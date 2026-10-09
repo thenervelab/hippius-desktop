@@ -1063,17 +1063,23 @@ camera only), `capture_restart` (before the take is discarded; it notifies,
 the pill has no room) and `capture_check_recording_start` (the bar asks
 before its countdown). Pinned by
 `capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
-count is the server listing of the account's own captures drive
-(`list_remote_folder_files_inner`, label from `destination` when own, else
-`CAPTURES_DIR_NAME`), files named like `Recording YYYY-MM-DD at HH.MM.SS`
-`.mp4/.webm/.mov` with an optional ` (N)` (`is_recording_name`), so console
-uploads and other devices count. Cached per account on
+count is EVERY video file (`.mp4`/`.webm`/`.mov`, any name, any subfolder:
+`is_video_name`, so a rename never frees a slot) in ALL of the account's own
+captures drives, each read from the server (`list_remote_folder_files_inner`),
+keyed `label/path`. A captures drive is one the server's folder list
+(`list_remote_folders_internal`) holds whose label is `CAPTURES_DIR_NAME` or
+`CAPTURES_DIR_NAME-N` (`is_default_captures_label`), or that this machine ever
+kept captures in (`destination::own_capture_labels`, appended by every own
+`destination::save`), so moving the captures folder ("Hippius Captures-2")
+does not reset the count, and console uploads and other devices count. Client
+side only; the server keeps no count. Cached per account on
 `CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
 opens; a delivered recording counts at once (`note_delivered`, until listed
-or `PENDING_FOR`); a completed sync of the drive, a remote folder delete and
-a sync reset drop it. **Fails open**: unknown plan or unreadable count
-(error, `COUNT_WITHIN` timeout) never blocks; a paid last-known tier skips the
-listing; a count at the limit is confirmed by a fresh `recording_tier`. The
+or `PENDING_FOR`); a completed sync of any captures drive, a remote folder
+delete and a sync reset drop it. **Fails open**: unknown plan or unreadable
+count (folder list or any drive listing errors, `COUNT_WITHIN` timeout) never
+blocks; a paid last-known tier skips the listing (so a downgrade is only
+counted once a fresh tier read says Free); a count at the limit is confirmed by a fresh `recording_tier`. The
 FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
 `capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
 in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).

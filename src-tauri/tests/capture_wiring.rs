@@ -230,15 +230,18 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     );
 
     // The gate reads the plan the way the length cap does, and the count
-    // from the server's listing of the captures drive, failing open.
+    // from the server's listings of every captures drive, failing open.
     let allowance = read("src/capture/recording_allowance.rs");
     let check = fn_body(&allowance, "pub async fn check_start(");
     assert!(check.contains("allowance::recording_tier(state, &account)"));
     assert!(check.contains("recording_count(state, &account_id)"));
+    assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
+    let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        fn_body(&allowance, "pub async fn recording_count(").contains("remote::list_remote_folder_files_inner("),
+        list.contains("remote::list_remote_folder_files_inner("),
         "the count comes from the server listing the remote-folder browser uses"
     );
+    assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 
 /// The app's dialog and the bar's panel say what Rust's refusal says.
