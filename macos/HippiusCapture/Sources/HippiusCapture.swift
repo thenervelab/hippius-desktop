@@ -648,6 +648,9 @@ struct StartOptions {
     /// `sharingType = .none`, which would hide them from every other app's
     /// screen sharing too.
     let ownWindowsFilmed: [UInt32]
+    /// The Free plan's watermark, read from the atlas Rust wrote for this
+    /// recording (`watermarkAtlas`); nil records without one.
+    let watermark: Watermark?
 
     init?(_ obj: [String: Any]) {
         guard let output = obj["output"] as? String, !output.isEmpty else { return nil }
@@ -656,6 +659,13 @@ struct StartOptions {
         systemAudio = (obj["systemAudio"] as? Bool) ?? false
         cameraWindowId = intU32(obj["cameraWindowId"])
         ownWindowsFilmed = (obj["ownWindowsFilmed"] as? [Any])?.compactMap { intU32($0) } ?? []
+        watermark = (obj["watermarkAtlas"] as? String).flatMap { path in
+            let loaded = Watermark(contentsOf: URL(fileURLWithPath: path))
+            if loaded == nil {
+                FileHandle.standardError.write(Data("the watermark atlas could not be read; recording without it\n".utf8))
+            }
+            return loaded
+        }
         showClicks = (obj["showClicks"] as? Bool) ?? false
         microphoneDeviceId = obj["microphoneDeviceId"] as? String
         displayId = intU32(obj["displayId"])
@@ -698,6 +708,108 @@ enum CaptureError: LocalizedError {
 /// margin plus 18 * (1 - 1/sqrt(2)) = 5.3 pt clears both the ring and the
 /// corners. Pinned against the page by `recording::macos` tests.
 let stageInset: CGFloat = 12
+
+// MARK: - Watermark
+
+/// The Free plan's watermark (`src-tauri/src/capture/watermark.rs`). Rust
+/// draws every size into one atlas file, since only this process learns the
+/// frames' size; each frame then takes the size its shorter side calls for
+/// and has it blended into its bottom-right corner, in place, over the
+/// mark's own small rectangle. The atlas is little-endian: "HWM1", the
+/// marks (width, height, premultiplied BGRA), then the steps (shorter side
+/// from, mark, inset from the right, inset from the bottom).
+final class Watermark {
+    struct Mark {
+        let width: Int
+        let height: Int
+        let pixels: [UInt8]
+    }
+
+    struct Step {
+        let shortFrom: Int
+        let mark: Int
+        let insetRight: Int
+        let insetBottom: Int
+    }
+
+    private let marks: [Mark]
+    private let steps: [Step]
+    /// The step for the last frame size seen; frames keep one size.
+    private var chosen: (width: Int, height: Int, step: Step)?
+
+    init?(contentsOf url: URL) {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let bytes = [UInt8](data)
+        guard bytes.count >= 8, Array(bytes[0..<4]) == Array("HWM1".utf8) else { return nil }
+        var at = 4
+        func word() -> UInt32? {
+            guard at + 4 <= bytes.count else { return nil }
+            let v = UInt32(bytes[at]) | UInt32(bytes[at + 1]) << 8 | UInt32(bytes[at + 2]) << 16 | UInt32(bytes[at + 3]) << 24
+            at += 4
+            return v
+        }
+        guard let markCount = word(), markCount < 1000 else { return nil }
+        var marks: [Mark] = []
+        for _ in 0..<markCount {
+            guard let w = word(), let h = word(), w < 10_000, h < 10_000 else { return nil }
+            let length = Int(w) * Int(h) * 4
+            guard at + length <= bytes.count else { return nil }
+            marks.append(Mark(width: Int(w), height: Int(h), pixels: Array(bytes[at..<(at + length)])))
+            at += length
+        }
+        guard let stepCount = word(), stepCount < 100_000 else { return nil }
+        var steps: [Step] = []
+        for _ in 0..<stepCount {
+            guard let from = word(), let mark = word(), let right = word(), let bottom = word(), Int(mark) < marks.count else { return nil }
+            steps.append(Step(shortFrom: Int(from), mark: Int(mark), insetRight: Int(Int32(bitPattern: right)), insetBottom: Int(Int32(bitPattern: bottom))))
+        }
+        guard !steps.isEmpty, at == bytes.count else { return nil }
+        self.marks = marks
+        self.steps = steps
+    }
+
+    /// Blend the watermark into a BGRA frame. Anything else is left alone.
+    func stamp(_ buffer: CVPixelBuffer) {
+        guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA else { return }
+        let width = CVPixelBufferGetWidth(buffer)
+        let height = CVPixelBufferGetHeight(buffer)
+        let step: Step
+        if let chosen, chosen.width == width, chosen.height == height {
+            step = chosen.step
+        } else {
+            let short = min(width, height)
+            guard let found = steps.last(where: { $0.shortFrom <= short }) else { return }
+            chosen = (width, height, found)
+            step = found
+        }
+        let mark = marks[step.mark]
+        let left = width - step.insetRight - mark.width
+        let top = height - step.insetBottom - mark.height
+        let x0 = max(left, 0), y0 = max(top, 0)
+        let x1 = min(left + mark.width, width), y1 = min(top + mark.height, height)
+        guard x0 < x1, y0 < y1 else { return }
+        guard CVPixelBufferLockBaseAddress(buffer, []) == kCVReturnSuccess else { return }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+        guard let base = CVPixelBufferGetBaseAddress(buffer)?.assumingMemoryBound(to: UInt8.self) else { return }
+        let rowBytes = CVPixelBufferGetBytesPerRow(buffer)
+        mark.pixels.withUnsafeBufferPointer { src in
+            for y in y0..<y1 {
+                let row = base + y * rowBytes
+                let markRow = (y - top) * mark.width
+                for x in x0..<x1 {
+                    let s = (markRow + x - left) * 4
+                    let alpha = Int(src[s + 3])
+                    if alpha == 0 { continue }
+                    let d = row + x * 4
+                    // Premultiplied over an opaque frame: mark + frame * (1 - alpha).
+                    for c in 0..<3 {
+                        d[c] = UInt8(min(255, Int(src[s + c]) + (Int(d[c]) * (255 - alpha) + 127) / 255))
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// The longest edge a recording is encoded at. A 5K or 6K display is scaled
 /// down to this, so the file stays a size people can upload and share.
@@ -1082,6 +1194,8 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private let configuration: SCStreamConfiguration
     private let outputURL: URL
     private let onDeath: DeathHandler
+    /// Burned into every frame before it is written; used on `writerQueue`.
+    private let watermark: Watermark?
     let width: Int
     let height: Int
     fileprivate let writerQueue = DispatchQueue(label: "com.hippius.capture.writer")
@@ -1296,6 +1410,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             outputURL: options.outputURL,
             width: width,
             height: height,
+            watermark: options.watermark,
             onDeath: onDeath
         )
         // One stream, with the session as its delegate so a stop-with-error
@@ -1329,6 +1444,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         outputURL: URL,
         width: Int,
         height: Int,
+        watermark: Watermark?,
         onDeath: @escaping DeathHandler
     ) {
         self.writer = writer
@@ -1341,6 +1457,7 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         self.width = width
         self.height = height
         self.onDeath = onDeath
+        self.watermark = watermark
         super.init()
     }
 
@@ -1523,6 +1640,11 @@ final class RecordSession: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             if lastVideoTime.isValid, CMTimeCompare(placed.time, lastVideoTime) <= 0 { return }
             // Real time: a frame the encoder cannot take now is dropped.
             guard videoInput.isReadyForMoreMediaData, let buffer = shifted(sampleBuffer, by: placed.offset) else { return }
+            // Each frame arrives here once, so it is stamped once; the tail
+            // frame repeated at Stop is this same, already stamped, picture.
+            if let watermark, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                watermark.stamp(pixelBuffer)
+            }
             if videoInput.append(buffer) {
                 lastVideo = buffer
                 lastVideoTime = placed.time

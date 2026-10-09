@@ -60,6 +60,12 @@ pub struct RecordOptions {
     /// Camera only where the recorder opens the camera itself (Wayland):
     /// which camera. The stage page lets go of it first.
     pub camera: Option<protocol::CameraPick>,
+    /// Burn the Free plan's watermark into every frame
+    /// (`capture::watermark`), decided once as the recording starts.
+    pub watermark: bool,
+    /// macOS: the watermark's atlas for the Swift helper, written by
+    /// `macos::start` when `watermark` is on.
+    pub watermark_atlas: Option<std::path::PathBuf>,
 }
 
 /// A microphone or camera the bar's pickers offer.

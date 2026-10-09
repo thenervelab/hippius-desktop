@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.7-beta.7"
+version = "0.6.7-beta.8"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -373,8 +373,9 @@ webview2-com = "0.38"
 # Linux build already carries (notify-rust, opener, single-instance), so no
 # second D-Bus stack. Only the portals capture uses are switched on: Phase 4
 # adds `screencast` (Wayland recording) and `inhibit` (no screen blanking
-# while recording), and Phase 6 `global_shortcuts` (the capture shortcut on
-# Wayland, KDE Plasma and GNOME 48+).
+# while recording), Phase 6 `global_shortcuts` (the capture shortcut on
+# Wayland, KDE Plasma and GNOME 48+), and `camera` (the Camera portal Hippius
+# asks before the bubble opens the camera, `capture::camera_access`).
 #
 # Linux recording (Phase 4): GStreamer from the distro through gstreamer-rs
 # (MIT/Apache). It links only libgstreamer-1.0 and libgstapp-1.0, which
@@ -384,7 +385,7 @@ webview2-com = "0.38"
 # libgstreamer-plugins-base1.0-dev.
 [target.'cfg(target_os = "linux")'.dependencies]
 x11rb = { version = "0.13", features = ["randr"] }
-ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit", "global_shortcuts"] }
+ashpd = { version = "0.13", default-features = false, features = ["tokio", "screenshot", "screencast", "inhibit", "global_shortcuts", "camera"] }
 gstreamer = "0.25"
 gstreamer-app = "0.25"
 # The camera bubble's getUserMedia (Phase 5): WebKitGTK's media-stream

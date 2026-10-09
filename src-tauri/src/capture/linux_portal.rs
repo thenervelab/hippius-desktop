@@ -1,14 +1,14 @@
 //! Screenshots on Wayland, through the xdg-desktop-portal Screenshot
 //! interface.
 //!
-//! A Wayland app can neither see other windows nor read the screen itself.
-//! First choice (`frozen_shot`): ask with `interactive = false` for a still
-//! of the whole desktop, which Hippius's overlay is drawn over. GNOME 42's
-//! portal takes it at once with no dialog (and a flash); newer portals ask
-//! once whether to allow it and remember. When that is refused or does not
-//! fit the monitors, `interactive = true`: the
-//! desktop's tool (GNOME Shell's screenshot UI, KDE's dialog, the wlroots
-//! portal's picker) lets the user choose an area, a window or a screen. The
+//! A Wayland app can neither see other windows nor read the screen itself,
+//! so a screenshot asks with `interactive = true`: the desktop's tool
+//! (GNOME Shell's screenshot UI, KDE's dialog, the wlroots portal's picker)
+//! lets the user choose an area, a window or a screen, and that is the one
+//! step. `interactive = false` (a still of the whole desktop for
+//! `frozen_shot`, off for now) is not used for a screenshot: GNOME 46's
+//! portal answers it with its own "Share this screenshot" dialog, after the
+//! whole screen was already taken. The
 //! portal answers with a `file://` URI of the PNG it wrote, usually in
 //! `~/Pictures/Screenshots` or a temp folder. Hippius MOVES that file into
 //! its own capture folder under its own name, so the user is not left with a
@@ -233,7 +233,7 @@ pub(crate) fn classify(e: &ashpd::Error) -> PortalAnswer {
 /// The D-Bus error names that mean nobody serves the portal (Screenshot,
 /// and the recorder's ScreenCast).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn is_missing_service(error_name: &str) -> bool {
+pub(crate) fn is_missing_service(error_name: &str) -> bool {
     matches!(
         error_name,
         "org.freedesktop.DBus.Error.ServiceUnknown"

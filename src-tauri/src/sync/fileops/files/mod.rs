@@ -51,4 +51,3 @@ pub use user_files::{
 pub(in crate::sync) use add::{compute_startup_pending_summary, sum_regular_file_bytes};
 pub(crate) use dir_stats::{dir_stats_for_sync_root, dir_stats_recursive};
 pub(in crate::sync) use dir_stats::{invalidate_dir_stats_after_cycle, invalidate_dir_stats_under};
-pub(crate) use synced_state::content_hashes_present;

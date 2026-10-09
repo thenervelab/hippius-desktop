@@ -115,26 +115,6 @@ describe("wantsProgress", () => {
   });
 });
 
-describe("a recording held at the free plan's limit", () => {
-  const HELD = "You've used your 25 free recordings. Upgrade to share this one, or delete an older recording.";
-
-  it("is neither a failure nor done, and never slides away", () => {
-    const view = cardView(card({ state: "held", message: HELD }), null, []);
-    expect(view).toMatchObject({ held: true, failed: false, done: false, settled: false, waiting: false, percent: null });
-    expect(view.text).toBe("Not uploaded");
-  });
-
-  it("follows no upload progress", () => {
-    expect(wantsProgress(card({ state: "held", message: HELD }))).toBe(false);
-  });
-
-  it("is not held in any other state", () => {
-    for (const status of [{ state: "uploading" as const }, failed(), { state: "uploaded" as const, linkCopied: true }]) {
-      expect(cardView(card(status), null, []).held).toBe(false);
-    }
-  });
-});
-
 it("names where the file went", () => {
   expect(destinationText(card({ state: "uploading" }))).toBe("Work › Captures");
 });

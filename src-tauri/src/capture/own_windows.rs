@@ -213,10 +213,40 @@ pub fn capture_window_focus_shows_main(
     matches!(platform, Platform::LinuxWayland) && recording_on(phase) && !main_on_screen && !pointer_over && !just_shown
 }
 
+/// Whether closing the main window may quit the app now (Windows and Linux,
+/// where closing it quits). Not while a capture is under way: the main
+/// window is hidden then, and a close it gets is the desktop's, not the
+/// user's (GNOME's dock or Activities closing "every window" of the app
+/// while the pill and bubble are its only visible ones). Quitting there
+/// threw the capture away with the app; the window is hidden instead and
+/// the capture goes on.
+#[must_use]
+pub fn closing_main_quits(phase: CapturePhase) -> bool {
+    phase == CapturePhase::Idle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capture::session::CaptureKind;
+
+    #[test]
+    fn closing_the_main_window_never_quits_mid_capture() {
+        assert!(closing_main_quits(CapturePhase::Idle));
+        for phase in [
+            CapturePhase::Selecting {
+                kind: CaptureKind::Recording,
+                mode: crate::capture::session::CaptureMode::Screen,
+            },
+            CapturePhase::Capturing {
+                kind: CaptureKind::Recording,
+            },
+            RECORDING,
+            CapturePhase::Finalizing,
+        ] {
+            assert!(!closing_main_quits(phase), "{phase:?}");
+        }
+    }
 
     const RECORDING: CapturePhase = CapturePhase::Recording {
         elapsed_secs: 0,

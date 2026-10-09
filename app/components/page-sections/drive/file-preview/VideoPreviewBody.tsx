@@ -27,6 +27,9 @@ export type VideoPlayback =
 // gate, or nobody is signed in), so Rust had no line to give.
 const CANNOT_PLAY = "This video can't be played here. Open it in your video player, or download it.";
 
+// Under the player when a stream keeps pausing to wait for data.
+const STUTTER_LINE = "Not playing smoothly? Your video player may play it better.";
+
 // Hand the file to the system's default video player (`xdg-open` on Linux,
 // through the opener plugin), as the Linux PDF path does.
 async function openInVideoPlayer(filePath: string) {
@@ -117,6 +120,11 @@ const VideoPreviewBody: React.FC<{
   }, [streamUrl, startWithinMs, started, startFailed]);
   const onPlaybackStarted = useCallback(() => setStarted(true), []);
   const onPlaybackFailed = useCallback(() => setStartFailed(true), []);
+  // A stream that keeps stopping to wait (WebKitGTK's GStreamer player) gets
+  // the system's player offered beside it, not instead of it.
+  const [stutteredUrl, setStutteredUrl] = useState<string | null>(null);
+  const onPlaybackStuttered = useCallback(() => setStutteredUrl(streamUrl), [streamUrl]);
+  const stuttered = streamUrl !== null && stutteredUrl === streamUrl;
 
   if (resolveError) {
     return (
@@ -163,7 +171,7 @@ const VideoPreviewBody: React.FC<{
     <PreviewSurface className="items-center justify-center">
       <div
         className={cn(
-          "relative w-full h-full min-h-0 min-w-0 flex flex-col rounded-[8px] overflow-hidden",
+          "relative w-full flex-1 min-h-0 min-w-0 flex flex-col rounded-[8px] overflow-hidden",
           "bg-grey-light-300 dark:bg-black-primary-bg",
           "shadow-[0_14px_31px_rgba(0,0,0,0.06),0_56px_56px_rgba(0,0,0,0.05)]",
           "animate-scale-in-95-0.4",
@@ -180,11 +188,27 @@ const VideoPreviewBody: React.FC<{
             handleFileDownload={handleFileDownload}
             onPlaybackStarted={streamUrl ? onPlaybackStarted : undefined}
             onPlaybackFailed={streamUrl ? onPlaybackFailed : undefined}
+            onPlaybackStuttered={streamUrl ? onPlaybackStuttered : undefined}
           />
         ) : (
           <PreviewLoading title="Loading video…" />
         )}
       </div>
+      {stuttered && localPath ? (
+        <div
+          role="status"
+          className="mt-3 flex w-full shrink-0 flex-wrap items-center justify-center gap-x-3 gap-y-2 px-4 text-center text-sm text-grey-50 dark:text-grey-light-300"
+        >
+          <span>{STUTTER_LINE}</span>
+          <button
+            type="button"
+            onClick={() => void openInVideoPlayer(localPath)}
+            className="rounded-[8px] border border-primary-50 px-3 py-1.5 text-sm font-medium text-primary-50 hover:bg-primary-50 hover:text-white"
+          >
+            Open in your video player
+          </button>
+        </div>
+      ) : null}
     </PreviewSurface>
   );
 };

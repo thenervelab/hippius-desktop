@@ -235,7 +235,20 @@ export interface CaptureCameraState {
   switchFromPill: boolean;
   /** The pill offers the bubble's sizes mid-recording. */
   resizeFromPill: boolean;
+  /**
+   * What the system said about the camera (Rust's `camera_access`; Linux
+   * asks before the bubble opens it): the page waits while `asking` and
+   * says why after a no. Absent or `unknown`: open it and see.
+   */
+  access?: CaptureCameraAccess;
+  /** Whether the system sees a camera at all, when it said. */
+  cameraPresent?: boolean | null;
+  /** Where this system's camera switch is, for the "allow it in" line. */
+  privacyPlace?: string;
 }
+
+/** Rust's `CameraAccess`. */
+export type CaptureCameraAccess = "unknown" | "asking" | "granted" | "denied" | "turnedOff";
 
 /**
  * `capture_microphone_state`: the live recording's microphone, for the pill.
@@ -331,40 +344,7 @@ export type CapturePreviewStatus =
   | { state: "syncing"; linkCopied: boolean; linkError?: string }
   | { state: "uploaded"; linkCopied: boolean; linkError?: string }
   /** `message` is Rust's sentence; `retryable` = Retry applies (false when the sync queue retries it). */
-  | { state: "failed"; message: string; reason: CaptureFailureReason; retryable: boolean }
-  /**
-   * A recording on a free plan that has used its recordings: kept on this
-   * computer, not uploaded, no link. `message` is Rust's sentence. Released on
-   * its own once a slot frees up or the plan changes.
-   */
-  | { state: "held"; message: string };
-
-/** One recording held at the free plan's limit. Mirrors Rust's `HeldRecording`. */
-export interface HeldRecording {
-  id: string;
-  fileName: string;
-  /** When it was held, ms since the epoch. */
-  heldAt: number;
-  thumbnail?: string;
-}
-
-/** `capture_held_recordings`. Mirrors Rust's `HeldList`. */
-export interface HeldRecordings {
-  /** Rust's sentence about why they are held. */
-  message: string;
-  /** Oldest first: the order they are released in. */
-  items: HeldRecording[];
-}
-
-/** The recordings held at the free plan's limit, with Rust's sentence. */
-export function getHeldRecordings(): Promise<HeldRecordings> {
-  return invoke("capture_held_recordings");
-}
-
-/** Delete a held recording for good. */
-export function deleteHeldRecording(id: string): Promise<void> {
-  return invoke("capture_held_delete", { id });
-}
+  | { state: "failed"; message: string; reason: CaptureFailureReason; retryable: boolean };
 
 /** What the card says about the link. Mirrors Rust's `LinkState`. */
 export type CaptureLinkState =
@@ -966,4 +946,23 @@ export function createCaptureDrive(folder: string | null): Promise<CaptureDriveS
 /** `capture_start` refused because macOS has not granted Screen Recording. */
 export function isScreenRecordingPermissionMissing(error: unknown): boolean {
   return isNotReady(error, "SCREEN_RECORDING_PERMISSION");
+}
+
+/** A recording was refused before it started: the free plan's recordings are used up. */
+export function isRecordingLimitReached(error: unknown): boolean {
+  return isNotReady(error, "RECORDING_LIMIT_REACHED");
+}
+
+/**
+ * Ask Rust's recording gate whether a recording may start now, before the
+ * bar counts down; refuses with `RECORDING_LIMIT_REACHED`. Record asks it
+ * again, so this only spares the countdown.
+ */
+export function checkRecordingStart(): Promise<void> {
+  return invoke("capture_check_recording_start");
+}
+
+/** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
+export function upgradeFromRecordingLimit(): Promise<void> {
+  return invoke("capture_limit_upgrade");
 }

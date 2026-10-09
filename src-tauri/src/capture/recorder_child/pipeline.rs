@@ -44,6 +44,9 @@ pub struct Pipeline<E: Encoder> {
     /// The capture-clock time of the first picture: time zero.
     origin: Option<u64>,
     frames_written: u64,
+    /// The Free plan's watermark, blended into each picture as it arrives
+    /// (`capture::watermark`), after anything else was drawn into it.
+    watermark: Option<crate::capture::watermark::Nv12Stamp>,
 }
 
 /// Microseconds to 100 ns units.
@@ -67,7 +70,14 @@ impl<E: Encoder> Pipeline<E> {
             mixer: Mixer::new(sources),
             origin: None,
             frames_written: 0,
+            watermark: None,
         }
+    }
+
+    /// Watermark every picture from now on: `stamp` is made for the
+    /// recording's size, so it is worked out once, not per picture.
+    pub fn set_watermark(&mut self, stamp: crate::capture::watermark::Nv12Stamp) {
+        self.watermark = Some(stamp);
     }
 
     #[must_use]
@@ -101,7 +111,7 @@ impl<E: Encoder> Pipeline<E> {
     ///
     /// # Errors
     /// The encoder failed.
-    pub fn video(&mut self, time: u64, nv12: Vec<u8>) -> Result<(), String> {
+    pub fn video(&mut self, time: u64, mut nv12: Vec<u8>) -> Result<(), String> {
         let origin = *self.origin.get_or_insert(time);
         let at = match time.checked_sub(origin) {
             Some(at) => at,
@@ -110,6 +120,9 @@ impl<E: Encoder> Pipeline<E> {
             None if self.frames_written == 0 && self.hold.held_since().is_none_or(|t| t == 0) => 0,
             None => return Ok(()),
         };
+        if let Some(stamp) = &self.watermark {
+            stamp.apply(&mut nv12);
+        }
         match self.hold.push(Arc::new(nv12), at) {
             Some(timed) => self.write_video(&timed),
             None => Ok(()),
@@ -191,14 +204,17 @@ mod tests {
         audio: Vec<(i64, i64, usize)>,
         finished: bool,
         fail_video_after: Option<usize>,
+        /// The pictures themselves, as the encoder got them.
+        pictures: Vec<Vec<u8>>,
     }
 
     impl Encoder for &mut Fake {
-        fn video(&mut self, _nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
+        fn video(&mut self, nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
             if self.fail_video_after.is_some_and(|n| self.video.len() >= n) {
                 return Err("encoder gone".into());
             }
             self.video.push((start, duration));
+            self.pictures.push(nv12.to_vec());
             Ok(())
         }
         fn audio(&mut self, pcm: &[i16], start: i64, duration: i64) -> Result<(), String> {
@@ -229,6 +245,33 @@ mod tests {
         assert!(fake.finished);
         let (start, duration, len) = fake.audio[0];
         assert_eq!((start, duration, len), (0, 200_000, 960 * 2), "20 ms from zero");
+    }
+
+    /// A Free plan recording's every picture reaches the encoder with the
+    /// watermark in it, the repeated last one included, and only the corner
+    /// changes; without a stamp the pictures pass untouched.
+    #[test]
+    fn a_watermarked_recording_stamps_every_picture() {
+        let (w, h) = (640u32, 360u32);
+        let blank = vec![16u8; w as usize * h as usize * 3 / 2];
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[]);
+        p.set_watermark(crate::capture::watermark::Nv12Stamp::new(w, h).unwrap());
+        p.video(1_000_000, blank.clone()).unwrap();
+        p.video(1_033_333, blank.clone()).unwrap();
+        p.finish(2_000_000).unwrap();
+        assert_eq!(fake.pictures.len(), 2);
+        for picture in &fake.pictures {
+            assert_ne!(picture, &blank, "stamped");
+            let first = picture.iter().zip(&blank).position(|(a, b)| a != b).unwrap();
+            assert!(first / w as usize > h as usize / 2, "only the bottom of the picture changes");
+        }
+
+        let mut plain = Fake::default();
+        let mut p = Pipeline::new(&mut plain, &[]);
+        p.video(1_000_000, blank.clone()).unwrap();
+        p.finish(2_000_000).unwrap();
+        assert_eq!(plain.pictures, vec![blank]);
     }
 
     /// The encoder took 2 s to make from the first picture: the file starts

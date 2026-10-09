@@ -68,7 +68,9 @@ use crate::capture::rollout::{Platform, current_platform};
 /// stream can take a moment to negotiate).
 const FIRST_FRAME_WITHIN: Duration = Duration::from_secs(15);
 /// Finishing the file is time-boxed; fragments already written still play.
-const FINISH_WITHIN: Duration = Duration::from_secs(30);
+/// The encoder's end (30 s) plus rewriting the file with its index first
+/// (`encoder::REMUX_WITHIN`, 60 s), inside the app's two minutes for Stop.
+const FINISH_WITHIN: Duration = Duration::from_secs(100);
 
 /// Diagnostics go to stderr, which the app logs at `warn`.
 pub(crate) fn say(line: &str) {
@@ -275,7 +277,16 @@ fn record(
     }
 
     let (ready_tx, ready_rx) = mpsc::channel::<Result<(u32, u32), String>>();
-    let writer = spawn_writer(rx, Arc::clone(&shared), Arc::clone(out), output.clone(), sources, ready_tx, candidates);
+    let writer = spawn_writer(
+        rx,
+        Arc::clone(&shared),
+        Arc::clone(out),
+        output.clone(),
+        sources,
+        ready_tx,
+        candidates,
+        cmd.watermark,
+    );
 
     let video = match video(Arc::clone(&shared)) {
         Ok(video) => video,
@@ -308,6 +319,7 @@ fn tell_lost(out: &Output, source: Source) -> impl FnOnce(&str) + Send + 'static
     move |error| super::emit(&out, &protocol::device_lost_line(source.device_name(), error))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_writer(
     rx: mpsc::Receiver<Msg>,
     shared: Arc<Shared>,
@@ -316,10 +328,11 @@ fn spawn_writer(
     sources: Vec<Source>,
     ready: Sender<Result<(u32, u32), String>>,
     candidates: Vec<linux_plan::Encoders>,
+    watermark: bool,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let has_audio = !sources.is_empty();
-        writer_loop::run(&rx, &shared, &out, &sources, &ready, |size| {
+        writer_loop::run(&rx, &shared, &out, &sources, &ready, watermark, |size| {
             encoder::GstEncoder::create(&output, size, &candidates, has_audio)
         });
     })

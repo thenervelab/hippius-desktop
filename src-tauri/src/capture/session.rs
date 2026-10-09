@@ -160,9 +160,23 @@ pub fn transition(phase: CapturePhase, event: CaptureEvent) -> Result<CapturePha
     }
 }
 
+/// Whether recording start number `start` has been overtaken by a newer
+/// one (`latest`, the last number handed out): a start cancelled while the
+/// desktop's dialog was up, then Record pressed again.
+#[must_use]
+pub const fn start_superseded(start: u64, latest: u64) -> bool {
+    start != latest
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_latest_recording_start_owns_the_session() {
+        assert!(!start_superseded(3, 3));
+        assert!(start_superseded(2, 3), "Record pressed again while the dialog was up");
+    }
 
     const SHOT: CaptureEvent = CaptureEvent::Start {
         kind: CaptureKind::Screenshot,
