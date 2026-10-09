@@ -5577,10 +5577,6 @@ async fn sync_camera(app: &AppHandle) {
             if let Err(e) = open_camera_window(app, shape, options.camera_size, anchored.map(|(f, scale, _)| (f, scale))) {
                 tracing::warn!(error = %e, "camera window could not open");
             }
-            // Linux: ask the system for the camera before the bubble opens
-            // it. The bubble waits while the question is up (the state sent
-            // below says `asking`).
-            ask_camera_access(app);
         }
     }
     if wanted.is_none() {
@@ -5588,95 +5584,6 @@ async fn sync_camera(app: &AppHandle) {
     }
     let camera_state = camera_state_for(app, wanted, hidden, &options).await;
     let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
-}
-
-/// How long the Camera portal may take to answer before Hippius assumes the
-/// system is showing its question and moves its own windows aside. A
-/// stored answer comes back in a few milliseconds.
-const CAMERA_QUESTION_AFTER: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// Ask the system for the camera (Linux, `camera_access`), once at a time,
-/// then send the camera state again so the bubble opens the camera or says
-/// why it cannot. Off Linux, or with a yes already given this run, nothing
-/// happens. Never fails: a portal that cannot be reached leaves the bubble
-/// to try by itself.
-fn ask_camera_access(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let platform = super::rollout::current_platform();
-    if !super::camera_access::should_ask(platform, state.capture.camera_access.current()) {
-        return;
-    }
-    if !state.capture.camera_access.begin_asking() {
-        return;
-    }
-    tracing::info!("camera: asking the system for the camera before the bubble opens it");
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut asked = tokio::spawn(super::camera_access::ask_portal());
-        let (answer, aside) = if let Ok(answer) = tokio::time::timeout(CAMERA_QUESTION_AFTER, &mut asked).await {
-            (answer, Vec::new())
-        } else {
-            // The system's question is on screen: Hippius's windows are kept
-            // above everything, so they step aside until it is answered, or
-            // the question could be hidden behind them.
-            let aside = step_aside_for_system_question(&app);
-            (asked.await, aside)
-        };
-        let (access, present) = answer.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "camera: the camera question ended without an answer");
-            (super::camera_access::CameraAccess::Unknown, None)
-        });
-        let state = app.state::<AppState>();
-        state.capture.camera_access.finish_asking(access, present);
-        come_back_after_system_question(&app, &aside);
-        // The bubble learns the answer (and opens the camera, or says why not).
-        sync_camera(&app).await;
-    });
-}
-
-/// Hide the capture windows that are on screen, so a system dialog is not
-/// under them; returns their labels.
-fn step_aside_for_system_question(app: &AppHandle) -> Vec<String> {
-    let mut aside = Vec::new();
-    // Never mid-recording: the bubble and the pill are in the video.
-    if matches!(
-        app.state::<AppState>().capture.current(),
-        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing
-    ) {
-        return aside;
-    }
-    for (label, window) in app.webview_windows() {
-        let ours =
-            label.starts_with(OVERLAY_LABEL_PREFIX) || [CAMERA_LABEL, CONTROLS_LABEL, BUBBLE_CONTROLS_LABEL, AREA_LABEL].contains(&label.as_str());
-        if ours && window.is_visible().unwrap_or(false) && window.hide().is_ok() {
-            aside.push(label);
-        }
-    }
-    if !aside.is_empty() {
-        tracing::info!(
-            windows = aside.len(),
-            "camera: capture windows moved aside for the system's camera question"
-        );
-    }
-    aside
-}
-
-/// Put back what [`step_aside_for_system_question`] hid, if the capture is
-/// still going (a cancel meanwhile closed them for good).
-fn come_back_after_system_question(app: &AppHandle, aside: &[String]) {
-    if aside.is_empty() {
-        return;
-    }
-    let state = app.state::<AppState>();
-    if state.capture.current() == CapturePhase::Idle {
-        return;
-    }
-    for label in aside {
-        if let Some(window) = app.get_webview_window(label) {
-            show_without_focus(&window);
-        }
-    }
-    focus_active_ui(app, &state.capture);
 }
 
 /// Where the bubble goes while an area recording is being chosen: inside the
