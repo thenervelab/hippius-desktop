@@ -42,6 +42,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.
+
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
 
 - **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.

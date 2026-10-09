@@ -17,4 +17,12 @@ describe("DeleteFileConfirmDialog", () => {
     render(<DeleteFileConfirmDialog file={{ name: "report.pdf" } as FormattedUserFile} onClose={() => undefined} />);
     expect(screen.getByText("Share links made from it keep working. Turn them off in Shared Links.")).toBeInTheDocument();
   });
+
+  // The question and the helper line describe the dialog, not its buttons.
+  it("is described by its question and the share links line", () => {
+    render(<DeleteFileConfirmDialog file={{ name: "report.pdf" } as FormattedUserFile} onClose={() => undefined} />);
+    expect(screen.getByRole("dialog")).toHaveAccessibleDescription(
+      'Are you sure you want to delete "report.pdf"? This action cannot be undone. Share links made from it keep working. Turn them off in Shared Links.',
+    );
+  });
 });
