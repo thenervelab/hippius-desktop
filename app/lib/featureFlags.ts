@@ -7,14 +7,13 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). Screen capture uses it (beta and staging).
+// staging, never production). No flag uses it today: screen capture, the
+// last one, now ships on every lane (its per-platform rollout is Rust's).
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
-
-import { enabledFrom } from "@/app/lib/buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -194,15 +193,15 @@ export const REFERRALS_COMING_SOON = true;
 /**
  * Screen capture: screenshots and (on macOS) recordings of an area, a window
  * or a whole screen, filed in the user's drive with a share link copied.
- * Hides the Drive header's Capture menu, the tray's capture actions and the
- * Settings card. The platform half is Rust's (`capture_support`): Linux
- * reports unsupported until its portal path lands, whatever this says.
  *
- * On in beta and staging, off in production until it has had a beta
- * release: it opens windows over every app on screen and asks for a macOS
- * permission. Windows and Linux follow the same lanes, beta and staging
- * (`capture::rollout`, which keeps them out of production until their
- * hardware checklists pass).
+ * This only says the build carries capture, and it does on every lane.
+ * Which platforms actually get it is Rust's call (`capture_support`, which
+ * reads `capture::rollout`): in production that is macOS, while Windows and
+ * Linux stay in beta and staging until their hardware checklists pass.
+ * So no surface may read this flag alone: the Drive header's Capture menu,
+ * the tray, the Captures nav entry and page, the Settings section and the
+ * image editor entries all also require Rust's answer
+ * (`captureSupportedAtom`, or `useCaptureAvailability`).
  * Design: `docs/plans/2026-09-22-screen-capture.md`.
  */
-export const SCREEN_CAPTURE_ENABLED = enabledFrom("beta");
+export const SCREEN_CAPTURE_ENABLED = true;

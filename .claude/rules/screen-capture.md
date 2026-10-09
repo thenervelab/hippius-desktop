@@ -26,9 +26,15 @@ Screenshots and (on macOS) recordings of an area, a window or a whole display,
 filed at the root of the account's own captures drive (`Hippius Captures`,
 "Destination" below), with a public share link copied unless
 `CaptureOptions.copyLink` is off. Design and
-phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
-`SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` (beta and staging, not
-production), and behind Rust's `capture_support` for the platform:
+phasing: `docs/plans/2026-09-22-screen-capture.md`. Built into every lane
+(`SCREEN_CAPTURE_ENABLED = true`, production included), and behind Rust's
+`capture_support` for the platform, which is what keeps Windows and Linux
+out of production. **No surface may read the flag alone**: the Captures nav
+entry and page, the Settings section and the image editor entries go
+through `useCaptureAvailability` (flag AND `captureSupportedAtom`, with
+`captureSupportKnownAtom` so nothing redirects or resets before Rust has
+answered), the tray through `useTrayCaptureView`; pinned by
+`app/lib/capture/__tests__/captureProductionGates.test.tsx`. Platforms:
 **screenshots on macOS, Windows and Linux**; **recording on macOS 13+**
 when `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
 Wayland). Windows and Linux are on in debug, staging and beta builds and off
@@ -66,8 +72,7 @@ Drive it by hand: `{"cmd":"start","id":1,"output":"/tmp/x.txt","synthetic":true}
 **Rollout:** `rollout::floor(platform, feature)` is the lowest lane per row
 (debug builds count as staging); `commands::capture_supported()` and
 `recording::recording_unavailable()` both ask it, so a platform below its
-lane reads exactly as unsupported. `SCREEN_CAPTURE_ENABLED` stays the one
-frontend switch. Moving a row on is a one-line change once its manual
+lane reads exactly as unsupported, and the frontend needs no new flag. Moving a row on is a one-line change once its manual
 checklist passes; `release_lane_pins.rs` pins that production enables only
 production rows and that Windows recording needs a signed installer to get
 there. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
@@ -1546,7 +1551,7 @@ disable it. The capture bar's Record modes and Settings show the same line. The 
 (`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
 support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
 Settings › Screenshots & Recording (section `capture`, after Sync & Storage,
-shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
+shown where `useCaptureAvailability` is `available`, kept while `unknown`) holds every
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`

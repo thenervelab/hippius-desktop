@@ -85,15 +85,19 @@ describe("the Screenshots & Recording section", () => {
     expect(capture).not.toContain("—");
   });
 
-  it("renders the capture settings there, behind the capture flag, and not under Sync & Storage", () => {
-    expect(page).toContain("{SCREEN_CAPTURE_ENABLED && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}");
+  it("renders the capture settings there, behind capture availability, and not under Sync & Storage", () => {
+    expect(page).toContain("{captureSection && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}");
     const syncStart = page.indexOf('{section === "sync" && (');
     const sync = page.slice(syncStart, page.indexOf("</>", syncStart));
     expect(sync).not.toContain("<CaptureSettings");
     expect(page.match(/<CaptureSettings \/>/g)).toHaveLength(1);
   });
 
-  it("is reachable by its query string only while the capture flag is on", () => {
-    expect(page).toMatch(/captureEnabled: SCREEN_CAPTURE_ENABLED,/);
+  // Production carries the flag on every platform, so the flag alone would
+  // keep the section reachable on a computer that cannot capture.
+  it("is reachable by its query string unless capture is unavailable on this computer", () => {
+    expect(page).toMatch(/const captureSection = useCaptureAvailability\(\) !== "unavailable";/);
+    expect(page).toMatch(/captureEnabled: captureSection,/);
+    expect(page).not.toContain("SCREEN_CAPTURE_ENABLED");
   });
 });

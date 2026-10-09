@@ -4,7 +4,6 @@ import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
-  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
 
 export interface SubMenuItemData {
@@ -31,7 +30,8 @@ export interface NavItemData {
   // hides it while `WALLET_FEATURE_ENABLED` is off; `"referrals"` hides it
   // while `REFERRALS_FEATURE_ENABLED` is off; `"chat"` hides it until Rust's
   // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`);
-  // `"capture"` hides it while `SCREEN_CAPTURE_ENABLED` is off.
+  // `"capture"` hides it unless the caller says capture is on for this
+  // computer (`SCREEN_CAPTURE_ENABLED` and Rust's `capture_support`).
   // Adding a new gate is one entry here plus one branch in
   // `filterNavSections`.
   featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture";
@@ -137,10 +137,12 @@ export const navSections: NavSection[] = [
  * Pure so the gating rules are unit-testable: `shares` is a runtime server
  * capability (passed in by the sidebar from `shareFeatureEnabledAtom`) and
  * `chat` is the runtime answer of Rust's `chat_get_config` (from
- * `chatEnabledAtom`; defaults to hidden until known), while `wallet`,
- * `referrals` and `capture` are the build-time `WALLET_FEATURE_ENABLED` /
- * `REFERRALS_FEATURE_ENABLED` / `SCREEN_CAPTURE_ENABLED` flags (defaulted here so callers don't
- * re-import them). Sections whose items are all filtered out are dropped
+ * `chatEnabledAtom`; defaults to hidden until known), `wallet` and
+ * `referrals` are the build-time `WALLET_FEATURE_ENABLED` /
+ * `REFERRALS_FEATURE_ENABLED` flags (defaulted here so callers don't
+ * re-import them), and `capture` is the capture flag AND Rust's support for
+ * this computer (`useCaptureAvailability`), hidden unless said to be on: the
+ * flag alone is true in production on platforms that cannot capture. Sections whose items are all filtered out are dropped
  * entirely so no orphaned heading renders.
  */
 export function filterNavSections(
@@ -156,7 +158,7 @@ export function filterNavSections(
   const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
   const referralsEnabled =
     gates.referralsEnabled ?? REFERRALS_FEATURE_ENABLED;
-  const captureEnabled = gates.captureEnabled ?? SCREEN_CAPTURE_ENABLED;
+  const captureEnabled = gates.captureEnabled === true;
   return sections
     .map((section) => ({
       ...section,
