@@ -2735,3 +2735,25 @@ fn a_superseded_recording_start_leaves_the_new_session_alone() {
         "only its own folder"
     );
 }
+
+/// A failed direct capture outlives a restart: the failure writes its marker,
+/// reaching the drive clears it, sign-in offers it again, and each capture
+/// start brings one back while nothing is parked. Discard is the only way
+/// its file is removed.
+#[test]
+fn a_failed_capture_is_offered_again_after_a_restart() {
+    let src = read("src/capture/commands.rs");
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
+    let placed = deliver.find("announce_placed(").expect("placement is announced");
+    assert!(clear < placed, "cleared as soon as delivery succeeds");
+    assert!(deliver.contains("keep_failed_card(app, id)"), "a failure writes its marker");
+    assert!(
+        fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
+        "sign-in offers a kept failure again"
+    );
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("bring_back_failed_or_kept(&app, &state.capture).await"));
+    assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}

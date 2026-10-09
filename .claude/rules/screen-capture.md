@@ -811,7 +811,16 @@ Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). F
 `retryable`. `capture_failed` carries `cardShowing`, and `CaptureHost` shows no toast
 when it is true (the card already says it); the notification never names a
 path. A failed card closed by the user is PARKED and comes back on the
-next `capture_start`, until retried or discarded. On success there is NO
+next `capture_start`, until retried or discarded. Parking is memory, so a
+failed retryable card also writes `failed.json` beside its file
+(`kept_failed.rs`: account key, kind, destination, message, reason; only in
+a `capture-…` folder of capture-tmp), cleared once delivery succeeds and
+gone with the folder on Discard. At sign-in (`capture_sync_shortcut` →
+`spawn_offer_kept_failed`) the newest for the account comes back as its
+card (failed, Retry, Upgrade when the plan was full) unless a card is up or
+parked; each `capture_start` with nothing parked brings back the next
+(`next_kept_failed`). Nothing ever deletes a capture automatically. Pinned by
+`kept_failed::tests` and `capture_wiring::a_failed_capture_is_offered_again_after_a_restart`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder`; a capture in the captures drive
 (`capturesDrive`: the destination's folder is the root) goes to

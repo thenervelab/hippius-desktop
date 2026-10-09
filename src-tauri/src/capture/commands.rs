@@ -1245,7 +1245,7 @@ pub async fn capture_start(
     }
     let areas = bar::load_areas(pool).await.unwrap_or_default();
 
-    bring_back_failed_card(&app, &state.capture);
+    bring_back_failed_or_kept(&app, &state.capture).await;
     hide_own_windows(&app, &state.capture).await;
     if matches!(plan, super::support::StartPlan::Frozen | super::support::StartPlan::SystemPicker) {
         start_without_live_overlay(&app, &state.capture, plan);
@@ -3979,6 +3979,13 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
     }
     .await;
 
+    // A capture that left its temp folder, or reached the drive, is no
+    // longer a failure to offer after a restart (`kept_failed`).
+    if outcome.is_ok()
+        && let Ok(root) = super::screenshot::capture_tmp_root()
+    {
+        super::kept_failed::clear(&root, path);
+    }
     match outcome {
         Ok(Delivery::KeptHere(kept)) => keep_here(app, path, card_id, &kept).await,
         Ok(Delivery::Placed {
@@ -4032,6 +4039,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                     };
                 })
             });
+            if let Some(id) = card_id {
+                keep_failed_card(app, id);
+            }
             let _ = app.emit(
                 FAILED_EVENT,
                 FailedPayload {
@@ -4904,6 +4914,76 @@ fn settle_closed_card(state: &CaptureState, card: PreviewCard) {
     }
 }
 
+/// A failed card writes its marker beside its file, so the capture is
+/// offered again after a restart (`kept_failed`). Parking alone is memory.
+fn keep_failed_card(app: &AppHandle, id: u64) {
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
+        return;
+    };
+    let card = lock(&state.capture.preview).clone().filter(|c| c.id == id);
+    let account = crate::auth::account_key::account_key(&account_id);
+    if let Some(card) = card
+        && let Some(kept) = super::kept_failed::KeptFailed::from_card(&account, &card)
+    {
+        super::kept_failed::write(&root, &card.file_path, &kept);
+    }
+}
+
+/// The newest failed capture kept from before a restart (`kept_failed`)
+/// that no card shows or holds parked, as its card.
+async fn next_kept_failed(app: &AppHandle) -> Option<PreviewCard> {
+    let state = app.state::<AppState>();
+    let account_id = state.current_account_id().ok()?;
+    let pool = state.pool().ok()?;
+    let root = super::screenshot::capture_tmp_root().ok()?;
+    let mut except = Vec::new();
+    let showing = lock(&state.capture.preview).as_ref().map(|c| c.file_path.clone());
+    let parked = lock(&state.capture.parked).as_ref().map(|c| c.file_path.clone());
+    except.extend(showing);
+    except.extend(parked);
+    let account = crate::auth::account_key::account_key(&account_id);
+    let (file, kept) = tauri::async_runtime::spawn_blocking(move || super::kept_failed::list(&root, &account, &except).into_iter().next())
+        .await
+        .ok()??;
+    let remote = !destination::is_local(pool, &account_id, &kept.destination.label).await;
+    let id = state.capture.preview_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    super::kept_failed::card(id, &file, kept, remote)
+}
+
+/// At sign-in, a capture that did not upload before the app last quit comes
+/// back as its card, with Retry (and Upgrade when the plan was full), unless
+/// a card is already up or parked. The rest come back one at a time on later
+/// captures (`bring_back_failed_card`).
+pub(crate) fn spawn_offer_kept_failed(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let showing = lock(&state.capture.preview).is_some();
+        let parked = lock(&state.capture.parked).is_some();
+        if showing || parked || state.capture.current() != CapturePhase::Idle {
+            return;
+        }
+        let Some(card) = next_kept_failed(&app).await else {
+            return;
+        };
+        {
+            let mut preview = lock(&state.capture.preview);
+            if preview.is_some() {
+                return;
+            }
+            *preview = Some(card);
+        }
+        let display = lock(&state.capture.bar_display).clone();
+        if let Err(e) = open_preview_window(&app, display.as_ref()) {
+            tracing::warn!(error = %e, "a capture kept from before a restart could not show its card");
+            return;
+        }
+        show_card_if_any(&app, &state.capture);
+        tracing::info!("a capture that did not upload before a restart is offered again");
+    });
+}
+
 /// Remove the capture's own temp folder, and nothing else: only a
 /// `capture-…` folder directly under the capture temp root.
 fn remove_temp_dir(file: &Path) {
@@ -4917,16 +4997,26 @@ fn remove_temp_dir(file: &Path) {
 
 /// At the start of a capture: a failed capture's card stays up (or comes
 /// back), so a capture that did not upload is never silently dropped; any
-/// other card makes way for the new one.
-fn bring_back_failed_card(app: &AppHandle, state: &CaptureState) {
+/// other card makes way for the new one. With none parked, `kept` (one
+/// kept on disk from before a restart, `next_kept_failed`) comes back.
+fn bring_back_failed_card(app: &AppHandle, state: &CaptureState, kept: Option<PreviewCard>) {
     let showing_failed = lock(&state.preview).as_ref().is_some_and(PreviewCard::is_parkable);
     if showing_failed {
         return;
     }
     close_preview(app, state);
-    if let Some(card) = lock(&state.parked).take() {
+    let parked = lock(&state.parked).take();
+    if let Some(card) = parked.or(kept) {
         *lock(&state.preview) = Some(card);
     }
+}
+
+/// [`bring_back_failed_card`], reading a capture kept on disk from before a
+/// restart only when nothing is parked.
+async fn bring_back_failed_or_kept(app: &AppHandle, state: &CaptureState) {
+    let nothing_parked = lock(&state.parked).is_none();
+    let kept = if nothing_parked { next_kept_failed(app).await } else { None };
+    bring_back_failed_card(app, state, kept);
 }
 
 /// Put the current card (a failed one brought back) on screen.
@@ -5318,8 +5408,10 @@ pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHa
     }
     *lock(&state.capture.shortcut_problems) = problems;
     // The signed-in app is up: recordings an earlier build held are
-    // released if the plan allows them now.
+    // released if the plan allows them now, and a capture that did not
+    // upload before the app last quit is offered again.
     spawn_release_held(&app);
+    spawn_offer_kept_failed(&app);
     Ok(())
 }
 

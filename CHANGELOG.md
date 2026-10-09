@@ -37,6 +37,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Controls on the camera bubble while you record.** Point at the bubble to change its size or pause and resume the recording right there. The controls never show up in the video. On a Mac and Windows.
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
 - **Deleting a file or folder reminds you about its share links.** The confirmation now says that share links made from it keep working, and that you can turn them off in Shared Links.
+- **A capture that could not upload is offered again after a restart.** Its card comes back when you open Hippius, with Retry (or Upgrade when your storage is full), instead of the capture sitting forgotten on your computer.
 
 ### Changed
 

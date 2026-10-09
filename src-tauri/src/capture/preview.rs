@@ -44,8 +44,9 @@ pub enum PreviewStatus {
     },
 }
 
-/// Why an upload failed, as far as the card's next step goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Why an upload failed, as far as the card's next step goes. Read back
+/// from a kept failure's marker (`kept_failed`) after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureReason {
     /// No network: retry when back online.
