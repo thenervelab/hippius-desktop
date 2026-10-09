@@ -18,7 +18,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Added
 
 - **The free plan includes 25 screen recordings.** Every recording in your Hippius Captures drive counts, including ones made on the web or on another computer. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
-- **Screenshots on Linux with Wayland use the Hippius capture bar.** Drag an area or take the entire screen on a still of your desktop, with the same keys, timer and shortcut as on other systems, instead of your desktop's screenshot tool.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
   JPEG files that are only on Hippius, not just ones synced to this computer.
@@ -171,7 +170,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Linux screen recordings play from share links in Chrome.** Recordings made on Ubuntu 22.04 opened as "This video can't be played in the browser"; every Linux recording is now saved in the layout browsers read straight through, so it starts playing at once. If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
-
+- **Screenshots on Linux with Wayland take one step again.** Screenshot opens your desktop's own screenshot tool straight away, where you choose an area, a window or a whole screen, and Hippius uploads the result like any other capture. You are no longer shown the Hippius capture bar first and then asked by GNOME to share a picture of your whole screen. The Screenshot menu says how it works on your desktop.
+- **The camera and microphone menus show on the Linux recording bar.** On Wayland they opened behind the bar's buttons; they now open over them, where you can pick a device.
 - **Videos play in the viewer on Linux.** Screen recordings and other videos in your drives now play inside Hippius on Linux instead of showing a black screen. If your system is missing the video decoder, the viewer tells you which package to install and still lets you open the video in your own player.
 - **The camera bubble shows your camera on Ubuntu 22.04 and similar Linux systems.** It used to stay on its placeholder there; if a camera still cannot start, the bubble now says so instead of waiting for ever.
 - **Linux: a tidier recording bar, and the dock opens Hippius mid-recording.** On Wayland the recording bar is now just the bar, not a large dark box around it, and clicking Hippius in the dock or picking it in Alt+Tab while recording brings the app back.
