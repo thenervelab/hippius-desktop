@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   Pencil,
   RotateCw,
+  Settings2,
   Sparkles,
   Trash2,
   Video,
@@ -27,6 +28,7 @@ import {
   editCapturePreview,
   getCapturePreview,
   getCapturePreviewPointer,
+  manageCapturePreviewLink,
   mintCapturePreviewLink,
   retryCapturePreview,
   revealCapturePreview,
@@ -329,6 +331,13 @@ export default function CapturePreviewPage() {
             <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
               {card.notice}
             </p>
+          ) : card.linkNote ? (
+            // A public link says who can open it, in the destination's place
+            // (still in the tooltip) so the card keeps its height. More >
+            // Manage link changes it.
+            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)} data-testid="capture-link-note">
+              {card.linkNote}
+            </p>
           ) : (
             <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
               {destinationText(card)}
@@ -443,7 +452,7 @@ export default function CapturePreviewPage() {
                   {copied ? "Copied" : "Copy link"}
                 </button>
               )}
-              {(actions.reveal || actions.revokeLink || canEdit) && (
+              {(actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
                 <button
                   ref={menuButton}
                   type="button"
@@ -457,7 +466,7 @@ export default function CapturePreviewPage() {
                   <MoreHorizontal aria-hidden className="size-4" />
                 </button>
               )}
-              {menuOpen && (actions.reveal || actions.revokeLink || canEdit) && (
+              {menuOpen && (actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
                 // Opens upward over the picture: the card sits at the window's
                 // bottom edge, so there is no room below.
                 <div
@@ -492,6 +501,20 @@ export default function CapturePreviewPage() {
                       className={MENU_ITEM}
                     >
                       <FolderSearch aria-hidden className="size-3.5 shrink-0" /> Show in {fileManager}
+                    </button>
+                  )}
+                  {actions.manageLink && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        run(manageCapturePreviewLink);
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <Settings2 aria-hidden className="size-3.5 shrink-0" /> Manage link
                     </button>
                   )}
                   {actions.revokeLink && (

@@ -52,13 +52,10 @@ env:
 jobs:
   publish-tauri-macos:
     runs-on: macos-latest
-    # Creates the beta release and uploads artifacts to it. `pull-requests:
-    # read` is for the release-notes step, which queries the PR API — without it
-    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
-    # exits non-zero and fails the step under `set -euo pipefail`.
+    # Creates the beta release and uploads artifacts to it. The release name
+    # and notes are written later by assemble-release, so no PR access here.
     permissions:
       contents: write
-      pull-requests: read
 
     steps:
       - name: Checkout
@@ -144,48 +141,6 @@ jobs:
             git clone --bare --filter=blob:none ssh://git@github.com/thenervelab/hcfs.git /tmp/hcfs-verify
             git -C /tmp/hcfs-verify cat-file -t "$REV"
           fi
-
-      - name: Get release notes
-        id: release_notes
-        shell: bash
-        run: |
-          set -euo pipefail
-          SHA="$(git rev-parse HEAD)"
-          PR_NUMBER="$(git log -1 --pretty=format:'%s' | grep -oE '#[0-9]+' | tr -d '# ' || true)"
-
-          if [[ -z "${PR_NUMBER:-}" ]]; then
-            PR_NUMBER="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/commits/${SHA}/pulls" \
-              | jq -r '.[0].number // empty')"
-          fi
-
-          if [[ -n "${PR_NUMBER:-}" ]]; then
-            PR_INFO="$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}")"
-
-            TITLE="$(jq -r '.title // empty' <<<"$PR_INFO")"
-            BODY="$(jq -r '.body // empty'  <<<"$PR_INFO")"
-          else
-            TITLE="$(git log -1 --pretty=%s)"
-            BODY="$(git log -1 --pretty=%b)"
-          fi
-
-          TITLE="${TITLE//$'\r'/}"
-          BODY="${BODY//$'\r'/}"
-          if [[ -z "${BODY:-}" ]]; then
-            BODY="See the assets to download this version and install."
-          fi
-
-          BODY="$(printf '%s' "$BODY" | head -c 30000)"
-
-          {
-            echo "title<<__TITLE__"
-            echo "$TITLE"
-            echo "__TITLE__"
-            echo "body<<__BODY__"
-            echo "$BODY"
-            echo "__BODY__"
-          } >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -348,24 +303,14 @@ jobs:
           HIPPIUS_RELEASE_CHANNEL: beta
         with:
           tagName: v__VERSION__
-          # The suffix rides on the release NAME because that list is where a
-          # tester picks a build from; a caveat buried in the body is read after
-          # the download, if at all.
-          #
-          # BEST-EFFORT, not guaranteed: publish-tauri-linux and
-          # publish-tauri-windows have no `needs:` on this job and publish to
-          # this same tag with `overwrite: true` and a hardcoded
-          # `[BETA] Hippius` name, so whichever job creates the release first
-          # wins the name.
-          releaseName: "[BETA] ${{ steps.release_notes.outputs.title }}"
+          # Placeholders. The three platform jobs race to create this release
+          # and tauri-action never edits the name or body of one that exists,
+          # so whichever job gets there first would decide them. All three set
+          # the same values and assemble-release writes the real name and notes
+          # once every job has finished.
+          releaseName: '[BETA] Hippius'
           releaseBody: |
             **Beta Build**
-
-            > This is a prerelease. It follows the development work, so it has
-            > the newest features first and those features are not fully
-            > stabilized. Switch back from Settings at any time.
-
-            ${{ steps.release_notes.outputs.body }}
           # Draft until publish-manifest has corrected latest.json, mirroring
           # tauri-build.yml. macOS is built --bundles app, so between here and
           # the finalize step the release carries no DMG at all; published,
@@ -473,13 +418,10 @@ jobs:
   # jobs upsert the same v<version> release.
   publish-tauri-linux:
     runs-on: ubuntu-22.04
-    # Creates the beta release and uploads artifacts to it. `pull-requests:
-    # read` is for the release-notes step, which queries the PR API — without it
-    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
-    # exits non-zero and fails the step under `set -euo pipefail`.
+    # Creates the beta release and uploads artifacts to it. The release name
+    # and notes are written later by assemble-release, so no PR access here.
     permissions:
       contents: write
-      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -562,6 +504,7 @@ jobs:
           HIPPIUS_RELEASE_CHANNEL: beta
         with:
           tagName: v__VERSION__
+          # Placeholders, replaced by assemble-release. See the macOS job.
           releaseName: '[BETA] Hippius'
           releaseBody: |
             **Beta Build**
@@ -579,13 +522,10 @@ jobs:
   # cert, so for internal preview the extension ships as a side bundle.
   publish-tauri-windows:
     runs-on: windows-latest
-    # Creates the beta release and uploads artifacts to it. `pull-requests:
-    # read` is for the release-notes step, which queries the PR API — without it
-    # the title resolves empty and, on a push with no `#N` in the subject, `jq`
-    # exits non-zero and fails the step under `set -euo pipefail`.
+    # Creates the beta release and uploads artifacts to it. The release name
+    # and notes are written later by assemble-release, so no PR access here.
     permissions:
       contents: write
-      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -676,6 +616,7 @@ jobs:
           HIPPIUS_RELEASE_CHANNEL: beta
         with:
           tagName: v__VERSION__
+          # Placeholders, replaced by assemble-release. See the macOS job.
           releaseName: '[BETA] Hippius'
           releaseBody: |
             **Beta Build**
@@ -730,10 +671,16 @@ jobs:
   #      `beta` release below holds one asset, latest.json, overwritten every
   #      build; that is the URL ReleaseChannel::Beta::manifest_url() points at.
   #      Its own `url` fields still address the real versioned assets.
+  #
+  #   3. Write the release name and notes. The platform jobs race to create
+  #      the release and tauri-action never edits an existing one, so the
+  #      first job to arrive fixed the name and body. Writing them here, after
+  #      all three, is the only place the result does not depend on timing.
   assemble-release:
     needs: [publish-tauri-macos, publish-tauri-linux, publish-tauri-windows]
     permissions:
       contents: write # upload latest.json + SHA256SUMS, edit the release notes
+      pull-requests: read # the notes step reads the merged PR via the API
     runs-on: ubuntu-latest
     steps:
       - name: Checkout (read version -> tag)
@@ -821,6 +768,74 @@ jobs:
           echo "Manifest declares stateEpoch=$EPOCH"
 
           gh release upload "$TAG" --repo "$REPO" latest.json --clobber
+
+      # The merged PR's title and body for the commit this build is from, or
+      # the CHANGELOG's [Unreleased] section when there is no PR body. Replaces
+      # the whole body, so it must run BEFORE the Downloads step below, which
+      # prepends its table to whatever notes it finds.
+      #
+      # PR text only ever travels through files and `gh` flags, never through
+      # `${{ }}`, so nothing in a PR body can become shell.
+      - name: Write the release name and notes
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          TAG="v$(jq -r .version src-tauri/tauri.conf.json)"
+
+          # The merged PR this commit belongs to. The subject's `#N` is the
+          # fallback for a commit the API does not associate with one.
+          gh api "repos/${REPO}/commits/${SHA}/pulls" \
+            --jq '[.[] | select(.merged_at != null)] | first // empty' >"${work}/pr.json" || true
+          if [[ ! -s "${work}/pr.json" ]]; then
+            SUBJECT="$(gh api "repos/${REPO}/commits/${SHA}" --jq '.commit.message | split("\n")[0]')"
+            PR_NUMBER="$(grep -oE '#[0-9]+' <<<"${SUBJECT}" | head -n1 | tr -d '#' || true)"
+            if [[ -n "${PR_NUMBER}" ]]; then
+              gh api "repos/${REPO}/pulls/${PR_NUMBER}" >"${work}/pr.json" || true
+            fi
+          fi
+
+          TITLE=""
+          if [[ -s "${work}/pr.json" ]]; then
+            TITLE="$(jq -r '.title // ""' "${work}/pr.json" | tr -d '\r')"
+            jq -r '.body // ""' "${work}/pr.json" | tr -d '\r' >"${work}/notes.md"
+          fi
+          if [[ -z "${TITLE}" ]]; then
+            TITLE="$(gh api "repos/${REPO}/commits/${SHA}" --jq '.commit.message | split("\n")[0]' | tr -d '\r')"
+          fi
+
+          # No PR body: the text between `## [Unreleased]` and the next
+          # `## [` heading.
+          if [[ ! -s "${work}/notes.md" ]] || ! grep -q '[^[:space:]]' "${work}/notes.md"; then
+            awk '
+              /^## \[Unreleased\]/ { inside = 1; next }
+              inside && /^## \[/   { exit }
+              inside                { print }
+            ' CHANGELOG.md >"${work}/notes.md"
+          fi
+          if ! grep -q '[^[:space:]]' "${work}/notes.md"; then
+            echo "See the assets to download this version and install." >"${work}/notes.md"
+          fi
+
+          {
+            echo "**Beta Build**"
+            echo
+            echo "> This is a prerelease. It follows the development work, so it has"
+            echo "> the newest features first and those features are not fully"
+            echo "> stabilized. Switch back from Settings at any time."
+            echo
+            head -c 100000 "${work}/notes.md"
+            echo
+          } >"${work}/body.md"
+
+          gh release edit "${TAG}" --repo "${REPO}" \
+            --title "[BETA] ${TITLE:-Hippius}" \
+            --notes-file "${work}/body.md"
+          echo "Release name and notes written to ${TAG}."
 
       # Checksums for every asset (from the API's own digests, nothing is
       # downloaded) plus a Downloads table naming the installer per platform.

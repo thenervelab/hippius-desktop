@@ -142,10 +142,21 @@ describe("CaptureHost", () => {
     expect(h.toastError).not.toHaveBeenCalled();
   });
 
+  it("asks Rust to run a launch's capture shortcut once it listens", async () => {
+    mountHost();
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_launch_shortcut"));
+  });
+
   it("opens the plans on the card's Upgrade", async () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_open_plans", null));
     expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
+  });
+
+  it("opens Shared Links at the capture's link on the card's Manage link", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_manage_link", { shareToken: "tok1" }));
+    expect(h.push).toHaveBeenCalledWith("/shares?highlight=file%3Atok1");
   });
 
   // The shortcut is the one-step area screenshot: Rust's payload says so and

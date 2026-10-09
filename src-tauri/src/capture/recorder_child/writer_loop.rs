@@ -123,15 +123,13 @@ const NOTHING_CAPTURED: &str = "The recording stopped before anything was captur
 /// The writer thread: owns the pipeline until Finish, Cancel, or every
 /// sender is gone (then it finishes and keeps the file). `create` makes the
 /// encoder for the first picture's size; `ready` hears that size (or why the
-/// encoder could not start) once. `watermark` burns the Free plan's
-/// watermark into every picture.
+/// encoder could not start) once.
 pub fn run<E: Encoder>(
     rx: &Receiver<Msg>,
     shared: &Shared,
     out: &Output,
     sources: &[Source],
     ready: &Sender<Result<(u32, u32), String>>,
-    watermark: bool,
     mut create: impl FnMut((u32, u32)) -> Result<E, String>,
 ) {
     let mut pipeline: Option<Pipeline<E>> = None;
@@ -172,9 +170,6 @@ pub fn run<E: Encoder>(
                     match create(size) {
                         Ok(encoder) => {
                             let mut p = Pipeline::new(encoder, sources);
-                            if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1) {
-                                p.set_watermark(stamp);
-                            }
                             // Time zero is now, as Start is answered, not
                             // when the first picture was taken: making the
                             // encoder can take seconds, and the app's timer
@@ -355,7 +350,7 @@ mod tests {
             let log = Arc::clone(&log);
             let clock = Arc::clone(&clock);
             move || {
-                run(&rx, &shared, &out, sources, &ready_tx, false, |_size| {
+                run(&rx, &shared, &out, sources, &ready_tx, |_size| {
                     clock.fetch_add(create_takes, Ordering::SeqCst);
                     if fail_create {
                         Err("no H.264 encoder".to_string())

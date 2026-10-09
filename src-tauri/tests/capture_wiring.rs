@@ -230,15 +230,18 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     );
 
     // The gate reads the plan the way the length cap does, and the count
-    // from the server's listing of the captures drive, failing open.
+    // from the server's listings of every captures drive, failing open.
     let allowance = read("src/capture/recording_allowance.rs");
     let check = fn_body(&allowance, "pub async fn check_start(");
     assert!(check.contains("allowance::recording_tier(state, &account)"));
     assert!(check.contains("recording_count(state, &account_id)"));
+    assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
+    let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        fn_body(&allowance, "pub async fn recording_count(").contains("remote::list_remote_folder_files_inner("),
+        list.contains("remote::list_remote_folder_files_inner("),
         "the count comes from the server listing the remote-folder browser uses"
     );
+    assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 
 /// The app's dialog and the bar's panel say what Rust's refusal says.
@@ -904,11 +907,14 @@ fn the_card_and_session_commands_are_registered() {
         "capture_relaunch_for_permission",
         "capture_preview_mint_link",
         "capture_preview_revoke_link",
+        "capture_preview_manage_link",
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
         "capture_limit_upgrade",
         "capture_check_recording_start",
+        "capture_free_plan_notice",
+        "capture_launch_shortcut",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),
@@ -2483,8 +2489,10 @@ fn the_bar_follows_the_pointer_to_another_display() {
 
 /// GNOME's Wayland session ignores a Wayland client's keep-above, so the
 /// pill and the bubble fell behind other windows and the camera went
-/// missing from the recording. On GNOME Wayland the app connects through
-/// XWayland, which Mutter keeps above: decided before GTK starts (after the
+/// missing from the recording. XWayland, which Mutter keeps above, is only
+/// used when `HIPPIUS_XWAYLAND` asks for it (native Wayland by default:
+/// XWayland drew the area overlay at the wrong size on scaled displays). It
+/// is decided before GTK starts (after the
 /// recorder child, which opens no window), and through GDK's allowed
 /// backends, never `GDK_BACKEND`, which every program the app starts would
 /// inherit. XWayland comes first and Wayland after it, so the app still
@@ -2502,6 +2510,10 @@ fn gnome_wayland_connects_through_xwayland_before_gtk_starts() {
     let module = read("src/utils/display_backend.rs");
     let apply = fn_body(&module, "pub fn apply() -> Choice {");
     assert!(apply.contains("choose(&SessionEnv"), "apply asks the pure decision");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("if !truthy(env.xwayland_opt_in)"),
+        "native Wayland unless XWayland is asked for"
+    );
     assert!(apply.contains("set_allowed_backends(XWAYLAND_FIRST)"));
     assert!(module.contains("pub const XWAYLAND_FIRST: &str = \"x11,wayland\";"));
     for forbidden in ["set_var(", "remove_var("] {
@@ -2638,41 +2650,28 @@ fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
     assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
 }
 
-/// Linux asks the system for the camera before the bubble opens it, moves
-/// the capture windows aside while the system's question is up, and sends
-/// the answer to the bubble; the bubble's state carries it (`camera_access`).
+/// The bubble opens the camera itself on Linux, as it did before the Camera
+/// portal pre-check: nothing asks the portal ahead of `getUserMedia` or
+/// moves the capture windows aside, so the camera state's `access` stays
+/// `unknown` and the page opens the camera and says what failed if it
+/// fails. `camera_access` keeps the answer types for when the pre-check is
+/// wired again.
 #[test]
-fn linux_asks_for_the_camera_before_the_bubble_opens_it() {
+fn linux_bubble_opens_the_camera_without_a_portal_pre_check() {
     let src = read("src/capture/commands.rs");
     let sync = fn_body(&src, "async fn sync_camera(");
-    let open = sync.find("open_camera_window(app, shape").expect("the bubble opens here");
-    let ask = sync.find("ask_camera_access(app)").expect("sync_camera asks for the camera");
-    assert!(ask > open, "asked as the bubble opens, so its state says `asking`");
-    assert!(
-        ask < sync.find("camera_state_for(app, wanted").expect("state sent"),
-        "asked before the state goes out"
-    );
-    let asking = fn_body(&src, "fn ask_camera_access(");
-    assert!(asking.contains("camera_access::should_ask("), "only where the platform asks");
-    assert!(asking.contains("begin_asking()"), "one question at a time");
-    let step_aside = asking.find("step_aside_for_system_question(&app)").expect("windows step aside");
-    let finish = asking.find("finish_asking(access, present)").expect("the answer is kept");
-    let back = asking.find("come_back_after_system_question(&app, &aside)").expect("windows come back");
-    let resend = asking.find("sync_camera(&app).await").expect("the bubble learns the answer");
-    assert!(step_aside < finish && finish < back && back < resend);
-    assert!(
-        fn_body(&src, "fn step_aside_for_system_question(").contains("CapturePhase::Recording"),
-        "never mid-recording: the bubble and pill are in the video"
-    );
+    assert!(sync.contains("open_camera_window(app, shape"), "the bubble opens here");
+    for gone in [
+        "ask_camera_access",
+        "step_aside_for_system_question",
+        "come_back_after_system_question",
+        "camera_access::ask_portal",
+        "begin_asking()",
+    ] {
+        assert!(!src.contains(gone), "no camera pre-check: {gone}");
+    }
     let state = fn_body(&src, "async fn camera_state_for(");
     assert!(state.contains("access: state.capture.camera_access.current()"));
-    assert!(state.contains("privacy_place: super::camera_access::privacy_place("));
-    assert!(fn_body(&src, "pub async fn capture_overlay_context(").contains("device_privacy(state.capture.camera_access.current())"));
-    let cargo = read("Cargo.toml");
-    assert!(
-        cargo.lines().any(|l| l.starts_with("ashpd") && l.contains("\"camera\"")),
-        "ashpd's Camera portal is switched on"
-    );
 }
 
 /// `capture_support` waits on the Linux recorder's probe (up to 20 s on a
@@ -2736,4 +2735,39 @@ fn a_superseded_recording_start_leaves_the_new_session_alone() {
         start[check..adopt].contains("discard_recording(Some(recorder), Some(dir))"),
         "only its own folder"
     );
+}
+
+/// A failed direct capture outlives a restart: the failure writes its marker,
+/// reaching the drive clears it, sign-in offers it again, and each capture
+/// start brings one back while nothing is parked. Discard is the only way
+/// its file is removed.
+#[test]
+fn a_failed_capture_is_offered_again_after_a_restart() {
+    let src = read("src/capture/commands.rs");
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
+    let placed = deliver.find("announce_placed(").expect("placement is announced");
+    assert!(clear < placed, "cleared as soon as delivery succeeds");
+    assert!(deliver.contains("keep_failed_card(app, id)"), "a failure writes its marker");
+    assert!(
+        fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
+        "sign-in offers a kept failure again"
+    );
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("bring_back_failed_or_kept(&app, &state.capture).await"));
+    assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// `--capture` / `--record` on the launch that starts the app are kept in
+/// setup and run by the signed-in app once it listens; a second launch is
+/// still the single-instance handler's.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_not_dropped() {
+    let main = read("src/main.rs");
+    assert!(main.contains("remember_launch_shortcut(app.handle(), std::env::args()"));
+    let commands = read("src/capture/commands.rs");
+    let run = fn_body(&commands, "pub fn capture_launch_shortcut(");
+    assert!(run.contains(".take()"), "run once");
+    assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
 }

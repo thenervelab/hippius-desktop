@@ -44,8 +44,9 @@ pub enum PreviewStatus {
     },
 }
 
-/// Why an upload failed, as far as the card's next step goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Why an upload failed, as far as the card's next step goes. Read back
+/// from a kept failure's marker (`kept_failed`) after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureReason {
     /// No network: retry when back online.
@@ -89,7 +90,21 @@ impl LinkState {
             Self::Creating => Some("Creating link…"),
         }
     }
+
+    /// Who can open the link and for how long, while there is one. A
+    /// capture's link is public and never expires; the card says so, and
+    /// its More menu opens Shared Links to change it.
+    #[must_use]
+    pub fn note(&self) -> Option<&'static str> {
+        match self {
+            Self::Public { .. } => Some(PUBLIC_LINK_NOTE),
+            _ => None,
+        }
+    }
 }
+
+/// [`LinkState::note`] for a public link.
+pub const PUBLIC_LINK_NOTE: &str = "Anyone with the link can view. Never expires.";
 
 /// Which buttons the card offers now. Rust decides; the card draws them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -106,6 +121,9 @@ pub struct CardActions {
     pub mint_link: bool,
     /// Revoke the public link this capture made.
     pub revoke_link: bool,
+    /// Open this link's row in Shared Links, where who can open it and for
+    /// how long are changed.
+    pub manage_link: bool,
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
     /// Open the storage plans in the main window: the upload failed because
@@ -143,6 +161,9 @@ pub struct PreviewCard {
     /// [`LinkState::text`], sent so the card does not word it itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_text: Option<String>,
+    /// [`LinkState::note`], sent so the card does not word it itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_note: Option<String>,
     pub actions: CardActions,
     /// The capture is in the drive and its link has settled: the card may
     /// slide away on its own. Worked out in [`PreviewCard::refreshed`].
@@ -296,6 +317,7 @@ impl PreviewCard {
     #[must_use]
     pub fn refreshed(self) -> Self {
         let link_text = self.link.text().map(str::to_string);
+        let link_note = self.link.note().map(str::to_string);
         let actions = self.decide_actions();
         // A link still being made, or one that failed, holds the card: it
         // must stay up to say the link was copied, or to offer Create link.
@@ -307,6 +329,7 @@ impl PreviewCard {
         let notice = self.stopped_at_free_limit.then(|| super::allowance::FREE_LIMIT_NOTICE.to_string());
         Self {
             link_text,
+            link_note,
             actions,
             settled,
             notice,
@@ -329,6 +352,7 @@ impl PreviewCard {
             // or the temp copy kept for exactly this.
             mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
+            manage_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
             upgrade: self.stopped_at_free_limit
                 || matches!(
@@ -402,6 +426,7 @@ mod tests {
             rel_path: rel_path_for("Recording 2026-09-29 at 15.42.10.mp4"),
             link: LinkState::None,
             link_text: None,
+            link_note: None,
             actions: CardActions::default(),
             settled: false,
             share_url: None,
@@ -514,6 +539,17 @@ mod tests {
     #[test]
     fn the_link_line_is_worded_by_rust() {
         assert_eq!(LinkState::Public { copied: true }.text(), Some("Public link copied"));
+        // A public link says who can open it and that it never expires;
+        // no other state has a link to describe.
+        assert_eq!(LinkState::Public { copied: false }.note(), Some(PUBLIC_LINK_NOTE));
+        for other in [
+            LinkState::None,
+            LinkState::Revoked,
+            LinkState::Creating,
+            LinkState::Failed { message: "x".into() },
+        ] {
+            assert_eq!(other.note(), None, "{other:?}");
+        }
         assert_eq!(LinkState::Public { copied: false }.text(), Some("Public link ready"));
         assert_eq!(LinkState::None.text(), None);
         assert_eq!(LinkState::Revoked.text(), Some("Link revoked"));
@@ -527,7 +563,7 @@ mod tests {
         // Uploading: nothing yet.
         assert_eq!(card(1).actions, CardActions::default());
 
-        // Uploaded to a synced drive with a link: copy, revoke, reveal.
+        // Uploaded to a synced drive with a link: copy, manage, revoke, reveal.
         let mut c = card(1);
         c.placed_path = Some(PathBuf::from("/Users/x/Hippius/Work/Captures/Recording.mp4"));
         c.share_token = Some("tok".into());
@@ -546,6 +582,7 @@ mod tests {
             CardActions {
                 copy_link: true,
                 revoke_link: true,
+                manage_link: true,
                 reveal: true,
                 ..CardActions::default()
             }
@@ -698,9 +735,10 @@ mod tests {
                 "relPath": "Captures/Recording 2026-09-29 at 15.42.10.mp4",
                 "link": { "state": "public", "copied": true },
                 "linkText": "Public link copied",
+                "linkNote": "Anyone with the link can view. Never expires.",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "reveal": true, "upgrade": false, "edit": false
+                    "revokeLink": true, "manageLink": true, "reveal": true, "upgrade": false, "edit": false
                 },
                 "settled": true
             })

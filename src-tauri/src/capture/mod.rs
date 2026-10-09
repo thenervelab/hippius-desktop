@@ -24,6 +24,7 @@ pub mod frozen_shot;
 pub mod geometry;
 pub mod held_recordings;
 pub mod instant;
+pub mod kept_failed;
 pub mod linux_portal;
 pub mod linux_x11;
 pub mod live_controls;

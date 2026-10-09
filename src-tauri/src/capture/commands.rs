@@ -49,6 +49,8 @@ pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 /// The card's Upgrade: the main window opens the storage plans.
 pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
+/// The card's Manage link: the main window opens Shared Links at this link.
+pub const MANAGE_LINK_EVENT: &str = "capture_manage_link";
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -231,6 +233,9 @@ pub struct CaptureState {
     stopped_at_limit: AtomicBool,
     /// The last recording tier seen per account (`allowance::TierCache`).
     pub(crate) recording_tiers: super::allowance::TierCache,
+    /// `hippius --capture` / `--record` that started the app, and when:
+    /// run once the signed-in app is listening (`capture_launch_shortcut`).
+    launch_shortcut: Mutex<Option<(ShortcutKind, std::time::Instant)>>,
     /// This session's plan read, started with the session so the capture
     /// rarely waits for it (`prefetch_tier`, `capture_tier`).
     tier_lookup: Mutex<Option<tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>>>>,
@@ -1243,7 +1248,7 @@ pub async fn capture_start(
     }
     let areas = bar::load_areas(pool).await.unwrap_or_default();
 
-    bring_back_failed_card(&app, &state.capture);
+    bring_back_failed_or_kept(&app, &state.capture).await;
     hide_own_windows(&app, &state.capture).await;
     if matches!(plan, super::support::StartPlan::Frozen | super::support::StartPlan::SystemPicker) {
         start_without_live_overlay(&app, &state.capture, plan);
@@ -3977,6 +3982,13 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
     }
     .await;
 
+    // A capture that left its temp folder, or reached the drive, is no
+    // longer a failure to offer after a restart (`kept_failed`).
+    if outcome.is_ok()
+        && let Ok(root) = super::screenshot::capture_tmp_root()
+    {
+        super::kept_failed::clear(&root, path);
+    }
     match outcome {
         Ok(Delivery::KeptHere(kept)) => keep_here(app, path, card_id, &kept).await,
         Ok(Delivery::Placed {
@@ -4030,6 +4042,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                     };
                 })
             });
+            if let Some(id) = card_id {
+                keep_failed_card(app, id);
+            }
             let _ = app.emit(
                 FAILED_EVENT,
                 FailedPayload {
@@ -4846,6 +4861,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         status: PreviewStatus::Uploading,
         link: LinkState::None,
         link_text: None,
+        link_note: None,
         actions: super::preview::CardActions::default(),
         settled: false,
         share_url: None,
@@ -4901,6 +4917,76 @@ fn settle_closed_card(state: &CaptureState, card: PreviewCard) {
     }
 }
 
+/// A failed card writes its marker beside its file, so the capture is
+/// offered again after a restart (`kept_failed`). Parking alone is memory.
+fn keep_failed_card(app: &AppHandle, id: u64) {
+    let state = app.state::<AppState>();
+    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
+        return;
+    };
+    let card = lock(&state.capture.preview).clone().filter(|c| c.id == id);
+    let account = crate::auth::account_key::account_key(&account_id);
+    if let Some(card) = card
+        && let Some(kept) = super::kept_failed::KeptFailed::from_card(&account, &card)
+    {
+        super::kept_failed::write(&root, &card.file_path, &kept);
+    }
+}
+
+/// The newest failed capture kept from before a restart (`kept_failed`)
+/// that no card shows or holds parked, as its card.
+async fn next_kept_failed(app: &AppHandle) -> Option<PreviewCard> {
+    let state = app.state::<AppState>();
+    let account_id = state.current_account_id().ok()?;
+    let pool = state.pool().ok()?;
+    let root = super::screenshot::capture_tmp_root().ok()?;
+    let mut except = Vec::new();
+    let showing = lock(&state.capture.preview).as_ref().map(|c| c.file_path.clone());
+    let parked = lock(&state.capture.parked).as_ref().map(|c| c.file_path.clone());
+    except.extend(showing);
+    except.extend(parked);
+    let account = crate::auth::account_key::account_key(&account_id);
+    let (file, kept) = tauri::async_runtime::spawn_blocking(move || super::kept_failed::list(&root, &account, &except).into_iter().next())
+        .await
+        .ok()??;
+    let remote = !destination::is_local(pool, &account_id, &kept.destination.label).await;
+    let id = state.capture.preview_seq.fetch_add(1, Ordering::SeqCst) + 1;
+    super::kept_failed::card(id, &file, kept, remote)
+}
+
+/// At sign-in, a capture that did not upload before the app last quit comes
+/// back as its card, with Retry (and Upgrade when the plan was full), unless
+/// a card is already up or parked. The rest come back one at a time on later
+/// captures (`bring_back_failed_card`).
+pub(crate) fn spawn_offer_kept_failed(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let showing = lock(&state.capture.preview).is_some();
+        let parked = lock(&state.capture.parked).is_some();
+        if showing || parked || state.capture.current() != CapturePhase::Idle {
+            return;
+        }
+        let Some(card) = next_kept_failed(&app).await else {
+            return;
+        };
+        {
+            let mut preview = lock(&state.capture.preview);
+            if preview.is_some() {
+                return;
+            }
+            *preview = Some(card);
+        }
+        let display = lock(&state.capture.bar_display).clone();
+        if let Err(e) = open_preview_window(&app, display.as_ref()) {
+            tracing::warn!(error = %e, "a capture kept from before a restart could not show its card");
+            return;
+        }
+        show_card_if_any(&app, &state.capture);
+        tracing::info!("a capture that did not upload before a restart is offered again");
+    });
+}
+
 /// Remove the capture's own temp folder, and nothing else: only a
 /// `capture-…` folder directly under the capture temp root.
 fn remove_temp_dir(file: &Path) {
@@ -4914,16 +5000,26 @@ fn remove_temp_dir(file: &Path) {
 
 /// At the start of a capture: a failed capture's card stays up (or comes
 /// back), so a capture that did not upload is never silently dropped; any
-/// other card makes way for the new one.
-fn bring_back_failed_card(app: &AppHandle, state: &CaptureState) {
+/// other card makes way for the new one. With none parked, `kept` (one
+/// kept on disk from before a restart, `next_kept_failed`) comes back.
+fn bring_back_failed_card(app: &AppHandle, state: &CaptureState, kept: Option<PreviewCard>) {
     let showing_failed = lock(&state.preview).as_ref().is_some_and(PreviewCard::is_parkable);
     if showing_failed {
         return;
     }
     close_preview(app, state);
-    if let Some(card) = lock(&state.parked).take() {
+    let parked = lock(&state.parked).take();
+    if let Some(card) = parked.or(kept) {
         *lock(&state.preview) = Some(card);
     }
+}
+
+/// [`bring_back_failed_card`], reading a capture kept on disk from before a
+/// restart only when nothing is parked.
+async fn bring_back_failed_or_kept(app: &AppHandle, state: &CaptureState) {
+    let nothing_parked = lock(&state.parked).is_none();
+    let kept = if nothing_parked { next_kept_failed(app).await } else { None };
+    bring_back_failed_card(app, state, kept);
 }
 
 /// Put the current card (a failed one brought back) on screen.
@@ -5132,6 +5228,28 @@ pub async fn capture_preview_revoke_link(state: tauri::State<'_, AppState>, app:
     Ok(())
 }
 
+/// What Manage link sends the main window: the share's token, which names
+/// its row in Shared Links. Sent to the main window only, never to the card.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManageLink {
+    share_token: String,
+}
+
+/// Manage link: the main window comes forward on Shared Links with this
+/// capture's link pointed out, where who can open it and when it expires
+/// are changed. The card stays as it is.
+#[tauri::command]
+pub async fn capture_preview_manage_link(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = card_for(&state.capture, |c| c.actions.manage_link, "This capture has no link to manage.")?;
+    let share_token = card
+        .share_token
+        .ok_or_else(|| AppError::Validation("This capture has no link to manage.".into()))?;
+    show_main_window(&app);
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, MANAGE_LINK_EVENT, ManageLink { share_token });
+    Ok(())
+}
+
 /// Reveal in Finder / Show in Explorer: the capture's file in the drive's
 /// synced folder on this machine.
 #[tauri::command]
@@ -5212,6 +5330,14 @@ pub async fn capture_check_recording_start(state: tauri::State<'_, AppState>) ->
     super::recording_allowance::require_can_start(&state).await
 }
 
+/// The free plan's notice for the capture bar and the Captures page
+/// (`recording_allowance::current_free_plan_notice`); `None` for any plan
+/// that is not known to be free.
+#[tauri::command]
+pub async fn capture_free_plan_notice(state: tauri::State<'_, AppState>) -> Result<Option<super::recording_allowance::FreePlanNotice>> {
+    Ok(super::recording_allowance::current_free_plan_notice(&state).await)
+}
+
 /// The recording limit dialog's Upgrade, from the capture bar: the bar
 /// closes and the main window opens the plans (`capture_open_plans`, where
 /// every upgrade prompt goes).
@@ -5285,8 +5411,10 @@ pub async fn capture_sync_shortcut(state: tauri::State<'_, AppState>, app: AppHa
     }
     *lock(&state.capture.shortcut_problems) = problems;
     // The signed-in app is up: recordings an earlier build held are
-    // released if the plan allows them now.
+    // released if the plan allows them now, and a capture that did not
+    // upload before the app last quit is offered again.
     spawn_release_held(&app);
+    spawn_offer_kept_failed(&app);
     Ok(())
 }
 
@@ -5443,6 +5571,58 @@ pub fn on_record_shortcut(app: &AppHandle) {
     on_shortcut_of(app, ShortcutKind::Record);
 }
 
+/// How long a launch's `--capture` / `--record` waits for the signed-in app.
+/// Later (the user signed in long after), a bar opening out of nowhere would
+/// surprise more than help.
+pub const LAUNCH_SHORTCUT_FOR: std::time::Duration = std::time::Duration::from_mins(2);
+
+/// The shortcut a launch's argv asks for: `--capture` is the capture
+/// shortcut, `--record` the Record one (`--capture` wins if both are there).
+#[must_use]
+pub fn launch_shortcut_for<I, S>(args: I) -> Option<ShortcutKind>
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<str>,
+{
+    if crate::cli::argv_requests_capture(args.clone()) {
+        Some(ShortcutKind::Screenshot)
+    } else if crate::cli::argv_requests_record(args) {
+        Some(ShortcutKind::Record)
+    } else {
+        None
+    }
+}
+
+/// The launch's shortcut, if it is still worth running at `now`.
+#[must_use]
+pub fn launch_shortcut_due(pending: Option<(ShortcutKind, std::time::Instant)>, now: std::time::Instant) -> Option<ShortcutKind> {
+    pending.and_then(|(kind, at)| (now.saturating_duration_since(at) < LAUNCH_SHORTCUT_FOR).then_some(kind))
+}
+
+/// `hippius --capture` / `--record` that STARTED the app (the single-instance
+/// handler only sees them when it is already running). Kept until the
+/// signed-in app is up and listening, since a start goes through it.
+pub fn remember_launch_shortcut<I, S>(app: &AppHandle, args: I)
+where
+    I: IntoIterator<Item = S> + Clone,
+    S: AsRef<str>,
+{
+    if let Some(kind) = launch_shortcut_for(args) {
+        tracing::info!(?kind, "launched for a capture shortcut; it runs once the app is signed in");
+        *lock(&app.state::<AppState>().capture.launch_shortcut) = Some((kind, std::time::Instant::now()));
+    }
+}
+
+/// The signed-in app is listening for capture starts: the launch's
+/// `--capture` / `--record` does now what the shortcut does, once.
+#[tauri::command]
+pub fn capture_launch_shortcut(state: tauri::State<'_, AppState>, app: AppHandle) {
+    let pending = lock(&state.capture.launch_shortcut).take();
+    if let Some(kind) = launch_shortcut_due(pending, std::time::Instant::now()) {
+        on_shortcut_of(&app, kind);
+    }
+}
+
 /// A press of a system-wide shortcut. Both toggle the same way
 /// (`shortcut::action_for`): Stop and Cancel run here; Start goes through
 /// the main window with what `kind` starts (`ShortcutKind::start`: the
@@ -5577,10 +5757,6 @@ async fn sync_camera(app: &AppHandle) {
             if let Err(e) = open_camera_window(app, shape, options.camera_size, anchored.map(|(f, scale, _)| (f, scale))) {
                 tracing::warn!(error = %e, "camera window could not open");
             }
-            // Linux: ask the system for the camera before the bubble opens
-            // it. The bubble waits while the question is up (the state sent
-            // below says `asking`).
-            ask_camera_access(app);
         }
     }
     if wanted.is_none() {
@@ -5588,95 +5764,6 @@ async fn sync_camera(app: &AppHandle) {
     }
     let camera_state = camera_state_for(app, wanted, hidden, &options).await;
     let _ = app.emit(CAMERA_STATE_EVENT, camera_state);
-}
-
-/// How long the Camera portal may take to answer before Hippius assumes the
-/// system is showing its question and moves its own windows aside. A
-/// stored answer comes back in a few milliseconds.
-const CAMERA_QUESTION_AFTER: std::time::Duration = std::time::Duration::from_millis(300);
-
-/// Ask the system for the camera (Linux, `camera_access`), once at a time,
-/// then send the camera state again so the bubble opens the camera or says
-/// why it cannot. Off Linux, or with a yes already given this run, nothing
-/// happens. Never fails: a portal that cannot be reached leaves the bubble
-/// to try by itself.
-fn ask_camera_access(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let platform = super::rollout::current_platform();
-    if !super::camera_access::should_ask(platform, state.capture.camera_access.current()) {
-        return;
-    }
-    if !state.capture.camera_access.begin_asking() {
-        return;
-    }
-    tracing::info!("camera: asking the system for the camera before the bubble opens it");
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let mut asked = tokio::spawn(super::camera_access::ask_portal());
-        let (answer, aside) = if let Ok(answer) = tokio::time::timeout(CAMERA_QUESTION_AFTER, &mut asked).await {
-            (answer, Vec::new())
-        } else {
-            // The system's question is on screen: Hippius's windows are kept
-            // above everything, so they step aside until it is answered, or
-            // the question could be hidden behind them.
-            let aside = step_aside_for_system_question(&app);
-            (asked.await, aside)
-        };
-        let (access, present) = answer.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "camera: the camera question ended without an answer");
-            (super::camera_access::CameraAccess::Unknown, None)
-        });
-        let state = app.state::<AppState>();
-        state.capture.camera_access.finish_asking(access, present);
-        come_back_after_system_question(&app, &aside);
-        // The bubble learns the answer (and opens the camera, or says why not).
-        sync_camera(&app).await;
-    });
-}
-
-/// Hide the capture windows that are on screen, so a system dialog is not
-/// under them; returns their labels.
-fn step_aside_for_system_question(app: &AppHandle) -> Vec<String> {
-    let mut aside = Vec::new();
-    // Never mid-recording: the bubble and the pill are in the video.
-    if matches!(
-        app.state::<AppState>().capture.current(),
-        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing
-    ) {
-        return aside;
-    }
-    for (label, window) in app.webview_windows() {
-        let ours =
-            label.starts_with(OVERLAY_LABEL_PREFIX) || [CAMERA_LABEL, CONTROLS_LABEL, BUBBLE_CONTROLS_LABEL, AREA_LABEL].contains(&label.as_str());
-        if ours && window.is_visible().unwrap_or(false) && window.hide().is_ok() {
-            aside.push(label);
-        }
-    }
-    if !aside.is_empty() {
-        tracing::info!(
-            windows = aside.len(),
-            "camera: capture windows moved aside for the system's camera question"
-        );
-    }
-    aside
-}
-
-/// Put back what [`step_aside_for_system_question`] hid, if the capture is
-/// still going (a cancel meanwhile closed them for good).
-fn come_back_after_system_question(app: &AppHandle, aside: &[String]) {
-    if aside.is_empty() {
-        return;
-    }
-    let state = app.state::<AppState>();
-    if state.capture.current() == CapturePhase::Idle {
-        return;
-    }
-    for label in aside {
-        if let Some(window) = app.get_webview_window(label) {
-            show_without_focus(&window);
-        }
-    }
-    focus_active_ui(app, &state.capture);
 }
 
 /// Where the bubble goes while an area recording is being chosen: inside the
@@ -6853,6 +6940,25 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+
+    /// `hippius --capture` / `--record` that start the app run once the
+    /// signed-in app is up, unless that took so long it would surprise.
+    #[test]
+    fn a_launch_for_a_shortcut_runs_it_once_the_app_is_up() {
+        assert_eq!(launch_shortcut_for(["--capture"]), Some(ShortcutKind::Screenshot));
+        assert_eq!(launch_shortcut_for(["--record"]), Some(ShortcutKind::Record));
+        assert_eq!(launch_shortcut_for(["--record", "--capture"]), Some(ShortcutKind::Screenshot));
+        assert_eq!(launch_shortcut_for(Vec::<String>::new()), None);
+        assert_eq!(launch_shortcut_for(["hippiusapp://callback"]), None);
+        let at = std::time::Instant::now();
+        assert_eq!(launch_shortcut_due(Some((ShortcutKind::Record, at)), at), Some(ShortcutKind::Record));
+        assert_eq!(
+            launch_shortcut_due(Some((ShortcutKind::Record, at)), at + LAUNCH_SHORTCUT_FOR),
+            None,
+            "too late"
+        );
+        assert_eq!(launch_shortcut_due(None, at), None);
+    }
 
     /// Windows' work area in physical pixels, as `read_work_areas` turns it
     /// into the area's own logical units.

@@ -2,11 +2,14 @@
 // menu offers it for, and opens the editor after closing itself.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 
-vi.mock("@/app/lib/featureFlags", async (orig) => ({ ...(await orig<object>()), SCREEN_CAPTURE_ENABLED: true }));
+// Capture on for this computer: the flag AND Rust's support. Production
+// carries the flag everywhere, so support alone decides (see the last test).
+const capture = vi.hoisted(() => ({ availability: "available" as "available" | "unavailable" | "unknown" }));
+vi.mock("@/app/lib/capture/useCaptureAvailability", () => ({ useCaptureAvailability: () => capture.availability }));
 const openFileInEditor = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/app/lib/tauri/captureEditor", () => ({ openFileInEditor }));
 const memberLabels = vi.hoisted(() => ({ set: new Set<string>() }));
@@ -44,6 +47,7 @@ beforeEach(() => {
   window.scrollTo = vi.fn() as unknown as typeof window.scrollTo;
   openFileInEditor.mockClear();
   memberLabels.set = new Set();
+  capture.availability = "available";
 });
 
 describe("the viewer's Edit image button", () => {
@@ -66,6 +70,17 @@ describe("the viewer's Edit image button", () => {
 
   it("is not offered in a drive shared with this account", () => {
     memberLabels.set = new Set(["Captures"]);
+    show(picture());
+    expect(screen.queryByRole("button", { name: "Edit image" })).not.toBeInTheDocument();
+  });
+
+  // A production build on Windows or Linux: the flag is on, Rust says no.
+  it("is not offered where capture is unavailable on this computer, or not known yet", () => {
+    capture.availability = "unavailable";
+    show(picture());
+    expect(screen.queryByRole("button", { name: "Edit image" })).not.toBeInTheDocument();
+    cleanup();
+    capture.availability = "unknown";
     show(picture());
     expect(screen.queryByRole("button", { name: "Edit image" })).not.toBeInTheDocument();
   });

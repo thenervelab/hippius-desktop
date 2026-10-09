@@ -23,18 +23,24 @@
 //! Wayland when it cannot connect, so the app still starts where XWayland
 //! is missing or broken.
 //!
-//! Left alone: a `GDK_BACKEND` the user set (theirs to choose, and GDK
-//! would refuse a backend outside the allowed list), non-GNOME desktops (not
-//! the reported problem, and not tested), and anyone who sets
-//! `HIPPIUS_WAYLAND_NATIVE=1` (for example because XWayland draws the app
-//! blurry under fractional scaling).
+//! **Off by default.** Under XWayland, GNOME with a scaled display drew the
+//! Wayland area-recording overlay and its still at the wrong size (a quarter
+//! of the screen), and Linux recording got worse on real machines, so the
+//! app is a native Wayland client again, as it was before XWayland was
+//! chosen. XWayland is used only when `HIPPIUS_XWAYLAND=1` is set (to try
+//! the keep-above it gives the pill and bubble). The pill and the bubble
+//! may then fall behind other windows on GNOME Wayland.
+//!
+//! Left alone even then: a `GDK_BACKEND` the user set (theirs to choose,
+//! and GDK would refuse a backend outside the allowed list) and non-GNOME
+//! desktops.
 
 // Only Linux applies the decision; elsewhere it is compiled for its tests.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
-/// Set to `1` (or `true`, `yes`, `on`) to keep the app a native Wayland
-/// client on GNOME. The pill and bubble may then fall behind other windows.
-pub const NATIVE_WAYLAND_OPT_OUT: &str = "HIPPIUS_WAYLAND_NATIVE";
+/// Set to `1` (or `true`, `yes`, `on`) to connect through XWayland on GNOME
+/// Wayland. Unset, the app is a native Wayland client.
+pub const XWAYLAND_OPT_IN: &str = "HIPPIUS_XWAYLAND";
 
 /// The backends GDK may use, in order, when XWayland is chosen.
 pub const XWAYLAND_FIRST: &str = "x11,wayland";
@@ -49,8 +55,8 @@ pub struct SessionEnv<'a> {
     /// `XDG_CURRENT_DESKTOP`, for example `ubuntu:GNOME`.
     pub current_desktop: Option<&'a str>,
     pub gdk_backend: Option<&'a str>,
-    /// [`NATIVE_WAYLAND_OPT_OUT`].
-    pub native_opt_out: Option<&'a str>,
+    /// [`XWAYLAND_OPT_IN`].
+    pub xwayland_opt_in: Option<&'a str>,
 }
 
 /// Which connection GTK makes.
@@ -69,7 +75,8 @@ pub enum Why {
     NotLinux,
     NotWayland,
     UserSetGdkBackend,
-    OptedOut,
+    /// XWayland was not asked for (`HIPPIUS_XWAYLAND`): native Wayland.
+    NotOptedIn,
     NoXWayland,
     NotGnome,
     /// GNOME's Wayland session ignores a Wayland client's keep-above.
@@ -105,15 +112,15 @@ pub fn is_gnome(current_desktop: Option<&str>) -> bool {
 }
 
 /// The connection to make, decided from the session alone. The order is
-/// the order of the checks: a user's own `GDK_BACKEND` and the opt-out win
-/// over everything.
+/// the order of the checks: a user's own `GDK_BACKEND` wins over
+/// everything, and nothing changes unless XWayland was asked for.
 #[must_use]
 pub fn choose(env: &SessionEnv<'_>) -> Choice {
     if set(env.gdk_backend).is_some() {
         return keep(Why::UserSetGdkBackend);
     }
-    if truthy(env.native_opt_out) {
-        return keep(Why::OptedOut);
+    if !truthy(env.xwayland_opt_in) {
+        return keep(Why::NotOptedIn);
     }
     // The same test the capture surfaces use, so "Wayland" means one thing.
     if crate::capture::rollout::linux_platform(env.xdg_session_type, env.wayland_display) != crate::capture::rollout::Platform::LinuxWayland {
@@ -137,13 +144,13 @@ pub fn choose(env: &SessionEnv<'_>) -> Choice {
 #[must_use]
 pub fn apply() -> Choice {
     let var = |name: &str| std::env::var(name).ok();
-    let (session, wayland, display, desktop, gdk, opt_out) = (
+    let (session, wayland, display, desktop, gdk, opt_in) = (
         var("XDG_SESSION_TYPE"),
         var("WAYLAND_DISPLAY"),
         var("DISPLAY"),
         var("XDG_CURRENT_DESKTOP"),
         var("GDK_BACKEND"),
-        var(NATIVE_WAYLAND_OPT_OUT),
+        var(XWAYLAND_OPT_IN),
     );
     let choice = choose(&SessionEnv {
         xdg_session_type: session.as_deref(),
@@ -151,7 +158,7 @@ pub fn apply() -> Choice {
         display: display.as_deref(),
         current_desktop: desktop.as_deref(),
         gdk_backend: gdk.as_deref(),
-        native_opt_out: opt_out.as_deref(),
+        xwayland_opt_in: opt_in.as_deref(),
     });
     if choice.backend == Backend::XWayland {
         gtk::gdk::set_allowed_backends(XWAYLAND_FIRST);
@@ -184,13 +191,25 @@ mod tests {
         display: Some(":0"),
         current_desktop: Some("ubuntu:GNOME"),
         gdk_backend: None,
-        native_opt_out: None,
+        xwayland_opt_in: Some("1"),
     };
 
-    /// Ubuntu's GNOME on Wayland (the reported machine) connects through
-    /// XWayland, so the pill and bubble can stay on top.
+    /// Without the opt-in, GNOME on Wayland stays a native Wayland client.
     #[test]
-    fn gnome_on_wayland_goes_through_xwayland() {
+    fn gnome_on_wayland_stays_native_unless_xwayland_is_asked_for() {
+        for off in [None, Some("0"), Some("false"), Some(""), Some("no")] {
+            let env = SessionEnv {
+                xwayland_opt_in: off,
+                ..GNOME_WAYLAND
+            };
+            assert_eq!(choose(&env), keep(Why::NotOptedIn), "{off:?}");
+        }
+    }
+
+    /// With the opt-in, Ubuntu's GNOME on Wayland connects through XWayland,
+    /// so the pill and bubble can stay on top.
+    #[test]
+    fn gnome_on_wayland_goes_through_xwayland_when_asked() {
         assert_eq!(
             choose(&GNOME_WAYLAND),
             Choice {
@@ -205,7 +224,7 @@ mod tests {
         assert_eq!(choose(&only_display).backend, Backend::XWayland, "WAYLAND_DISPLAY alone is Wayland");
     }
 
-    /// A user's own GDK_BACKEND, the opt-out, an X11 session, a session
+    /// A user's own GDK_BACKEND, an X11 session, a session
     /// without XWayland and other desktops are left as GTK would choose.
     #[test]
     fn everything_else_keeps_gtks_own_choice() {
@@ -223,20 +242,6 @@ mod tests {
                     ..GNOME_WAYLAND
                 },
                 Why::UserSetGdkBackend,
-            ),
-            (
-                SessionEnv {
-                    native_opt_out: Some("1"),
-                    ..GNOME_WAYLAND
-                },
-                Why::OptedOut,
-            ),
-            (
-                SessionEnv {
-                    native_opt_out: Some(" TRUE "),
-                    ..GNOME_WAYLAND
-                },
-                Why::OptedOut,
             ),
             (
                 SessionEnv {
@@ -278,12 +283,12 @@ mod tests {
         for (env, why) in cases {
             assert_eq!(choose(&env), keep(why), "{env:?}");
         }
-        for off in ["0", "false", "", "no"] {
+        for on in ["1", " TRUE ", "yes", "on"] {
             let env = SessionEnv {
-                native_opt_out: Some(off),
+                xwayland_opt_in: Some(on),
                 ..GNOME_WAYLAND
             };
-            assert_eq!(choose(&env).backend, Backend::XWayland, "{off:?} is not an opt-out");
+            assert_eq!(choose(&env).backend, Backend::XWayland, "{on:?} asks for XWayland");
         }
         assert_eq!(
             choose(&SessionEnv {

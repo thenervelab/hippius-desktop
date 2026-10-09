@@ -274,6 +274,8 @@ describe("saving", () => {
     ]);
     expect(radios[0]).toBeChecked();
     expect(radios[0]).toHaveFocus();
+    // The file being saved describes the dialog to a screen reader.
+    expect(dialog).toHaveAccessibleDescription(CONTEXT.fileName);
     expect(within(dialog).getByText(CONTEXT.copyNote)).toBeInTheDocument();
     expect(within(dialog).getByText(CONTEXT.replaceNote)).toBeInTheDocument();
     expect(within(dialog).getByRole("checkbox", { name: "Remember my choice" })).not.toBeChecked();

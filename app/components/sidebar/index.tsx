@@ -8,6 +8,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { chatEnabledAtom } from "@/app/lib/global-atoms/chatAtoms";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { InView } from "react-intersection-observer";
 import { useEffect, useMemo, useRef } from "react";
 import SidebarSearch from "./SidebarSearch";
@@ -66,10 +67,14 @@ const Sidebar: React.FC = () => {
 
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const chatEnabled = useAtomValue(chatEnabledAtom);
+  // The capture flag AND Rust's answer for this computer: production builds
+  // carry capture everywhere but turn it on for macOS only. Hidden until
+  // Rust answers, like the Settings sidebar's entry.
+  const captureEnabled = useCaptureAvailability() === "available";
 
   const visibleSections = useMemo(
-    () => filterNavSections(navSections, { shareEnabled, chatEnabled }),
-    [shareEnabled, chatEnabled],
+    () => filterNavSections(navSections, { shareEnabled, chatEnabled, captureEnabled }),
+    [shareEnabled, chatEnabled, captureEnabled],
   );
 
   if (pathname.startsWith("/settings")) return null;
