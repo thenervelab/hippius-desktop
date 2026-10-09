@@ -18,6 +18,7 @@ import {
   type ShareTab,
 } from "@/app/lib/tauri/capture";
 import { MODE_ICON } from "@/app/lib/capture/modes";
+import { freePlanBarLine, useFreePlanNotice } from "@/app/lib/capture/freePlanNotice";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_LINK, GLASS_MUTED, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { barClasses, type BarClasses, type BarLayout } from "./barLayout";
 import {
@@ -712,6 +713,7 @@ export default function CaptureBar(props: Props) {
   // In the panel the bar's empty parts move the window, as its title bar would.
   const dragRegion = layout === "panel" ? { "data-tauri-drag-region": true } : {};
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const freePlan = useFreePlanNotice();
   // Why a disabled mode cannot be picked, shown in place of the hint once one is clicked.
   const [modeNote, setModeNote] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -917,6 +919,17 @@ export default function CaptureBar(props: Props) {
           {confirmLabel(kind)}
         </button>
       </div>
+      {/* Free plan only, said before anything is captured rather than found
+          on the file afterwards. Rust decides who is on it. */}
+      {freePlan && (
+        <p
+          {...dragRegion}
+          data-testid="capture-free-plan"
+          className={`${layout === "panel" ? "max-w-[420px]" : "max-w-[min(560px,calc(100vw-32px))]"} rounded-[10px] bg-[#000]/60 px-3 py-1 text-center text-[12px] text-white/75 shadow-lg`}
+        >
+          {freePlanBarLine(freePlan, props.recordingAvailable)}
+        </p>
+      )}
     </div>
   );
 }

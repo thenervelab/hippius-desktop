@@ -14,6 +14,7 @@ import { captureDialogAtom } from "@/app/lib/capture/captureFlow";
 import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
+import { freeRecordingsUsed, useFreePlanNotice } from "@/app/lib/capture/freePlanNotice";
 import { cn } from "@/lib/utils";
 
 const CARD = cn(
@@ -66,6 +67,9 @@ export default function CapturesView() {
   );
 
   const openSetup = () => setDialog({ kind: "captureDrive" });
+  // Free plan only; Rust words nothing for a paid plan or an unread one.
+  const freePlan = useFreePlanNotice();
+  const recordingsUsed = freePlan ? freeRecordingsUsed(freePlan) : null;
 
   return (
     <>
@@ -78,6 +82,11 @@ export default function CapturesView() {
         // every drive; before it exists they are here and in the card.
         actions={route ? null : <CaptureButtons />}
       />
+      {recordingsUsed && (
+        <p data-testid="captures-free-recordings" className="px-3 pb-2 text-sm text-grey-50 dark:text-grey-dark-600">
+          {recordingsUsed}
+        </p>
+      )}
       {route ? (
         // Keyed on the drive: a moved captures drive is a different drive,
         // opened fresh rather than over the old one's view.

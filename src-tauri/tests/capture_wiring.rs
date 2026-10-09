@@ -230,15 +230,18 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     );
 
     // The gate reads the plan the way the length cap does, and the count
-    // from the server's listing of the captures drive, failing open.
+    // from the server's listings of every captures drive, failing open.
     let allowance = read("src/capture/recording_allowance.rs");
     let check = fn_body(&allowance, "pub async fn check_start(");
     assert!(check.contains("allowance::recording_tier(state, &account)"));
     assert!(check.contains("recording_count(state, &account_id)"));
+    assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
+    let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        fn_body(&allowance, "pub async fn recording_count(").contains("remote::list_remote_folder_files_inner("),
+        list.contains("remote::list_remote_folder_files_inner("),
         "the count comes from the server listing the remote-folder browser uses"
     );
+    assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 
 /// The app's dialog and the bar's panel say what Rust's refusal says.
@@ -904,11 +907,14 @@ fn the_card_and_session_commands_are_registered() {
         "capture_relaunch_for_permission",
         "capture_preview_mint_link",
         "capture_preview_revoke_link",
+        "capture_preview_manage_link",
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
         "capture_limit_upgrade",
         "capture_check_recording_start",
+        "capture_free_plan_notice",
+        "capture_launch_shortcut",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),
@@ -2729,4 +2735,39 @@ fn a_superseded_recording_start_leaves_the_new_session_alone() {
         start[check..adopt].contains("discard_recording(Some(recorder), Some(dir))"),
         "only its own folder"
     );
+}
+
+/// A failed direct capture outlives a restart: the failure writes its marker,
+/// reaching the drive clears it, sign-in offers it again, and each capture
+/// start brings one back while nothing is parked. Discard is the only way
+/// its file is removed.
+#[test]
+fn a_failed_capture_is_offered_again_after_a_restart() {
+    let src = read("src/capture/commands.rs");
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
+    let placed = deliver.find("announce_placed(").expect("placement is announced");
+    assert!(clear < placed, "cleared as soon as delivery succeeds");
+    assert!(deliver.contains("keep_failed_card(app, id)"), "a failure writes its marker");
+    assert!(
+        fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
+        "sign-in offers a kept failure again"
+    );
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("bring_back_failed_or_kept(&app, &state.capture).await"));
+    assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// `--capture` / `--record` on the launch that starts the app are kept in
+/// setup and run by the signed-in app once it listens; a second launch is
+/// still the single-instance handler's.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_not_dropped() {
+    let main = read("src/main.rs");
+    assert!(main.contains("remember_launch_shortcut(app.handle(), std::env::args()"));
+    let commands = read("src/capture/commands.rs");
+    let run = fn_body(&commands, "pub fn capture_launch_shortcut(");
+    assert!(run.contains(".take()"), "run once");
+    assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
 }

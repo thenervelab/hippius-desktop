@@ -19,7 +19,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Screenshots and screen recording are available to everyone on macOS.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
 - **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark. Recordings made on Linux do not carry it yet.
-- **The free plan includes 25 screen recordings.** Every recording in your Hippius Captures drive counts, including ones made on the web or on another computer. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
+- **The free plan includes 25 screen recordings.** Every video in your captures drives counts, whatever it is called and whichever folder it is in, including ones made on the web or on another computer, and moving your captures folder does not start the count again. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
+- **A capture's card says who can open its link.** Capture links are public and never expire, and the card now says so. Manage link in its More menu opens the link in Shared Links, where you can change it.
+- **The capture bar tells the free plan what to expect.** Before you capture, a short line says free captures carry a small Hippius watermark, recordings stop at 5 minutes, and how many of your 25 free recordings you have used. The Captures page shows the count too.
 - **Edit a picture straight from the viewer.** An Edit button sits next to Share, Download and Delete when you open a PNG or JPEG in your drives, and opens it in the screenshot editor.
 - **Edit pictures in your remote folders.** Edit image now works on PNG and
   JPEG files that are only on Hippius, not just ones synced to this computer.
@@ -34,8 +36,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Change the camera bubble's size during a screen recording.** Small, large or full size, and the saved video changes with it. On a Mac and Windows.
 - **Controls on the camera bubble while you record.** Point at the bubble to change its size or pause and resume the recording right there. The controls never show up in the video. On a Mac and Windows.
 - **Annotate from the menu bar.** Choose Annotate an image from the Screenshot tile's menu to open any picture in the screenshot editor, or press Edit on a screenshot in the list. A picture from outside your drives is saved as a new screenshot with its own link, and your original is left as it was. On a Mac and Windows.
+- **Deleting a file or folder reminds you about its share links.** The confirmation now says that share links made from it keep working, and that you can turn them off in Shared Links.
+- **A capture that could not upload is offered again after a restart.** Its card comes back when you open Hippius, with Retry (or Upgrade when your storage is full), instead of the capture sitting forgotten on your computer.
+- **Capture shortcuts set in your desktop's own keyboard settings work when Hippius is closed.** Hippius starts and opens the screenshot or recording as soon as you are signed in. On Linux.
 
 ### Changed
+
+- **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.
 
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
 

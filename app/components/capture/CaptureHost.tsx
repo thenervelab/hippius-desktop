@@ -24,14 +24,17 @@ import {
   CAPTURE_DRIVE_SETUP_NEEDED_EVENT,
   getCaptureSupport,
   syncCaptureShortcut,
+  takeCaptureLaunchShortcut,
   type CaptureFailed,
   type CaptureKind,
+  type CaptureManageLink,
   type CaptureShortcutStart,
   type CaptureMode,
   type CaptureShowInFolder,
 } from "@/app/lib/tauri/capture";
 import { BILLING_ROUTE, capturesRoute, driveFolderRoute } from "@/app/lib/routes";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
+import { fileShareRowId, sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { openAppWindow, TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import CaptureDriveDialog from "./CaptureDriveDialog";
@@ -115,7 +118,17 @@ export default function CaptureHost() {
       }),
       // The card's Upgrade (the plan is full): the plans, where every upgrade prompt goes.
       listen("capture_open_plans", () => router.push(BILLING_ROUTE)),
+      // The card's Manage link: Shared Links, with this capture's link
+      // pointed out, where who can open it and when it expires are changed.
+      listen<CaptureManageLink>("capture_manage_link", (e) =>
+        router.push(sharesPageHref([fileShareRowId(e.payload.shareToken)])),
+      ),
     ];
+    // `hippius --capture` / `--record` that started the app: Rust runs it
+    // once this window listens for the start it emits.
+    void Promise.all(unlisteners)
+      .then(() => takeCaptureLaunchShortcut())
+      .catch(() => undefined);
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
     };
