@@ -5,6 +5,7 @@ import { Trash2 } from "lucide-react";
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { useDeleteFile } from "@/app/lib/hooks/use-delete-file";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { deleteShareLinksNote } from "./deleteShareLinksNote";
 
 /**
  * Confirm, then delete ONE file through the Drive's own `delete_files` call
@@ -49,6 +50,7 @@ export default function DeleteFileConfirmDialog({
           undone.
         </>
       }
+      helperText={deleteShareLinksNote([file])}
       button={isDeleting ? "Deleting..." : "Delete File"}
       icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
       iconBgColor="bg-[#fc7d73]"

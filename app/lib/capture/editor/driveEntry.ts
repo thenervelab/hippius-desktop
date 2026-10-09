@@ -1,5 +1,3 @@
-import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
-
 /**
  * Whether a Drive row offers "Edit image". Only a picture the editor can
  * save back in its own format (Rust's `EditableFormat`: PNG and JPEG), in an
@@ -9,6 +7,10 @@ import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
  * downloads it by and uploads the edit back with. Rust checks all of this
  * again when the editor opens; this only keeps an item off the menu that
  * would be refused.
+ *
+ * `enabled` is whether the editor ships on this computer: the capture flag
+ * AND Rust's capture support (`useCaptureAvailability`). No default: the
+ * flag alone is on in production for platforms that cannot capture.
  */
 const EDITABLE = /\.(png|jpe?g)$/i;
 
@@ -28,7 +30,7 @@ export interface EditorRow {
   memberDrive: boolean;
 }
 
-export function offersImageEditor(row: EditorRow, enabled: boolean = SCREEN_CAPTURE_ENABLED): boolean {
+export function offersImageEditor(row: EditorRow, enabled: boolean): boolean {
   const reachable = !row.cloudOnly || Boolean(row.serverFileId);
   return enabled && !row.isFolder && Boolean(row.label) && reachable && !row.memberDrive && isEditableImageName(row.name);
 }

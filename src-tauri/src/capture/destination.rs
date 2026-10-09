@@ -150,7 +150,43 @@ pub async fn save(pool: &SqlitePool, account_id: &str, destination: &CaptureDest
     };
     destination.validate()?;
     let value = serde_json::to_string(&destination).map_err(|e| AppError::Other(format!("Could not store the capture drive: {e}")))?;
-    crate::utils::preferences::save_user_preference_internal(pool, &key_for(account_id), &value).await
+    crate::utils::preferences::save_user_preference_internal(pool, &key_for(account_id), &value).await?;
+    if destination.owner_ss58.is_none() {
+        remember_label(pool, account_id, &destination.label).await?;
+    }
+    Ok(())
+}
+
+const LABELS_PREFIX: &str = "capture_drive_labels_v1:";
+
+fn labels_key_for(account_id: &str) -> String {
+    format!("{LABELS_PREFIX}{}", crate::auth::account_key::account_key(account_id))
+}
+
+/// Every own drive this account has kept captures in on this machine, the
+/// current one included. Moving the captures folder makes a new drive
+/// ("Hippius Captures-2"), and the recordings in the old one still count
+/// towards the free plan's allowance (`recording_allowance`).
+pub async fn own_capture_labels(pool: &SqlitePool, account_id: &str) -> Result<Vec<String>> {
+    let raw = crate::utils::preferences::get_user_preference_internal(pool, &labels_key_for(account_id)).await?;
+    let mut labels: Vec<String> = raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    if let Some(current) = load(pool, account_id).await?.filter(|d| d.owner_ss58.is_none())
+        && !labels.contains(&current.label)
+    {
+        labels.push(current.label);
+    }
+    Ok(labels)
+}
+
+async fn remember_label(pool: &SqlitePool, account_id: &str, label: &str) -> Result<()> {
+    let raw = crate::utils::preferences::get_user_preference_internal(pool, &labels_key_for(account_id)).await?;
+    let mut labels: Vec<String> = raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    if labels.iter().any(|l| l == label) {
+        return Ok(());
+    }
+    labels.push(label.to_string());
+    let value = serde_json::to_string(&labels).map_err(|e| AppError::Other(format!("Could not store the capture drives: {e}")))?;
+    crate::utils::preferences::save_user_preference_internal(pool, &labels_key_for(account_id), &value).await
 }
 
 /// One of this account's drives synced on this machine, as a new captures
@@ -362,6 +398,28 @@ mod tests {
         assert_eq!(own_local_path(&pool, "5Alice", "Paused").await.unwrap(), None);
         assert!(!is_local(&pool, "5Alice", "Paused").await);
         assert!(drives_here(&pool, "5Bob").await.unwrap().is_empty());
+    }
+
+    /// Moving the captures folder makes a new drive; the old one is still
+    /// remembered as a captures drive, per account, and a shared drive never is.
+    #[tokio::test]
+    async fn every_own_captures_drive_is_remembered() {
+        let pool = pool().await;
+        assert!(own_capture_labels(&pool, "5Alice").await.unwrap().is_empty());
+        save(&pool, "5Alice", &own("Hippius Captures")).await.unwrap();
+        save(&pool, "5Alice", &own("Hippius Captures-2")).await.unwrap();
+        save(&pool, "5Alice", &own("Hippius Captures")).await.unwrap();
+        let shared = CaptureDestination {
+            owner_ss58: Some("5Owner".into()),
+            folder_hash: Some("abcd".into()),
+            ..own("Team")
+        };
+        save(&pool, "5Alice", &shared).await.unwrap();
+        assert_eq!(
+            own_capture_labels(&pool, "5Alice").await.unwrap(),
+            vec!["Hippius Captures".to_string(), "Hippius Captures-2".to_string()]
+        );
+        assert!(own_capture_labels(&pool, "5Bob").await.unwrap().is_empty());
     }
 
     #[tokio::test]

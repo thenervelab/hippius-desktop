@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Loader } from "lucide-react";
 import type { SaveMode } from "@/app/lib/tauri/captureEditor";
@@ -44,6 +44,8 @@ export function SaveDialog({
   const [mode, setMode] = useState<SaveMode>("copy");
   const [remember, setRemember] = useState(false);
   const radios = useRef<Partial<Record<SaveMode, HTMLInputElement | null>>>({});
+  // The file being saved describes the dialog to a screen reader.
+  const fileNameId = useId();
 
   // Every opening starts on the choice it was opened for (the safe one
   // unless the user picked Replace), unremembered.
@@ -84,14 +86,14 @@ export function SaveDialog({
         <Dialog.Overlay className={SCRIM} />
         <Dialog.Content
           className={PANEL}
-          aria-describedby={undefined}
+          aria-describedby={fileNameId}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
             radios.current[initialMode]?.focus();
           }}
         >
           <Dialog.Title className="text-[16px] font-semibold">Save your edits</Dialog.Title>
-          <p className="mt-1 truncate text-[13px] text-grey-70" title={fileName}>
+          <p id={fileNameId} className="mt-1 truncate text-[13px] text-grey-70" title={fileName}>
             {fileName}
           </p>
           <form

@@ -37,7 +37,11 @@ const card = (
 });
 
 const linked = (status: CapturePreviewCard["status"], id = 1, actions: Partial<Actions> = {}) =>
-  card(status, id, { copyLink: true, ...actions }, { link: { state: "public", copied: true }, linkText: "Public link copied" });
+  card(status, id, { copyLink: true, ...actions }, {
+    link: { state: "public", copied: true },
+    linkText: "Public link copied",
+    linkNote: "Anyone with the link can view. Never expires.",
+  });
 
 const failed = (message: string, reason: "offline" | "storageFull" | "needsFolder" | "other" = "offline") => ({
   state: "failed" as const,
@@ -205,8 +209,8 @@ describe("the preview card", () => {
     expect(live).toHaveLength(1);
     // Rust words the link; the card says it as it is.
     expect(live[0]).toHaveTextContent("Uploaded · Public link copied");
-    // Where it went has its own line.
-    expect(screen.getByText("Work › Captures")).toBeInTheDocument();
+    // Who can open the link has its own line, with where it went in its tooltip.
+    expect(screen.getByText("Anyone with the link can view. Never expires.")).toHaveAttribute("title", "Work › Captures");
   });
 
   it("keeps a long failure to one line, with the whole of it in the tooltip", async () => {
@@ -323,6 +327,29 @@ describe("the card's actions (Rust decides which)", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  // A capture's link is public and never expires; the card says so in the
+  // destination's place, so it keeps its height, and More opens Shared Links.
+  it("says a public link never expires, and opens Shared Links to change it", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { revokeLink: true, manageLink: true }));
+    const note = screen.getByTestId("capture-link-note");
+    expect(note).toHaveTextContent("Anyone with the link can view. Never expires.");
+    expect(note).toHaveClass("truncate");
+    expect(note).toHaveAttribute("title", "Work › Captures");
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Manage link" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_manage_link")).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("offers Manage link only when Rust does", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { revokeLink: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Manage link" })).toBeNull();
+  });
+
   // "Show in folder" broke onto two lines beside Copy link, Show in Finder
   // and More. The row is now one primary, one compact secondary and at most
   // one icon button, and no label can wrap.
@@ -330,7 +357,7 @@ describe("the card's actions (Rust decides which)", () => {
     const states: CapturePreviewCard[] = [
       card({ state: "uploading" }),
       linked({ state: "syncing", linkCopied: true }, 1, { reveal: true, revokeLink: true }),
-      linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true, revokeLink: true }),
+      linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true, revokeLink: true, manageLink: true }),
       card({ state: "uploaded", linkCopied: false }, 1, { mintLink: true, reveal: true }),
       card(failed("offline"), 1, { retry: true, discard: true }),
       card(failed("Your storage is full.", "storageFull"), 1, { retry: true, discard: true, upgrade: true }),

@@ -20,6 +20,13 @@ export const captureDialogAtom = atom<CaptureDialog | null>(null);
 /** Whether this build and platform can capture screenshots, from Rust. */
 export const captureSupportedAtom = atom<boolean>(false);
 
+/**
+ * Whether Rust has answered `capture_support` yet (or failed to). Until it
+ * has, `captureSupportedAtom` is a placeholder `false`, not a "no": a gate
+ * that redirects or resets on "no" must wait for this (`useCaptureAvailability`).
+ */
+export const captureSupportKnownAtom = atom<boolean>(false);
+
 /** Whether Record actions should be offered (macOS helper present). */
 export const captureRecordingAtom = atom<boolean>(false);
 

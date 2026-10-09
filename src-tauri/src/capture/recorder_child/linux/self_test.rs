@@ -5,8 +5,7 @@
 //! It records 3 s, pauses 1 s, records 2 s more and stops, through the same
 //! [`Pipeline`] and timeline as a real recording, then demuxes the file with
 //! GStreamer and checks: about 5 s long (the pause cut out), one H.264 video
-//! stream and one AAC audio stream, an even picture size, the index first
-//! (the fragments rewritten at Stop). The take is timed
+//! stream and one AAC audio stream, an even picture size. The take is timed
 //! by the samples' own timestamps, never by the wall clock: an unoptimised
 //! test build on a CI runner cannot convert and encode in real time, so the
 //! source falls behind the clock and a wall-clock take came out short. It
@@ -46,8 +45,6 @@ pub struct Report {
     pub audio: bool,
     pub width: u32,
     pub height: u32,
-    /// One ordinary movie with its index first (rewritten at Stop).
-    pub index_first: bool,
     pub problems: Vec<String>,
 }
 
@@ -59,9 +56,6 @@ pub fn run() -> Report {
     let mut report = match record(&path, Some(Duration::from_secs(6))) {
         Ok(encoder) => {
             let mut report = read_back(&path);
-            report.index_first = std::fs::File::open(&path)
-                .and_then(|mut f| linux_plan::top_level_boxes(&mut f))
-                .is_ok_and(|boxes| linux_plan::index_first(&boxes));
             report.encoder = Some(encoder.into());
             report
         }
@@ -78,9 +72,6 @@ pub fn run() -> Report {
     }
     if !report.audio {
         report.problems.push("no AAC audio stream".into());
-    }
-    if !report.index_first {
-        report.problems.push("the finished file is fragmented or keeps its index last".into());
     }
     if report.width % 2 != 0 || report.height % 2 != 0 || report.width == 0 {
         report.problems.push(format!("picture {}x{} is not even", report.width, report.height));

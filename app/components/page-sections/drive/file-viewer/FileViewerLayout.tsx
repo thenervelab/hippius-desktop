@@ -12,6 +12,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight, PenLine } from "lucide-react";
 import { toast } from "sonner";
 import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
@@ -136,6 +137,8 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { enterSelectionModeAndSelectFile } = useFileSelection();
   const memberDriveLabels = useMemberDriveLabels();
+  // The screenshot editor is offered where capture is.
+  const imageEditorEnabled = useCaptureAvailability() === "available";
 
   const [isMac] = useState(() => {
     if (typeof navigator === "undefined") return false;
@@ -200,7 +203,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     cloudOnly: isCloudOnlyRow(file),
     serverFileId: file.fileId,
     memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
-  });
+  }, imageEditorEnabled);
   const handleEdit = useCallback(() => {
     if (!file.label) return;
     onClose();

@@ -1,5 +1,12 @@
 //! Asking for the camera before the bubble opens it, on Linux.
 //!
+//! **Not wired at the moment.** Nothing calls [`ask_portal`]: the bubble
+//! opens the camera through WebKitGTK's own request, as it did before this
+//! pre-check, while Linux recording is brought back to its last known good
+//! state. [`AccessState`] therefore stays `Unknown`, which lets the page
+//! open the camera and leaves the bar's camera row empty. The description
+//! below is how it works once `sync_camera` asks again.
+//!
 //! WebKitGTK 2.50 and later open every camera through the xdg-desktop-portal
 //! Camera interface (`PipeWireCaptureDeviceManager`): `IsCameraPresent`,
 //! then `AccessCamera`, then the PipeWire remote the portal hands back. The

@@ -37,6 +37,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import { useDriveRoute } from "./driveRoute";
+import { deleteShareLinksNote } from "./deleteShareLinksNote";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -693,6 +694,7 @@ const DriveContent: FC<DriveContentProps> = ({
             ?
           </>
         }
+        helperText={deleteShareLinksNote(fileToDelete ? [fileToDelete] : [])}
         heading={`Delete ${fileToDelete?.isFolder ? "Folder" : "File"}`}
         icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
         iconBgColor="bg-[#fc7d73]"

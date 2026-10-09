@@ -26,9 +26,15 @@ Screenshots and (on macOS) recordings of an area, a window or a whole display,
 filed at the root of the account's own captures drive (`Hippius Captures`,
 "Destination" below), with a public share link copied unless
 `CaptureOptions.copyLink` is off. Design and
-phasing: `docs/plans/2026-09-22-screen-capture.md`. Behind
-`SCREEN_CAPTURE_ENABLED = enabledFrom("beta")` (beta and staging, not
-production), and behind Rust's `capture_support` for the platform:
+phasing: `docs/plans/2026-09-22-screen-capture.md`. Built into every lane
+(`SCREEN_CAPTURE_ENABLED = true`, production included), and behind Rust's
+`capture_support` for the platform, which is what keeps Windows and Linux
+out of production. **No surface may read the flag alone**: the Captures nav
+entry and page, the Settings section and the image editor entries go
+through `useCaptureAvailability` (flag AND `captureSupportedAtom`, with
+`captureSupportKnownAtom` so nothing redirects or resets before Rust has
+answered), the tray through `useTrayCaptureView`; pinned by
+`app/lib/capture/__tests__/captureProductionGates.test.tsx`. Platforms:
 **screenshots on macOS, Windows and Linux**; **recording on macOS 13+**
 when `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
 Wayland). Windows and Linux are on in debug, staging and beta builds and off
@@ -66,8 +72,7 @@ Drive it by hand: `{"cmd":"start","id":1,"output":"/tmp/x.txt","synthetic":true}
 **Rollout:** `rollout::floor(platform, feature)` is the lowest lane per row
 (debug builds count as staging); `commands::capture_supported()` and
 `recording::recording_unavailable()` both ask it, so a platform below its
-lane reads exactly as unsupported. `SCREEN_CAPTURE_ENABLED` stays the one
-frontend switch. Moving a row on is a one-line change once its manual
+lane reads exactly as unsupported, and the frontend needs no new flag. Moving a row on is a one-line change once its manual
 checklist passes; `release_lane_pins.rs` pins that production enables only
 production rows and that Windows recording needs a signed installer to get
 there. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
@@ -222,22 +227,13 @@ line. **WebKitGTK 2.50+ opens every camera through the Camera portal**
 (`PipeWireCaptureDeviceManager`: `IsCameraPresent`, `AccessCamera`, the
 portal's PipeWire fd; no V4L2 fallback, and nothing at all below PipeWire
 0.3.64), and the portal asks once per app, host apps included, and keeps a
-missed or dismissed question as "no". So `camera_access.rs` asks first: as
-`sync_camera` opens the bubble, `ask_camera_access` calls `AccessCamera`
-(ashpd `camera`), and if no answer comes in `CAMERA_QUESTION_AFTER` the
-capture windows (all kept above) are hidden until it does, never
-mid-recording. `CameraState.access` (`asking` / `granted` / `denied` /
-`turnedOff` for the lockdown's `NotAllowed` / `unknown` without a portal)
-keeps the page from calling `getUserMedia` until yes; a yes is kept for the
-run, anything else is asked again on the next open (a stored answer comes
-back without a dialog). The bar's camera row gets Rust's line
-(`privacy::with_linux_camera`) and the bubble says why in plain words
-(`cameraProblem.ts`, `privacyPlace` from Rust), the hint on a small bubble
-only while pointed at. The microphone needs no ask (no portal for host
-apps; meter and recorder read it in-process). Pinned by
-`camera_access::tests`, `privacy::tests`, `cameraProblem.test.ts`,
-`cameraPage.test.tsx` and
-`capture_wiring::linux_asks_for_the_camera_before_the_bubble_opens_it`. `--list-cameras` names cameras as WebKitGTK does
+missed or dismissed question as "no". `camera_access.rs` holds a pre-check
+that asks `AccessCamera` before the bubble opens, but it is **not wired**:
+it was rolled back with the Linux recorder changes, so the bubble opens the
+camera through WebKit's own request, `CameraState.access` stays `unknown`
+and the bar's camera row carries no Linux line. The bubble still says why a
+camera failed in plain words (`cameraProblem.ts`). Pinned by
+`capture_wiring::linux_bubble_opens_the_camera_without_a_portal_pre_check`. `--list-cameras` names cameras as WebKitGTK does
 (both are GStreamer's names). **Old PipeWire cannot open cameras:** with
 `gstreamer1.0-pipewire` installed its device provider hides the V4L2 one in
 `GstDeviceMonitor`, so WebKitGTK (and camera only) open every camera with
@@ -290,7 +286,10 @@ keycaps, since the desktop has the last word), gated by the lane's
 `ShortcutPortal` row; without a portal `support::shortcut_for` says
 `desktopSettings` with `shortcut.command` (`<exe> --capture`), which the
 single-instance handler turns into `on_shortcut` WITHOUT showing the main
-window, and `desktop_shortcut.rs` writes GNOME's custom keybinding at
+window (on the launch that STARTS the app, setup keeps it,
+`remember_launch_shortcut`, and `CaptureHost` calls `capture_launch_shortcut`
+once its listeners are up, which runs `on_shortcut_of` once if within
+`LAUNCH_SHORTCUT_FOR`; `--record` the same), and `desktop_shortcut.rs` writes GNOME's custom keybinding at
 Hippius's own path. Linux marks the tray icon like Windows and, since
 AppIndicator sends no click, puts the recording's menu on it
 (`tray_recording_menu.rs`, rewritten only on a state change; one listener,
@@ -351,8 +350,11 @@ own element (what WebKitGTK makes), retries a busy one for 3 s, tries
 bounded caps then any, mirrors it like the stage and records it with the
 same writer, mixer and pause. Pinned by `capture_wiring.rs`.
 
-**GNOME Wayland runs the app as an XWayland client** (`utils::display_backend`,
-not yet run on Linux). GTK's keep-above is an empty function on Wayland and
+**GNOME Wayland can run the app as an XWayland client, but only when
+`HIPPIUS_XWAYLAND=1` is set** (`utils::display_backend`; native Wayland by
+default, since under XWayland on a scaled display the Wayland area overlay
+and its still were drawn at the wrong size, and Linux recording regressed on
+real machines). What follows is how it works when asked for. GTK's keep-above is an empty function on Wayland and
 Mutter offers clients no keep-above and no layer-shell, so the pill and the
 bubble fell behind any window raised mid-recording (the camera then missing
 from the video); Mutter honours `_NET_WM_STATE_ABOVE` and window positions
@@ -758,7 +760,7 @@ actions where no label wraps (`whitespace-nowrap` on every text button): one
 primary that takes the spare room (Show in folder, or Upgrade / Retry), one
 compact secondary sized to its label (Copy link / Create link / Retry /
 Discard) and at most one 32 pt icon button with an `aria-label`. Show in
-Finder / Explorer and Revoke link live in the "More" menu (opens upward over
+Finder / Explorer, Manage link and Revoke link live in the "More" menu (opens upward over
 the picture, focus on its first item, arrows move, Escape closes and refocuses
 More); with Upgrade, Retry and Discard all present, Discard is the icon.
 Pinned by `previewPage.test.tsx` across every state. It listens to upload progress only while `uploading` / `syncing`
@@ -792,9 +794,17 @@ it never slides away before it can say the link was copied, and a card whose
 link failed stays up with Create link. `deliver::mint` tries a link three
 times in all (`mint_retry_after`: 1 s, then 3 s) unless the drive is full, since
 a request that did not get through is often fine a second later.
-Rust also owns `link` (`LinkState`), `linkText` ("Public link copied") and
+Rust also owns `link` (`LinkState`), `linkText` ("Public link copied"),
+`linkNote` (`LinkState::note`, `PUBLIC_LINK_NOTE` "Anyone with the link can
+view. Never expires." for a public link; drawn in the destination line's
+place, destination in its `title`, so the card's height is unchanged; a
+`notice` still wins that slot) and
 `actions` (`CardActions`: retry, discard, copyLink, mintLink, revokeLink,
-reveal, upgrade) through `PreviewCard::refreshed`; every change goes through
+manageLink, reveal, upgrade). Capture links stay public and never expire by
+design; More > Manage link (`capture_preview_manage_link`) shows the main
+window and emits `capture_manage_link { shareToken }` to it only, and
+`CaptureHost` opens `sharesPageHref([fileShareRowId(token)])`. All of it comes
+through `PreviewCard::refreshed`; every change goes through
 `update_card`. The card draws exactly those buttons and says `linkText` after
 "Uploaded". `upgrade` (a `storageFull` failure) calls `capture_preview_upgrade`,
 which brings the main window forward and emits `capture_open_plans`;
@@ -804,7 +814,16 @@ Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). F
 `retryable`. `capture_failed` carries `cardShowing`, and `CaptureHost` shows no toast
 when it is true (the card already says it); the notification never names a
 path. A failed card closed by the user is PARKED and comes back on the
-next `capture_start`, until retried or discarded. On success there is NO
+next `capture_start`, until retried or discarded. Parking is memory, so a
+failed retryable card also writes `failed.json` beside its file
+(`kept_failed.rs`: account key, kind, destination, message, reason; only in
+a `capture-…` folder of capture-tmp), cleared once delivery succeeds and
+gone with the folder on Discard. At sign-in (`capture_sync_shortcut` →
+`spawn_offer_kept_failed`) the newest for the account comes back as its
+card (failed, Retry, Upgrade when the plan was full) unless a card is up or
+parked; each `capture_start` with nothing parked brings back the next
+(`next_kept_failed`). Nothing ever deletes a capture automatically. Pinned by
+`kept_failed::tests` and `capture_wiring::a_failed_capture_is_offered_again_after_a_restart`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder`; a capture in the captures drive
 (`capturesDrive`: the destination's folder is the root) goes to
@@ -856,8 +875,10 @@ starts it at `capture_start`, `capture_tier` takes it before the recorder
 starts (so the first frame has it) and before a screenshot's PNG is written;
 the same verdict sets the length limit. Where it is drawn: screenshots in
 `finish_screenshot` (and `stamp_portal_shot` for the desktop's tool);
-Windows and Linux recordings in the child's `Pipeline` (`Nv12Stamp`, after
-the bubble is composited, from `StartCommand.watermark`); macOS in the Swift
+Windows recordings in the child's `Pipeline` (`Nv12Stamp`, after the bubble
+is composited, from `StartCommand.watermark`); Linux recordings carry NO
+watermark for now (the Linux child ignores `watermark`, rolled back with
+the recorder); macOS in the Swift
 helper, which gets every size as an atlas (`watermarkAtlas`, written beside
 the recording by `recording::macos::start` and removed once the helper
 answered) and stamps each SCK frame once as it is appended. Pinned by
@@ -1062,20 +1083,32 @@ camera only), `capture_restart` (before the take is discarded; it notifies,
 the pill has no room) and `capture_check_recording_start` (the bar asks
 before its countdown). Pinned by
 `capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
-count is the server listing of the account's own captures drive
-(`list_remote_folder_files_inner`, label from `destination` when own, else
-`CAPTURES_DIR_NAME`), files named like `Recording YYYY-MM-DD at HH.MM.SS`
-`.mp4/.webm/.mov` with an optional ` (N)` (`is_recording_name`), so console
-uploads and other devices count. Cached per account on
+count is EVERY video file (`.mp4`/`.webm`/`.mov`, any name, any subfolder:
+`is_video_name`, so a rename never frees a slot) in ALL of the account's own
+captures drives, each read from the server (`list_remote_folder_files_inner`),
+keyed `label/path`. A captures drive is one the server's folder list
+(`list_remote_folders_internal`) holds whose label is `CAPTURES_DIR_NAME` or
+`CAPTURES_DIR_NAME-N` (`is_default_captures_label`), or that this machine ever
+kept captures in (`destination::own_capture_labels`, appended by every own
+`destination::save`), so moving the captures folder ("Hippius Captures-2")
+does not reset the count, and console uploads and other devices count. Client
+side only; the server keeps no count. Cached per account on
 `CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
 opens; a delivered recording counts at once (`note_delivered`, until listed
-or `PENDING_FOR`); a completed sync of the drive, a remote folder delete and
-a sync reset drop it. **Fails open**: unknown plan or unreadable count
-(error, `COUNT_WITHIN` timeout) never blocks; a paid last-known tier skips the
-listing; a count at the limit is confirmed by a fresh `recording_tier`. The
+or `PENDING_FOR`); a completed sync of any captures drive, a remote folder
+delete and a sync reset drop it. **Fails open**: unknown plan or unreadable
+count (folder list or any drive listing errors, `COUNT_WITHIN` timeout) never
+blocks; a paid last-known tier skips the listing (so a downgrade is only
+counted once a fresh tier read says Free); a count at the limit is confirmed by a fresh `recording_tier`. The
 FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
 `capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
 in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).
+Before a capture the free plan is told: `capture_free_plan_notice`
+(`current_free_plan_notice`, fresh `recording_tier` then the count) returns
+`FreePlanNotice { used (capped at the limit, null when unread), limit,
+maxRecordingMins }` for a KNOWN Free tier only, `None` for paid or unknown;
+the bar draws one line under its toolbar and the Captures page "X of 25 free
+recordings used" (`lib/capture/freePlanNotice.ts`). Nothing for paid/unknown.
 Nothing is held any more; `held_recordings.rs` keeps only the way out for
 recordings an earlier build sealed under `~/.hippius/held-recordings`
 (`release_held` once per sign-in from `capture_sync_shortcut`, as many as
@@ -1315,10 +1348,10 @@ stderr lines are diagnostics and are logged at `warn`.
   on every keyframe. Windows asks for peak-constrained VBR (average, twice
   it, GOP) through `SetInputMediaType`'s encoding parameters, falling back to
   the same encoder untuned before the software one (`writer::ATTEMPTS`);
-  Linux puts every encoder in a mode that spends less when still (`va` and
-  `vaapi` VBR, whose `bitrate` means the average and the ceiling
-  respectively; x264 CRF 23 capped by its VBV; OpenH264 quality-first with a
-  max), never their CBR / CQP defaults. Pinned by `sizing` and `linux_plan`
+  Linux gives each encoder the average with its own default rate control
+  and a keyframe every 2 s (`linux_plan::KEYFRAME_FRAMES`): the VBR /
+  constant-quality modes with a ceiling were rolled back with the other
+  Linux recorder changes. Pinned by `sizing` and `linux_plan`
   tests (Swift literals included) and `writer.rs` tests on Windows.
 - Pause cuts time out: samples are retimed on the writer queue by the host
   time of every finished pause (`place`), video and audio alike, and samples
@@ -1333,22 +1366,13 @@ stderr lines are diagnostics and are logged at `warn`.
   for the end of the file before the first frame, and share links can only be
   read from the start, so the whole recording downloaded before it played.
   Windows (`MFTranscodeContainerType_FMPEG4`) writes fragmented files whose
-  index is already first. Linux writes fragments while recording (`mp4mux
-  fragment-duration`, so a killed recorder leaves a playable file) and at
-  Stop rewrites them as one movie with its index first, nothing re-encoded
-  (`linux_plan::faststart`: `qtdemux ! mp4mux faststart=true`, run by
-  `encoder::faststart_in_place`, checked with `index_first` before it
-  replaces the file; on any failure the fragments stay). Why: GStreamer
-  1.20 (Ubuntu 22.04) writes one `trun` per picture with implicit data
-  offsets, which Chrome's demuxer reads from the wrong place
-  (`PIPELINE_ERROR_DECODE`, the share page's "can't be played"); and for
-  ANY fragmented file Chrome walks every fragment back and forth before
-  the first frame (about two backward jumps per fragment, measured), which
-  on a share link restarts the download each time. Pinned by
-  `recordings_put_their_index_first` (`recorder_child/plan.rs`) and the
-  Linux self-test (`index_first`). The encoder only ever gets 8-bit 4:2:0
-  (`linux_plan::ENCODER_INPUT`): from RGB, x264 picks 4:4:4 and writes
-  "High 4:4:4 Predictive".
+  index is already first. Linux writes fragmented files too (`mp4mux
+  fragment-duration`, so a killed recorder leaves a playable file). A
+  rewrite at Stop with the index first (`qtdemux ! mp4mux faststart=true`)
+  and an NV12/I420 capsfilter before the encoder were tried and rolled
+  back: recordings failed on real GNOME Wayland machines while CI's Xvfb
+  run passed. Pinned by `recordings_put_their_index_first`
+  (`recorder_child/plan.rs`).
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when
@@ -1559,7 +1583,7 @@ disable it. The capture bar's Record modes and Settings show the same line. The 
 (`TrayCaptureButton`, opens the bar on the last mode; its slot is held while
 support is asked). Mode names and icons come from `app/lib/capture/modes.ts`.
 Settings › Screenshots & Recording (section `capture`, after Sync & Storage,
-shown where `SCREEN_CAPTURE_ENABLED` and `captureSupportedAtom`) holds every
+shown where `useCaptureAvailability` is `available`, kept while `unknown`) holds every
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`

@@ -57,6 +57,7 @@ export default function TrayUploadRow({
   accountId,
   isCapture = false,
   siblings,
+  editorEnabled = false,
 }: {
   item: UploadFeedItem;
   /** The signed-in account, for revealing a file and fetching its picture. */
@@ -65,12 +66,17 @@ export default function TrayUploadRow({
   isCapture?: boolean;
   /** The files the viewer can walk from this one: the tab it is listed in. */
   siblings?: UploadFeedItem[];
+  /**
+   * Capture is on for this computer (flag AND Rust's support), so a picture
+   * offers Edit (the screenshot editor). Off until Rust has answered.
+   */
+  editorEnabled?: boolean;
 }) {
   const name = displayFileName(item.name);
   const picture = useTrayThumbnail(item, accountId);
 
-  const actions = getTrayRowActions(item, fileManagerLabel());
-  const quick = getTrayQuickActions(item);
+  const actions = getTrayRowActions(item, fileManagerLabel(), editorEnabled);
+  const quick = getTrayQuickActions(item, editorEnabled);
   const opensViewer = trayRowOpensViewer(item);
   const subtitleId = useId();
 

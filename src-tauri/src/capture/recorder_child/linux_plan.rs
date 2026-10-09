@@ -43,7 +43,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use super::plan::{self, PixelRect};
-use super::sizing::{PEAK_TO_AVERAGE, RateControl};
+use super::sizing::RateControl;
 use crate::capture::recording::protocol::StartCommand;
 use crate::capture::recording::{MediaDevice, RecordingUnavailable, tidy_devices};
 use crate::capture::targets::DisplayTarget;
@@ -74,43 +74,30 @@ impl H264Encoder {
         }
     }
 
-    /// The element with the shared rate control: the Swift helper's average,
-    /// a ceiling of [`PEAK_TO_AVERAGE`] times it, and its keyframe interval.
-    /// Each encoder is put in a mode that spends less on a still screen:
-    /// none of them is left in constant bit rate, which pads a still screen
-    /// up to the average (x264's and VA's default), and the old VA-API
-    /// plugin's default (constant QP) ignored the bit rate altogether.
-    ///
-    /// - VA (`va` plugin): VBR; `bitrate` is the average and the ceiling is
-    ///   `bitrate * 100 / target-percentage`.
-    /// - VA-API (`vaapi` plugin): VBR; there `bitrate` is the ceiling and
-    ///   the average is `target-percentage` of it.
-    /// - x264: constant quality ([`X264_CRF`]) with the ceiling as its VBV
-    ///   rate over a one-second buffer, so a still screen costs almost
-    ///   nothing and a busy one stops at the ceiling. `veryfast` keeps a
-    ///   4K30 screen real time on a laptop CPU.
-    /// - OpenH264: its default quality-first rate control with the average
-    ///   as target and the ceiling as its maximum.
-    ///
-    /// Units differ: x264 and the VA encoders take kbit/s, OpenH264 bit/s.
+    /// The element with the shared average bit rate and a keyframe every
+    /// 2 s at 30 fps ([`KEYFRAME_FRAMES`]), each encoder in its own default
+    /// rate control. This is the form Linux recordings used before the
+    /// encoders were put in VBR / constant-quality modes with a ceiling: on
+    /// real GNOME machines (hardware VA encoders) that change came with
+    /// recordings stopping at Record with GStreamer's "Internal data stream
+    /// error", so the plain settings are back. Units differ: x264 and the
+    /// VA encoders take kbit/s, OpenH264 bit/s.
     #[must_use]
     pub fn element(self, rate: RateControl) -> String {
-        let (average, peak, keyframes) = (rate.average_kbps(), rate.peak_kbps(), rate.keyframe_frames);
-        let target_percentage = 100 / PEAK_TO_AVERAGE;
+        let kbps = rate.average_kbps();
         match self {
-            Self::Va => format!("vah264enc rate-control=vbr bitrate={average} target-percentage={target_percentage} key-int-max={keyframes}"),
-            Self::Vaapi => format!("vaapih264enc rate-control=vbr bitrate={peak} target-percentage={target_percentage} keyframe-period={keyframes}"),
-            Self::X264 => {
-                format!("x264enc pass=qual quantizer={X264_CRF} bitrate={peak} vbv-buf-capacity=1000 key-int-max={keyframes} speed-preset=veryfast")
-            }
-            Self::OpenH264 => format!("openh264enc bitrate={} max-bitrate={} gop-size={keyframes}", rate.average, rate.peak),
+            Self::Va => format!("vah264enc bitrate={kbps} key-int-max={KEYFRAME_FRAMES}"),
+            Self::Vaapi => format!("vaapih264enc bitrate={kbps} keyframe-period={KEYFRAME_FRAMES}"),
+            // `veryfast` keeps a 4K30 screen real time on a laptop CPU.
+            Self::X264 => format!("x264enc bitrate={kbps} key-int-max={KEYFRAME_FRAMES} speed-preset=veryfast"),
+            Self::OpenH264 => format!("openh264enc bitrate={} gop-size={KEYFRAME_FRAMES}", rate.average),
         }
     }
 }
 
-/// x264's constant-quality level: x264's own default CRF and OBS's "High
-/// Quality, Medium File Size" recording preset. Lower is sharper and bigger.
-pub const X264_CRF: u32 = 23;
+/// The Linux encoders' keyframe interval in frames: every 2 s at 30 fps,
+/// one per fragment ([`FRAGMENT_MS`]).
+pub const KEYFRAME_FRAMES: u32 = 60;
 
 /// An AAC encoder element, in the order the plan prefers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -651,14 +638,6 @@ pub fn meter_capture(device: Option<&str>) -> String {
     )
 }
 
-/// What the encoder is given: 8-bit 4:2:0 only (NV12, or I420 for
-/// OpenH264, which takes nothing else). Left to choose, x264 takes the
-/// first format it can, and from RGB that is 4:4:4, which it writes as
-/// H.264 "High 4:4:4 Predictive": a profile browsers' hardware decoders and
-/// some browsers refuse. The pictures arrive as NV12 today; this keeps a
-/// change upstream from ever producing such a file.
-pub const ENCODER_INPUT: &str = "video/x-raw,format={ NV12, I420 }";
-
 /// What the file is written with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodePlan {
@@ -686,9 +665,8 @@ pub fn encode(plan: &EncodePlan) -> String {
     );
     let mut out = format!(
         "appsrc name={VIDEO_SRC} format=time is-live=false do-timestamp=false caps={caps} ! \
-         queue ! videoconvert ! capsfilter caps={planar} ! {venc} ! h264parse ! {unbounded} ! mux. ",
+         queue ! videoconvert ! {venc} ! h264parse ! {unbounded} ! mux. ",
         caps = quoted(&video_caps),
-        planar = quoted(ENCODER_INPUT),
         venc = plan.encoders.video.element(RateControl::for_size(plan.width, plan.height)),
     );
     if plan.audio {
@@ -707,96 +685,6 @@ pub fn encode(plan: &EncodePlan) -> String {
         quoted(&plan.output)
     );
     out
-}
-
-/// The finished recording rewritten as one ordinary MP4 with its index
-/// (`moov`) first, the layout the macOS helper writes
-/// (`shouldOptimizeForNetworkUse`). Nothing is re-encoded: `qtdemux` reads
-/// the fragments back and `mp4mux faststart=true` writes the samples once,
-/// its index ahead of them (the samples wait in `temp`, next to the file,
-/// not in a `/tmp` that may be memory).
-///
-/// Why: the fragments are only there so a killed recorder leaves a file
-/// that plays. Kept in the finished file they cost two ways. GStreamer 1.20
-/// (Ubuntu 22.04) writes one `trun` per picture, all but the first without
-/// a data offset, which Chrome's demuxer reads from the wrong place: the
-/// file fails to decode in Chrome ("PIPELINE_ERROR_DECODE") and a share
-/// link shows "can't be played". And with any GStreamer, Chrome walks every
-/// fragment of a fragmented file before it plays, jumping back each time,
-/// which on a share link (the server ignores Range) restarts the download.
-/// A file with its index first is read once, front to back, everywhere.
-#[must_use]
-pub fn faststart(input: &str, output: &str, temp: &str, audio: bool) -> String {
-    let mut out = format!(
-        "filesrc location={input} ! qtdemux name=demux \
-         mp4mux name=remux faststart=true faststart-file={temp} ! filesink location={output} \
-         demux.video_0 ! queue ! remux.video_0",
-        input = quoted(input),
-        output = quoted(output),
-        temp = quoted(temp),
-    );
-    if audio {
-        out.push_str(" demux.audio_0 ! queue ! remux.audio_0");
-    }
-    out
-}
-
-/// Where [`faststart`] writes: the rewritten file, then its samples while
-/// the index is built, both next to the recording (`<name>.remux`,
-/// `<name>.samples`). The recording itself is replaced only once the
-/// rewrite is whole.
-#[must_use]
-pub fn remux_paths(output: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    let with = |suffix: &str| {
-        let mut name = output.as_os_str().to_os_string();
-        name.push(suffix);
-        std::path::PathBuf::from(name)
-    };
-    (with(".remux"), with(".samples"))
-}
-
-/// The four-letter types of an MP4's top-level boxes, in file order, read
-/// from the box headers alone (a few bytes per box, whatever the size).
-///
-/// # Errors
-/// The file could not be read or ends inside a box header.
-pub fn top_level_boxes<R: std::io::Read + std::io::Seek>(file: &mut R) -> std::io::Result<Vec<[u8; 4]>> {
-    use std::io::SeekFrom;
-    let len = file.seek(SeekFrom::End(0))?;
-    let mut at = 0u64;
-    let mut boxes = Vec::new();
-    while at + 8 <= len {
-        file.seek(SeekFrom::Start(at))?;
-        let mut header = [0u8; 8];
-        file.read_exact(&mut header)?;
-        let size32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-        let kind = [header[4], header[5], header[6], header[7]];
-        let size = match size32 {
-            0 => len - at,
-            1 => {
-                let mut large = [0u8; 8];
-                file.read_exact(&mut large)?;
-                u64::from_be_bytes(large)
-            }
-            n => u64::from(n),
-        };
-        if size < 8 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "a box shorter than its header"));
-        }
-        boxes.push(kind);
-        at = at.saturating_add(size);
-    }
-    Ok(boxes)
-}
-
-/// Whether top-level `boxes` make one ordinary movie with its index first:
-/// a `moov` ahead of the first `mdat`, and no fragments (`moof`).
-#[must_use]
-pub fn index_first(boxes: &[[u8; 4]]) -> bool {
-    let moov = boxes.iter().position(|b| b == b"moov");
-    let mdat = boxes.iter().position(|b| b == b"mdat");
-    let fragmented = boxes.iter().any(|b| b == b"moof");
-    matches!((moov, mdat), (Some(i), Some(j)) if i < j) && !fragmented
 }
 
 /// What an X11 recording reads, from the start command and the displays
@@ -1015,22 +903,10 @@ mod tests {
     #[test]
     fn bit_rates_are_in_each_encoders_own_units() {
         let hd = RateControl::for_size(1920, 1080);
-        assert_eq!(
-            H264Encoder::X264.element(hd),
-            "x264enc pass=qual quantizer=23 bitrate=10000 vbv-buf-capacity=1000 key-int-max=120 speed-preset=veryfast"
-        );
-        assert_eq!(
-            H264Encoder::OpenH264.element(hd),
-            "openh264enc bitrate=5000000 max-bitrate=10000000 gop-size=120"
-        );
-        assert_eq!(
-            H264Encoder::Va.element(hd),
-            "vah264enc rate-control=vbr bitrate=5000 target-percentage=50 key-int-max=120"
-        );
-        assert_eq!(
-            H264Encoder::Vaapi.element(hd),
-            "vaapih264enc rate-control=vbr bitrate=10000 target-percentage=50 keyframe-period=120"
-        );
+        assert_eq!(H264Encoder::X264.element(hd), "x264enc bitrate=5000 key-int-max=60 speed-preset=veryfast");
+        assert_eq!(H264Encoder::OpenH264.element(hd), "openh264enc bitrate=5000000 gop-size=60");
+        assert_eq!(H264Encoder::Va.element(hd), "vah264enc bitrate=5000 key-int-max=60");
+        assert_eq!(H264Encoder::Vaapi.element(hd), "vaapih264enc bitrate=5000 keyframe-period=60");
         assert_eq!(AacEncoder::Avenc.element(), "avenc_aac bitrate=160000");
     }
 
@@ -1294,8 +1170,8 @@ mod tests {
     #[test]
     fn the_writer_encodes_one_video_and_one_audio_track_in_fragments() {
         let text = encode(&encode_plan(true));
-        let peak = RateControl::for_size(3840, 2160).peak_kbps();
-        assert!(text.contains(&format!("x264enc pass=qual quantizer=23 bitrate={peak} ")), "{text}");
+        let kbps = RateControl::for_size(3840, 2160).average_kbps();
+        assert!(text.contains(&format!("x264enc bitrate={kbps} ")), "{text}");
         assert!(
             text.contains("caps=\"video/x-raw,format=NV12,width=3840,height=2160,framerate=30/1"),
             "{text}"
@@ -1312,132 +1188,34 @@ mod tests {
         );
     }
 
-    /// Every encoder is put in a rate control that spends less on a still
-    /// screen than the average (never their constant-bit-rate or
-    /// constant-QP defaults), with the same ceiling of twice the average and
-    /// the Swift helper's keyframe interval, at every size.
+    /// Every encoder keeps its own default rate control (no VBR or
+    /// constant-quality mode, no ceiling), the average bit rate and a
+    /// keyframe every 2 s, at every size.
     #[test]
-    fn every_encoder_spends_less_on_a_still_screen_and_keyframes_alike() {
+    fn every_encoder_keeps_its_default_rate_control_and_keyframes_alike() {
         for (w, h) in [(1280, 720), (1920, 1080), (3456, 2234), (3840, 2160)] {
             let rate = RateControl::for_size(w, h);
             for encoder in H264Encoder::PREFERENCE {
                 let element = encoder.element(rate);
                 assert!(element.starts_with(encoder.factory()), "{element}");
+                for mode in [
+                    "rate-control=",
+                    "pass=",
+                    "quantizer=",
+                    "target-percentage=",
+                    "max-bitrate=",
+                    "vbv-buf-capacity=",
+                ] {
+                    assert!(!element.contains(mode), "{mode} in {element}");
+                }
                 let gop = match encoder {
                     H264Encoder::Va | H264Encoder::X264 => "key-int-max",
                     H264Encoder::Vaapi => "keyframe-period",
                     H264Encoder::OpenH264 => "gop-size",
                 };
-                let keyframes = format!("{gop}={}", rate.keyframe_frames);
-                assert!(element.split(' ').any(|p| p == keyframes), "a keyframe every 4 s: {element}");
-                match encoder {
-                    H264Encoder::Va => {
-                        assert!(element.contains("rate-control=vbr "), "{element}");
-                        // The ceiling is bitrate * 100 / target-percentage.
-                        assert!(element.contains(&format!("bitrate={} target-percentage=50", rate.average_kbps())));
-                        assert_eq!(100 / PEAK_TO_AVERAGE, 50, "a ceiling of twice the average");
-                    }
-                    H264Encoder::Vaapi => {
-                        assert!(element.contains("rate-control=vbr "), "{element}");
-                        // Here bitrate is the ceiling and the average its percentage.
-                        assert!(element.contains(&format!("bitrate={} target-percentage=50", rate.peak_kbps())));
-                    }
-                    H264Encoder::X264 => {
-                        assert!(element.contains("pass=qual quantizer=23 "), "constant quality, not CBR: {element}");
-                        assert!(element.contains(&format!("bitrate={} vbv-buf-capacity=1000", rate.peak_kbps())));
-                    }
-                    H264Encoder::OpenH264 => {
-                        assert!(!element.contains("rate-control="), "its default is quality first: {element}");
-                        assert!(element.contains(&format!("bitrate={} max-bitrate={}", rate.average, rate.peak)));
-                    }
-                }
+                assert!(element.split(' ').any(|p| p == format!("{gop}=60")), "{element}");
             }
         }
-    }
-
-    /// The encoder only ever gets 8-bit 4:2:0: from RGB, x264 would pick
-    /// 4:4:4 and write "High 4:4:4 Predictive".
-    #[test]
-    fn the_encoder_is_given_4_2_0_only() {
-        for audio in [true, false] {
-            let text = encode(&encode_plan(audio));
-            assert!(
-                text.contains("videoconvert ! capsfilter caps=\"video/x-raw,format={ NV12, I420 }\" ! x264enc "),
-                "{text}"
-            );
-        }
-        assert!(!ENCODER_INPUT.contains("444") && !ENCODER_INPUT.contains("BGR") && !ENCODER_INPUT.contains("10LE"));
-    }
-
-    /// The finished file is remuxed, not re-encoded, with its index first;
-    /// the audio track is linked only when the recording has one (a link to
-    /// a track that never comes would hold the muxer forever).
-    #[test]
-    fn the_finished_file_is_remuxed_with_its_index_first() {
-        let text = faststart("/c/Recording 1.mp4", "/c/Recording 1.mp4.remux", "/c/Recording 1.mp4.samples", true);
-        assert!(
-            text.starts_with("filesrc location=\"/c/Recording 1.mp4\" ! qtdemux name=demux "),
-            "{text}"
-        );
-        assert!(text.contains(
-            "mp4mux name=remux faststart=true faststart-file=\"/c/Recording 1.mp4.samples\" ! filesink location=\"/c/Recording 1.mp4.remux\""
-        ));
-        assert!(text.contains("demux.video_0 ! queue ! remux.video_0"));
-        assert!(text.contains("demux.audio_0 ! queue ! remux.audio_0"));
-        for encoder in ["x264enc", "openh264enc", "vah264enc", "vaapih264enc", "avenc_aac", "videoconvert"] {
-            assert!(!text.contains(encoder), "nothing is re-encoded: {text}");
-        }
-        let silent = faststart("/a.f", "/a.mp4", "/a.t", false);
-        assert!(!silent.contains("audio"), "{silent}");
-        assert!(silent.contains("demux.video_0 ! queue ! remux.video_0"));
-    }
-
-    fn mp4_box(kind: [u8; 4], payload: usize) -> Vec<u8> {
-        let mut b = u32::try_from(8 + payload).unwrap().to_be_bytes().to_vec();
-        b.extend_from_slice(&kind);
-        b.resize(8 + payload, 0);
-        b
-    }
-
-    /// The layout check reads box headers only: the fragmented file a
-    /// recorder writes is not index-first, the rewritten one is, and so is
-    /// a 64-bit `mdat` (a recording past 4 GB).
-    #[test]
-    fn the_layout_check_tells_fragments_from_an_index_first_movie() {
-        let read = |parts: &[Vec<u8>]| top_level_boxes(&mut std::io::Cursor::new(parts.concat())).unwrap();
-        let fragmented = read(&[
-            mp4_box(*b"ftyp", 24),
-            mp4_box(*b"moov", 100),
-            mp4_box(*b"moof", 50),
-            mp4_box(*b"mdat", 1000),
-            mp4_box(*b"moof", 50),
-            mp4_box(*b"mdat", 900),
-            mp4_box(*b"mfra", 40),
-        ]);
-        assert_eq!(fragmented.len(), 7);
-        assert!(!index_first(&fragmented), "fragments");
-        let rewritten = read(&[
-            mp4_box(*b"ftyp", 24),
-            mp4_box(*b"moov", 400),
-            mp4_box(*b"uuid", 30),
-            mp4_box(*b"mdat", 5000),
-        ]);
-        assert!(index_first(&rewritten));
-        let index_last = read(&[mp4_box(*b"ftyp", 24), mp4_box(*b"mdat", 5000), mp4_box(*b"moov", 400)]);
-        assert!(!index_first(&index_last), "index at the end");
-        let mut large = 1u32.to_be_bytes().to_vec();
-        large.extend_from_slice(b"mdat");
-        large.extend_from_slice(&24u64.to_be_bytes());
-        large.resize(24, 0);
-        assert!(index_first(&read(&[mp4_box(*b"ftyp", 8), mp4_box(*b"moov", 10), large])));
-        assert!(top_level_boxes(&mut std::io::Cursor::new(vec![0, 0, 0, 3, b'b', b'a', b'd', b'!'])).is_err());
-    }
-
-    #[test]
-    fn the_rewrite_lands_next_to_the_recording() {
-        let (remuxed, samples) = remux_paths(std::path::Path::new("/c/Recording 1.mp4"));
-        assert_eq!(remuxed, std::path::Path::new("/c/Recording 1.mp4.remux"));
-        assert_eq!(samples, std::path::Path::new("/c/Recording 1.mp4.samples"));
     }
 
     #[test]

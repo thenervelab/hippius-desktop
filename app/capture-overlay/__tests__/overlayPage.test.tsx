@@ -92,6 +92,8 @@ beforeEach(() => {
   tauri.reset();
   // Rust's recording gate lets a recording start unless a test says not.
   tauri.onInvoke("capture_check_recording_start", () => null);
+  // A paid or unknown plan: no free plan notice unless a test says so.
+  tauri.onInvoke("capture_free_plan_notice", () => null);
   confirm = vi.fn(() => new Promise(() => undefined));
   window.history.replaceState({}, "", "/capture-overlay?display=1");
 });
@@ -273,6 +275,21 @@ describe("the capture overlay's keyboard", () => {
 });
 
 describe("the capture bar's words", () => {
+  it("tells the free plan about the watermark, the 5 minutes and its recordings before capturing", async () => {
+    tauri.onInvoke("capture_free_plan_notice", () => ({ used: 4, limit: 25, maxRecordingMins: 5 }));
+    setup();
+    expect(await screen.findByTestId("capture-free-plan")).toHaveTextContent(
+      "Free plan: captures carry a small Hippius watermark and recordings stop at 5 minutes. 4 of 25 free recordings used.",
+    );
+  });
+
+  it("says nothing about a plan that is paid or unknown", async () => {
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    await waitFor(() => expect(called("capture_free_plan_notice")).toBe(true));
+    expect(screen.queryByTestId("capture-free-plan")).toBeNull();
+  });
+
   it("shows Record disabled with Rust's reason when this build has no helper, and does not switch to it", async () => {
     tauri.onInvoke("capture_set_mode", () => null);
     setup({
