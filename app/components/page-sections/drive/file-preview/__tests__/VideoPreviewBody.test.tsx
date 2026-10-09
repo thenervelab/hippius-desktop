@@ -34,19 +34,23 @@ vi.mock("@/app/lib/hooks/useViewableFileUrl", () => ({
 const player = vi.hoisted(() => ({
   started: undefined as undefined | (() => void),
   failed: undefined as undefined | (() => void),
+  stuttered: undefined as undefined | (() => void),
 }));
 vi.mock("@/app/components/page-sections/drive/files-table/VideoPlayer", () => ({
   default: ({
     videoUrl,
     onPlaybackStarted,
     onPlaybackFailed,
+    onPlaybackStuttered,
   }: {
     videoUrl: string;
     onPlaybackStarted?: () => void;
     onPlaybackFailed?: () => void;
+    onPlaybackStuttered?: () => void;
   }) => {
     player.started = onPlaybackStarted;
     player.failed = onPlaybackFailed;
+    player.stuttered = onPlaybackStuttered;
     return <div data-testid="video-player">{videoUrl}</div>;
   },
 }));
@@ -66,6 +70,7 @@ const file = {
 } as unknown as FormattedUserFile;
 
 const STREAM_URL = `http://127.0.0.1:40123/v/${"a".repeat(64)}`;
+const STUTTER_LINE = "Not playing smoothly? Your video player may play it better.";
 const START_FAILED = "This video didn't start in Hippius. Open it in your video player, or download it.";
 const DECODER_LINE =
   "Videos need an H.264 decoder your system doesn't have. Install gstreamer1.0-libav, then restart Hippius.";
@@ -93,6 +98,7 @@ beforeEach(() => {
   opener.openPath.mockClear();
   player.started = undefined;
   player.failed = undefined;
+  player.stuttered = undefined;
   resolved.value = {
     url: "asset://localhost/drive/Captures/Recording.mp4",
     localPath: "/drive/Captures/Recording.mp4",
@@ -163,12 +169,39 @@ describe("VideoPreviewBody", () => {
     expect(download).toHaveBeenCalledWith(file, "5Test");
   });
 
+  it("offers the system player beside a stream that keeps stopping, and keeps playing", async () => {
+    stream();
+    render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    await screen.findByTestId("video-player");
+    act(() => player.started?.());
+    expect(screen.queryByText(STUTTER_LINE)).toBeNull();
+    await waitFor(() => {
+      act(() => player.stuttered?.());
+      expect(screen.getByText(STUTTER_LINE)).toBeInTheDocument();
+    });
+    // Beside the player, not instead of it.
+    expect(screen.getByTestId("video-player")).toHaveTextContent(STREAM_URL);
+    fireEvent.click(screen.getByRole("button", { name: "Open in your video player" }));
+    await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("/drive/Captures/Recording.mp4"));
+  });
+
+  it("never offers it where the webview plays the file itself", async () => {
+    tauri.onInvoke("video_playback_source", () => ({ kind: "webview" }));
+    render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
+    await screen.findByTestId("video-player");
+    expect(player.stuttered).toBeUndefined();
+  });
+
   it("falls back at once when the player errors", async () => {
     stream();
     render(<VideoPreviewBody file={file} handleFileDownload={vi.fn()} />);
     await screen.findByTestId("video-player");
-    act(() => player.failed?.());
-    expect(await screen.findByText(START_FAILED)).toBeInTheDocument();
+    // The player hands over a fresh callback on every render; on a slow
+    // runner the one read first can be stale, so report until it lands.
+    await waitFor(() => {
+      act(() => player.failed?.());
+      expect(screen.getByText(START_FAILED)).toBeInTheDocument();
+    });
     expect(screen.getByRole("button", { name: /Open in your video player/ })).toBeEnabled();
   });
 

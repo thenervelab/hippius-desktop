@@ -24,9 +24,10 @@ pub const INFO_DRIVE_PASSWORD: &str = "hippius-drive-password-encryption";
 /// grant blob; the value is pinned by the `grant_passphrase_is_pinned` KAT.
 pub const INFO_DRIVE_GRANT: &str = "hippius-drive-grant-v1";
 
-/// HKDF info string for the key that seals a held recording on this device
-/// (`crate::capture::recording_allowance`). Local only: nothing sealed with it
-/// ever leaves the machine, so changing it only strands recordings held now.
+/// HKDF info string for the key a held recording was sealed with on this
+/// device (`crate::capture::held_recordings`). Nothing is sealed any more;
+/// recordings an earlier build held are still opened with it when they are
+/// released, so changing it strands them.
 pub const INFO_HELD_RECORDING: &str = "hippius-held-recording-v1";
 
 /// Minimum length of `base64(nonce[12] || tag[16])` — no ciphertext.

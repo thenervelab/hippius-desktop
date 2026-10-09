@@ -35,6 +35,7 @@ import { openAppWindow, TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/a
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import CaptureDriveDialog from "./CaptureDriveDialog";
 import CapturePermissionDialog from "./CapturePermissionDialog";
+import RecordingLimitDialog from "./RecordingLimitDialog";
 
 /**
  * Mounted once in the protected layout. Owns the capture dialogs and the
@@ -121,6 +122,7 @@ export default function CaptureHost() {
     <>
       <CaptureDriveDialog />
       <CapturePermissionDialog />
+      <RecordingLimitDialog />
     </>
   );
 }

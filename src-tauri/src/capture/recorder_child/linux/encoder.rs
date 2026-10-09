@@ -2,9 +2,11 @@
 //! pictures at the recording's size, the one mixed sound track), into H.264,
 //! AAC and fragmented MP4 (`linux_plan::encode`). Times are set on every
 //! buffer by the writer, so pause retiming is Rust's and nothing here is
-//! live.
+//! live. At Stop the finished file is rewritten with its index first
+//! (`linux_plan::faststart`, no re-encoding); the fragments only had to
+//! survive a killed recorder.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use gstreamer as gst;
@@ -22,6 +24,10 @@ use super::say;
 const MAX_QUEUED_FRAMES: u64 = 8;
 /// How long finishing the file may take.
 const FINISH_WITHIN: gst::ClockTime = gst::ClockTime::from_seconds(30);
+/// How long rewriting the finished file with its index first may take (a
+/// copy of the file on the same disk, nothing re-encoded). Past it the
+/// fragmented file is kept: it plays, only less well in browsers.
+pub const REMUX_WITHIN: gst::ClockTime = gst::ClockTime::from_seconds(60);
 
 /// 100 ns units (the writer's) to a clock time.
 fn clock(hns: i64) -> gst::ClockTime {
@@ -30,6 +36,8 @@ fn clock(hns: i64) -> gst::ClockTime {
 
 pub struct GstEncoder {
     pipeline: gst::Pipeline,
+    output: PathBuf,
+    audio_track: bool,
     video: gst_app::AppSrc,
     audio: Option<gst_app::AppSrc>,
     frame_bytes: u64,
@@ -94,6 +102,8 @@ impl GstEncoder {
         }
         Ok(Self {
             pipeline,
+            output: PathBuf::from(&plan.output),
+            audio_track: plan.audio,
             video,
             audio,
             frame_bytes: u64::try_from(nv12_len(plan.width, plan.height)).unwrap_or(u64::MAX),
@@ -158,8 +168,69 @@ impl Encoder for GstEncoder {
         };
         let _ = self.pipeline.set_state(gst::State::Null);
         self.finished = true;
+        if result.is_ok() {
+            match faststart_in_place(&self.output, self.audio_track) {
+                Ok(()) => say("the recording was rewritten with its index first"),
+                Err(e) => say(&format!("the recording keeps its fragments: {e}")),
+            }
+        }
         result
     }
+}
+
+/// Rewrite the finished recording at `output` with its index first
+/// (`linux_plan::faststart`), replacing it only once the rewrite is whole
+/// and checked; on any failure the fragmented file stays as it was.
+///
+/// # Errors
+/// The rewrite failed, took too long or came out wrong.
+pub fn faststart_in_place(output: &Path, audio: bool) -> Result<(), String> {
+    let (remuxed, samples) = linux_plan::remux_paths(output);
+    let text = |p: &Path| p.to_str().map(str::to_string).ok_or("the recording's path is not UTF-8");
+    let description = linux_plan::faststart(&text(output)?, &text(&remuxed)?, &text(&samples)?, audio);
+    let ran = run_to_end(&description, REMUX_WITHIN);
+    // mp4mux removes its samples file itself; this covers a failed run.
+    let _ = std::fs::remove_file(&samples);
+    let checked = ran.and_then(|()| {
+        let mut file = std::fs::File::open(&remuxed).map_err(|e| e.to_string())?;
+        let boxes = linux_plan::top_level_boxes(&mut file).map_err(|e| e.to_string())?;
+        if linux_plan::index_first(&boxes) {
+            Ok(())
+        } else {
+            Err("the rewritten file does not have its index first".to_string())
+        }
+    });
+    if let Err(e) = checked {
+        let _ = std::fs::remove_file(&remuxed);
+        return Err(e);
+    }
+    std::fs::rename(&remuxed, output).map_err(|e| {
+        let _ = std::fs::remove_file(&remuxed);
+        format!("the rewritten file could not replace the recording: {e}")
+    })
+}
+
+/// Run a pipeline that ends by itself (a file in, a file out) to its end.
+fn run_to_end(description: &str, within: gst::ClockTime) -> Result<(), String> {
+    let pipeline = gst::parse::launch(description)
+        .map_err(|e| e.to_string())?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| "not a pipeline".to_string())?;
+    if pipeline.set_state(gst::State::Playing).is_err() {
+        let detail = bus_error(&pipeline).unwrap_or_else(|| "it did not start".into());
+        let _ = pipeline.set_state(gst::State::Null);
+        return Err(detail);
+    }
+    let ended = pipeline
+        .bus()
+        .and_then(|bus| bus.timed_pop_filtered(within, &[gst::MessageType::Eos, gst::MessageType::Error]));
+    let result = match ended.as_ref().map(|m| gst::MessageRef::view(m)) {
+        Some(gst::MessageView::Eos(_)) => Ok(()),
+        Some(gst::MessageView::Error(err)) => Err(err.error().to_string()),
+        _ => Err("it took too long".into()),
+    };
+    let _ = pipeline.set_state(gst::State::Null);
+    result
 }
 
 impl Drop for GstEncoder {

@@ -90,6 +90,8 @@ const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c ===
 
 beforeEach(() => {
   tauri.reset();
+  // Rust's recording gate lets a recording start unless a test says not.
+  tauri.onInvoke("capture_check_recording_start", () => null);
   confirm = vi.fn(() => new Promise(() => undefined));
   window.history.replaceState({}, "", "/capture-overlay?display=1");
 });
@@ -509,6 +511,10 @@ describe("the Options menu", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     vi.useFakeTimers();
     fireEvent.keyDown(window, { key: "Enter" });
+    // Rust's recording gate answers before the count starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(screen.getByText("Recording in 5")).toBeInTheDocument();
   });
 
@@ -792,6 +798,10 @@ describe("click to capture", () => {
     expect(await screen.findByText("Click to record this screen")).toBeInTheDocument();
     vi.useFakeTimers();
     click(el, 300, 300);
+    // Rust's recording gate answers before the count starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(screen.getByText("Recording in 3")).toBeInTheDocument();
     expect(called("capture_select")).toBe(false);
     // One second per number; each re-render arms the next.
@@ -1009,6 +1019,24 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     await waitFor(() =>
       expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "area" }),
     );
+  });
+
+  /**
+   * The panel's device menu drops over the toolbar below its row; the
+   * sources panel it lives in is stacked above the toolbar so the menu is
+   * not drawn under the bar's buttons.
+   */
+  it("opens the microphone menu above the toolbar, not behind it", async () => {
+    setup(PANEL);
+    tauri.onInvoke("capture_microphones", () => [
+      { id: "mic-1", name: "Built-in Audio", isDefault: true, continuity: false },
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: /^Microphone:/ }));
+    const menu = await screen.findByRole("menu", { name: "Choose a microphone" });
+    const sources = screen.getByRole("group", { name: "Recording sources" });
+    expect(sources).toContainElement(menu);
+    expect(sources.className.split(/\s+/)).toEqual(expect.arrayContaining(["relative", "z-20"]));
+    expect(screen.getByRole("toolbar", { name: "Capture" }).className).not.toMatch(/(^|\s)z-/);
   });
 
   it("says what Record leads to for a whole screen", async () => {
@@ -1263,5 +1291,63 @@ describe("drawing over an area that is already there", () => {
     expect(handedOver()).toEqual([]);
     expect(screen.getByText("400 × 300")).toBeInTheDocument();
     expect(screen.queryByText("0 × 0")).toBeNull();
+  });
+});
+
+describe("Record on a free plan whose recordings are used up", () => {
+  const LIMIT = {
+    kind: "NotReady",
+    subkind: "RECORDING_LIMIT_REACHED",
+    message: "You've used your 25 free recordings Upgrade your plan to record more, or delete an older recording.",
+  };
+  const recording = { kind: "recording" as const, countdownSecs: 3 };
+  const refuse = () => {
+    throw LIMIT;
+  };
+
+  it("shows the limit panel at once, before any countdown, and records nothing", async () => {
+    tauri.onInvoke("capture_check_recording_start", refuse);
+    setup(recording);
+    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    const panel = await screen.findByRole("alertdialog", { name: "You've used your 25 free recordings" });
+    expect(panel).toHaveTextContent("Upgrade your plan to record more, or delete an older recording.");
+    expect(screen.queryByRole("button", { name: "Record now" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("shows it when Rust refuses at Record itself", async () => {
+    tauri.onInvoke("capture_check_recording_start", () => null);
+    confirm = vi.fn(() => Promise.reject(LIMIT));
+    setup({ kind: "recording" });
+    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledWith({ displayId: 1 });
+  });
+
+  it("Upgrade goes through Rust; Not now and Escape leave the bar up", async () => {
+    tauri.onInvoke("capture_check_recording_start", refuse);
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    setup(recording);
+    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("toolbar", { name: "Capture" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(called("capture_cancel")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Upgrade/ }));
+    await waitFor(() => expect(called("capture_limit_upgrade")).toBe(true));
+  });
+
+  it("never asks the gate for a screenshot", async () => {
+    setup({ countdownSecs: 0 });
+    fireEvent.click(await screen.findByRole("button", { name: "Capture" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(called("capture_check_recording_start")).toBe(false);
   });
 });

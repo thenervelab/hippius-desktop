@@ -51,6 +51,21 @@ describe("where the bar draws itself", () => {
     expect(panel.toolbar).toContain("shadow-[0_2px_6px");
   });
 
+  /**
+   * A device menu in the panel drops over the toolbar below its row. The
+   * glass makes the sources panel and the toolbar stacking contexts painted
+   * in page order, so without a z-index of its own the sources panel (and
+   * the menu in it) was drawn under the toolbar.
+   */
+  it("lifts the panel's sources, and their menus, above the toolbar", () => {
+    const panel = barClasses("panel");
+    expect(panel.sources).toMatch(/(^|\s)relative(\s|$)/);
+    expect(panel.sources).toMatch(/(^|\s)z-20(\s|$)/);
+    expect(panel.toolbar).not.toMatch(/(^|\s)z-/);
+    // The overlay's menus open upward, away from the toolbar: unchanged.
+    expect(barClasses("overlay").sources).not.toMatch(/(^|\s)z-/);
+  });
+
   it("keeps the overlay's bar at the bottom of the screen with its menus above", () => {
     const overlay = barClasses("overlay");
     expect(overlay.column).toContain("bottom-10");
