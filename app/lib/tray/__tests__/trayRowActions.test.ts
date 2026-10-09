@@ -1,12 +1,8 @@
-import { beforeEach, describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, it, expect } from "vitest";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
-// Edit (the screenshot editor) ships behind the capture flag.
-const flags = vi.hoisted(() => ({ capture: true }));
-vi.mock("@/app/lib/featureFlags", () => ({
-  get SCREEN_CAPTURE_ENABLED() {
-    return flags.capture;
-  },
-}));
+// Edit (the screenshot editor) is offered only where capture is on for this
+// computer (the flag AND Rust's support), which the popover passes in.
+const editor = { on: true };
 
 import {
   canEditTrayRow,
@@ -46,7 +42,7 @@ function row(overrides: Partial<UploadFeedItem> = {}): UploadFeedItem {
 }
 
 const ids = (item: UploadFeedItem) =>
-  getTrayRowActions(item, "Finder").map((a) => a.id);
+  getTrayRowActions(item, "Finder", editor.on).map((a) => a.id);
 
 describe("tray row menu, per file state", () => {
   it("offers a local, synced file everything the Drive menu offers", () => {
@@ -60,7 +56,7 @@ describe("tray row menu, per file state", () => {
       "rename",
       "delete",
     ]);
-    const labels = getTrayRowActions(row(), "Finder").map((a) => a.label);
+    const labels = getTrayRowActions(row(), "Finder", editor.on).map((a) => a.label);
     expect(labels).toContain("Reveal in Finder");
     expect(labels).toContain("Show in Hippius");
   });
@@ -75,7 +71,7 @@ describe("tray row menu, per file state", () => {
     expect(got).not.toContain("reveal");
     expect(got).not.toContain("delete");
     // Rename is shown but disabled, with the Drive's own reason.
-    const rename = getTrayRowActions(cloud, "Finder").find((a) => a.id === "rename");
+    const rename = getTrayRowActions(cloud, "Finder", editor.on).find((a) => a.id === "rename");
     expect(rename).toMatchObject({ disabled: true, tooltip: RENAME_DISABLED_TOOLTIP });
     expect(cloudFileIdFor(cloud)).toBe(cloud.fileId);
   });
@@ -111,12 +107,12 @@ describe("tray row menu, per file state", () => {
   it("does not offer View for a file the viewer cannot open", () => {
     const zip = row({ name: "backup.zip", actualFileName: "backup.zip" });
     expect(ids(zip)).not.toContain("preview");
-    expect(getTrayQuickActions(zip)).toEqual(["copy-link"]);
+    expect(getTrayQuickActions(zip, editor.on)).toEqual(["copy-link"]);
   });
 
   it("disables Delete while the file is still being assigned", () => {
     const syncing = row({ isAssigned: false });
-    expect(getTrayRowActions(syncing, "Finder").find((a) => a.id === "delete")).toMatchObject({
+    expect(getTrayRowActions(syncing, "Finder", editor.on).find((a) => a.id === "delete")).toMatchObject({
       disabled: true,
       destructive: true,
     });
@@ -131,63 +127,67 @@ describe("tray row menu, per file state", () => {
 
 describe("tray row quick actions", () => {
   beforeEach(() => {
-    flags.capture = true;
+    editor.on = true;
   });
 
   const shot = (overrides: Partial<UploadFeedItem> = {}) =>
     row({ name: "Screenshot.png", actualFileName: "Screenshot.png", ...overrides });
 
   it("are the link alone for a file that is not a picture", () => {
-    expect(getTrayQuickActions(row())).toEqual(["copy-link"]);
+    expect(getTrayQuickActions(row(), editor.on)).toEqual(["copy-link"]);
   });
 
   it("are the link and Edit for a picture on this computer", () => {
-    expect(getTrayQuickActions(shot())).toEqual(["copy-link", "edit"]);
-    expect(getTrayQuickActions(shot({ name: "a.JPG", actualFileName: "a.JPG" }))).toEqual([
+    expect(getTrayQuickActions(shot(), editor.on)).toEqual(["copy-link", "edit"]);
+    expect(getTrayQuickActions(shot({ name: "a.JPG", actualFileName: "a.JPG" }), editor.on)).toEqual([
       "copy-link",
       "edit",
     ]);
   });
 
   it("are nothing while a file uploads: no link, and nothing on the server to edit", () => {
-    expect(getTrayQuickActions(shot({ feedStatus: "uploading", syncStatus: "uploading" }))).toEqual([]);
+    expect(getTrayQuickActions(shot({ feedStatus: "uploading", syncStatus: "uploading" }), editor.on)).toEqual([]);
   });
 });
 
 describe("tray row Edit", () => {
   beforeEach(() => {
-    flags.capture = true;
+    editor.on = true;
   });
 
   const shot = (overrides: Partial<UploadFeedItem> = {}) =>
     row({ name: "Screenshot.png", actualFileName: "Screenshot.png", ...overrides });
 
   it("is offered for a finished PNG or JPEG in a drive synced here", () => {
-    expect(canEditTrayRow(shot())).toBe(true);
+    expect(canEditTrayRow(shot(), editor.on)).toBe(true);
     expect(ids(shot())).toContain("edit");
   });
 
   it("is not offered for what the editor cannot save back", () => {
-    expect(canEditTrayRow(row())).toBe(false);
-    expect(canEditTrayRow(shot({ name: "a.gif", actualFileName: "a.gif" }))).toBe(false);
-    expect(canEditTrayRow(shot({ name: "clip.mp4", actualFileName: "clip.mp4" }))).toBe(false);
+    expect(canEditTrayRow(row(), editor.on)).toBe(false);
+    expect(canEditTrayRow(shot({ name: "a.gif", actualFileName: "a.gif" }), editor.on)).toBe(false);
+    expect(canEditTrayRow(shot({ name: "clip.mp4", actualFileName: "clip.mp4" }), editor.on)).toBe(false);
   });
 
   // Pictures in a remote folder are edited too, by their server id.
   it("is offered for a picture only on the server when the row has its file id", () => {
-    expect(canEditTrayRow(shot({ source: "" }))).toBe(true);
+    expect(canEditTrayRow(shot({ source: "" }), editor.on)).toBe(true);
   });
 
   it("is not offered for a picture with no copy here and no file id, with no drive, or in flight", () => {
     // Marked as only on the server, but with no id to fetch it by.
-    expect(canEditTrayRow(shot({ source: `${REMOTE_SOURCE_PREFIX}Screenshot.png`, fileId: undefined }))).toBe(false);
-    expect(canEditTrayRow(shot({ label: undefined }))).toBe(false);
-    expect(canEditTrayRow(shot({ feedStatus: "failed" }))).toBe(false);
+    expect(canEditTrayRow(shot({ source: `${REMOTE_SOURCE_PREFIX}Screenshot.png`, fileId: undefined }), editor.on)).toBe(false);
+    expect(canEditTrayRow(shot({ label: undefined }), editor.on)).toBe(false);
+    expect(canEditTrayRow(shot({ feedStatus: "failed" }), editor.on)).toBe(false);
   });
 
-  it("is not offered where the lane has no screenshot editor", () => {
-    flags.capture = false;
-    expect(canEditTrayRow(shot())).toBe(false);
+  // A production build carries the flag on Windows and Linux too, where
+  // Rust reports capture unsupported: no Edit there, in the menu or on hover.
+  it("is not offered where capture is off for this computer", () => {
+    editor.on = false;
+    expect(canEditTrayRow(shot(), editor.on)).toBe(false);
+    expect(ids(shot())).not.toContain("edit");
+    expect(getTrayQuickActions(shot(), editor.on)).toEqual(["copy-link"]);
   });
 
   it("runs in the popover, not through the main window", () => {

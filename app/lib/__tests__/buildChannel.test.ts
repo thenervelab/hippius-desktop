@@ -170,14 +170,14 @@ describe("FOLDER_ROLES_ENABLED", () => {
 });
 
 /**
- * Screen capture ships to beta and staging and not yet to production. A
- * literal `true`, or a lane edited per branch, would put it in front of
- * every user on the next release.
+ * Screen capture is built into every lane. What keeps Windows and Linux out
+ * of production is Rust's `capture::rollout`, so the flag must stay a plain
+ * `true`: a lane gate here would hide macOS from production users again.
  */
 describe("SCREEN_CAPTURE_ENABLED", () => {
   const flags = read("app/lib/featureFlags.ts");
 
-  it("is on in beta and staging only", () => {
-    expect(flags).toMatch(/SCREEN_CAPTURE_ENABLED\s*=\s*enabledFrom\("beta"\);/);
+  it("is on in every lane, production included", () => {
+    expect(flags).toMatch(/SCREEN_CAPTURE_ENABLED\s*=\s*true;/);
   });
 });

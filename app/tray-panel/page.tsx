@@ -63,6 +63,11 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
+  const { view: captureView, shortcut } = useTrayCaptureView();
+  // Capture is on for this computer: the flag AND Rust's support, which
+  // production gives macOS only. Rows offer Edit and the Captures list is
+  // fetched only then.
+  const capturesOn = captureView.state === "ready";
   const {
     menu,
     feed,
@@ -73,8 +78,7 @@ export default function TrayPanelPage() {
     unreadCount,
     chatUnread,
     loading,
-  } = useTrayPanelData();
-  const { view: captureView, shortcut } = useTrayCaptureView();
+  } = useTrayPanelData(capturesOn);
   // Where capture is off or unsupported there is no Captures tab: the list
   // is every upload, as before the tabs.
   const hasCapturesTab = captureView.state !== "hidden";
@@ -223,6 +227,7 @@ export default function TrayPanelPage() {
                       accountId={menu?.substrateAddress ?? null}
                       isCapture={tab === "captures" || captureKeys.has(dedupKey(item))}
                       siblings={viewable}
+                      editorEnabled={capturesOn}
                     />
                   ))}
                 </ul>

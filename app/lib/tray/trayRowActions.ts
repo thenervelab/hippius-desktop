@@ -186,8 +186,11 @@ export function trayDriveLocation(item: FormattedUserFile): {
  * drives are shared with the account (a provider-free webview), so a
  * member drive's picture is offered here and refused by Rust, which checks
  * every rule again when the editor opens.
+ *
+ * `editorEnabled`: capture is on for this computer (the popover's
+ * `useTrayCaptureView` is `ready`), the flag AND Rust's support.
  */
-export function canEditTrayRow(item: UploadFeedItem): boolean {
+export function canEditTrayRow(item: UploadFeedItem, editorEnabled: boolean): boolean {
   return (
     item.feedStatus === "completed" &&
     offersImageEditor({
@@ -197,7 +200,7 @@ export function canEditTrayRow(item: UploadFeedItem): boolean {
       cloudOnly: isCloudOnlyRow(item),
       serverFileId: item.fileId,
       memberDrive: false,
-    })
+    }, editorEnabled)
   );
 }
 
@@ -217,6 +220,7 @@ export function canRevealTrayRow(item: UploadFeedItem): boolean {
 export function getTrayRowActions(
   item: UploadFeedItem,
   fileManager: string,
+  editorEnabled: boolean,
 ): TrayRowAction[] {
   const actions: TrayRowAction[] = [];
   const completed = item.feedStatus === "completed";
@@ -224,7 +228,7 @@ export function getTrayRowActions(
   if (trayRowOpensViewer(item)) {
     actions.push({ id: "preview", label: "View" });
   }
-  if (canEditTrayRow(item)) {
+  if (canEditTrayRow(item, editorEnabled)) {
     actions.push({ id: "edit", label: "Edit image" });
   }
   if (completed && !item.isFolder && hasDrive(item)) {
@@ -270,9 +274,9 @@ export function getTrayRowActions(
  * primary one) and, for a picture, Edit. Everything else is one click away
  * in the row's menu.
  */
-export function getTrayQuickActions(item: UploadFeedItem): TrayRowActionId[] {
+export function getTrayQuickActions(item: UploadFeedItem, editorEnabled: boolean): TrayRowActionId[] {
   const quick: TrayRowActionId[] = [];
   if (canLinkTrayRow(item)) quick.push("copy-link");
-  if (canEditTrayRow(item)) quick.push("edit");
+  if (canEditTrayRow(item, editorEnabled)) quick.push("edit");
   return quick;
 }

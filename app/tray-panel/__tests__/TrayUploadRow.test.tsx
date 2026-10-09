@@ -33,13 +33,9 @@ vi.mock("@tauri-apps/api/window", () => ({
   Window: { getByLabel: vi.fn(() => Promise.resolve(main)) },
 }));
 
-// Edit (the screenshot editor) ships behind the capture flag.
-const flags = vi.hoisted(() => ({ capture: true }));
-vi.mock("@/app/lib/featureFlags", () => ({
-  get SCREEN_CAPTURE_ENABLED() {
-    return flags.capture;
-  },
-}));
+// Edit (the screenshot editor) is offered only where capture is on for this
+// computer (the flag AND Rust's support), which the popover passes in.
+const flags = { capture: true };
 
 import TrayUploadRow from "../TrayUploadRow";
 import { resetTrayThumbnails } from "../useTrayThumbnail";
@@ -89,7 +85,13 @@ function renderRow(
 ) {
   return render(
     <ul>
-      <TrayUploadRow item={item} accountId={ACCOUNT} isCapture={isCapture} siblings={siblings} />
+      <TrayUploadRow
+        item={item}
+        accountId={ACCOUNT}
+        isCapture={isCapture}
+        siblings={siblings}
+        editorEnabled={flags.capture}
+      />
     </ul>,
   );
 }
@@ -148,7 +150,8 @@ describe("hover actions", () => {
     expect(screen.getByRole("button", { name: /^Edit:/ })).toBeInTheDocument();
     cleanup();
 
-    // Nor where the lane has no screenshot editor.
+    // Nor where capture is off for this computer (a production build on
+    // Windows or Linux carries the flag, but Rust says unsupported).
     flags.capture = false;
     renderRow(screenshot(), true);
     expect(screen.queryByRole("button", { name: /^Edit:/ })).not.toBeInTheDocument();
