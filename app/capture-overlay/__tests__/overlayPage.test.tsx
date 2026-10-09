@@ -1021,6 +1021,24 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     );
   });
 
+  /**
+   * The panel's device menu drops over the toolbar below its row; the
+   * sources panel it lives in is stacked above the toolbar so the menu is
+   * not drawn under the bar's buttons.
+   */
+  it("opens the microphone menu above the toolbar, not behind it", async () => {
+    setup(PANEL);
+    tauri.onInvoke("capture_microphones", () => [
+      { id: "mic-1", name: "Built-in Audio", isDefault: true, continuity: false },
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: /^Microphone:/ }));
+    const menu = await screen.findByRole("menu", { name: "Choose a microphone" });
+    const sources = screen.getByRole("group", { name: "Recording sources" });
+    expect(sources).toContainElement(menu);
+    expect(sources.className.split(/\s+/)).toEqual(expect.arrayContaining(["relative", "z-20"]));
+    expect(screen.getByRole("toolbar", { name: "Capture" }).className).not.toMatch(/(^|\s)z-/);
+  });
+
   it("says what Record leads to for a whole screen", async () => {
     setup({ ...PANEL, mode: "screen" });
     expect(await screen.findByRole("status")).toHaveTextContent("then choose a screen in your desktop's sharing dialog");

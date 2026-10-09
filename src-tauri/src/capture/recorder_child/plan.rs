@@ -223,8 +223,11 @@ mod tests {
     /// Every platform's recording starts with its index, so a share link's
     /// page plays from the first bytes instead of downloading the whole file
     /// to reach an index at the end (share links cannot be read from the
-    /// middle). The Mac's writer moves it there at Stop; Windows and Linux
-    /// write fragmented files whose index is first.
+    /// middle). The Mac's writer moves it there at Stop; Linux writes
+    /// fragments while recording and rewrites them at Stop as one movie
+    /// with its index first (GStreamer 1.20's fragments do not decode in
+    /// Chrome, and Chrome walks any fragmented file back and forth before
+    /// playing it); Windows writes fragmented files whose index is first.
     #[test]
     fn recordings_put_their_index_first() {
         let swift = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
@@ -232,7 +235,13 @@ mod tests {
         let windows = include_str!("windows/writer.rs");
         assert!(windows.contains("MFTranscodeContainerType_FMPEG4"), "Windows: fragmented MP4");
         let linux = include_str!("linux_plan.rs");
-        assert!(linux.contains("mp4mux name=mux fragment-duration="), "Linux: fragmented MP4");
+        assert!(linux.contains("mp4mux name=mux fragment-duration="), "Linux: fragments while recording");
+        assert!(linux.contains("mp4mux name=remux faststart=true"), "Linux: index first at Stop");
+        let linux_writer = include_str!("linux/encoder.rs");
+        assert!(
+            linux_writer.contains("faststart_in_place(&self.output"),
+            "Linux: the rewrite runs at Stop"
+        );
     }
 
     /// The stage inset is the Swift helper's, which is pinned against the

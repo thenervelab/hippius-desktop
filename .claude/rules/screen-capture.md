@@ -43,7 +43,7 @@ through one shared `HelperRecorder`; Windows = WGC + Media Foundation
 fragmented MP4 + WASAPI, no ffmpeg; Linux = portals (`ashpd`, on the zbus 5
 already in the graph) on Wayland, x11rb and `ximagesrc` on X11, GStreamer from
 the distro for the file; Wayland has no live overlay (the system picker
-chooses a recording; a screenshot is chosen over a still, Phase 3 below);
+chooses a recording, and the desktop's screenshot tool a screenshot, Phase 3 below);
 per-platform rollout lives in Rust (`capture::rollout`), not in new frontend
 flags. Note: xcap 0.9.8's `wgc` feature has no GDI fallback.
 
@@ -139,7 +139,17 @@ their panels and every area read back is shifted; **no content protection**,
 so every Linux session sets `ui_in_grabs` and `settle_compositor` sleeps
 `COMPOSITOR_SETTLE` before the grab; a window shot is the screen where the
 window is (a covered window shows what covers it). **Wayland screenshots
-are chosen on a still** (`frozen_shot.rs`, pure; `StartPlan::Frozen` from
+go straight to the desktop's own tool** (`StartPlan::SystemPicker`,
+`Surfaces.selection` = `systemPicker`, no screenshot modes, no timer,
+`systemPickerNote` shown in the Capture menu and Settings): the portal
+with `interactive = true` is GNOME Shell's screenshot UI, the one
+selection step. Choosing on a still (below) is **off**
+(`frozen_screenshot: false` everywhere): GNOME 46's portal answers the
+non-interactive request with its own "Share this screenshot" dialog after
+the whole screen was taken, and under XWayland with a scaled display the
+overlay and the still did not line up (overlay offset and scaled down).
+Kept wired for a desktop where it can be proven. The still's path, when
+on (`frozen_shot.rs`, pure; `StartPlan::Frozen` from
 `Surfaces.frozen_screenshot`): `frozen_screenshot` hides the card, waits two
 `COMPOSITOR_SETTLE`s (the main window was hidden at start), asks the
 Screenshot portal with `interactive = false` (`portal_still`: GNOME 42's
@@ -170,14 +180,15 @@ open; a cancel there is a quiet cancel, everything else `fail_capture`;
 `settle` MOVES the portal's PNG into the capture folder under the Hippius
 name, never follows a symlink, and says `PORTAL_MISSING` / `PORTAL_FAILED`
 in Rust's words). `Surfaces.selection` is how a SCREENSHOT is chosen (the
-Capture menu and tray branch on it; overlay everywhere now) and the
+Capture menu and tray branch on it; the desktop's tool on Wayland) and the
 Rust-only `record_selection` how a recording is (the panel on Wayland);
 the overlay page branches on its context's `panel` and `frozen`, never on
 the platform, and `shortcut.supported` / `unavailableMessage` (no keycaps,
 Settings shows the line). The bar switching kind on Wayland swaps the
-windows (`support::switch_plan` → `swap_selection_windows`: the stills'
-overlays give way to the panel for Record, the panel to a fresh still for
-a screenshot). The `rust-linux-test` CI job runs
+windows (`support::switch_plan` → `swap_selection_windows`: a
+screenshot's windows give way to the panel for Record, the panel to the
+desktop's tool for a screenshot; the panel offers no screenshot modes, so
+that is only a guard). The `rust-linux-test` CI job runs
 the X server test under Xvfb. Pinned by `capture_wiring.rs`.
 
 **Phase 4 (Linux recording) is in code, not yet run on Linux.** The child
@@ -387,8 +398,7 @@ nothing; Escape cancels; Space before a drag swaps to window click, and
 Space HELD during a drag moves the area (`overlaySelection::shiftDrag`,
 both flows). The size label shows while dragging. It never moves the bar's
 last kind/mode (`StartChoice.remember`, `remembers_mode_switch`). On
-Wayland it is the same one step on the still (Phase 3); only when no still
-can be had does the desktop's own tool open, already one step. The buttons
+Wayland the shortcut opens the desktop's own tool, already one step. The buttons
 and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
@@ -1304,9 +1314,23 @@ stderr lines are diagnostics and are logged at `warn`.
   it the file was `ftyp, mdat, moov`). With the index last, a browser asks
   for the end of the file before the first frame, and share links can only be
   read from the start, so the whole recording downloaded before it played.
-  Windows (`MFTranscodeContainerType_FMPEG4`) and Linux (`mp4mux
-  fragment-duration`) write fragmented files whose index is already first.
-  Pinned by `recordings_put_their_index_first` (`recorder_child/plan.rs`).
+  Windows (`MFTranscodeContainerType_FMPEG4`) writes fragmented files whose
+  index is already first. Linux writes fragments while recording (`mp4mux
+  fragment-duration`, so a killed recorder leaves a playable file) and at
+  Stop rewrites them as one movie with its index first, nothing re-encoded
+  (`linux_plan::faststart`: `qtdemux ! mp4mux faststart=true`, run by
+  `encoder::faststart_in_place`, checked with `index_first` before it
+  replaces the file; on any failure the fragments stay). Why: GStreamer
+  1.20 (Ubuntu 22.04) writes one `trun` per picture with implicit data
+  offsets, which Chrome's demuxer reads from the wrong place
+  (`PIPELINE_ERROR_DECODE`, the share page's "can't be played"); and for
+  ANY fragmented file Chrome walks every fragment back and forth before
+  the first frame (about two backward jumps per fragment, measured), which
+  on a share link restarts the download each time. Pinned by
+  `recordings_put_their_index_first` (`recorder_child/plan.rs`) and the
+  Linux self-test (`index_first`). The encoder only ever gets 8-bit 4:2:0
+  (`linux_plan::ENCODER_INPUT`): from RGB, x264 picks 4:4:4 and writes
+  "High 4:4:4 Predictive".
 - **One audio track.** Browsers (the share link's page included) and most
   players play only a file's first audio track, so the microphone as a
   second track went unheard. `AudioMixer` mixes the microphone and, only when

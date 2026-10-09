@@ -8,9 +8,8 @@
 //! Only the shortcut starts one. The Screenshot and Record buttons and the
 //! tray keep the capture bar, with its options and its remembered area.
 //!
-//! On Wayland the overlay is drawn over a still of the desktop
-//! (`frozen_shot`), so the shortcut is the same one step there. Where no
-//! still can be had, the desktop's own screenshot tool opens instead: it is
+//! On Wayland there is no overlay: the shortcut opens the desktop's own
+//! screenshot tool (GNOME Shell's screenshot UI, KDE's dialog), which is
 //! already one step.
 
 use super::session::{CaptureKind, CaptureMode};
@@ -140,20 +139,19 @@ mod tests {
         );
     }
 
-    /// Wayland draws the overlay over a still of the desktop, so the
-    /// shortcut is the same one-step area shot there; no bar mode is
-    /// remembered.
+    /// Wayland has no overlay, so the shortcut opens the desktop's own
+    /// screenshot tool, already one step; no bar mode is remembered.
     #[test]
-    fn the_wayland_shortcut_is_a_one_step_area_shot_on_the_still() {
+    fn the_wayland_shortcut_opens_the_desktops_tool() {
         let s = wayland();
-        assert!(instant_area_offered(&s));
+        assert!(!instant_area_offered(&s));
         let choice = start_choice(&s, true, (None, None), (CaptureKind::Recording, CaptureMode::Screen), true);
-        assert_eq!((choice.kind, choice.mode), (CaptureKind::Screenshot, CaptureMode::Area));
-        assert!(choice.instant);
+        assert_eq!(choice.kind, CaptureKind::Screenshot);
+        assert!(!choice.instant, "no overlay to drag on");
         assert!(!choice.remember);
         assert_eq!(
             super::super::support::start_plan(&s, choice.kind),
-            super::super::support::StartPlan::Frozen
+            super::super::support::StartPlan::SystemPicker
         );
     }
 
