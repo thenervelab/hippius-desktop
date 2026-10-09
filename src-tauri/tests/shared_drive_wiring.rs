@@ -850,3 +850,24 @@ fn automatic_delivery_uses_the_approve_path_and_the_manager_gate() {
     let body = fn_body(&logout, "pub async fn logout_full(");
     assert!(body.contains("invite_auto_seal.stop()"), "sign-out stops delivery");
 }
+
+/// Every command that sends an invite asks whether the drive is full before
+/// it touches the drive key, so a full drive refuses before any password
+/// prompt, and the Share dialog's warning is backed by Rust on the send.
+#[test]
+fn every_invite_sender_refuses_a_full_drive_before_the_key() {
+    let src = shared_drive_commands_src();
+    let mint = fn_body(&src, "async fn mint_invite_link(");
+    let full = mint.find("refuse_if_drive_full(").expect("the link mint checks for room");
+    let key = mint.find("session_mnemonic(").expect("the link mint reads the key");
+    assert!(full < key, "the room check comes before the key");
+
+    let email = fn_body(&src, "pub async fn email_drive_invite(");
+    let full = email.find("refuse_if_drive_full(").expect("the email invite checks for room");
+    let key = email.find("require_session_key(").expect("the email invite needs the key");
+    assert!(full < key, "the room check comes before the unlock");
+    assert!(
+        email.contains("refuse_if_drive_full(&state, &ctx, &identity, Some("),
+        "an email names its address"
+    );
+}

@@ -35,6 +35,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **You hear that a shared drive is full before you invite someone, not after.**
+  When a drive already has as many people as your plan allows, the Share dialog
+  says so ("8 of 8 people, plus you") and offers to upgrade, and it won't send
+  an invite that could not get anyone in, instead of the person you invited
+  finding out when they try to join. The Subscription Plans page now shows how
+  many people you can share a drive with on each plan (Plus 3, Max 8, Scale
+  20), and marks Plus as the most popular.
+
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
 
 - **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.

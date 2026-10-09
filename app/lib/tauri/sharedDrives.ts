@@ -219,6 +219,27 @@ export interface ShareAccess {
   pendingInvites: DriveInviteInfo[];
   /** People with whole-drive access (they can open any folder too). */
   driveMemberCount: number;
+  /** Whether the drive has room for one more person, decided in Rust. */
+  capacity: DriveCapacity;
+  /**
+   * Everyone already on the drive by address, trimmed and lowercased by
+   * Rust. On a full drive an email to one of them takes no new place.
+   */
+  emailsWithAccess: string[];
+}
+
+/**
+ * How full a shared drive is (Rust's `shared_drives::capacity`). The owner
+ * is never counted and pending invitations do not count, as on the server.
+ * `full` is the verdict to render; never recompute it from the numbers.
+ */
+export interface DriveCapacity {
+  /** People the drive may hold, or null when the app cannot tell. */
+  memberLimit: number | null;
+  /** People on the drive now. */
+  people: number;
+  /** Inviting one more person would end at the server's refusal. */
+  full: boolean;
 }
 
 /**
@@ -838,6 +859,14 @@ export function isFolderEditorInvitesUnavailable(error: unknown): boolean {
 /** A folder invite cannot be mailed yet: email for one folder is coming soon. */
 export function isFolderEmailInvitesUnavailable(error: unknown): boolean {
   return isNotReady(error, "FOLDER_EMAIL_INVITES_UNAVAILABLE");
+}
+
+/**
+ * The drive already holds as many people as its owner's plan allows, so Rust
+ * refused an invite that would bring someone new, before anything was sent.
+ */
+export function isDriveFull(error: unknown): boolean {
+  return isNotReady(error, "DRIVE_FULL");
 }
 
 /** One folder shared WITH this account (a folder grant it holds). */

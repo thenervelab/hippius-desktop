@@ -9,6 +9,7 @@ import {
   formatPlanPrice,
   formatPlanStorage,
   hasSharedTeamDrive,
+  MOST_POPULAR_PLAN_CODE,
   type DrivePlan,
 } from "@/lib/types/drive-plans";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -79,10 +80,11 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
   const storage = formatPlanStorage(plan.storage_bytes);
   // `pending` greys a line and explains it as coming soon, for a perk a
   // plan includes before it can be used. Shared drives are live, so their
-  // line reads as available.
+  // line reads as available, and says how many people a drive can hold
+  // when Rust sent the number.
   const features: { label: string; pending?: boolean }[] = [
     { label: "Automatic renewal" },
-    ...(hasSharedTeamDrive(plan) ? [{ label: "Shared team drive" }] : []),
+    ...(hasSharedTeamDrive(plan) ? [{ label: sharedDriveLine(plan.included_people) }] : []),
     {
       label: plan.is_free
         ? "Upgrade whenever you need more"
@@ -104,6 +106,11 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
         <p className="min-w-0 flex-1 truncate text-[14px] font-medium tracking-[-0.28px] text-black-700 dark:text-white">
           {plan.name}
         </p>
+        {plan.code === MOST_POPULAR_PLAN_CODE ? (
+          <span className="shrink-0 whitespace-nowrap rounded-full bg-primary-50 px-2 py-0.5 text-[10px] font-semibold uppercase leading-4 tracking-[0.2px] text-white dark:bg-primary-brand-dark dark:text-black-primary-bg">
+            Most popular
+          </span>
+        ) : null}
       </div>
 
       {/* Inner panel: border-t only — the left/right/bottom edges are the
@@ -211,5 +218,14 @@ const DrivePlanCard: FC<DrivePlanCardProps> = ({
     </article>
   );
 };
+
+/**
+ * The shared drive perk, with the people a drive holds when known: "Share a
+ * drive with up to 8 people". The owner is not one of them.
+ */
+export function sharedDriveLine(includedPeople: number | undefined): string {
+  if (!includedPeople || includedPeople <= 0) return "Shared team drive";
+  return `Share a drive with up to ${includedPeople} ${includedPeople === 1 ? "person" : "people"}`;
+}
 
 export default DrivePlanCard;

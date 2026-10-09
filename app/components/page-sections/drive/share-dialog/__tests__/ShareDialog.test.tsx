@@ -108,6 +108,8 @@ function access(over: Partial<ShareAccess> = {}): ShareAccess {
     folderHolders: [],
     pendingInvites: [],
     driveMemberCount: 0,
+    capacity: { memberLimit: 8, people: 0, full: false },
+    emailsWithAccess: [],
     ...over,
   };
 }
@@ -411,6 +413,175 @@ describe("a plan without sharing (Free, Starter)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel invite to opened@example.com" }));
     confirmCancelInvite();
     await waitFor(() => expect(revokeDriveInviteMock).toHaveBeenCalledWith("team-docs", "i2", undefined));
+  });
+});
+
+// The server refuses a join past the owner's plan limit only when the person
+// tries to join. Rust says when the drive is already full, and the dialog
+// warns before anything is sent, in the box's place.
+describe("a full drive", () => {
+  const FULL = "This drive is full";
+  const LINKS = "Links you've already shared won't let anyone new in until there's room.";
+  const fullDrive = (over: Partial<ShareAccess> = {}) =>
+    access({
+      members: [{ memberSs58: ANN, role: "writer", memberName: "Ann", memberEmail: "ann@example.com", isYou: false }],
+      capacity: { memberLimit: 8, people: 8, full: true },
+      emailsWithAccess: ["ann@example.com"],
+      ...over,
+    });
+
+  it("warns the owner with the count, first in the tab box, above the email field", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    renderDialog();
+    const title = await screen.findByText(FULL);
+    expect(screen.getByText("8 of 8 people, plus you. Upgrade your plan to add more.")).toBeInTheDocument();
+    expect(screen.getByText(LINKS)).toBeInTheDocument();
+    const tablist = screen.getByRole("tablist", { name: "How to share" });
+    const field = screen.getByLabelText("Email address");
+    // Under the tabs, above the form: in document order tabs, warning, field.
+    expect(tablist.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(title.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(tablist.closest("[data-share-add]")).toContainElement(title);
+    // People already in stay listed and removable.
+    expect(screen.getByText("Ann")).toBeInTheDocument();
+    expect(screen.queryByText(UPGRADE_TITLE)).not.toBeInTheDocument();
+  });
+
+  it("says the count as it is after a downgrade", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive({ capacity: { memberLimit: 3, people: 5, full: true } }));
+    renderDialog();
+    expect(await screen.findByText("5 of 3 people, plus you. Upgrade your plan to add more.")).toBeInTheDocument();
+  });
+
+  it("sends the owner to the plans and closes the dialog", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    const store = renderDialog();
+    await screen.findByText(FULL);
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+    expect(push).toHaveBeenCalledWith(BILLING_ROUTE);
+    expect(store.get(shareDialogAtom)).toBeNull();
+  });
+
+  it("disables Send and the role for someone new, and hides the email hint", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    renderDialog();
+    await screen.findByText(FULL);
+    expect(screen.queryByText(EMAIL_HINT)).not.toBeInTheDocument();
+    await typeEmail("new@example.com");
+    expect(screen.getByRole("button", { name: "Send invite" })).toBeDisabled();
+    expect(screen.getByLabelText("Invite role")).toBeDisabled();
+    fireEvent.submit(screen.getByLabelText("Email address").closest("form")!);
+    expect(emailDriveInviteMock).not.toHaveBeenCalled();
+  });
+
+  // Someone already on the drive takes no new place.
+  it("lets an email go to someone already on the drive", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    emailDriveInviteMock.mockResolvedValue({ inviteId: "i9", presealed: true });
+    renderDialog();
+    await screen.findByText(FULL);
+    await typeEmail("Ann@Example.com");
+    const send = screen.getByRole("button", { name: "Send invite" });
+    expect(send).toBeEnabled();
+    expect(screen.getByLabelText("Invite role")).toBeEnabled();
+    fireEvent.click(send);
+    await waitFor(() => expect(emailDriveInviteMock).toHaveBeenCalled());
+  });
+
+  it("disables Create link", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    renderDialog(undefined, "link");
+    await screen.findByText(FULL);
+    expect(screen.getByRole("button", { name: "Create link" })).toBeDisabled();
+    // What a link does still reads under the disabled button.
+    expect(screen.getByText("Anyone with the link can join until it expires.")).toBeInTheDocument();
+  });
+
+  it("warns on a folder too, since a folder invite adds a person", async () => {
+    flags.folderRoles = true;
+    listShareAccessMock.mockResolvedValue(fullDrive({ capacity: { memberLimit: 3, people: 3, full: true } }));
+    renderDialog(folderTarget(), "link");
+    expect(await screen.findByText("3 of 3 people, plus you. Upgrade your plan to add more.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create link" })).toBeDisabled();
+  });
+
+  it("keeps everything enabled while there is room", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive({ capacity: { memberLimit: 8, people: 7, full: false } }));
+    renderDialog();
+    await screen.findByText("Ann");
+    expect(screen.queryByText(FULL)).not.toBeInTheDocument();
+    expect(screen.getByText(EMAIL_HINT)).toBeInTheDocument();
+    await typeEmail("new@example.com");
+    expect(screen.getByRole("button", { name: "Send invite" })).toBeEnabled();
+  });
+
+  it("puts the controls back once someone is removed and there is room again", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    removeDriveMemberMock.mockResolvedValue(undefined);
+    renderDialog(undefined, "link");
+    await screen.findByText(FULL);
+    listShareAccessMock.mockResolvedValue(access({ capacity: { memberLimit: 8, people: 7, full: false } }));
+    choose("Role for Ann", "Remove access");
+    fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(screen.queryByText(FULL)).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Create link" })).toBeEnabled();
+  });
+
+  // Rust is the backstop: a drive that filled up after the list was read is
+  // refused on the send, in red, and the list is read again.
+  it("says nothing was sent, as an error, when Rust refuses a link as full", async () => {
+    listShareAccessMock.mockResolvedValue(access());
+    createDriveInviteMock.mockRejectedValue(notReady("DRIVE_FULL"));
+    renderDialog(undefined, "link");
+    await screen.findByText("(1)");
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    fireEvent.click(screen.getByRole("button", { name: "Create link" }));
+    const refused = await screen.findByText("Nothing was sent. This drive is full.");
+    expect(refused.closest("[role=alert]")).not.toBeNull();
+    expect(await screen.findByText(FULL)).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it("says nothing was sent when Rust refuses an email as full", async () => {
+    listShareAccessMock.mockResolvedValue(access());
+    emailDriveInviteMock.mockRejectedValue(notReady("DRIVE_FULL"));
+    renderDialog();
+    await screen.findByText("(1)");
+    await typeEmail("new@example.com");
+    fireEvent.click(screen.getByRole("button", { name: "Send invite" }));
+    expect(await screen.findByText("Nothing was sent. This drive is full.")).toBeInTheDocument();
+  });
+
+  it("tells a Manager the owner's count, with no upgrade button", async () => {
+    const OWNER = "5OwnerCccccccccccccccccccccccccccccccccccccccccccc";
+    listMyDriveMembershipsMock.mockResolvedValue([
+      { ownerSs58: OWNER, folderHash: "abc", displayLabel: "team-docs", role: "manager", createdAt: "t", syncedLocally: false, localLabel: null },
+    ]);
+    listShareAccessMock.mockResolvedValue(
+      fullDrive({
+        ownerSs58: OWNER,
+        ownerIsYou: false,
+        members: [
+          { memberSs58: ME, memberName: "Me", role: "manager", isYou: true },
+          { memberSs58: ANN, memberName: "Ann", role: "writer", isYou: false },
+        ],
+      }),
+    );
+    renderDialog({ label: "team-docs", folderName: "team-docs", ownerSs58: OWNER, folderHash: "abc" });
+    expect(await screen.findByText(FULL)).toBeInTheDocument();
+    expect(
+      screen.getByText("8 of 8 people, plus the owner. Remove someone, or ask the owner to upgrade their plan."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(LINKS)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upgrade plan" })).not.toBeInTheDocument();
+  });
+
+  // Nothing in the warning talks about buying seats: there are none to buy.
+  it("never mentions seats", async () => {
+    listShareAccessMock.mockResolvedValue(fullDrive());
+    renderDialog();
+    await screen.findByText(FULL);
+    expect(screen.queryByText(/seat/i)).not.toBeInTheDocument();
   });
 });
 

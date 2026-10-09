@@ -23,7 +23,16 @@ const TABS: { tabKey: ShareDialogTab; tabName: string; icon: React.ReactNode }[]
   { tabKey: "link", tabName: "By link", icon: <Link2 className="size-3.5" aria-hidden /> },
 ];
 
-export function ShareTabs({ email, link }: { email: React.ReactNode; link: React.ReactNode }) {
+export function ShareTabs({
+  email,
+  link,
+  notice,
+}: {
+  email: React.ReactNode;
+  link: React.ReactNode;
+  /** Shown under the tabs, above either form (the full-drive warning). */
+  notice?: React.ReactNode;
+}) {
   const [tab, setTab] = useAtom(shareDialogTabAtom);
   const idBase = useId();
 
@@ -40,6 +49,7 @@ export function ShareTabs({ email, link }: { email: React.ReactNode; link: React
         height="h-8"
         showTooltip={false}
       />
+      {notice}
       <TabPanel idBase={idBase} tabKey="email" activeTab={tab} className="min-w-0">
         {email}
       </TabPanel>

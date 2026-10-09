@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import React from "react";
 
-import DrivePlanCard from "../DrivePlanCard";
+import DrivePlanCard, { sharedDriveLine } from "../DrivePlanCard";
 import type { DrivePlan } from "@/lib/types/drive-plans";
 
 /**
@@ -137,3 +137,51 @@ describe("the free plan card beside a paid subscription", () => {
   });
 });
 
+/**
+ * Each plan that includes sharing says how many people one drive holds, from
+ * the number Rust adds to the catalogue (Plus 3, Max 8, Scale 20).
+ */
+describe("DrivePlanCard people per drive", () => {
+  it.each([
+    ["duo", "Plus", 3],
+    ["max", "Max", 8],
+    ["scale", "Scale", 20],
+  ] as const)("says how many people a %s drive holds", (code, name, people) => {
+    renderCard(plan({ code, name, included_people: people }));
+    expect(screen.getByText(`Share a drive with up to ${people} people`)).toBeTruthy();
+    expect(screen.queryByText("Shared team drive")).toBeNull();
+  });
+
+  it("falls back to the plain perk when the number is missing", () => {
+    renderCard(plan());
+    expect(screen.getByText("Shared team drive")).toBeTruthy();
+  });
+
+  it("states no people on a plan without sharing, even if a number arrives", () => {
+    renderCard(plan({ code: "solo", name: "Starter", included_people: 3 }));
+    expect(screen.queryByText(/Share a drive with/)).toBeNull();
+  });
+
+  it("words one person and nonsense numbers", () => {
+    expect(sharedDriveLine(1)).toBe("Share a drive with up to 1 person");
+    expect(sharedDriveLine(0)).toBe("Shared team drive");
+    expect(sharedDriveLine(undefined)).toBe("Shared team drive");
+  });
+
+  it("never mentions seats", () => {
+    renderCard(plan({ included_people: 3 }));
+    expect(screen.queryByText(/seat/i)).toBeNull();
+  });
+});
+
+describe("DrivePlanCard Most popular badge", () => {
+  it("marks Plus as the most popular", () => {
+    renderCard(plan());
+    expect(screen.getByText("Most popular")).toBeTruthy();
+  });
+
+  it.each(["free", "solo", "max", "scale"] as const)("does not mark %s", (code) => {
+    renderCard(plan({ code, name: code }));
+    expect(screen.queryByText("Most popular")).toBeNull();
+  });
+});

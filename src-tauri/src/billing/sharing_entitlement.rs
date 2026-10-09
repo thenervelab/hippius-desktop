@@ -24,6 +24,11 @@
 //! So a code this build knows is decided here, and anything it cannot read
 //! (a code it has never heard of, an empty code, a subscription that could
 //! not be loaded) is left to the server.
+//!
+//! How many people one shared drive may hold on each of those plans also
+//! lives here ([`people_per_drive`]), for the plans page. Whether one drive
+//! is full is the server's answer (`shared_drives::capacity`), since bought
+//! seats raise a drive's limit past its plan's.
 
 use crate::billing::storage_overview::PlanInfo;
 
@@ -45,6 +50,23 @@ pub fn plan_code_allows_sharing(code: Option<&str>) -> bool {
         return true;
     }
     SHARING_PLAN_CODES.contains(&code.as_str())
+}
+
+/// People one shared drive may hold on each plan that includes sharing, by
+/// plan code: Plus (`duo`) 3, Max 8, Scale 20. The owner is not counted.
+///
+/// The same table hcfs-server checks an invite accept against (its
+/// `SHARED_DRIVE_MEMBER_LIMITS`). Only the plans page reads it: a drive's
+/// own limit comes from the server, which adds any seats bought for it.
+const PEOPLE_PER_DRIVE: [(&str, u32); 3] = [("duo", 3), ("max", 8), ("scale", 20)];
+
+/// How many people a plan lets one shared drive hold, or `None` for a plan
+/// without sharing, an empty code, or a code this build does not know.
+/// `None` is "not stated", never "unlimited" and never zero: callers show
+/// nothing rather than a number they cannot vouch for.
+pub fn people_per_drive(code: &str) -> Option<u32> {
+    let code = code.trim().to_ascii_lowercase();
+    PEOPLE_PER_DRIVE.iter().find(|(listed, _)| *listed == code).map(|(_, people)| *people)
 }
 
 /// The drive-rail subscription's plan code, when it names an active plan.
@@ -172,5 +194,31 @@ mod tests {
         assert!(resolve_can_share_drives(None, Some(&plus), true));
         let starter = json!({ "active": true, "plan": "solo" });
         assert!(!resolve_can_share_drives(None, Some(&starter), true));
+    }
+
+    #[test]
+    fn each_sharing_plan_includes_its_people() {
+        assert_eq!(people_per_drive("duo"), Some(3), "Plus");
+        assert_eq!(people_per_drive("max"), Some(8));
+        assert_eq!(people_per_drive("scale"), Some(20));
+        assert_eq!(people_per_drive(" MAX "), Some(8), "casing and padding do not matter");
+    }
+
+    /// A plan without sharing, or one this build does not know, states no
+    /// number: never zero people and never unlimited.
+    #[test]
+    fn plans_without_sharing_state_no_people_count() {
+        for code in ["free", "solo", "", "team", "Plus"] {
+            assert_eq!(people_per_drive(code), None, "{code:?}");
+        }
+    }
+
+    /// Every plan that includes sharing has a people count, so a new sharing
+    /// plan cannot ship with no limit to show.
+    #[test]
+    fn every_sharing_plan_has_a_people_count() {
+        for code in SHARING_PLAN_CODES {
+            assert!(people_per_drive(code).is_some(), "{code} has no people count");
+        }
     }
 }
