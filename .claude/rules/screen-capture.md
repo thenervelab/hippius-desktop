@@ -833,8 +833,9 @@ when its `seq` is newer than the one it shows. It drags by
 **Free plan length cap** (`allowance.rs`): Free plan recordings stop at
 `FREE_MAX_RECORDING` (5 min of RECORDED time, the recorder's
 `RecordedClock`, pauses left out); paid plans have no limit; screenshots are
-untouched. `begin_recording` decides the tier once, alongside the recorder's
-start (`recording_tier`, bounded by `LOOKUP_WITHIN`), and stores the limit on
+untouched. `begin_recording` decides the tier once, before the recorder starts, from
+the session's prefetched read (`capture_tier`; `recording_tier`, bounded by
+`LOOKUP_WITHIN`), and stores the limit on
 `CaptureState`; `tick_once` stops at it through `stop_inner`, exactly like
 Stop, and the card gets `stopped_at_free_limit` (Rust's `notice`, Upgrade,
 no auto-hide). The tier reads the plan through
@@ -844,6 +845,23 @@ the overview remembers it on every read, per account, in memory and in
 kept, none ever seen means no cap. The pill shows Rust's `remainingSecs`
 (on `PhaseEvent`, last minute only). Other recording limits read the same
 `RecordingTier` / `recording_tier`.
+
+**Free plan watermark** (`watermark.rs`): the Hippius mark and "Hippius"
+(master `icons/watermark.png`, only its alpha read), white at 70 % over a
+soft shadow, bottom-right, 3 % of the shorter side tall (18 to 44 px), 2 % in
+(12 to 32 px), drawn once per size and blended over its own rectangle only.
+Free tier only (`watermark::applies`), an unknown tier gets none (fail open,
+like the length limit). The tier is read ONCE per capture: `prefetch_tier`
+starts it at `capture_start`, `capture_tier` takes it before the recorder
+starts (so the first frame has it) and before a screenshot's PNG is written;
+the same verdict sets the length limit. Where it is drawn: screenshots in
+`finish_screenshot` (and `stamp_portal_shot` for the desktop's tool);
+Windows and Linux recordings in the child's `Pipeline` (`Nv12Stamp`, after
+the bubble is composited, from `StartCommand.watermark`); macOS in the Swift
+helper, which gets every size as an atlas (`watermarkAtlas`, written beside
+the recording by `recording::macos::start` and removed once the helper
+answered) and stamps each SCK frame once as it is appended. Pinned by
+`watermark::tests` (including the Swift literals) and the protocol tests.
 
 **Live controls** (`live_controls.rs`, pure; the pill's `PillMenu.tsx` only
 draws): mid-recording the pill mutes and unmutes the microphone

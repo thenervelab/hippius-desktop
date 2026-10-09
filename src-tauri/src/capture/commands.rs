@@ -231,6 +231,9 @@ pub struct CaptureState {
     stopped_at_limit: AtomicBool,
     /// The last recording tier seen per account (`allowance::TierCache`).
     pub(crate) recording_tiers: super::allowance::TierCache,
+    /// This session's plan read, started with the session so the capture
+    /// rarely waits for it (`prefetch_tier`, `capture_tier`).
+    tier_lookup: Mutex<Option<tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>>>>,
     /// Recordings in each account's captures drive, briefly cached
     /// (`recording_allowance::CountCache`).
     pub(crate) recording_counts: super::recording_allowance::CountCache,
@@ -1227,6 +1230,9 @@ pub async fn capture_start(
         Err(e) => return Err(e),
     }
     state.capture.instant.store(choice.instant, Ordering::SeqCst);
+    // The plan decides the watermark and the recording's length limit; read
+    // now, while the user chooses, so taking the capture does not wait.
+    prefetch_tier(&app, &state.capture);
     warm_recording_count(&app, recording_ok);
     if choice.remember {
         options.last_kind = kind;
@@ -2732,13 +2738,23 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     restore_main_window(app, &state.capture);
     let (image, thumbnail, path) = taken?;
     let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
+    // The Free plan's watermark goes into the pixels before the PNG exists,
+    // so every copy of the file has it. The card's small picture, made
+    // before the plan is asked, does not.
+    let watermark = super::watermark::applies(capture_tier(app).await);
 
     let written = {
         let path = path.clone();
-        tauri::async_runtime::spawn_blocking(move || super::screenshot::save_png(&image, &path))
-            .await
-            .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
-            .and_then(|r| r)
+        let mut image = image;
+        tauri::async_runtime::spawn_blocking(move || {
+            if watermark {
+                super::watermark::stamp_image(&mut image);
+            }
+            super::screenshot::save_png(&image, &path)
+        })
+        .await
+        .map_err(|e| AppError::Other(format!("capture task failed: {e}")))
+        .and_then(|r| r)
     };
     // The session ends here: the file exists, and the card owns the upload.
     let captured = written.and_then(|()| advance(app, &state.capture, CaptureEvent::Captured).map(|_| ()));
@@ -2778,6 +2794,28 @@ async fn system_picker_screenshot(app: &AppHandle) {
     }
 }
 
+/// Watermark a screenshot the desktop's tool saved at `path` (`image` is it,
+/// decoded, when the tool wrote a PNG). A file that cannot be read or
+/// written again is delivered as it is, like an unknown plan: logged, never
+/// a failed capture.
+fn stamp_portal_shot(path: &Path, image: Option<image::RgbaImage>) -> Option<image::RgbaImage> {
+    let decoded = image.or_else(|| image::open(path).ok().map(|i| i.to_rgba8()));
+    let Some(mut image) = decoded else {
+        tracing::warn!("capture: the desktop's screenshot could not be read to watermark it");
+        return None;
+    };
+    super::watermark::stamp_image(&mut image);
+    // Written beside it and moved over it, so a failed write leaves the
+    // tool's file whole.
+    let staged = path.with_extension("watermarked.part");
+    let written = super::screenshot::save_png(&image, &staged).and_then(|()| std::fs::rename(&staged, path).map_err(AppError::from));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&staged);
+        tracing::warn!(error = %e, "capture: the watermarked screenshot could not be written");
+    }
+    Some(image)
+}
+
 /// Ask the portal, move its file into a fresh capture folder under the
 /// Hippius name, show the card, and start delivery. `Ok(false)` = the user
 /// cancelled in the desktop's tool.
@@ -2785,6 +2823,7 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     let state = app.state::<AppState>();
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let answer = super::linux_portal::request(true).await;
+    let watermark = super::watermark::applies(capture_tier(app).await);
     let settled = {
         let dir = dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -2793,6 +2832,9 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
             let shot = super::linux_portal::settle(answer, &dir.join(name))?;
             Ok::<_, AppError>(match shot {
                 super::linux_portal::PortalShot::Taken { path, image } => {
+                    // The desktop's tool wrote the file: the watermark is
+                    // drawn into it and the PNG written again.
+                    let image = if watermark { stamp_portal_shot(&path, image) } else { image };
                     let thumbnail = image.and_then(|i| super::thumbnail::from_image(&image::DynamicImage::ImageRgba8(i)).ok());
                     Some((path, thumbnail))
                 }
@@ -3134,9 +3176,10 @@ async fn take_from_still(
     }
 }
 
-/// The plan decides the recording's length limit, once, as it starts
-/// (`allowance`). Read alongside the recorder's own start, so it adds no
-/// wait; with no account or no verdict there is no limit.
+/// The plan decides a capture's watermark and a recording's length limit
+/// (`watermark`, `allowance`); with no account or no verdict there is
+/// neither. Read once per capture: [`prefetch_tier`] starts it as the
+/// session starts and [`capture_tier`] takes the answer.
 fn spawn_tier_lookup(app: &AppHandle) -> tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>> {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3144,6 +3187,23 @@ fn spawn_tier_lookup(app: &AppHandle) -> tauri::async_runtime::JoinHandle<Option
         let account = state.current_session_account().ok()?;
         super::allowance::recording_tier(state.inner(), &account).await
     })
+}
+
+/// Start this session's plan read (replacing any left by an earlier session).
+fn prefetch_tier(app: &AppHandle, capture: &CaptureState) {
+    let previous = lock(&capture.tier_lookup).replace(spawn_tier_lookup(app));
+    if let Some(previous) = previous {
+        previous.abort();
+    }
+}
+
+/// This capture's tier: the session's prefetched read, or a fresh one when
+/// there is none (a Restart, whose first take used it). Bounded by
+/// `allowance::LOOKUP_WITHIN`, and usually done before it is asked for.
+async fn capture_tier(app: &AppHandle) -> Option<super::allowance::RecordingTier> {
+    let state = app.state::<AppState>();
+    let pending = lock(&state.capture.tier_lookup).take();
+    pending.unwrap_or_else(|| spawn_tier_lookup(app)).await.ok().flatten()
 }
 
 /// Start the recorder on `selection`. Failures return to the caller, which
@@ -3200,6 +3260,9 @@ async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> R
     } else {
         Vec::new()
     };
+    // Decided before the recorder starts, so its very first frame carries
+    // the watermark; the same verdict sets the length limit below.
+    let tier = capture_tier(app).await;
     let options = RecordOptions {
         microphone: saved.microphone && recording::microphone_supported(),
         microphone_device: saved.microphone_device.clone(),
@@ -3210,11 +3273,12 @@ async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> R
         restore_token,
         pick_area: camera.is_none() && super::support::picks_area_after_dialog(&surfaces, selection),
         camera,
+        watermark: super::watermark::applies(tier),
+        watermark_atlas: None,
     };
     let microphone_device = options.microphone_device.clone();
     let tmp_root = super::screenshot::capture_tmp_root()?;
     refuse_a_synced_temp(&state, &tmp_root).await?;
-    let tier_lookup = spawn_tier_lookup(app);
     let dir = super::screenshot::fresh_capture_dir(&tmp_root)?;
     *lock(&state.capture.recording_dir) = Some(dir.clone());
     let name = super::naming::capture_file_name(CaptureKind::Recording, chrono::Local::now().naive_local());
@@ -3266,7 +3330,6 @@ async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> R
         recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
-    let tier = tier_lookup.await.ok().flatten();
     state.capture.set_recording_limit(super::allowance::max_recording(tier));
     state.capture.stopped_at_limit.store(false, Ordering::SeqCst);
     let recorded_microphone = recorder.microphone();
