@@ -37,9 +37,9 @@ answered), the tray through `useTrayCaptureView`; pinned by
 `app/lib/capture/__tests__/captureProductionGates.test.tsx`. Platforms:
 **screenshots on macOS, Windows and Linux**; **recording on macOS 13+**
 when `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
-Wayland). Windows and Linux are on in debug, staging and beta builds and off
-in production (`capture::rollout`, until each platform's hardware checklist
-passes, and for Windows recording a signed installer).
+Wayland). Lanes (`capture::rollout`): screenshots and recording everywhere
+on every platform (the Windows installer is not code signed yet, so
+SmartScreen may warn on install); the Wayland shortcut portal in beta only.
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
@@ -74,8 +74,7 @@ Drive it by hand: `{"cmd":"start","id":1,"output":"/tmp/x.txt","synthetic":true}
 `recording::recording_unavailable()` both ask it, so a platform below its
 lane reads exactly as unsupported, and the frontend needs no new flag. Moving a row on is a one-line change once its manual
 checklist passes; `release_lane_pins.rs` pins that production enables only
-production rows and that Windows recording needs a signed installer to get
-there. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
+production rows. **Surfaces:** `support::Surfaces` (selection, modes, screenshotTimer,
 systemAudio, microphoneUnavailableMessage, continuityHint, shortcut) is flattened into
 `capture_support` and `OverlayContext`; the bar draws only Rust's `modes`,
 hides the timer when `screenshotTimer` is false, hides "Record system audio"
@@ -84,7 +83,7 @@ used to hard-code "macOS 15"). The shared `StartCommand` carries the
 recording's `systemAudio` and a window recording's `cameraWindowId` (the
 bubble), so every recorder gets them.
 
-**Phase 2 (Windows recording) is in code, not yet run on hardware.** The
+**Phase 2 (Windows recording) passes the Windows CI recorder runs; a hands-on hardware run is still to do.** The
 child's platform-free pieces (`mixer`, `pcm`, `frame`, `pacing`, `plan`,
 `pipeline`) are tested everywhere; `recorder_child/windows/` is WGC
 (`windows-capture`) + WASAPI + a Media Foundation FMPEG4 sink writer. Rules:
