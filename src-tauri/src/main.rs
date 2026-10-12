@@ -1127,11 +1127,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
 
-        // `hippius --capture` / `--record` that started the app: the
-        // single-instance handler below sees them only when it is already
-        // running, so this launch's are kept for the signed-in app.
-        crate::capture::commands::remember_launch_shortcut(app.handle(), std::env::args().skip(1).collect::<Vec<_>>());
-
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before
         // any recording puts that menu on the icon.
@@ -1234,6 +1229,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
         let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
+
+        // `hippius --capture` / `--record` that started the app: the
+        // single-instance handler sees them only when it is already running,
+        // so this launch's are kept for the signed-in app. They are kept in
+        // AppState, so this MUST sit after `manage`: called before it, a
+        // Wayland Record shortcut pressed with the app closed crashed the
+        // app as it started. Pinned by
+        // `a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed`.
+        crate::capture::commands::remember_launch_shortcut(app.handle(), std::env::args().skip(1).collect::<Vec<_>>());
 
         // Reclaim upload-chunk staging directories abandoned by earlier runs.
         //

@@ -875,10 +875,10 @@ starts it at `capture_start`, `capture_tier` takes it before the recorder
 starts (so the first frame has it) and before a screenshot's PNG is written;
 the same verdict sets the length limit. Where it is drawn: screenshots in
 `finish_screenshot` (and `stamp_portal_shot` for the desktop's tool);
-Windows recordings in the child's `Pipeline` (`Nv12Stamp`, after the bubble
-is composited, from `StartCommand.watermark`); Linux recordings carry NO
-watermark for now (the Linux child ignores `watermark`, rolled back with
-the recorder); macOS in the Swift
+Windows and Linux recordings in the child's `Pipeline` (`Nv12Stamp`, after
+the bubble is composited, from `StartCommand.watermark`; Linux through
+`writer_loop::run`'s `watermark`, pinned by
+`the_watermark_is_drawn_only_when_asked`); macOS in the Swift
 helper, which gets every size as an atlas (`watermarkAtlas`, written beside
 the recording by `recording::macos::start` and removed once the helper
 answered) and stamps each SCK frame once as it is appended. Pinned by
