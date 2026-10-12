@@ -226,6 +226,45 @@ describe("useStartCapture's answer to a refusal", () => {
     expect(h.toastError).not.toHaveBeenCalled();
   });
 
+  // Nothing is captured on a plan that could not be read: Rust's words, and
+  // a Retry that starts the very same capture again.
+  it("refuses an unread plan in Rust's words with a Retry of the same start", async () => {
+    const message = "We couldn't check your plan. Check your connection and try again.";
+    let refuse = true;
+    tauri.onInvoke("capture_start", () => {
+      if (refuse) throw { kind: "NotReady", subkind: "CAPTURE_PLAN_UNAVAILABLE", message };
+      return null;
+    });
+    const { store, start } = hook();
+    await act(() => start(undefined, undefined, true));
+    expect(h.openAppWindow).toHaveBeenCalled();
+    expect(store.get(captureDialogAtom)).toBeNull();
+    const [shown, options] = h.toastError.mock.calls[0];
+    expect(shown).toBe(message);
+    expect(options.action.label).toBe("Retry");
+
+    refuse = false;
+    tauri.core.invoke.mockClear();
+    await act(async () => options.action.onClick());
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null, instant: true }),
+    );
+  });
+
+  it("offers Upgrade, through Rust, to an account with no Drive storage", async () => {
+    tauri.onInvoke("capture_start", () => {
+      throw { kind: "NotReady", subkind: "CAPTURE_NO_DRIVE_PLAN", message: "No Drive storage yet." };
+    });
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    const { start } = hook();
+    await act(() => start("screenshot"));
+    const [shown, options] = h.toastError.mock.calls[0];
+    expect(shown).toBe("No Drive storage yet.");
+    expect(options.action.label).toBe("Upgrade");
+    await act(async () => options.action.onClick());
+    await waitFor(() => expect(tauri.core.invoke.mock.calls.some(([c]) => c === "capture_limit_upgrade")).toBe(true));
+  });
+
   it("shows anything else as a message, without a dialog", async () => {
     tauri.onInvoke("capture_start", () => {
       throw { kind: "Validation", message: "Screen capture is not supported here yet." };

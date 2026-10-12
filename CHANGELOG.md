@@ -42,6 +42,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Captures check your plan before they start.** The capture bar says "Checking your plan…" for a moment, and if your plan can't be checked (you're offline, say) it tells you and offers Retry instead of capturing. An account with no Drive storage is told straight away and offered a plan.
 - **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.
 
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.

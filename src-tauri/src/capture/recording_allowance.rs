@@ -2,8 +2,8 @@
 //!
 //! Screenshots are never counted and sharing is never limited; paid plans
 //! have no count at all. The limit is enforced when a recording STARTS: a
-//! known limited plan that already has [`FREE_RECORDING_LIMIT`] recordings
-//! is refused before anything records ([`require_can_start`], the one gate
+//! limited plan that already has [`FREE_RECORDING_LIMIT`] recordings is
+//! refused before anything records ([`require_can_start`], the one gate
 //! every start path calls). Nothing is recorded and then held back.
 //!
 //! # What is counted
@@ -30,12 +30,14 @@
 //! in the listing, and a completed sync or a delete in the drive drops the
 //! cached listing ([`invalidate_label`]), so the next start reads it again.
 //!
-//! # Failing open
+//! # Never on an unknown plan or count
 //!
-//! Like the length cap (`capture::allowance`), the limit fails open: an
-//! unknown plan, or a count that cannot be read (offline, listing timed out),
-//! never blocks a recording. Only a KNOWN limited plan with a KNOWN count at
-//! the limit does.
+//! The plan is the capture session's read (`allowance::session_tier`): one
+//! that could not be read refuses the recording with a Retry, as every
+//! capture is refused then. A limited plan whose count cannot be read
+//! (offline, a listing that failed or timed out) is refused with a Retry
+//! too ([`NotReadyKind::RecordingCountUnavailable`]), never let through. A
+//! paid plan never waits on a listing.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -60,10 +62,14 @@ pub const LIMITED_TIERS: &[RecordingTier] = &[RecordingTier::Free];
 pub const LIMIT_TITLE: &str = "You've used your 25 free recordings";
 pub const LIMIT_BODY: &str = "Upgrade your plan to record more, or delete an older recording.";
 
+/// The refusal when a Free plan's recordings could not be counted
+/// (`RecordingCountUnavailable`).
+pub const COUNT_UNAVAILABLE: &str = "We couldn't check how many free recordings you've used. Check your connection and try again.";
+
 /// How long a listed count answers before the server is asked again.
 pub const COUNT_TTL: Duration = Duration::from_secs(30);
 
-/// How long a start waits for the listing before it fails open.
+/// How long a start waits for the listing before it refuses with a Retry.
 pub const COUNT_WITHIN: Duration = Duration::from_secs(5);
 
 /// How long a recording this app delivered counts on its own, while its
@@ -131,21 +137,27 @@ fn counted_path(label: &str, path: &str) -> String {
     format!("{label}/{path}")
 }
 
-/// What starting a recording comes to.
+/// What starting a recording comes to, once the plan is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartVerdict {
     Allowed,
-    /// A known limited plan with a known count at or past the limit.
+    /// A limited plan with a count at or past the limit.
     LimitReached,
+    /// A limited plan whose count could not be read: refused with a Retry.
+    CountUnavailable,
 }
 
-/// Refuse only a KNOWN limited plan with a KNOWN count at the limit. An
-/// unknown plan or an unreadable count fails open.
+/// A paid plan always starts; a limited one only with a count it has read
+/// that is under the limit.
 #[must_use]
-pub fn decide_start(tier: Option<RecordingTier>, counted: Option<usize>) -> StartVerdict {
-    match (tier, counted) {
-        (Some(tier), Some(n)) if is_limited(tier) && n >= FREE_RECORDING_LIMIT => StartVerdict::LimitReached,
-        _ => StartVerdict::Allowed,
+pub fn decide_start(tier: RecordingTier, counted: Option<usize>) -> StartVerdict {
+    if !is_limited(tier) {
+        return StartVerdict::Allowed;
+    }
+    match counted {
+        None => StartVerdict::CountUnavailable,
+        Some(n) if n >= FREE_RECORDING_LIMIT => StartVerdict::LimitReached,
+        Some(_) => StartVerdict::Allowed,
     }
 }
 
@@ -258,7 +270,7 @@ async fn list_recordings(state: &AppState, account_id: &str) -> Result<(Vec<Stri
 
 /// The recordings in the account's captures drives: the cached count while
 /// fresh, else new server listings. `None` when any of them cannot be read,
-/// which the gate reads as "allowed".
+/// which the gate refuses with a Retry for a limited plan.
 pub async fn recording_count(state: &AppState, account_id: &str) -> Option<usize> {
     let key = account_key(account_id);
     if let Some(n) = state.capture.recording_counts.fresh(&key, Instant::now()) {
@@ -267,11 +279,11 @@ pub async fn recording_count(state: &AppState, account_id: &str) -> Option<usize
     match tokio::time::timeout(COUNT_WITHIN, list_recordings(state, account_id)).await {
         Ok(Ok((labels, recordings))) => Some(state.capture.recording_counts.store(&key, &labels, recordings, Instant::now())),
         Ok(Err(e)) => {
-            tracing::warn!(error = %e, "recording count: captures drives not listed; not limiting");
+            tracing::warn!(error = %e, "recording count: captures drives not listed");
             None
         }
         Err(_) => {
-            tracing::warn!("recording count: the captures drives listing took too long; not limiting");
+            tracing::warn!("recording count: the captures drives listing took too long");
             None
         }
     }
@@ -311,51 +323,43 @@ pub fn clear(state: &AppState) {
 /// record shortcut, the tray's and menus' Record, Restart) calls this before
 /// anything records, so a refusal costs the user nothing.
 ///
-/// The plan is read cheaply first (the last verdict kept); a paid plan never
-/// waits on a listing. A count at the limit is confirmed against a fresh plan
-/// read, so an upgrade a moment ago is honoured.
-pub async fn check_start(state: &AppState) -> StartVerdict {
-    let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
-        return StartVerdict::Allowed;
-    };
-    let quick = state.capture.recording_tiers.last_known(state.pool().ok(), account.as_str()).await;
-    if quick.is_some_and(|tier| !is_limited(tier)) {
-        return StartVerdict::Allowed;
-    }
-    let counted = recording_count(state, &account_id).await;
-    // Under the limit (or unreadable) is allowed on any plan: no plan read.
-    if counted.is_none_or(|n| n < FREE_RECORDING_LIMIT) {
-        return StartVerdict::Allowed;
-    }
-    let tier = super::allowance::recording_tier(state, &account).await;
-    let verdict = decide_start(tier, counted);
-    if verdict == StartVerdict::LimitReached {
-        tracing::info!(counted = ?counted, "recording refused: the free plan's recordings are used up");
-    }
-    verdict
-}
-
-/// [`check_start`] as the refusal every start command returns.
+/// The plan is the capture session's read (`allowance::session_tier`,
+/// waited for if still under way); a paid plan never waits on a listing.
 ///
 /// # Errors
 ///
-/// [`NotReadyKind::RecordingLimitReached`] when the limit is reached.
+/// The plan's refusals (`CapturePlanUnavailable`, `CaptureNoDrivePlan`);
+/// [`NotReadyKind::RecordingLimitReached`] at the limit;
+/// [`NotReadyKind::RecordingCountUnavailable`] when a limited plan's count
+/// cannot be read.
 pub async fn require_can_start(state: &AppState) -> Result<()> {
-    match check_start(state).await {
+    let tier = super::allowance::session_tier(state).await?;
+    let counted = if is_limited(tier) {
+        recording_count(state, &state.current_account_id()?).await
+    } else {
+        None
+    };
+    match decide_start(tier, counted) {
         StartVerdict::Allowed => Ok(()),
-        StartVerdict::LimitReached => Err(AppError::NotReady(NotReadyKind::RecordingLimitReached)),
+        StartVerdict::LimitReached => {
+            tracing::info!(counted = ?counted, "recording refused: the free plan's recordings are used up");
+            Err(AppError::NotReady(NotReadyKind::RecordingLimitReached))
+        }
+        StartVerdict::CountUnavailable => {
+            tracing::info!("recording refused: the free plan's recordings could not be counted");
+            Err(AppError::NotReady(NotReadyKind::RecordingCountUnavailable))
+        }
     }
 }
 
 /// Fill the count ahead of a Record press (the capture bar just opened), so
-/// the press itself does not wait on the listing. Only for a plan that could
-/// be limited.
+/// the press itself does not wait on the listing. Only for a limited plan,
+/// once the session's plan read says so.
 pub async fn warm(state: &AppState) {
-    let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
+    let Ok(account_id) = state.current_account_id() else {
         return;
     };
-    let quick = state.capture.recording_tiers.last_known(state.pool().ok(), account.as_str()).await;
-    if quick.is_none_or(is_limited) {
+    if super::allowance::session_tier(state).await.is_ok_and(is_limited) {
         let _ = recording_count(state, &account_id).await;
     }
 }
@@ -385,13 +389,18 @@ pub fn free_plan_notice(tier: Option<RecordingTier>, counted: Option<usize>) -> 
     })
 }
 
-/// [`free_plan_notice`] for the signed-in account: a fresh plan read, and
-/// the count only for a limited plan.
+/// [`free_plan_notice`] for the signed-in account, and the count only for a
+/// limited plan. During a capture the plan is that capture's read (so the
+/// bar never says more than the gate decides); otherwise a fresh one.
 pub async fn current_free_plan_notice(state: &AppState) -> Option<FreePlanNotice> {
     let (Ok(account), Ok(account_id)) = (state.current_session_account(), state.current_account_id()) else {
         return None;
     };
-    let tier = super::allowance::recording_tier(state, &account).await?;
+    let tier = if state.capture.current() == super::session::CapturePhase::Idle {
+        super::allowance::recording_tier(state, &account).await.ok()?
+    } else {
+        super::allowance::session_tier(state).await.ok()?
+    };
     if !is_limited(tier) {
         return None;
     }
@@ -526,8 +535,8 @@ mod tests {
     }
 
     #[test]
-    fn only_a_known_limited_plan_with_a_known_count_at_the_limit_is_refused() {
-        let free = Some(RecordingTier::Free);
+    fn a_free_plan_at_the_limit_or_with_an_unread_count_is_refused() {
+        let free = RecordingTier::Free;
         assert_eq!(decide_start(free, Some(0)), StartVerdict::Allowed);
         assert_eq!(
             decide_start(free, Some(FREE_RECORDING_LIMIT - 1)),
@@ -541,12 +550,16 @@ mod tests {
         );
         assert_eq!(decide_start(free, Some(40)), StartVerdict::LimitReached);
         assert_eq!(
-            decide_start(Some(RecordingTier::Paid), Some(500)),
+            decide_start(free, None),
+            StartVerdict::CountUnavailable,
+            "an unread count is refused with a Retry, never let through"
+        );
+        assert_eq!(
+            decide_start(RecordingTier::Paid, Some(500)),
             StartVerdict::Allowed,
             "paid plans have no count"
         );
-        assert_eq!(decide_start(None, Some(500)), StartVerdict::Allowed, "an unknown plan fails open");
-        assert_eq!(decide_start(free, None), StartVerdict::Allowed, "an unreadable count fails open");
+        assert_eq!(decide_start(RecordingTier::Paid, None), StartVerdict::Allowed, "and never list one");
     }
 
     #[test]
