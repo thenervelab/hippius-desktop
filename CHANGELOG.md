@@ -17,7 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
-- **Screenshots and screen recording are available to everyone on macOS.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
+- **Screenshots and screen recording are available to everyone on Mac, Windows and Linux.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
 - **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark.
 - **The free plan includes 25 screen recordings.** Every video in your captures drives counts, whatever it is called and whichever folder it is in, including ones made on the web or on another computer, and moving your captures folder does not start the count again. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
 - **A capture's card says who can open its link.** Capture links are public and never expire, and the card now says so. Manage link in its More menu opens the link in Shared Links, where you can change it.
@@ -70,10 +70,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   unless you pick another place, and backs it up as its own drive. The capture
   you just took is kept safe while you decide. Captures you took before stay
   where they are. Move the folder any time in Settings.
-
-- **Screenshots and screen recording on Windows and Linux, in beta.** The
-  same capture tools as on a Mac, for beta testers first, before they reach
-  everyone.
 
 - **The link icon beside a shared file takes you straight to its link.**
   Shared Links scrolls to that file's row and highlights it, the way Show in
