@@ -12,8 +12,7 @@
 //!
 //! Debug builds count as staging, so `pnpm tauri dev` shows everything built.
 //! Pinned by the table tests below and by `tests/release_lane_pins.rs`
-//! (production enables only rows marked production, and Windows recording
-//! reaches production only with a signed installer).
+//! (production enables only rows marked production).
 
 use crate::release_channel::{self, ReleaseChannel};
 
@@ -59,12 +58,9 @@ pub const fn floor(platform: Platform, feature: Feature) -> Option<ReleaseChanne
     match (platform, feature) {
         // macOS ships wherever the frontend switch does.
         (MacOs, Screenshots | Recording) => Some(ReleaseChannel::Production),
-        // Windows screenshots ship everywhere. Windows recording waits for a
-        // signed installer (`tests/release_lane_pins.rs`): an unsigned binary
-        // that records the screen and the microphone is what SmartScreen and
-        // Defender look at hardest.
-        (Windows, Screenshots) => Some(ReleaseChannel::Production),
-        (Windows, Recording) => Some(ReleaseChannel::Beta),
+        // Windows ships everywhere. The installer is not code signed yet, so
+        // SmartScreen may warn on install until it is; recording ships anyway.
+        (Windows, Screenshots | Recording) => Some(ReleaseChannel::Production),
         // Linux screenshots and recording ship everywhere, checked on Ubuntu
         // GNOME (X11 and Wayland).
         (LinuxX11 | LinuxWayland, Screenshots | Recording) => Some(ReleaseChannel::Production),
@@ -166,19 +162,15 @@ mod tests {
         }
     }
 
-    /// Today's lanes: macOS and Linux everywhere the frontend switch is;
-    /// Windows screenshots everywhere, Windows recording in staging and beta
-    /// until the installer is signed.
+    /// Today's lanes: screenshots and recording everywhere the frontend
+    /// switch is, on every platform.
     #[test]
-    fn today_only_windows_recording_stays_out_of_production() {
+    fn today_capture_ships_to_production_on_every_platform() {
         for feature in [Feature::Screenshots, Feature::Recording] {
-            for platform in [Platform::MacOs, Platform::LinuxX11, Platform::LinuxWayland] {
+            for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
                 assert!(enabled(ReleaseChannel::Production, platform, feature), "{platform:?} {feature:?}");
             }
         }
-        assert!(enabled(ReleaseChannel::Production, Platform::Windows, Feature::Screenshots));
-        assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
-        assert!(!enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording));
     }
 
     #[test]

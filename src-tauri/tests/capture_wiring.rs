@@ -1394,10 +1394,9 @@ fn only_the_camera_and_overlay_webviews_may_open_devices() {
 }
 
 /// The Windows recorder is the app's own executable started without a
-/// console window, and Windows recording ships to staging and beta, not to
-/// production until its hardware checklist passes and the installer is signed.
+/// console window, and Windows recording ships on every lane.
 #[test]
-fn windows_records_in_its_own_child_and_stays_out_of_production() {
+fn windows_records_in_its_own_child_on_every_lane() {
     let windows = read("src/capture/recording/windows.rs");
     assert!(fn_body(&windows, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&windows, "pub fn helper_command(").contains("CREATE_NO_WINDOW"));
@@ -1405,10 +1404,7 @@ fn windows_records_in_its_own_child_and_stays_out_of_production() {
     use tauri_project_lib::release_channel::ReleaseChannel;
     assert!(enabled(ReleaseChannel::Staging, Platform::Windows, Feature::Recording));
     assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
-    assert!(
-        !enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording),
-        "Windows recording reaches production only once its hardware checklist passes"
-    );
+    assert!(enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording));
 }
 
 /// Linux records in the app's own child, waits for the user in the

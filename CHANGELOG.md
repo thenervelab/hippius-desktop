@@ -71,9 +71,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   you just took is kept safe while you decide. Captures you took before stay
   where they are. Move the folder any time in Settings.
 
-- **Screenshots and screen recording on Linux, and screenshots on Windows.**
-  The same capture tools as on a Mac. Screen recording on Windows is with beta
-  testers for now.
+- **Screenshots and screen recording on Windows and Linux.** The same capture
+  tools as on a Mac.
 
 - **The link icon beside a shared file takes you straight to its link.**
   Shared Links scrolls to that file's row and highlights it, the way Show in

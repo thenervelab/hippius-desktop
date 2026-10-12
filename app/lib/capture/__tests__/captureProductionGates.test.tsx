@@ -108,7 +108,7 @@ describe("the main sidebar's Captures entry", () => {
     expect(link("/captures")).not.toBeNull();
   });
 
-  it("is absent where it cannot (Windows and Linux in production)", () => {
+  it("is absent where this computer cannot capture", () => {
     renderWith(<Sidebar />, false);
     expect(link("/captures")).toBeNull();
     expect(link("/files")).not.toBeNull();
