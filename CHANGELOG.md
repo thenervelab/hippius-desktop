@@ -15,6 +15,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-12
+
 ### Added
 
 - **Screenshots and screen recording are available to everyone on macOS.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
@@ -178,6 +180,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Uploads, sync and share links work again on the free plan.** The Folder and File buttons were greyed out, and uploads, syncing and share links were refused for free accounts with no credits. Hippius now checks your storage plan, so they work as before.
 - **Screen recording on Linux works again on Ubuntu and other GNOME desktops.** Recordings no longer stop the moment you press Record or fail when you stop them, the area you draw lines up with your screen on scaled displays, and the camera is not asked for again each time the bubble opens.
 - **Videos that keep stopping in the Linux viewer can open in your video player.** If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
 - **Screenshots on Linux with Wayland take one step again.** Screenshot opens your desktop's own screenshot tool straight away, where you choose an area, a window or a whole screen, and Hippius uploads the result like any other capture. You are no longer shown the Hippius capture bar first and then asked by GNOME to share a picture of your whole screen. The Screenshot menu says how it works on your desktop.
