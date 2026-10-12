@@ -2764,3 +2764,37 @@ fn a_launch_for_a_capture_shortcut_is_not_dropped() {
     assert!(run.contains(".take()"), "run once");
     assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
 }
+
+/// A Free plan recording on Linux (X11 and Wayland alike) carries the
+/// watermark: the child hands `StartCommand.watermark` to the shared writer,
+/// which stamps the pipeline (`writer_loop`'s own tests pin the stamping).
+/// The Linux child only compiles on Linux, so its wiring is pinned here.
+#[test]
+fn linux_recordings_hand_the_watermark_to_the_writer() {
+    let linux = read("src/capture/recorder_child/linux/mod.rs");
+    assert!(
+        fn_body(&linux, "fn record(").contains("cmd.watermark"),
+        "record passes the plan's watermark on"
+    );
+    let spawn = fn_body(&linux, "fn spawn_writer(");
+    assert!(spawn.contains("writer_loop::run(&rx, &shared, &out, &sources, &ready, watermark,"));
+    let writer = fn_body(&read("src/capture/recorder_child/writer_loop.rs"), "pub fn run<");
+    assert!(writer.contains("if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1)"));
+    assert!(writer.contains("p.set_watermark(stamp)"));
+}
+
+/// The launch's shortcut is kept in AppState, and `state::<AppState>()`
+/// panics before `manage`: called at the top of setup, `hippius --record`
+/// (a Wayland desktop's Record shortcut with the app closed) crashed the app
+/// as it started.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed() {
+    let main = read("src/main.rs");
+    let setup = fn_body(&main, "builder.setup(");
+    let managed = setup.find("app_handle.manage(app_state)").expect("setup manages AppState");
+    let remembered = setup.find("remember_launch_shortcut(").expect("setup remembers the launch's shortcut");
+    assert_eq!(setup.matches("remember_launch_shortcut(").count(), 1, "remembered once");
+    assert!(managed < remembered, "remember_launch_shortcut reads AppState, so it runs after manage");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "pub fn remember_launch_shortcut").contains("app.state::<AppState>()"));
+}

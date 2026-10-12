@@ -269,9 +269,18 @@ mod tests {
                 serve(&rx, || (*state.lock().unwrap()).to_string(), out, timing);
             }
         });
-        std::thread::sleep(Duration::from_millis(20));
+        // Waits on what the watcher printed, never on a fixed sleep: a slow
+        // CI runner let 120 ms pass without a single 30 ms poll.
+        let printed = |n: usize| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while out.lines().len() < n {
+                assert!(Instant::now() < deadline, "the watcher never printed {n} lines");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        printed(1);
         *state.lock().unwrap() = "b";
-        std::thread::sleep(Duration::from_millis(120));
+        printed(2);
         drop(tx);
         thread.join().unwrap();
         assert_eq!(out.lines(), vec!["a", "b"], "every sender gone ends the watch too");
