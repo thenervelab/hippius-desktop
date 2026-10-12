@@ -196,6 +196,17 @@ pub enum NotReadyKind {
     /// (`capture::recording_allowance`). The FE shows the limit dialog
     /// (Upgrade / Not now); screenshots are never refused with it.
     RecordingLimitReached,
+    /// A capture was refused because the account's plan could not be read
+    /// (offline, an API error, too slow). Captures are decided only on a
+    /// plan the API returned (`capture::allowance`), so the FE offers Retry.
+    CapturePlanUnavailable,
+    /// A capture was refused because the account has no Drive storage at
+    /// all (an access-key login with no paid plan): a capture would have
+    /// nowhere to go. The FE offers Upgrade.
+    CaptureNoDrivePlan,
+    /// A Free plan recording was refused because its recordings could not
+    /// be counted (`capture::recording_allowance`). The FE offers Retry.
+    RecordingCountUnavailable,
     /// The server cannot send drive invitations by email (`503
     /// email_invites_unavailable`: no mail service configured). The FE keeps
     /// the "Invite by email" option and says, inline, that email invites are
@@ -263,6 +274,9 @@ impl NotReadyKind {
             Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
             Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
             Self::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
+            Self::CapturePlanUnavailable => "CAPTURE_PLAN_UNAVAILABLE",
+            Self::CaptureNoDrivePlan => "CAPTURE_NO_DRIVE_PLAN",
+            Self::RecordingCountUnavailable => "RECORDING_COUNT_UNAVAILABLE",
             Self::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
             Self::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
             Self::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -359,6 +373,9 @@ impl std::fmt::Display for NotReadyKind {
                 crate::capture::recording_allowance::LIMIT_TITLE,
                 crate::capture::recording_allowance::LIMIT_BODY
             ),
+            Self::CapturePlanUnavailable => f.write_str(crate::capture::allowance::PLAN_UNAVAILABLE),
+            Self::CaptureNoDrivePlan => f.write_str(crate::capture::allowance::NO_DRIVE_PLAN),
+            Self::RecordingCountUnavailable => f.write_str(crate::capture::recording_allowance::COUNT_UNAVAILABLE),
             Self::MassDeleteNothingHeld => write!(f, "These files are no longer waiting for a decision."),
             Self::MassDeleteHoldChanged { held } => {
                 let held = crate::sync::mass_delete_hold::group_thousands(*held);
@@ -858,6 +875,9 @@ mod tests {
                 NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
                 NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
                 NotReadyKind::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
+                NotReadyKind::CapturePlanUnavailable => "CAPTURE_PLAN_UNAVAILABLE",
+                NotReadyKind::CaptureNoDrivePlan => "CAPTURE_NO_DRIVE_PLAN",
+                NotReadyKind::RecordingCountUnavailable => "RECORDING_COUNT_UNAVAILABLE",
                 NotReadyKind::EmailInvitesUnavailable => "EMAIL_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderInvitesUnavailable => "FOLDER_INVITES_UNAVAILABLE",
                 NotReadyKind::FolderEditorInvitesUnavailable => "FOLDER_EDITOR_INVITES_UNAVAILABLE",
@@ -893,6 +913,9 @@ mod tests {
             NotReadyKind::ScreenRecordingPermission,
             NotReadyKind::CaptureDestinationUnset,
             NotReadyKind::RecordingLimitReached,
+            NotReadyKind::CapturePlanUnavailable,
+            NotReadyKind::CaptureNoDrivePlan,
+            NotReadyKind::RecordingCountUnavailable,
             NotReadyKind::EmailInvitesUnavailable,
             NotReadyKind::FolderInvitesUnavailable,
             NotReadyKind::FolderEditorInvitesUnavailable,

@@ -1,7 +1,7 @@
 import { atom } from "jotai";
 import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
 import type { SupportedModes } from "./modes";
-import { isRecordingLimitReached, isScreenRecordingPermissionMissing } from "@/app/lib/tauri/capture";
+import { isRecordingLimitReached, isScreenRecordingPermissionMissing, planRefusalAction } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /**
@@ -57,6 +57,7 @@ export const capturePermissionPaneAtom = atom<string | null>(null);
 export type CaptureRefusal =
   | { next: "grant-permission" }
   | { next: "recording-limit" }
+  | { next: "plan"; message: string; action: "retry" | "upgrade" }
   | { next: "show-error"; message: string };
 
 /**
@@ -68,5 +69,9 @@ export type CaptureRefusal =
 export function classifyCaptureRefusal(error: unknown): CaptureRefusal {
   if (isScreenRecordingPermissionMissing(error)) return { next: "grant-permission" };
   if (isRecordingLimitReached(error)) return { next: "recording-limit" };
+  // Refused on the plan: it could not be read (or the recordings counted),
+  // or the account has no Drive storage. Rust's words, with the way out.
+  const action = planRefusalAction(error);
+  if (action) return { next: "plan", message: errorMessage(error), action };
   return { next: "show-error", message: errorMessage(error) };
 }

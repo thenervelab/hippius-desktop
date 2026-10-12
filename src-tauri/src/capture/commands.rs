@@ -49,6 +49,12 @@ pub const PREVIEW_EVENT: &str = "capture_preview_changed";
 pub const SHOW_IN_FOLDER_EVENT: &str = "capture_show_in_folder";
 /// The card's Upgrade: the main window opens the storage plans.
 pub const OPEN_PLANS_EVENT: &str = "capture_open_plans";
+/// Where the capture session's plan read is (`allowance::CapturePlanStatus`):
+/// the bar shows "Checking your plan…", or a refusal with Retry or Upgrade.
+pub const PLAN_CHANGED_EVENT: &str = "capture_plan_changed";
+/// The notification's title when Restart is refused for anything but the
+/// recording limit (its body is the refusal's own words).
+const RESTART_REFUSED_TITLE: &str = "The recording was not restarted";
 /// The card's Manage link: the main window opens Shared Links at this link.
 pub const MANAGE_LINK_EVENT: &str = "capture_manage_link";
 /// The camera window's shape or device changed (`camera::CameraState`); the
@@ -231,14 +237,13 @@ pub struct CaptureState {
     /// The live recording reached its length limit and is being stopped for
     /// it: its card says so, with an Upgrade.
     stopped_at_limit: AtomicBool,
-    /// The last recording tier seen per account (`allowance::TierCache`).
-    pub(crate) recording_tiers: super::allowance::TierCache,
     /// `hippius --capture` / `--record` that started the app, and when:
     /// run once the signed-in app is listening (`capture_launch_shortcut`).
     launch_shortcut: Mutex<Option<(ShortcutKind, std::time::Instant)>>,
     /// This session's plan read, started with the session so the capture
-    /// rarely waits for it (`prefetch_tier`, `capture_tier`).
-    tier_lookup: Mutex<Option<tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>>>>,
+    /// rarely waits for it (`prefetch_tier`, `capture_tier`). Every capture
+    /// decision is made on it, and nothing starts without it.
+    pub(crate) plan: super::allowance::SessionPlan,
     /// Recordings in each account's captures drive, briefly cached
     /// (`recording_allowance::CountCache`).
     pub(crate) recording_counts: super::recording_allowance::CountCache,
@@ -1189,12 +1194,9 @@ pub async fn capture_start(
     {
         return Err(AppError::Validation(why.line().into()));
     }
-    // A Record start (the tray, a menu, the record shortcut) on a free plan
-    // whose recordings are used up is refused before any window opens. A
-    // capture already under way is brought forward below, never refused.
-    if kind == Some(CaptureKind::Recording) && state.capture.current() == CapturePhase::Idle {
-        super::recording_allowance::require_can_start(&state).await?;
-    }
+    // The plan is read now, while the user chooses; a Record start that
+    // cannot record is refused before any window opens.
+    let idle = begin_plan_read(&app, state.inner(), kind).await?;
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
     // No question about where captures go: the first capture sets its own
@@ -1225,6 +1227,8 @@ pub async fn capture_start(
     );
     let (kind, mode) = (choice.kind, choice.mode);
     let plan = super::support::start_plan(&surfaces, kind);
+    // No bar to show the read on (`shows_no_plan_status`): wait for it here.
+    wait_for_plan_without_bar(state.inner(), idle && shows_no_plan_status(choice.instant, plan)).await?;
 
     match advance(&app, &state.capture, CaptureEvent::Start { kind, mode }) {
         Ok(_) => {}
@@ -1235,9 +1239,6 @@ pub async fn capture_start(
         Err(e) => return Err(e),
     }
     state.capture.instant.store(choice.instant, Ordering::SeqCst);
-    // The plan decides the watermark and the recording's length limit; read
-    // now, while the user chooses, so taking the capture does not wait.
-    prefetch_tier(&app, &state.capture);
     warm_recording_count(&app, recording_ok);
     if choice.remember {
         options.last_kind = kind;
@@ -2682,6 +2683,10 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
     {
         return Err(refusal);
     }
+    // Nothing is captured on a plan that is not known: a read still under
+    // way is waited for, and a failed one (or no Drive storage) is refused
+    // here, the bar still up with its Retry or Upgrade.
+    super::allowance::session_tier(&state).await?;
     // The bar's Record (and an overlay click, the share picker, camera only):
     // a free plan whose recordings are used up is refused here, the bar
     // still up, so the user can upgrade or take a screenshot instead.
@@ -2724,6 +2729,9 @@ async fn select_inner(app: &AppHandle, selection: Selection) -> Result<()> {
 /// Failures return to [`select_inner`], which ends the session.
 async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> {
     let state = app.state::<AppState>();
+    // The Free plan's watermark is decided before the pixels are read, from
+    // the session's plan (already answered: `select_inner` waited for it).
+    let watermark = super::watermark::applies(capture_tier(app).await?);
     // A pill prepared while this session was a recording is not needed.
     close_controls(app);
     let frozen = lock(&state.capture.frozen).take();
@@ -2744,9 +2752,7 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     let (image, thumbnail, path) = taken?;
     let card_id = open_preview(app, CaptureKind::Screenshot, &path, thumbnail).await;
     // The Free plan's watermark goes into the pixels before the PNG exists,
-    // so every copy of the file has it. The card's small picture, made
-    // before the plan is asked, does not.
-    let watermark = super::watermark::applies(capture_tier(app).await);
+    // so every copy of the file has it. The card's small picture does not.
 
     let written = {
         let path = path.clone();
@@ -2801,8 +2807,7 @@ async fn system_picker_screenshot(app: &AppHandle) {
 
 /// Watermark a screenshot the desktop's tool saved at `path` (`image` is it,
 /// decoded, when the tool wrote a PNG). A file that cannot be read or
-/// written again is delivered as it is, like an unknown plan: logged, never
-/// a failed capture.
+/// written again is delivered as it is: logged, never a failed capture.
 fn stamp_portal_shot(path: &Path, image: Option<image::RgbaImage>) -> Option<image::RgbaImage> {
     let decoded = image.or_else(|| image::open(path).ok().map(|i| i.to_rgba8()));
     let Some(mut image) = decoded else {
@@ -2826,9 +2831,11 @@ fn stamp_portal_shot(path: &Path, image: Option<image::RgbaImage>) -> Option<ima
 /// cancelled in the desktop's tool.
 async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     let state = app.state::<AppState>();
+    // Decided before the desktop's tool opens: no screenshot on a plan that
+    // is not known (`capture_start` already waited for it).
+    let watermark = super::watermark::applies(capture_tier(app).await?);
     let dir = super::screenshot::fresh_capture_dir(&super::screenshot::capture_tmp_root()?)?;
     let answer = super::linux_portal::request(true).await;
-    let watermark = super::watermark::applies(capture_tier(app).await);
     let settled = {
         let dir = dir.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -3181,34 +3188,79 @@ async fn take_from_still(
     }
 }
 
-/// The plan decides a capture's watermark and a recording's length limit
-/// (`watermark`, `allowance`); with no account or no verdict there is
-/// neither. Read once per capture: [`prefetch_tier`] starts it as the
-/// session starts and [`capture_tier`] takes the answer.
-fn spawn_tier_lookup(app: &AppHandle) -> tauri::async_runtime::JoinHandle<Option<super::allowance::RecordingTier>> {
+/// The plan read every start begins with: the plan decides the watermark,
+/// the length limit and the count, and nothing is captured until it has
+/// answered. Begun only when no capture is under way (one under way keeps
+/// its own read and is brought forward). A Record start (the tray, a menu,
+/// the record shortcut) on a plan that cannot record (unread, no Drive
+/// storage, or a free plan whose recordings are used up or cannot be
+/// counted) is refused here, before any window opens. Returns whether no
+/// capture was under way.
+async fn begin_plan_read(app: &AppHandle, state: &AppState, kind: Option<CaptureKind>) -> Result<bool> {
+    let idle = state.capture.current() == CapturePhase::Idle;
+    if idle {
+        prefetch_tier(app, &state.capture);
+    }
+    if kind == Some(CaptureKind::Recording) && idle {
+        super::recording_allowance::require_can_start(state).await?;
+    }
+    Ok(idle)
+}
+
+/// A start with no bar to say "Checking your plan" (`no_bar`: the
+/// shortcut's one-step shot, the desktop's own tool, a Wayland still taken
+/// at once) waits for the plan before anything opens, and a refusal comes
+/// back before anything is captured. The bar shows the read and refuses
+/// for itself (`select_inner`).
+async fn wait_for_plan_without_bar(state: &AppState, no_bar: bool) -> Result<()> {
+    if no_bar {
+        super::allowance::session_tier(state).await?;
+    }
+    Ok(())
+}
+
+/// Whether this start puts up no bar to show the plan read on, so it
+/// waits for the plan before anything is captured: the shortcut's one-step
+/// shot, the desktop's own screenshot tool, and a Wayland still taken as the
+/// session starts.
+fn shows_no_plan_status(instant: bool, plan: super::support::StartPlan) -> bool {
+    instant || matches!(plan, super::support::StartPlan::Frozen | super::support::StartPlan::SystemPicker)
+}
+
+/// Start this session's plan read (replacing any earlier one, whose late
+/// answer is dropped). The plan decides a capture's watermark, a recording's
+/// length limit and its count (`watermark`, `allowance`,
+/// `recording_allowance`); the bar is told when it answers.
+fn prefetch_tier(app: &AppHandle, capture: &CaptureState) {
+    let seq = capture.plan.begin();
+    emit_plan_status(app, capture);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        let account = state.current_session_account().ok()?;
-        super::allowance::recording_tier(state.inner(), &account).await
-    })
+        let verdict = match state.current_session_account() {
+            Ok(account) => super::allowance::recording_tier(state.inner(), &account).await,
+            Err(_) => Err(super::allowance::PlanRefusal::Unreachable),
+        };
+        if state.capture.plan.finish(seq, verdict) {
+            emit_plan_status(&app, &state.capture);
+        }
+    });
 }
 
-/// Start this session's plan read (replacing any left by an earlier session).
-fn prefetch_tier(app: &AppHandle, capture: &CaptureState) {
-    let previous = lock(&capture.tier_lookup).replace(spawn_tier_lookup(app));
-    if let Some(previous) = previous {
-        previous.abort();
-    }
+/// Tell the capture bar where the plan read is (`capture_plan_changed`).
+fn emit_plan_status(app: &AppHandle, capture: &CaptureState) {
+    let _ = app.emit(PLAN_CHANGED_EVENT, super::allowance::plan_status(capture.plan.current()));
 }
 
-/// This capture's tier: the session's prefetched read, or a fresh one when
-/// there is none (a Restart, whose first take used it). Bounded by
-/// `allowance::LOOKUP_WITHIN`, and usually done before it is asked for.
-async fn capture_tier(app: &AppHandle) -> Option<super::allowance::RecordingTier> {
-    let state = app.state::<AppState>();
-    let pending = lock(&state.capture.tier_lookup).take();
-    pending.unwrap_or_else(|| spawn_tier_lookup(app)).await.ok().flatten()
+/// This capture's tier: the session's read, waited for if it is still under
+/// way (bounded by `allowance::LOOKUP_WITHIN`), and usually done before it
+/// is asked for.
+///
+/// # Errors
+///
+/// The plan's refusal: no capture is taken on a plan that is not known.
+async fn capture_tier(app: &AppHandle) -> Result<super::allowance::RecordingTier> {
+    super::allowance::session_tier(app.state::<AppState>().inner()).await
 }
 
 /// Start the recorder on `selection`. Failures return to the caller, which
@@ -3227,7 +3279,26 @@ async fn start_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         tracing::info!(error = %e, "an earlier recording start ended after a newer one began; the newer one is kept");
         return Ok(());
     }
+    if started.is_ok() {
+        mark_recording(&state).await;
+    }
     started
+}
+
+/// The recording is under way: should the app quit (or crash) before it
+/// reaches the drive, the next sign-in offers what was saved
+/// (`kept_failed`). Its folder is marked; a start that did not end up
+/// recording has no folder left to mark.
+async fn mark_recording(state: &AppState) {
+    let Some(dir) = lock(&state.capture.recording_dir).clone() else { return };
+    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
+        return;
+    };
+    let poster = lock(&state.capture.poster).clone();
+    let (destination, awaiting_setup) = marker_destination(state, &account_id, None).await;
+    let account = crate::auth::account_key::account_key(&account_id);
+    let kept = super::kept_failed::KeptFailed::in_flight(&account, CaptureKind::Recording, destination, awaiting_setup, poster);
+    super::kept_failed::write_in(&root, &dir, &kept);
 }
 
 /// [`start_recording`]'s work, for the start numbered `start`.
@@ -3267,7 +3338,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> R
     };
     // Decided before the recorder starts, so its very first frame carries
     // the watermark; the same verdict sets the length limit below.
-    let tier = capture_tier(app).await;
+    let tier = capture_tier(app).await?;
     let options = RecordOptions {
         microphone: saved.microphone && recording::microphone_supported(),
         microphone_device: saved.microphone_device.clone(),
@@ -3335,7 +3406,7 @@ async fn begin_recording(app: &AppHandle, selection: Selection, start: u64) -> R
         recorder = count_down_in_pill(app, recorder, count).await?;
     }
 
-    state.capture.set_recording_limit(super::allowance::max_recording(tier));
+    state.capture.set_recording_limit(tier.max_recording());
     state.capture.stopped_at_limit.store(false, Ordering::SeqCst);
     let recorded_microphone = recorder.microphone();
     if super::session::start_superseded(start, state.capture.recording_start.load(Ordering::SeqCst)) {
@@ -3949,17 +4020,17 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>) {
     let state = app.state::<AppState>();
     let started_ms = chrono::Utc::now().timestamp_millis();
-    let card_destination = card_id.and_then(|id| {
-        lock(&state.capture.preview)
-            .as_ref()
-            .filter(|c| c.id == id && !c.kept_locally)
-            .map(|c| c.destination.clone())
-    });
+    let card = card_id.and_then(|id| lock(&state.capture.preview).as_ref().filter(|c| c.id == id).cloned());
+    let card_destination = card.as_ref().filter(|c| !c.kept_locally).map(|c| c.destination.clone());
+    // Marked before anything can fail or the app can quit, so the capture is
+    // never left in the temp folder with nothing to offer it again.
+    let marked = mark_delivery(&state, path, card.as_ref(), card_destination.clone()).await;
+    let mut sent_to: Option<CaptureDestination> = None;
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
         let destination = match card_destination {
-            Some(d) => d,
+            Some(d) => moved_on_from(app, &account_id, card_id, d).await,
             None => match super::setup::ensure(app, &account_id).await? {
                 super::setup::Ensured::Ready(d) => {
                     if let Some(id) = card_id {
@@ -3970,6 +4041,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 super::setup::Ensured::Kept(kept) => return Ok(Delivery::KeptHere(kept)),
             },
         };
+        sent_to = Some(destination.clone());
         let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
         let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
         Ok::<_, AppError>(Delivery::Placed {
@@ -4030,31 +4102,80 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 notify(app, title, body);
             }
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
-            let message = super::deliver::failure_copy(&e);
-            let shown = card_id.is_some_and(|id| {
-                update_card(app, &state.capture, id, |card| {
-                    card.status = PreviewStatus::Failed {
-                        message: message.clone(),
-                        reason: super::deliver::failure_reason(&e),
-                        retryable: path.exists(),
-                    };
-                })
-            });
+        Err(e) => announce_failed(app, path, card_id, &e, marked, sent_to),
+    }
+}
+
+/// A capture that could not be delivered: its card says why (when one is
+/// still on screen), its marker keeps it for Retry card or no card, and a
+/// notification says it was kept.
+fn announce_failed(
+    app: &AppHandle,
+    path: &Path,
+    card_id: Option<u64>,
+    e: &AppError,
+    marked: Option<super::kept_failed::KeptFailed>,
+    sent_to: Option<CaptureDestination>,
+) {
+    let state = app.state::<AppState>();
+    tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
+    let message = super::deliver::failure_copy(e);
+    let shown = card_id.is_some_and(|id| {
+        update_card(app, &state.capture, id, |card| {
+            card.status = PreviewStatus::Failed {
+                message: message.clone(),
+                reason: super::deliver::failure_reason(e),
+                retryable: path.exists(),
+            };
+        })
+    });
+    if path.exists()
+        && let Some(marked) = marked
+    {
+        keep_failed(path, marked, sent_to, message.clone(), super::deliver::failure_reason(e));
+    }
+    let _ = app.emit(
+        FAILED_EVENT,
+        FailedPayload {
+            message,
+            card_showing: shown,
+        },
+    );
+    let (title, body) = super::deliver::failed_notice(e, shown);
+    notify(app, title, body);
+    // The captures folder is gone: the dialog that chooses it opens,
+    // the one Settings moves it with.
+    if super::deliver::is_missing_root(e) {
+        super::setup::ask_for_location(app);
+    }
+}
+
+/// The drive a card's Retry goes to: its own, unless that drive's folder
+/// here is gone (`deliver::refuse_missing_root`) and the captures drive was
+/// chosen again since, in which case the card takes the new one. Otherwise
+/// a capture refused for a moved folder could never be sent once the user
+/// chose the folder again.
+async fn moved_on_from(app: &AppHandle, account_id: &str, card_id: Option<u64>, own: CaptureDestination) -> CaptureDestination {
+    let state = app.state::<AppState>();
+    let Ok(pool) = state.pool() else { return own };
+    if own.owner_ss58.is_some() {
+        return own;
+    }
+    let gone = match destination::own_local_path(pool, account_id, &own.label).await {
+        Ok(Some(root)) => !root.is_dir(),
+        _ => false,
+    };
+    if !gone {
+        return own;
+    }
+    match destination::load(pool, account_id).await.ok().flatten() {
+        Some(chosen) if chosen.label != own.label => {
             if let Some(id) = card_id {
-                keep_failed_card(app, id);
+                adopt_destination(app, account_id, id, &chosen).await;
             }
-            let _ = app.emit(
-                FAILED_EVENT,
-                FailedPayload {
-                    message,
-                    card_showing: shown,
-                },
-            );
-            let (title, body) = super::deliver::failed_notice(&e, shown);
-            notify(app, title, body);
+            chosen
         }
+        _ => own,
     }
 }
 
@@ -4134,7 +4255,7 @@ async fn release_held(app: &AppHandle) {
             return;
         }
     };
-    let tier = super::allowance::recording_tier(&state, &account).await;
+    let tier = super::allowance::recording_tier(&state, &account).await.ok();
     let counted = match tier {
         Some(t) if super::recording_allowance::is_limited(t) => super::recording_allowance::recording_count(&state, &account_id).await,
         _ => None,
@@ -4506,9 +4627,17 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     end_camera(app).await;
     let path = match stopped {
         Ok(path) => path,
+        // The stop went wrong (no answer in time, a refusal, no finished
+        // file), but the recorder writes as it goes: what it saved plays up
+        // to its last fragment and is the user's recording, delivered like
+        // any other rather than thrown away with its folder.
         Err(e) => {
-            fail_capture(app, &e).await;
-            return Err(e);
+            let Some(path) = salvage_after_failed_stop(&state.capture) else {
+                fail_capture(app, &e).await;
+                return Err(e);
+            };
+            tracing::warn!(error = %e, "the recording did not stop cleanly; delivering what was saved");
+            path
         }
     };
     // The session ends here: the file exists, and the card owns the upload.
@@ -4539,6 +4668,13 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
+}
+
+/// The recording a failed stop left in the live recording's folder, when
+/// it holds at least a fragment (`kept_failed::salvageable_recording`).
+fn salvage_after_failed_stop(state: &CaptureState) -> Option<PathBuf> {
+    let dir = lock(&state.recording_dir).clone()?;
+    super::kept_failed::salvageable_recording(&dir)
 }
 
 #[tauri::command]
@@ -4586,7 +4722,11 @@ pub async fn capture_restart(app: AppHandle) -> Result<()> {
     // says why.
     if let Err(refused) = super::recording_allowance::require_can_start(&state).await {
         use super::recording_allowance::{LIMIT_BODY, LIMIT_TITLE};
-        notify(&app, LIMIT_TITLE.into(), LIMIT_BODY.into());
+        if matches!(refused, AppError::NotReady(NotReadyKind::RecordingLimitReached)) {
+            notify(&app, LIMIT_TITLE.into(), LIMIT_BODY.into());
+        } else {
+            notify(&app, RESTART_REFUSED_TITLE.into(), refused.to_string());
+        }
         return Err(refused);
     }
     advance(&app, &state.capture, CaptureEvent::Restart)?;
@@ -4917,20 +5057,75 @@ fn settle_closed_card(state: &CaptureState, card: PreviewCard) {
     }
 }
 
-/// A failed card writes its marker beside its file, so the capture is
-/// offered again after a restart (`kept_failed`). Parking alone is memory.
-fn keep_failed_card(app: &AppHandle, id: u64) {
-    let state = app.state::<AppState>();
-    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
-        return;
-    };
-    let card = lock(&state.capture.preview).clone().filter(|c| c.id == id);
-    let account = crate::auth::account_key::account_key(&account_id);
-    if let Some(card) = card
-        && let Some(kept) = super::kept_failed::KeptFailed::from_card(&account, &card)
-    {
-        super::kept_failed::write(&root, &card.file_path, &kept);
+/// Where a capture's marker says it was going (`kept_failed`): the card's
+/// own drive, else the captures drive, else (nobody has set one up yet) the
+/// drive that would be made, marked as waiting for setup.
+async fn marker_destination(state: &AppState, account_id: &str, card_destination: Option<CaptureDestination>) -> (CaptureDestination, bool) {
+    if let Some(d) = card_destination {
+        return (d, false);
     }
+    let stored = match state.pool() {
+        Ok(pool) => destination::load(pool, account_id).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let name = super::naming::DEFAULT_DRIVE_NAME;
+    stored.map_or_else(|| (CaptureDestination::own(name, name), true), |d| (d, false))
+}
+
+/// [`mark_in_flight`] for a delivery: as its card says (kind, picture,
+/// stopped at the free limit), or from the file's name with no card.
+async fn mark_delivery(
+    state: &AppState,
+    path: &Path,
+    card: Option<&PreviewCard>,
+    card_destination: Option<CaptureDestination>,
+) -> Option<super::kept_failed::KeptFailed> {
+    let video = path
+        .file_name()
+        .is_some_and(|n| super::recording_allowance::is_video_name(&n.to_string_lossy()));
+    let by_name = if video { CaptureKind::Recording } else { CaptureKind::Screenshot };
+    let kind = card.map_or(by_name, |c| c.kind);
+    let at_limit = card.is_some_and(|c| c.stopped_at_free_limit);
+    mark_in_flight(state, path, kind, card_destination, card.and_then(|c| c.thumbnail.clone()), at_limit).await
+}
+
+/// Mark `path` as a capture this run is recording or uploading, so it is
+/// offered again with Retry if the app quits before it reaches the drive
+/// (`kept_failed`). Returns the marker, for the failure that may replace it.
+async fn mark_in_flight(
+    state: &AppState,
+    path: &Path,
+    kind: CaptureKind,
+    card_destination: Option<CaptureDestination>,
+    thumbnail: Option<String>,
+    stopped_at_free_limit: bool,
+) -> Option<super::kept_failed::KeptFailed> {
+    let account_id = state.current_account_id().ok()?;
+    let root = super::screenshot::capture_tmp_root().ok()?;
+    let (destination, awaiting_setup) = marker_destination(state, &account_id, card_destination).await;
+    let account = crate::auth::account_key::account_key(&account_id);
+    let kept = super::kept_failed::KeptFailed {
+        stopped_at_free_limit,
+        ..super::kept_failed::KeptFailed::in_flight(&account, kind, destination, awaiting_setup, thumbnail)
+    };
+    super::kept_failed::write(&root, path, &kept);
+    Some(kept)
+}
+
+/// A capture that could not be delivered writes its marker beside its file
+/// from what the delivery knew, whether or not its card is still on screen
+/// (closed, or replaced by a newer capture's while it uploaded), so it is
+/// offered again on the next capture and after a restart, as the
+/// notification says. Parking alone is memory, and only for a card.
+fn keep_failed(
+    path: &Path,
+    marked: super::kept_failed::KeptFailed,
+    sent_to: Option<CaptureDestination>,
+    message: String,
+    reason: super::preview::FailureReason,
+) {
+    let Ok(root) = super::screenshot::capture_tmp_root() else { return };
+    super::kept_failed::write(&root, path, &marked.failed(sent_to, message, reason));
 }
 
 /// The newest failed capture kept from before a restart (`kept_failed`)
@@ -5336,6 +5531,28 @@ pub async fn capture_check_recording_start(state: tauri::State<'_, AppState>) ->
 #[tauri::command]
 pub async fn capture_free_plan_notice(state: tauri::State<'_, AppState>) -> Result<Option<super::recording_allowance::FreePlanNotice>> {
     Ok(super::recording_allowance::current_free_plan_notice(&state).await)
+}
+
+/// Where this capture's plan read is, for the capture bar: checking (no
+/// capture can start yet), ready, or refused with Rust's words and a Retry
+/// or an Upgrade. A session that started no read begins one. The bar then
+/// follows `capture_plan_changed`.
+#[tauri::command]
+pub fn capture_plan_status(state: tauri::State<'_, AppState>, app: AppHandle) -> super::allowance::CapturePlanStatus {
+    let check = state.capture.plan.current();
+    if check == super::allowance::PlanCheck::NotStarted && state.capture.current() != CapturePhase::Idle {
+        prefetch_tier(&app, &state.capture);
+    }
+    super::allowance::plan_status(state.capture.plan.current())
+}
+
+/// The capture bar's Retry after a plan read failed: read it again.
+#[tauri::command]
+pub fn capture_plan_retry(state: tauri::State<'_, AppState>, app: AppHandle) -> super::allowance::CapturePlanStatus {
+    prefetch_tier(&app, &state.capture);
+    let warm = recording::recording_supported();
+    warm_recording_count(&app, warm);
+    super::allowance::plan_status(state.capture.plan.current())
 }
 
 /// The recording limit dialog's Upgrade, from the capture bar: the bar
@@ -7238,7 +7455,7 @@ mod tests {
         let calls = Arc::new(Calls::default());
         let state = recording(&calls);
         assert!(!state.at_recording_limit(10_000), "no limit, never due");
-        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Free)));
+        state.set_recording_limit(super::super::allowance::RecordingTier::Free.max_recording());
         assert!(!state.at_recording_limit(299));
         assert!(state.at_recording_limit(300));
 
@@ -7251,7 +7468,7 @@ mod tests {
         assert_eq!(serde_json::to_value(seen[2]).unwrap()["remainingSecs"], 60);
         assert_eq!(state.snapshot().remaining_secs, Some(60), "a seed carries it too");
 
-        state.set_recording_limit(super::super::allowance::max_recording(Some(super::super::allowance::RecordingTier::Paid)));
+        state.set_recording_limit(super::super::allowance::RecordingTier::Paid.max_recording());
         assert_eq!(state.snapshot().remaining_secs, None);
         assert!(serde_json::to_value(state.snapshot()).unwrap().get("remainingSecs").is_none());
     }

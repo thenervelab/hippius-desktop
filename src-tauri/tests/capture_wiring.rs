@@ -179,15 +179,21 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     // The tray's Record tile, the Capture menus' Record items and the record
     // shortcut all reach Rust through `capture_start` with the kind set.
     let start = fn_body(&src, "pub async fn capture_start(");
-    let gate = start.find(GATE).expect("capture_start asks the gate");
+    let begin = fn_body(&src, "async fn begin_plan_read(");
+    let gate = begin
+        .find("recording_allowance::require_can_start(state).await")
+        .expect("capture_start asks the gate");
     assert!(
-        start[..gate].contains("kind == Some(CaptureKind::Recording)"),
-        "only a Record start is gated; a screenshot never is"
+        begin[..gate].contains("kind == Some(CaptureKind::Recording)"),
+        "only a Record start is gated on the count; a screenshot never is"
     );
+    let gated = start
+        .find("begin_plan_read(&app, state.inner(), kind).await?")
+        .expect("capture_start begins with the plan");
     let opened = start
         .find("advance(&app, &state.capture, CaptureEvent::Start")
         .expect("the session starts");
-    assert!(gate < opened, "refused before any window opens");
+    assert!(gated < opened, "refused before any window opens");
 
     // The bar's Record, an overlay click, the share picker and camera only all
     // take the selection through `select_inner`.
@@ -229,12 +235,20 @@ fn every_recording_start_path_goes_through_the_one_gate() {
         "begin_recording is defined once and called only from start_recording"
     );
 
-    // The gate reads the plan the way the length cap does, and the count
-    // from the server's listings of every captures drive, failing open.
+    // The gate reads the capture session's plan, the one the watermark and
+    // the length cap use, and the count from the server's listings of every
+    // captures drive; neither an unread plan nor an unread count lets a
+    // recording through.
     let allowance = read("src/capture/recording_allowance.rs");
-    let check = fn_body(&allowance, "pub async fn check_start(");
-    assert!(check.contains("allowance::recording_tier(state, &account)"));
-    assert!(check.contains("recording_count(state, &account_id)"));
+    let check = fn_body(&allowance, "pub async fn require_can_start(");
+    let plan = check
+        .find("allowance::session_tier(state).await?")
+        .expect("the session's plan, refusals passed on");
+    let count = check
+        .find("recording_count(state, &state.current_account_id()?)")
+        .expect("then the count");
+    assert!(plan < count);
+    assert!(check.contains("StartVerdict::CountUnavailable => {"), "an unread count is refused");
     assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
     let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
@@ -914,6 +928,8 @@ fn the_card_and_session_commands_are_registered() {
         "capture_limit_upgrade",
         "capture_check_recording_start",
         "capture_free_plan_notice",
+        "capture_plan_status",
+        "capture_plan_retry",
         "capture_launch_shortcut",
     ] {
         assert!(
@@ -1394,10 +1410,9 @@ fn only_the_camera_and_overlay_webviews_may_open_devices() {
 }
 
 /// The Windows recorder is the app's own executable started without a
-/// console window, and Windows recording ships to staging and beta, not to
-/// production until its hardware checklist passes and the installer is signed.
+/// console window, and Windows recording ships on every lane.
 #[test]
-fn windows_records_in_its_own_child_and_stays_out_of_production() {
+fn windows_records_in_its_own_child_on_every_lane() {
     let windows = read("src/capture/recording/windows.rs");
     assert!(fn_body(&windows, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&windows, "pub fn helper_command(").contains("CREATE_NO_WINDOW"));
@@ -1405,17 +1420,14 @@ fn windows_records_in_its_own_child_and_stays_out_of_production() {
     use tauri_project_lib::release_channel::ReleaseChannel;
     assert!(enabled(ReleaseChannel::Staging, Platform::Windows, Feature::Recording));
     assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
-    assert!(
-        !enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording),
-        "Windows recording reaches production only once its hardware checklist passes"
-    );
+    assert!(enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording));
 }
 
 /// Linux records in the app's own child, waits for the user in the
-/// desktop's screen-sharing dialog, and ships to staging and beta, not to
-/// production until its checklist passes on real sessions.
+/// desktop's screen-sharing dialog, and ships on every lane now that its
+/// checklist passed on Ubuntu GNOME.
 #[test]
-fn linux_records_in_its_own_child_and_stays_out_of_production() {
+fn linux_records_in_its_own_child_on_every_lane() {
     let linux = read("src/capture/recording/linux.rs");
     assert!(fn_body(&linux, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&linux, "pub fn start(").contains("helper::start_within("));
@@ -1425,10 +1437,7 @@ fn linux_records_in_its_own_child_and_stays_out_of_production() {
     for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
         assert!(enabled(ReleaseChannel::Staging, platform, Feature::Recording));
         assert!(enabled(ReleaseChannel::Beta, platform, Feature::Recording));
-        assert!(
-            !enabled(ReleaseChannel::Production, platform, Feature::Recording),
-            "{platform:?} recording reaches production only once its Linux checklist passes"
-        );
+        assert!(enabled(ReleaseChannel::Production, platform, Feature::Recording), "{platform:?}");
     }
 }
 
@@ -2565,16 +2574,16 @@ fn the_free_recording_limit_is_decided_at_start_and_stops_like_stop() {
     let src = read("src/capture/commands.rs");
     let begin = fn_body(&src, "async fn begin_recording(");
     assert!(
-        fn_body(&src, "fn spawn_tier_lookup(").contains("allowance::recording_tier("),
-        "the lookup reads the tier"
+        fn_body(&src, "fn prefetch_tier(").contains("allowance::recording_tier("),
+        "the session's read reads the tier"
     );
     assert!(
-        fn_body(&src, "async fn capture_tier(").contains("spawn_tier_lookup(app)"),
-        "a capture without a prefetched read reads it fresh"
+        fn_body(&src, "async fn capture_tier(").contains("allowance::session_tier("),
+        "a capture takes the session's read, or reads it when there is none"
     );
-    let lookup = begin.find("capture_tier(app).await").expect("the tier is read as the recording starts");
+    let lookup = begin.find("capture_tier(app).await?").expect("the tier is read as the recording starts");
     let set = begin
-        .find("set_recording_limit(super::allowance::max_recording(")
+        .find("set_recording_limit(tier.max_recording())")
         .expect("the limit comes from the tier");
     let adopt = begin.find("adopt_recorder(").expect("the recorder is adopted");
     assert!(lookup < set && set < adopt, "the limit is set before the recording is adopted");
@@ -2610,34 +2619,86 @@ fn the_watermark_follows_the_capture_tier() {
     let src = read("src/capture/commands.rs");
     let start = fn_body(&src, "pub async fn capture_start(");
     let advanced = start.find("CaptureEvent::Start { kind, mode }").expect("the session starts");
-    let prefetch = start
-        .find("prefetch_tier(&app, &state.capture)")
-        .expect("the plan is read as the session starts");
-    assert!(advanced < prefetch, "only a session that started reads the plan");
+    let read = start.find("begin_plan_read(").expect("the plan is read as the session starts");
+    assert!(read < advanced, "read before anything opens, so a refusal comes first");
+    let begin = fn_body(&src, "async fn begin_plan_read(");
+    let prefetch = begin.find("prefetch_tier(app, &state.capture)").expect("the read begins");
+    assert!(begin[..prefetch].contains("if idle {"), "a capture already under way keeps its own read");
 
     let begin = fn_body(&src, "async fn begin_recording(");
-    let tier = begin.find("let tier = capture_tier(app).await").expect("one read");
+    let tier = begin.find("let tier = capture_tier(app).await?").expect("one read");
     let mark = begin
         .find("watermark: super::watermark::applies(tier)")
         .expect("the watermark follows it");
     let recorder = begin.find("recording::start(selection").expect("the recorder starts");
-    let limit = begin.find("max_recording(tier)").expect("the limit follows the same read");
+    let limit = begin.find("tier.max_recording()").expect("the limit follows the same read");
     assert!(tier < mark && mark < recorder && tier < limit);
     assert_eq!(begin.matches("capture_tier(").count(), 1, "the plan is read once per recording");
 
     let shot = fn_body(&src, "async fn finish_screenshot(");
+    let decided = shot
+        .find("watermark::applies(capture_tier(app).await?)")
+        .expect("a screenshot's watermark comes from the session's plan");
+    let taken = shot.find("take_screenshot(selection, clear)").expect("the pixels are read");
     let stamp = shot.find("watermark::stamp_image(&mut image)").expect("a screenshot is watermarked");
     let save = shot.find("save_png(&image, &path)").expect("then written");
-    assert!(shot.contains("watermark::applies(capture_tier(app).await)") && stamp < save);
+    assert!(decided < taken, "decided before anything is captured");
+    assert!(stamp < save);
+    let portal = fn_body(&src, "async fn take_with_system_picker(");
+    let decided = portal
+        .find("watermark::applies(capture_tier(app).await?)")
+        .expect("the desktop's tool follows the same plan");
+    let asked = portal.find("linux_portal::request(true)").expect("the desktop's tool opens");
+    assert!(decided < asked, "no screenshot through the desktop's tool on an unknown plan");
     assert!(
-        fn_body(&src, "async fn take_with_system_picker(").contains("stamp_portal_shot(&path, image)"),
+        portal.contains("stamp_portal_shot(&path, image)"),
         "the desktop's own screenshot tool is watermarked too"
     );
 }
 
+/// No capture is taken on a plan that is not known. Every way a capture
+/// starts waits for the session's plan read and passes its refusal on
+/// before anything is captured: the bar's selection (`select_inner`), and
+/// at `capture_start` every start with no bar to show "Checking your plan"
+/// on. The bar is told where the read is.
+#[test]
+fn every_capture_waits_for_the_plan() {
+    let src = read("src/capture/commands.rs");
+
+    let select = fn_body(&src, "async fn select_inner(");
+    let plan = select
+        .find("super::allowance::session_tier(&state).await?")
+        .expect("select_inner waits for the plan");
+    let moved = select.find("CaptureEvent::Selected").expect("the phase moves on");
+    assert!(plan < moved, "refused while the bar is still up, screenshots included");
+    assert!(
+        !select[..plan].contains("if kind == CaptureKind::Recording {"),
+        "every kind, not only a recording"
+    );
+
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let plan = start
+        .find("wait_for_plan_without_bar(state.inner(), idle && shows_no_plan_status(choice.instant, plan)).await?")
+        .expect("a start with no bar waits for the plan");
+    assert!(fn_body(&src, "async fn wait_for_plan_without_bar(").contains("allowance::session_tier(state).await?"));
+    let opened = start
+        .find("advance(&app, &state.capture, CaptureEvent::Start")
+        .expect("the session starts");
+    assert!(plan < opened, "refused before anything opens or is grabbed");
+    let no_bar = fn_body(&src, "fn shows_no_plan_status(");
+    for case in ["instant", "StartPlan::Frozen", "StartPlan::SystemPicker"] {
+        assert!(no_bar.contains(case), "{case} has no bar to wait on");
+    }
+
+    // The bar follows the read and can ask for it again.
+    let prefetch = fn_body(&src, "fn prefetch_tier(");
+    assert!(prefetch.contains("capture.plan.begin()") && prefetch.contains("emit_plan_status("));
+    assert!(fn_body(&src, "pub fn capture_plan_retry(").contains("prefetch_tier(&app, &state.capture)"));
+}
+
 /// The tier reads the plan through the same fold the storage overview and
-/// sharing use, never a parse or a request of its own, and the overview
-/// keeps the last verdict fresh.
+/// sharing use, never a parse or a request of its own, and no verdict is
+/// kept to stand in for a failed read.
 #[test]
 fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
     let allowance = read("src/capture/allowance.rs");
@@ -2646,7 +2707,15 @@ fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
     assert!(allowance.contains("storage_overview::drive_code_is_free("));
     assert!(!allowance.contains("\"/api/"), "no request of its own");
     let overview = read("src/billing/storage_overview.rs");
-    assert!(fn_body(&overview, "pub async fn get_storage_overview(").contains("allowance::remember("));
+    assert!(
+        !overview.contains("capture::allowance::"),
+        "the overview keeps no capture verdict: a stored tier never decides a capture"
+    );
+    assert!(!allowance.contains("user_preferences") && !allowance.contains("last_known"));
+    assert!(
+        allowance.contains("storage_overview::free_tier_entitled("),
+        "no Drive storage is decided by the overview's own rule"
+    );
     assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
 }
 
@@ -2748,7 +2817,12 @@ fn a_failed_capture_is_offered_again_after_a_restart() {
     let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
     let placed = deliver.find("announce_placed(").expect("placement is announced");
     assert!(clear < placed, "cleared as soon as delivery succeeds");
-    assert!(deliver.contains("keep_failed_card(app, id)"), "a failure writes its marker");
+    assert!(deliver.contains("announce_failed(app, path, card_id, &e, marked, sent_to)"));
+    assert!(
+        fn_body(&src, "fn announce_failed(").contains("keep_failed(path, marked, sent_to,"),
+        "a failure writes its marker from the delivery itself, card or no card"
+    );
+    assert!(!deliver.contains("keep_failed_card"), "never only when its card is still on screen");
     assert!(
         fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
         "sign-in offers a kept failure again"
@@ -2757,6 +2831,59 @@ fn a_failed_capture_is_offered_again_after_a_restart() {
     assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
     let kept = read("src/capture/kept_failed.rs");
     assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// A recording or upload the app quits on is marked before it can be lost:
+/// the recording once it is under way, the delivery before anything can
+/// fail. The next run offers it with Retry (`kept_failed::this_run`).
+#[test]
+fn a_capture_the_app_quits_on_is_offered_again() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "async fn start_recording(");
+    assert!(
+        start.contains("if started.is_ok() {\n        mark_recording(&state).await;"),
+        "a recording that started is marked"
+    );
+    assert!(fn_body(&src, "async fn mark_recording(").contains("kept_failed::write_in(&root, &dir, &kept)"));
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let in_flight = deliver.find("mark_delivery(").expect("a delivery is marked");
+    let outcome = deliver.find("let outcome = async").expect("delivery runs");
+    assert!(in_flight < outcome, "marked before anything can fail");
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(
+        fn_body(&kept, "fn list_for_run(").contains("kept.run.as_deref() == Some(run)"),
+        "this run's own are skipped"
+    );
+}
+
+/// A stop that errors keeps what the recorder saved (it writes fragments
+/// as it goes) instead of throwing the folder away with the error.
+#[test]
+fn a_recording_whose_stop_fails_is_salvaged_not_discarded() {
+    let src = read("src/capture/commands.rs");
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    let stopped = stop.find("recorder.stop()").expect("the recorder stops");
+    let after = &stop[stopped..];
+    assert!(after.contains("let Some(path) = salvage_after_failed_stop"), "salvaged before failing");
+    assert!(after.contains("fail_capture(app, &e)"), "nothing saved: the capture fails");
+}
+
+/// A captures folder that was set up and is gone now is never made again
+/// by delivery; first-time setup makes the folder before the drive exists.
+#[test]
+fn a_missing_captures_folder_is_never_made_again() {
+    let deliver = read("src/capture/deliver.rs");
+    let place = fn_body(&deliver, "pub async fn place(");
+    let refused = place.find("refuse_missing_root(&root)?").expect("a gone folder is refused");
+    let moved = place.find("place_in_folder(").expect("the capture is moved in");
+    assert!(refused < moved, "refused before the folder could be made");
+    let setup = read("src/capture/setup.rs");
+    let add = fn_body(&setup, "async fn add_drive(");
+    let made = add.find("create_dir_all(dir)").expect("first setup makes the folder");
+    let added = add.find("add_local_sync_folder(").expect("then adds the drive");
+    assert!(made < added, "the folder exists before delivery can see the drive");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "fn announce_failed(").contains("is_missing_root(e)"));
 }
 
 /// `--capture` / `--record` on the launch that starts the app are kept in
@@ -2770,4 +2897,38 @@ fn a_launch_for_a_capture_shortcut_is_not_dropped() {
     let run = fn_body(&commands, "pub fn capture_launch_shortcut(");
     assert!(run.contains(".take()"), "run once");
     assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
+}
+
+/// A Free plan recording on Linux (X11 and Wayland alike) carries the
+/// watermark: the child hands `StartCommand.watermark` to the shared writer,
+/// which stamps the pipeline (`writer_loop`'s own tests pin the stamping).
+/// The Linux child only compiles on Linux, so its wiring is pinned here.
+#[test]
+fn linux_recordings_hand_the_watermark_to_the_writer() {
+    let linux = read("src/capture/recorder_child/linux/mod.rs");
+    assert!(
+        fn_body(&linux, "fn record(").contains("cmd.watermark"),
+        "record passes the plan's watermark on"
+    );
+    let spawn = fn_body(&linux, "fn spawn_writer(");
+    assert!(spawn.contains("writer_loop::run(&rx, &shared, &out, &sources, &ready, watermark,"));
+    let writer = fn_body(&read("src/capture/recorder_child/writer_loop.rs"), "pub fn run<");
+    assert!(writer.contains("if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1)"));
+    assert!(writer.contains("p.set_watermark(stamp)"));
+}
+
+/// The launch's shortcut is kept in AppState, and `state::<AppState>()`
+/// panics before `manage`: called at the top of setup, `hippius --record`
+/// (a Wayland desktop's Record shortcut with the app closed) crashed the app
+/// as it started.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed() {
+    let main = read("src/main.rs");
+    let setup = fn_body(&main, "builder.setup(");
+    let managed = setup.find("app_handle.manage(app_state)").expect("setup manages AppState");
+    let remembered = setup.find("remember_launch_shortcut(").expect("setup remembers the launch's shortcut");
+    assert_eq!(setup.matches("remember_launch_shortcut(").count(), 1, "remembered once");
+    assert!(managed < remembered, "remember_launch_shortcut reads AppState, so it runs after manage");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "pub fn remember_launch_shortcut").contains("app.state::<AppState>()"));
 }

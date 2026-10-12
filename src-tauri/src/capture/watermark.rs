@@ -3,9 +3,9 @@
 //! pixels so it stays on a file that is shared or downloaded.
 //!
 //! Only the Free tier gets one. The tier is the one the recording limits use
-//! (`allowance::recording_tier`), read once per capture, and an unknown tier
-//! (offline with nothing remembered, or a plan read that could not tell)
-//! gets none: the same fail-open rule as the length limit.
+//! (`allowance::session_tier`), read once per capture. There is no unknown
+//! tier here: a capture whose plan could not be read is refused before
+//! anything is captured (`allowance`), so it never reaches this decision.
 //!
 //! The look is white at [`OPACITY`] over a soft dark shadow, so it reads on
 //! light and dark pictures alike. Its height follows the picture's shorter
@@ -53,11 +53,10 @@ pub const ATLAS_MAGIC: &[u8; 4] = b"HWM1";
 
 static MASTER_PNG: &[u8] = include_bytes!("../../icons/watermark.png");
 
-/// Whether a capture on `tier` is watermarked: the Free plan only. An
-/// unknown tier is not (fail open, as with the length limit).
+/// Whether a capture on `tier` is watermarked: the Free plan only.
 #[must_use]
-pub fn applies(tier: Option<RecordingTier>) -> bool {
-    tier == Some(RecordingTier::Free)
+pub fn applies(tier: RecordingTier) -> bool {
+    tier == RecordingTier::Free
 }
 
 /// How big the watermark is on a picture, and how far from its corner.
@@ -425,10 +424,9 @@ mod tests {
     }
 
     #[test]
-    fn only_the_free_plan_is_watermarked_and_an_unknown_one_is_not() {
-        assert!(applies(Some(RecordingTier::Free)));
-        assert!(!applies(Some(RecordingTier::Paid)));
-        assert!(!applies(None), "no verdict falls open, as the length limit does");
+    fn only_the_free_plan_is_watermarked() {
+        assert!(applies(RecordingTier::Free));
+        assert!(!applies(RecordingTier::Paid));
     }
 
     #[test]
