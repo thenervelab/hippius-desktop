@@ -8,6 +8,7 @@ import {
   getCaptureMicrophones,
   openCapturePrivacySettings,
   saveCaptureOptions,
+  upgradeFromRecordingLimit,
   type CaptureDestination,
   type CaptureDevice,
   type CaptureKind,
@@ -19,6 +20,7 @@ import {
 } from "@/app/lib/tauri/capture";
 import { MODE_ICON } from "@/app/lib/capture/modes";
 import { freePlanBarLine, useFreePlanNotice } from "@/app/lib/capture/freePlanNotice";
+import { planAllowsCapture, useCapturePlan } from "@/app/lib/capture/capturePlan";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_LINK, GLASS_MUTED, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { barClasses, type BarClasses, type BarLayout } from "./barLayout";
 import {
@@ -714,6 +716,10 @@ export default function CaptureBar(props: Props) {
   const dragRegion = layout === "panel" ? { "data-tauri-drag-region": true } : {};
   const [menu, setMenu] = useState<OpenMenu | null>(null);
   const freePlan = useFreePlanNotice();
+  // Rust's plan read for this capture: until it says ready, nothing can be
+  // captured, and a refusal says why with its way out.
+  const plan = useCapturePlan();
+  const planReady = planAllowsCapture(plan.status);
   // Why a disabled mode cannot be picked, shown in place of the hint once one is clicked.
   const [modeNote, setModeNote] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -913,15 +919,47 @@ export default function CaptureBar(props: Props) {
         <button
           type="button"
           onClick={props.onConfirm}
+          disabled={!planReady}
+          aria-describedby={planReady ? undefined : "capture-plan-status"}
           title={`${confirmLabel(kind)} (${props.enterKey ?? "Return"})`}
           className={`ml-1 h-9 rounded-[9px] px-4 text-[13px] shadow-[0_1px_0_rgba(255,255,255,0.15)_inset] ${GLASS_PRIMARY}`}
         >
           {confirmLabel(kind)}
         </button>
       </div>
+      {/* The plan is being read, or could not be: nothing is captured on a
+          plan that is not known. Rust words the line and picks the way out. */}
+      {!planReady && (
+        <div
+          {...dragRegion}
+          id="capture-plan-status"
+          aria-live="polite"
+          data-testid="capture-plan-status"
+          className={`${layout === "panel" ? "max-w-[420px]" : "max-w-[min(560px,calc(100vw-32px))]"} flex flex-wrap items-center justify-center gap-x-3 gap-y-1 rounded-[10px] bg-[#000]/70 px-3 py-1.5 text-center text-[12.5px] text-white/90 shadow-lg`}
+        >
+          {plan.status.state === "checking" && (
+            <span aria-hidden className="size-3 shrink-0 animate-spin rounded-full border-2 border-white/30 border-t-white motion-reduce:animate-none" />
+          )}
+          <span>{plan.status.message}</span>
+          {plan.status.action === "retry" && (
+            <button type="button" onClick={plan.retry} className={`rounded-[7px] px-2.5 py-1 text-[12.5px] ${GLASS_PRIMARY}`}>
+              Retry
+            </button>
+          )}
+          {plan.status.action === "upgrade" && (
+            <button
+              type="button"
+              onClick={() => void upgradeFromRecordingLimit().catch(() => undefined)}
+              className={`rounded-[7px] px-2.5 py-1 text-[12.5px] ${GLASS_PRIMARY}`}
+            >
+              Upgrade
+            </button>
+          )}
+        </div>
+      )}
       {/* Free plan only, said before anything is captured rather than found
           on the file afterwards. Rust decides who is on it. */}
-      {freePlan && (
+      {planReady && freePlan && (
         <p
           {...dragRegion}
           data-testid="capture-free-plan"

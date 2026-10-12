@@ -17,8 +17,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
-- **Screenshots and screen recording are available to everyone on macOS.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
-- **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark. Recordings made on Linux do not carry it yet.
+- **Screenshots and screen recording are available to everyone on Mac, Windows and Linux.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
+- **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark.
 - **The free plan includes 25 screen recordings.** Every video in your captures drives counts, whatever it is called and whichever folder it is in, including ones made on the web or on another computer, and moving your captures folder does not start the count again. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
 - **A capture's card says who can open its link.** Capture links are public and never expire, and the card now says so. Manage link in its More menu opens the link in Shared Links, where you can change it.
 - **The capture bar tells the free plan what to expect.** Before you capture, a short line says free captures carry a small Hippius watermark, recordings stop at 5 minutes, and how many of your 25 free recordings you have used. The Captures page shows the count too.
@@ -42,6 +42,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Captures check your plan before they start.** The capture bar says "Checking your plan…" for a moment, and if your plan can't be checked (you're offline, say) it tells you and offers Retry instead of capturing. An account with no Drive storage is told straight away and offered a plan.
 - **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.
 
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
@@ -70,10 +71,6 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
   unless you pick another place, and backs it up as its own drive. The capture
   you just took is kept safe while you decide. Captures you took before stay
   where they are. Move the folder any time in Settings.
-
-- **Screenshots and screen recording on Windows and Linux, in beta.** The
-  same capture tools as on a Mac, for beta testers first, before they reach
-  everyone.
 
 - **The link icon beside a shared file takes you straight to its link.**
   Shared Links scrolls to that file's row and highlights it, the way Show in
@@ -178,6 +175,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Recordings and screenshots are no longer lost when something goes wrong.** A recording that does not stop cleanly is kept and uploaded instead of thrown away. A capture that fails to upload after you closed its card, or that was still recording or uploading when Hippius quit, comes back with Retry on your next capture or the next time you open Hippius. If your Captures folder was moved or deleted, Hippius asks you to choose it again instead of making a new empty one, so earlier captures are never removed from your drive.
 - **Screen recording on Linux works again on Ubuntu and other GNOME desktops.** Recordings no longer stop the moment you press Record or fail when you stop them, the area you draw lines up with your screen on scaled displays, and the camera is not asked for again each time the bubble opens.
 - **Videos that keep stopping in the Linux viewer can open in your video player.** If a video in the Hippius viewer on Linux keeps stopping to load, Hippius offers to open it in your video player, and a stalled video now picks up where it stopped instead of starting over.
 - **Screenshots on Linux with Wayland take one step again.** Screenshot opens your desktop's own screenshot tool straight away, where you choose an area, a window or a whole screen, and Hippius uploads the result like any other capture. You are no longer shown the Hippius capture bar first and then asked by GNOME to share a picture of your whole screen. The Screenshot menu says how it works on your desktop.

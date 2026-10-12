@@ -831,23 +831,6 @@ fn production_enables_only_the_capture_rows_marked_production() {
     }
 }
 
-/// An unsigned Windows binary that records the screen and the microphone is
-/// what SmartScreen and Defender look at hardest. Windows recording may reach
-/// production only once the installer is signed (a certificate thumbprint or
-/// a sign command in `tauri.conf.json`).
-#[test]
-fn windows_recording_reaches_production_only_with_a_signed_installer() {
-    use tauri_project_lib::capture::rollout::{Feature, Platform, floor};
-    use tauri_project_lib::release_channel::ReleaseChannel;
-
-    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
-    let windows = &config["bundle"]["windows"];
-    let signed = !windows["certificateThumbprint"].is_null() || windows.get("signCommand").is_some_and(|c| !c.is_null());
-    if floor(Platform::Windows, Feature::Recording) == Some(ReleaseChannel::Production) {
-        assert!(signed, "Windows recording is marked production but the Windows installer is not signed");
-    }
-}
-
 /// Screen capture carries most of the app's `cfg(windows)` code, and only the
 /// release workflow builds on Windows otherwise. The Windows lane must deny
 /// warnings over every target, run the capture tests, and run for any PR

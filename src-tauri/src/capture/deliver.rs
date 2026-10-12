@@ -93,6 +93,7 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
     };
 
     let (placed, via_sync) = if let Some(root) = local_root {
+        refuse_missing_root(&root)?;
         let placed = tokio::task::spawn_blocking({
             let file = file.to_path_buf();
             let dir = root.join(&destination.folder);
@@ -335,6 +336,35 @@ fn is_offline_shaped(message: &str) -> bool {
         || ["51", "65", "101", "113", "10051", "10065"]
             .iter()
             .any(|code| lower.contains(&format!("(os error {code})")))
+}
+
+/// What a capture says when its drive's folder on this computer is gone.
+pub const CAPTURES_FOLDER_MISSING: &str = "Your Captures folder was moved or deleted. Choose it again in Settings.";
+
+/// Refuse to deliver into a synced drive whose folder is gone (moved,
+/// renamed, deleted, or on a disk that is not plugged in).
+///
+/// Making it again would hand the sync engine an empty folder holding one
+/// new capture, which it could read as every earlier capture deleted here,
+/// and delete them from the server too. The drive was set up, so its folder
+/// existed: first-time setup makes the folder before the drive is added
+/// (`setup::add_drive`), so it never lands here.
+///
+/// # Errors
+///
+/// [`CAPTURES_FOLDER_MISSING`] when `root` is not a folder.
+pub fn refuse_missing_root(root: &Path) -> Result<()> {
+    if root.is_dir() {
+        return Ok(());
+    }
+    tracing::warn!("capture not delivered: its drive's folder on this computer is gone; not making it again");
+    Err(AppError::Validation(CAPTURES_FOLDER_MISSING.into()))
+}
+
+/// Whether delivery failed because the captures folder is gone.
+#[must_use]
+pub fn is_missing_root(e: &AppError) -> bool {
+    matches!(e, AppError::Validation(message) if message == CAPTURES_FOLDER_MISSING)
 }
 
 /// Move `file` into `dir` (created if needed) under a name nothing there has.
@@ -726,5 +756,28 @@ mod tests {
         assert!(keep_temp_after_upload(false, true, true));
         assert!(!keep_temp_after_upload(true, true, true));
         assert!(!keep_temp_after_upload(true, false, true));
+    }
+
+    /// A drive whose folder was moved or deleted is refused, never made
+    /// again (an empty folder could read to the sync engine as every earlier
+    /// capture deleted); a folder that is there takes the capture, its
+    /// subfolder made as before.
+    #[test]
+    fn a_missing_captures_folder_is_refused_not_made_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let gone = tmp.path().join("Documents").join("Hippius Captures");
+        let refused = refuse_missing_root(&gone).unwrap_err();
+        assert!(is_missing_root(&refused));
+        assert_eq!(failure_copy(&refused), CAPTURES_FOLDER_MISSING);
+        assert!(!gone.exists(), "nothing was made");
+
+        std::fs::create_dir_all(&gone).unwrap();
+        refuse_missing_root(&gone).unwrap();
+        let src = tmp.path().join("capture-x").join("Shot.png");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"png").unwrap();
+        let placed = place_in_folder(&gone.join("Work"), &src).unwrap();
+        assert_eq!(placed, gone.join("Work").join("Shot.png"));
+        assert!(!is_missing_root(&AppError::Validation("Something else.".into())));
     }
 }

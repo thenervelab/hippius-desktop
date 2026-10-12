@@ -999,3 +999,38 @@ export function takeCaptureLaunchShortcut(): Promise<void> {
 export function upgradeFromRecordingLimit(): Promise<void> {
   return invoke("capture_limit_upgrade");
 }
+
+/** Rust's `PLAN_CHANGED_EVENT`: where the capture session's plan read is. */
+export const CAPTURE_PLAN_CHANGED_EVENT = "capture_plan_changed";
+
+/**
+ * Rust's `allowance::CapturePlanStatus`: the bar's view of the plan read.
+ * `checking` means nothing can start yet; `refused` comes with Rust's words
+ * and the way out (`retry` reads the plan again, `upgrade` opens the plans).
+ */
+export interface CapturePlanStatus {
+  state: "checking" | "ready" | "refused";
+  message: string | null;
+  action: "retry" | "upgrade" | null;
+}
+
+/** Where this capture's plan read is; starts one if the session has none. */
+export function getCapturePlanStatus(): Promise<CapturePlanStatus> {
+  return invoke("capture_plan_status");
+}
+
+/** The bar's Retry after the plan could not be read: Rust reads it again. */
+export function retryCapturePlan(): Promise<CapturePlanStatus> {
+  return invoke("capture_plan_retry");
+}
+
+/**
+ * The way out of a capture refused on the plan, from Rust's structured
+ * refusal: `retry` when the plan or the recording count could not be read,
+ * `upgrade` when the account has no Drive storage; null for any other error.
+ */
+export function planRefusalAction(error: unknown): "retry" | "upgrade" | null {
+  if (isNotReady(error, "CAPTURE_PLAN_UNAVAILABLE") || isNotReady(error, "RECORDING_COUNT_UNAVAILABLE")) return "retry";
+  if (isNotReady(error, "CAPTURE_NO_DRIVE_PLAN")) return "upgrade";
+  return null;
+}

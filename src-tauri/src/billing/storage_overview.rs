@@ -65,7 +65,7 @@ pub enum CapacitySource {
 /// reason: this decides what the UI SAYS, and the server's own
 /// `/can_upload` remains the gate on every write. Guessing "no plan" from
 /// a failed lookup would tell a paying account it has nothing.
-fn free_tier_entitled(provider: Option<&str>) -> bool {
+pub(crate) fn free_tier_entitled(provider: Option<&str>) -> bool {
     !matches!(provider, Some("mnemonic"))
 }
 
@@ -717,12 +717,6 @@ pub async fn get_storage_overview(
     // Credits no longer price a capacity; the balance rides along purely
     // for display (the plan card / top-up cell).
     let credits_hip = credits_result.ok().map(|planck| crate::blockchain::convert::planck_to_hip(&planck));
-
-    // The recording length cap keys on the same plan; remembering it on
-    // every overview keeps its last verdict fresh for an offline start.
-    if let Some(tier) = crate::capture::allowance::tier_from_reads(&reads) {
-        crate::capture::allowance::remember(state.inner(), &account_id, tier).await;
-    }
 
     // Indexer empty-row is success + 0 bytes (not an error). Probe local
     // own-drive dir_stats only then, so a lagging indexer cannot paint
