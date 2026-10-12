@@ -193,7 +193,10 @@ const OWN_DRIVE_PREFLIGHT_LABEL: &str = "own-drive-preflight";
 /// app either way, since a wrong answer here is a refusal the user reads as
 /// "my plan is full" whoever's plan it actually was.
 fn preflight_request(caller_ss58: &str, incoming_bytes: u64, drive: Option<&crate::sync::identity::DriveIdentity>) -> CanUploadRequest {
-    let (ss58_address, folder_hash) = match drive {
+    // An identity built for a listing client carries an empty hash
+    // (`DriveIdentity::own(acct, "")`); it names no drive, so it gets the
+    // placeholder rather than the S3 rail.
+    let (ss58_address, folder_hash) = match drive.filter(|d| !d.wire_folder_hash.is_empty()) {
         Some(d) => (d.wire_ss58.clone(), d.wire_folder_hash.clone()),
         None => (caller_ss58.to_owned(), crate::sync::mnemonic::folder_hash(OWN_DRIVE_PREFLIGHT_LABEL)),
     };
@@ -284,7 +287,8 @@ mod tests {
     #[test]
     fn a_preflight_never_sends_an_empty_hash() {
         let own = DriveIdentity::own("5Me", "abc123");
-        for drive in [None, Some(&own), Some(&member("5Owner", "def456"))] {
+        let listing_client = DriveIdentity::own("5Me", "");
+        for drive in [None, Some(&own), Some(&member("5Owner", "def456")), Some(&listing_client)] {
             let req = preflight_request("5Me", 100, drive);
             assert!(!req.folder_hash.is_empty(), "an empty hash is the S3 rail: {drive:?}");
         }
