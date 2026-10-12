@@ -123,7 +123,8 @@ pub async fn check_drive_quota_for(
         return QuotaVerdict::unknown();
     };
 
-    let request = preflight_request(account.as_str(), incoming_bytes, drive);
+    let own_hash = own_drive_hash(state, account.as_str(), drive).await;
+    let request = preflight_request(account.as_str(), incoming_bytes, drive, &own_hash);
     let response = state
         .api_client
         .post(format!("{base_url}/can_upload"))
@@ -160,6 +161,86 @@ pub async fn check_drive_quota_for(
     verdict
 }
 
+/// Who the pre-flight asks about.
+///
+/// A member drive names the OWNER and the drive's wire hash, which is what
+/// routes the server to the owner's allowance; storage there is paid for by
+/// them. An own drive names the caller and one of the caller's own folder
+/// hashes (`own_hash`), so the server checks the caller, who pays.
+///
+/// The hash must never be empty. hcfs-server reads an empty `folder_hash` as
+/// the S3 rail (hippius-s3), which has no free tier and is paid by credits,
+/// so an empty hash refused every free Drive account with `zero_balance`.
+/// A real hash is the Drive rail, measured against the Drive plan. For an
+/// own drive the server only checks that the caller is the owner and then
+/// measures the caller's account-wide allowance, so which own hash is sent
+/// does not change the answer.
+///
+/// Pure, so the rule is testable without a server: it is invisible from the
+/// app either way, since a wrong answer here is a refusal the user reads as
+/// "my plan is full" whoever's plan it actually was.
+fn preflight_request(
+    caller_ss58: &str,
+    incoming_bytes: u64,
+    drive: Option<&crate::sync::identity::DriveIdentity>,
+    own_hash: &str,
+) -> CanUploadRequest {
+    match drive.filter(|d| d.is_member) {
+        Some(member) => CanUploadRequest {
+            ss58_address: member.wire_ss58.clone(),
+            folder_hash: member.wire_folder_hash.clone(),
+            size_bytes: incoming_bytes,
+        },
+        None => CanUploadRequest {
+            ss58_address: caller_ss58.to_owned(),
+            folder_hash: own_hash.to_owned(),
+            size_bytes: incoming_bytes,
+        },
+    }
+}
+
+/// Label whose folder hash stands in when the account has no drive of its
+/// own here yet (first sync setup, a capture before any drive exists). The
+/// server does not look the hash up for the owner, so it only has to be a
+/// well-formed own hash; the captures drive is the one the app creates for
+/// an account that has none.
+const FALLBACK_OWN_LABEL: &str = "Hippius Captures";
+
+/// The caller's own folder hash for the pre-flight: the drive being written
+/// to when it is known and own, else the first own drive this device syncs,
+/// else [`FALLBACK_OWN_LABEL`]'s. Never empty (see [`preflight_request`]).
+async fn own_drive_hash(state: &AppState, account_id: &str, drive: Option<&crate::sync::identity::DriveIdentity>) -> String {
+    if let Some(own) = drive.filter(|d| !d.is_member && !d.wire_folder_hash.is_empty()) {
+        return own.wire_folder_hash.clone();
+    }
+    let label = match state.pool() {
+        Ok(pool) => first_own_label(pool, account_id).await,
+        Err(_) => None,
+    };
+    crate::sync::mnemonic::folder_hash(label.as_deref().unwrap_or(FALLBACK_OWN_LABEL))
+}
+
+/// The first own drive (not a member drive, not the migration pseudo-drive)
+/// configured for the account on this device. A lookup error is `None`: the
+/// fallback hash answers the same question.
+async fn first_own_label(pool: &sqlx::SqlitePool, account_id: &str) -> Option<String> {
+    let owner = crate::auth::account_key::account_key(account_id);
+    sqlx::query_scalar::<_, String>(
+        "SELECT label FROM sync_paths
+         WHERE owner = ?
+           AND label != 'migration'
+           AND owner_ss58 IS NULL
+           AND wire_folder_hash IS NULL
+         ORDER BY label
+         LIMIT 1",
+    )
+    .bind(&owner)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
 /// The server to ask and the bearer to ask with, or `None` when the account
 /// has no usable session yet (fall open — the write cannot start either).
 ///
@@ -168,25 +249,6 @@ pub async fn check_drive_quota_for(
 /// path has no such step, so it resolves one here the way `console_access`
 /// does. Either region is correctness-equivalent (shared replicated DB), so
 /// the race is a pure latency choice.
-/// Who the pre-flight asks about.
-///
-/// A member drive names the OWNER and the drive's wire hash, which is what
-/// routes the server to the owner's allowance; storage there is paid for by
-/// them. An own drive sends the empty hash, which keeps the server's
-/// membership fallback inert and checks the caller, who pays.
-///
-/// Pure, so the rule is testable without a server: it is invisible from the
-/// app either way, since a wrong answer here is a refusal the user reads as
-/// "my plan is full" whoever's plan it actually was.
-fn preflight_request(caller_ss58: &str, incoming_bytes: u64, drive: Option<&crate::sync::identity::DriveIdentity>) -> CanUploadRequest {
-    let member_drive = drive.filter(|d| d.is_member);
-    CanUploadRequest {
-        ss58_address: member_drive.map_or_else(|| caller_ss58.to_owned(), |d| d.wire_ss58.clone()),
-        folder_hash: member_drive.map(|d| d.wire_folder_hash.clone()).unwrap_or_default(),
-        size_bytes: incoming_bytes,
-    }
-}
-
 async fn preflight_target(state: &AppState, account: &SessionAccount) -> Option<(String, String)> {
     let pool = state.pool().ok()?;
 
@@ -255,21 +317,30 @@ mod tests {
     /// plan it actually was.
     #[test]
     fn a_member_drive_is_checked_against_its_owner() {
-        let req = preflight_request("5Me", 100, Some(&member("5Owner", "abc123")));
+        let req = preflight_request("5Me", 100, Some(&member("5Owner", "abc123")), "0123456789abcdef");
         assert_eq!(req.ss58_address, "5Owner", "the owner pays, so the owner is asked about");
         assert_eq!(req.folder_hash, "abc123", "a real hash is what routes the server to them");
         assert_eq!(req.size_bytes, 100);
     }
 
-    /// An own drive keeps the previous shape exactly: the empty hash leaves
-    /// the server's membership fallback inert.
+    /// An own drive is checked against the caller, and always under a real
+    /// hash: hcfs-server reads an empty `folder_hash` as the S3 rail, which
+    /// refused every free Drive account with `zero_balance`.
     #[test]
-    fn an_own_drive_is_checked_against_the_caller() {
+    fn an_own_drive_is_checked_against_the_caller_on_the_drive_rail() {
         for drive in [None, Some(&DriveIdentity::own("5Me", "abc123"))] {
-            let req = preflight_request("5Me", 100, drive);
+            let req = preflight_request("5Me", 100, drive, "0123456789abcdef");
             assert_eq!(req.ss58_address, "5Me");
-            assert!(req.folder_hash.is_empty(), "an own drive must not name a folder");
+            assert_eq!(req.folder_hash, "0123456789abcdef", "an own drive must name one of the caller's folders");
+            assert!(!req.folder_hash.is_empty(), "an empty hash is the S3 rail");
         }
+    }
+
+    #[test]
+    fn the_fallback_own_hash_is_a_real_folder_hash() {
+        let hash = crate::sync::mnemonic::folder_hash(FALLBACK_OWN_LABEL);
+        assert_eq!(hash.len(), 16);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     use super::*;

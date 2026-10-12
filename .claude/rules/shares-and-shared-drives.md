@@ -170,10 +170,13 @@ from the app when they are wrong:
 
 - **The upload pre-flight names the DRIVE, not the caller.** `check_drive_quota_for`
   sends the owner's ss58 and the drive's wire folder hash for a member drive, which is
-  what routes hcfs-server to the owner's allowance; an own drive sends the empty hash,
-  keeping the server's membership fallback inert. Sending the empty hash unconditionally
-  asked about the caller's plan, so a member whose own plan was full could not upload to
-  a drive with room. The refusal reads as "my plan is full" whoever's plan it was, which
+  what routes hcfs-server to the owner's allowance; an own drive sends the caller's ss58
+  and one of the caller's own folder hashes (the target drive's, else the first own drive,
+  else the captures drive's). **Never the empty hash:** hcfs-server reads an empty
+  `folder_hash` as the S3 rail, which has no free tier, so it refused every free Drive
+  account with `zero_balance`. Sending the caller's plan unconditionally for a member
+  drive was the earlier bug: a member whose own plan was full could not upload to a drive
+  with room. The refusal reads as "my plan is full" whoever's plan it was, which
   is why nobody reports it. The upload commands therefore resolve their drive BEFORE the
   gate; that is the only order in which the gate can name it.
 - `add_shared_drive` still has no member-side credit gate at all (the init funnel's member
