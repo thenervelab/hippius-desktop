@@ -823,7 +823,23 @@ gone with the folder on Discard. At sign-in (`capture_sync_shortcut` →
 card (failed, Retry, Upgrade when the plan was full) unless a card is up or
 parked; each `capture_start` with nothing parked brings back the next
 (`next_kept_failed`). Nothing ever deletes a capture automatically. Pinned by
-`kept_failed::tests` and `capture_wiring::a_failed_capture_is_offered_again_after_a_restart`. On success there is NO
+`kept_failed::tests` and `capture_wiring::a_failed_capture_is_offered_again_after_a_restart`.
+The marker is written by the DELIVERY (`announce_failed` → `keep_failed`,
+from the path, the destination delivery chose and the account), never only
+from the card on screen: a card closed or replaced while it uploaded was
+dropped, and its failure left no marker although the notification promised
+it back. A recording's folder is also marked as it starts
+(`mark_recording`) and every delivery marks its file before anything can
+fail (`mark_delivery`), stamped `run: kept_failed::this_run()`; `list`
+skips this run's own (still recording or uploading) and offers them after a
+restart with `INTERRUPTED` (a recording under `MIN_PARTIAL_BYTES` offers
+nothing). A marker made before any captures drive existed carries
+`awaitingSetup`, and its card comes back `kept_locally` so Retry runs
+`setup::ensure`. A stop that errors (`STOP_WITHIN`, an `ok:false`, no
+finished file) delivers what the recorder saved when it holds a fragment
+(`salvage_after_failed_stop`), instead of `fail_capture` removing the
+folder. Pinned by `capture_wiring::a_capture_the_app_quits_on_is_offered_again`
+and `a_recording_whose_stop_fails_is_salvaged_not_discarded`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
 folder emits `capture_show_in_folder`; a capture in the captures drive
 (`capturesDrive`: the destination's folder is the root) goes to
@@ -1046,6 +1062,17 @@ registered only where `recording_supported()`. On Wayland Record is never
 bound by the portal: `support::record_shortcut_for` says `desktopSettings`
 with `<exe> --record` (`cli::argv_requests_record` → `on_record_shortcut`).
 Pinned by `shortcut::tests` and `capture_wiring::the_record_shortcut_is_wired_like_the_screenshot_one`.
+
+**A captures drive whose folder here is gone is never made again**:
+`deliver::place` refuses (`refuse_missing_root`, `CAPTURES_FOLDER_MISSING`,
+"Your Captures folder was moved or deleted. Choose it again in Settings.")
+before `place_in_folder`, since a recreated empty root holding one capture
+could read to the sync engine as every other capture deleted. The capture is
+kept with Retry (marker), and the capture drive dialog opens
+(`setup::ask_for_location`). First setup is unaffected: `setup::add_drive`
+makes the folder before the drive row exists. A card whose drive's folder is
+gone takes the captures drive chosen since on Retry (`moved_on_from`).
+Pinned by `capture_wiring::a_missing_captures_folder_is_never_made_again`.
 
 **Delivery is local-first for a drive synced here**: the file is moved into
 `<local root>/<folder>` (the root for the captures drive; `free_name` never

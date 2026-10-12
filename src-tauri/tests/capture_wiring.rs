@@ -2748,7 +2748,12 @@ fn a_failed_capture_is_offered_again_after_a_restart() {
     let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
     let placed = deliver.find("announce_placed(").expect("placement is announced");
     assert!(clear < placed, "cleared as soon as delivery succeeds");
-    assert!(deliver.contains("keep_failed_card(app, id)"), "a failure writes its marker");
+    assert!(deliver.contains("announce_failed(app, path, card_id, &e, marked, sent_to)"));
+    assert!(
+        fn_body(&src, "fn announce_failed(").contains("keep_failed(path, marked, sent_to,"),
+        "a failure writes its marker from the delivery itself, card or no card"
+    );
+    assert!(!deliver.contains("keep_failed_card"), "never only when its card is still on screen");
     assert!(
         fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
         "sign-in offers a kept failure again"
@@ -2757,6 +2762,59 @@ fn a_failed_capture_is_offered_again_after_a_restart() {
     assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
     let kept = read("src/capture/kept_failed.rs");
     assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// A recording or upload the app quits on is marked before it can be lost:
+/// the recording once it is under way, the delivery before anything can
+/// fail. The next run offers it with Retry (`kept_failed::this_run`).
+#[test]
+fn a_capture_the_app_quits_on_is_offered_again() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "async fn start_recording(");
+    assert!(
+        start.contains("if started.is_ok() {\n        mark_recording(&state).await;"),
+        "a recording that started is marked"
+    );
+    assert!(fn_body(&src, "async fn mark_recording(").contains("kept_failed::write_in(&root, &dir, &kept)"));
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let in_flight = deliver.find("mark_delivery(").expect("a delivery is marked");
+    let outcome = deliver.find("let outcome = async").expect("delivery runs");
+    assert!(in_flight < outcome, "marked before anything can fail");
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(
+        fn_body(&kept, "fn list_for_run(").contains("kept.run.as_deref() == Some(run)"),
+        "this run's own are skipped"
+    );
+}
+
+/// A stop that errors keeps what the recorder saved (it writes fragments
+/// as it goes) instead of throwing the folder away with the error.
+#[test]
+fn a_recording_whose_stop_fails_is_salvaged_not_discarded() {
+    let src = read("src/capture/commands.rs");
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    let stopped = stop.find("recorder.stop()").expect("the recorder stops");
+    let after = &stop[stopped..];
+    assert!(after.contains("let Some(path) = salvage_after_failed_stop"), "salvaged before failing");
+    assert!(after.contains("fail_capture(app, &e)"), "nothing saved: the capture fails");
+}
+
+/// A captures folder that was set up and is gone now is never made again
+/// by delivery; first-time setup makes the folder before the drive exists.
+#[test]
+fn a_missing_captures_folder_is_never_made_again() {
+    let deliver = read("src/capture/deliver.rs");
+    let place = fn_body(&deliver, "pub async fn place(");
+    let refused = place.find("refuse_missing_root(&root)?").expect("a gone folder is refused");
+    let moved = place.find("place_in_folder(").expect("the capture is moved in");
+    assert!(refused < moved, "refused before the folder could be made");
+    let setup = read("src/capture/setup.rs");
+    let add = fn_body(&setup, "async fn add_drive(");
+    let made = add.find("create_dir_all(dir)").expect("first setup makes the folder");
+    let added = add.find("add_local_sync_folder(").expect("then adds the drive");
+    assert!(made < added, "the folder exists before delivery can see the drive");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "fn announce_failed(").contains("is_missing_root(e)"));
 }
 
 /// `--capture` / `--record` on the launch that starts the app are kept in
