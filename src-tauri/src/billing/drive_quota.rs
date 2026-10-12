@@ -108,11 +108,13 @@ pub async fn check_drive_quota(state: &AppState, account: &SessionAccount, incom
 /// `drive` names the drive being written to. It matters for a drive shared
 /// WITH this account: storage there is paid for by the OWNER, and the server
 /// checks the owner's allowance when the request names a real folder hash.
-/// Sending the empty hash asks about the CALLER's plan instead, which refuses
-/// a member whose own plan is full while the drive they are writing to has
-/// room, and lets one through whose drive is full while their own plan is not.
+/// Sending the caller's own hash instead asks about the CALLER's plan, which
+/// refuses a member whose own plan is full while the drive they are writing to
+/// has room, and lets one through whose drive is full while their own plan is
+/// not.
 ///
-/// `None` is an own-drive write, where caller and payer are the same account.
+/// `None` is an own-drive write, where caller and payer are the same account
+/// and no particular drive is in scope (see [`preflight_request`]).
 pub async fn check_drive_quota_for(
     state: &AppState,
     account: &SessionAccount,
@@ -168,21 +170,39 @@ pub async fn check_drive_quota_for(
 /// path has no such step, so it resolves one here the way `console_access`
 /// does. Either region is correctness-equivalent (shared replicated DB), so
 /// the race is a pure latency choice.
+/// Label whose hash stands in for "one of my own drives" when a pre-flight has
+/// no drive in scope (the Add File button, a share link, sync-init).
+const OWN_DRIVE_PREFLIGHT_LABEL: &str = "own-drive-preflight";
+
 /// Who the pre-flight asks about.
 ///
-/// A member drive names the OWNER and the drive's wire hash, which is what
-/// routes the server to the owner's allowance; storage there is paid for by
-/// them. An own drive sends the empty hash, which keeps the server's
-/// membership fallback inert and checks the caller, who pays.
+/// The hash is never empty. hcfs-server picks the billing product from it: an
+/// empty `folder_hash` is the S3 rail (credits, no free tier), a real one is
+/// the Drive rail. Sending `""` for an own drive was correct until hcfs #586
+/// split the two, then refused every account with `zero_balance`.
+///
+/// - A drive in scope (own or member) sends its wire pair. For a member drive
+///   that names the OWNER, whose allowance pays; storage there is paid for by
+///   them.
+/// - No drive in scope sends the caller with a placeholder hash. The server
+///   only needs a non-empty hash to choose the Drive rail, and the owner is
+///   authorised for any hash under their own address. The quota it measures is
+///   the account's Drive plan, which does not depend on which drive.
 ///
 /// Pure, so the rule is testable without a server: it is invisible from the
 /// app either way, since a wrong answer here is a refusal the user reads as
 /// "my plan is full" whoever's plan it actually was.
 fn preflight_request(caller_ss58: &str, incoming_bytes: u64, drive: Option<&crate::sync::identity::DriveIdentity>) -> CanUploadRequest {
-    let member_drive = drive.filter(|d| d.is_member);
+    // An identity built for a listing client carries an empty hash
+    // (`DriveIdentity::own(acct, "")`); it names no drive, so it gets the
+    // placeholder rather than the S3 rail.
+    let (ss58_address, folder_hash) = match drive.filter(|d| !d.wire_folder_hash.is_empty()) {
+        Some(d) => (d.wire_ss58.clone(), d.wire_folder_hash.clone()),
+        None => (caller_ss58.to_owned(), crate::sync::mnemonic::folder_hash(OWN_DRIVE_PREFLIGHT_LABEL)),
+    };
     CanUploadRequest {
-        ss58_address: member_drive.map_or_else(|| caller_ss58.to_owned(), |d| d.wire_ss58.clone()),
-        folder_hash: member_drive.map(|d| d.wire_folder_hash.clone()).unwrap_or_default(),
+        ss58_address,
+        folder_hash,
         size_bytes: incoming_bytes,
     }
 }
@@ -261,15 +281,37 @@ mod tests {
         assert_eq!(req.size_bytes, 100);
     }
 
-    /// An own drive keeps the previous shape exactly: the empty hash leaves
-    /// the server's membership fallback inert.
+    /// hcfs-server reads an empty hash as the S3 rail (credits, no free tier),
+    /// so no pre-flight may send one: it answered `zero_balance` to every
+    /// account after hcfs #586.
     #[test]
-    fn an_own_drive_is_checked_against_the_caller() {
-        for drive in [None, Some(&DriveIdentity::own("5Me", "abc123"))] {
+    fn a_preflight_never_sends_an_empty_hash() {
+        let own = DriveIdentity::own("5Me", "abc123");
+        let listing_client = DriveIdentity::own("5Me", "");
+        for drive in [None, Some(&own), Some(&member("5Owner", "def456")), Some(&listing_client)] {
             let req = preflight_request("5Me", 100, drive);
-            assert_eq!(req.ss58_address, "5Me");
-            assert!(req.folder_hash.is_empty(), "an own drive must not name a folder");
+            assert!(!req.folder_hash.is_empty(), "an empty hash is the S3 rail: {drive:?}");
         }
+    }
+
+    /// An own drive in scope is asked about by its real hash, as the caller.
+    #[test]
+    fn an_own_drive_names_its_own_hash() {
+        let req = preflight_request("5Me", 100, Some(&DriveIdentity::own("5Me", "abc123")));
+        assert_eq!(req.ss58_address, "5Me");
+        assert_eq!(req.folder_hash, "abc123");
+    }
+
+    /// With no drive in scope the caller is asked about under a stable
+    /// placeholder, shaped like a real hash.
+    #[test]
+    fn no_drive_in_scope_uses_a_stable_placeholder_for_the_caller() {
+        let first = preflight_request("5Me", 100, None);
+        let second = preflight_request("5Me", 7, None);
+        assert_eq!(first.ss58_address, "5Me");
+        assert_eq!(first.folder_hash, second.folder_hash);
+        assert_eq!(first.folder_hash.len(), 16);
+        assert!(first.folder_hash.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     use super::*;
