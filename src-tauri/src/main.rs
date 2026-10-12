@@ -791,6 +791,8 @@ fn main() {
             crate::capture::commands::capture_limit_upgrade,
             crate::capture::commands::capture_check_recording_start,
             crate::capture::commands::capture_free_plan_notice,
+            crate::capture::commands::capture_plan_status,
+            crate::capture::commands::capture_plan_retry,
             crate::capture::commands::capture_launch_shortcut,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,

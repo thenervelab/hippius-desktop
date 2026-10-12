@@ -852,27 +852,56 @@ when its `seq` is newer than the one it shows. It drags by
 `FREE_MAX_RECORDING` (5 min of RECORDED time, the recorder's
 `RecordedClock`, pauses left out); paid plans have no limit; screenshots are
 untouched. `begin_recording` decides the tier once, before the recorder starts, from
-the session's prefetched read (`capture_tier`; `recording_tier`, bounded by
-`LOOKUP_WITHIN`), and stores the limit on
+the session's read (`capture_tier` → `session_tier`), and stores the limit on
 `CaptureState`; `tick_once` stops at it through `stop_inner`, exactly like
 Stop, and the card gets `stopped_at_free_limit` (Rust's `notice`, Upgrade,
 no auto-hide). The tier reads the plan through
-`storage_overview::PlanReads`, the same fold the overview and sharing use;
-the overview remembers it on every read, per account, in memory and in
-`user_preferences`. **It fails open**: no fresh verdict uses the last one
-kept, none ever seen means no cap. The pill shows Rust's `remainingSecs`
+`storage_overview::PlanReads`, the same fold the overview and sharing use.
+The pill shows Rust's `remainingSecs`
 (on `PhaseEvent`, last minute only). Other recording limits read the same
-`RecordingTier` / `recording_tier`.
+`RecordingTier` / `session_tier`.
+
+**Never on an unknown plan** (`allowance.rs`): every capture decision
+(watermark, length limit, count) is made only on a plan the API returned for
+THIS capture. `CaptureState.plan` (`SessionPlan`, a watch channel:
+`NotStarted` / `Checking` / `Done(Result<RecordingTier, PlanRefusal>)`) is
+begun by `prefetch_tier` at `capture_start` (idle only, before anything
+opens) and by the bar's Retry (`capture_plan_retry`); a newer read drops an
+older one's late answer (`finish` by `seq`). `recording_tier` reads fresh,
+bounded by `LOOKUP_WITHIN` (10 s), and `decide_plan` turns it into a
+verdict: no verdict is `PlanRefusal::Unreachable` →
+`NotReady(CapturePlanUnavailable)` (Retry); the free tier on an account not
+entitled to it (`storage_overview::free_tier_entitled`: provider
+`mnemonic`, the access-key login; the plan API says nothing about
+entitlement) is `NoDrivePlan` → `NotReady(CaptureNoDrivePlan)` (Upgrade).
+No verdict is kept across reads: the old last-known tier
+(`user_preferences` `capture.recordingTier.*`, written by the overview) is
+gone, and the overview no longer touches capture state. `session_tier` is
+THE decision: it waits for the session's read (`SETTLE_WITHIN`, a hung
+read is a failed one) or reads inline when none began. Callers:
+`select_inner` (every kind, before the phase moves), `capture_start` for a
+start with no bar to show the read on (`shows_no_plan_status`: instant,
+`Frozen`, `SystemPicker`; before `advance`), `require_can_start`,
+`finish_screenshot` and `take_with_system_picker` (before the pixels or
+the desktop's tool), `begin_recording`. The bar draws
+`capture_plan_status` / `capture_plan_changed` (`CapturePlanStatus {
+state, message, action }`, Rust's words, `PLAN_CHECKING`): its Capture /
+Record is disabled until `ready`, and a refusal shows Retry or Upgrade
+(`capture_limit_upgrade`); the main window answers a refused start with a
+toast carrying the same action (`useStartCapture`, `planRefusalAction`).
+Pinned by `allowance::tests`, `capture_wiring::every_capture_waits_for_the_plan`,
+`overlayPage.test.tsx` and `CaptureHost.test.tsx`.
 
 **Free plan watermark** (`watermark.rs`): the Hippius mark and "Hippius"
 (master `icons/watermark.png`, only its alpha read), white at 70 % over a
 soft shadow, bottom-right, 3 % of the shorter side tall (18 to 44 px), 2 % in
 (12 to 32 px), drawn once per size and blended over its own rectangle only.
-Free tier only (`watermark::applies`), an unknown tier gets none (fail open,
-like the length limit). The tier is read ONCE per capture: `prefetch_tier`
-starts it at `capture_start`, `capture_tier` takes it before the recorder
-starts (so the first frame has it) and before a screenshot's PNG is written;
-the same verdict sets the length limit. Where it is drawn: screenshots in
+Free tier only (`watermark::applies`); there is no unknown tier, since a
+capture whose plan was not read is refused first (above). The tier is read
+ONCE per capture: `prefetch_tier` starts it at `capture_start`,
+`capture_tier` takes it before the recorder starts (so the first frame has
+it) and before a screenshot's pixels are read; the same verdict sets the
+length limit. Where it is drawn: screenshots in
 `finish_screenshot` (and `stamp_portal_shot` for the desktop's tool);
 Windows recordings in the child's `Pipeline` (`Nv12Stamp`, after the bubble
 is composited, from `StartCommand.watermark`); Linux recordings carry NO
@@ -1075,8 +1104,8 @@ playable MP4 when the app dies mid-recording (`screenshot::is_orphan`).
 **Free plan recording allowance** (`recording_allowance.rs`): 25 recordings
 on a limited plan (`LIMITED_TIERS`, Free only; screenshots never counted).
 **Decided when a recording STARTS, never after**: ONE gate,
-`require_can_start`, refuses with `NotReady(RecordingLimitReached)` before
-anything records, called by `capture_start` (kind Recording: tray, menus,
+`require_can_start`, refuses with `NotReady(RecordingLimitReached)` (or the
+plan's refusals, or `RecordingCountUnavailable`) before anything records, called by `capture_start` (kind Recording: tray, menus,
 record shortcut), `select_inner` (the bar's Record, clicks, share picker,
 camera only), `capture_restart` (before the take is discarded; it notifies,
 the pill has no room) and `capture_check_recording_start` (the bar asks
@@ -1095,15 +1124,18 @@ side only; the server keeps no count. Cached per account on
 `CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
 opens; a delivered recording counts at once (`note_delivered`, until listed
 or `PENDING_FOR`); a completed sync of any captures drive, a remote folder
-delete and a sync reset drop it. **Fails open**: unknown plan or unreadable
-count (folder list or any drive listing errors, `COUNT_WITHIN` timeout) never
-blocks; a paid last-known tier skips the listing (so a downgrade is only
-counted once a fresh tier read says Free); a count at the limit is confirmed by a fresh `recording_tier`. The
+delete and a sync reset drop it. **Never on an unread count**: the plan is
+the session's (`session_tier`, refused as above when unread); a paid tier
+skips the listing; a Free tier whose count cannot be read (folder list or any
+drive listing errors, `COUNT_WITHIN` timeout) is refused with
+`NotReady(RecordingCountUnavailable)` and a Retry (`decide_start`). The
 FE only draws: `RecordingLimitDialog` (main window, via `useStartCapture`) and
 `capture-overlay/RecordingLimitPanel` (Upgrade = `capture_limit_upgrade`),
 in Rust's words (`recordingLimit.ts`, pinned to `LIMIT_TITLE`/`LIMIT_BODY`).
 Before a capture the free plan is told: `capture_free_plan_notice`
-(`current_free_plan_notice`, fresh `recording_tier` then the count) returns
+(`current_free_plan_notice`: the session's read during a capture, a fresh
+`recording_tier` otherwise, then the count; the bar shows it only once the
+plan is ready) returns
 `FreePlanNotice { used (capped at the limit, null when unread), limit,
 maxRecordingMins }` for a KNOWN Free tier only, `None` for paid or unknown;
 the bar draws one line under its toolbar and the Captures page "X of 25 free

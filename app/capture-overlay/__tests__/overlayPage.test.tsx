@@ -88,12 +88,21 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
 
 const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c === cmd);
 
+/** The bar's Capture / Record once Rust has said the plan is read (it is disabled until then). */
+async function enabledButton(name: string): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 beforeEach(() => {
   tauri.reset();
   // Rust's recording gate lets a recording start unless a test says not.
   tauri.onInvoke("capture_check_recording_start", () => null);
   // A paid or unknown plan: no free plan notice unless a test says so.
   tauri.onInvoke("capture_free_plan_notice", () => null);
+  // Rust has read the plan for this capture unless a test says otherwise.
+  tauri.onInvoke("capture_plan_status", () => ({ state: "ready", message: null, action: null }));
   confirm = vi.fn(() => new Promise(() => undefined));
   window.history.replaceState({}, "", "/capture-overlay?display=1");
 });
@@ -944,13 +953,14 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
     expect(screen.getByRole("radio", { name: "Record a window" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Record entire screen" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("capture-plan-status")).toBeNull());
     expect(screen.getByRole("status")).toHaveTextContent("then choose a window in your desktop's sharing dialog");
   });
 
   /** No window to click there: Record goes on to Rust, which asks the desktop. */
   it("records a window without asking for a click", async () => {
     setup(PANEL);
-    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await enabledButton("Record"));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 0 }));
     expect(screen.queryByText(/Click a window/)).toBeNull();
   });
@@ -1325,7 +1335,7 @@ describe("Record on a free plan whose recordings are used up", () => {
   it("shows the limit panel at once, before any countdown, and records nothing", async () => {
     tauri.onInvoke("capture_check_recording_start", refuse);
     setup(recording);
-    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await enabledButton("Record"));
     const panel = await screen.findByRole("alertdialog", { name: "You've used your 25 free recordings" });
     expect(panel).toHaveTextContent("Upgrade your plan to record more, or delete an older recording.");
     expect(screen.queryByRole("button", { name: "Record now" })).toBeNull();
@@ -1336,7 +1346,7 @@ describe("Record on a free plan whose recordings are used up", () => {
     tauri.onInvoke("capture_check_recording_start", () => null);
     confirm = vi.fn(() => Promise.reject(LIMIT));
     setup({ kind: "recording" });
-    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await enabledButton("Record"));
     expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
     expect(confirm).toHaveBeenCalledWith({ displayId: 1 });
   });
@@ -1345,7 +1355,7 @@ describe("Record on a free plan whose recordings are used up", () => {
     tauri.onInvoke("capture_check_recording_start", refuse);
     tauri.onInvoke("capture_limit_upgrade", () => null);
     setup(recording);
-    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await enabledButton("Record"));
     fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(screen.getByRole("toolbar", { name: "Capture" })).toBeInTheDocument();
@@ -1363,8 +1373,67 @@ describe("Record on a free plan whose recordings are used up", () => {
 
   it("never asks the gate for a screenshot", async () => {
     setup({ countdownSecs: 0 });
-    fireEvent.click(await screen.findByRole("button", { name: "Capture" }));
+    fireEvent.click(await enabledButton("Capture"));
     await waitFor(() => expect(confirm).toHaveBeenCalled());
     expect(called("capture_check_recording_start")).toBe(false);
+  });
+});
+
+describe("the plan read before a capture", () => {
+  const checking = { state: "checking", message: "Checking your plan…", action: null };
+  const unreachable = {
+    state: "refused",
+    message: "We couldn't check your plan. Check your connection and try again.",
+    action: "retry",
+  };
+  const confirmButton = () => screen.getByRole("button", { name: "Capture" });
+
+  it("says it is checking and cannot be captured until Rust has read the plan", async () => {
+    tauri.onInvoke("capture_plan_status", () => checking);
+    setup();
+    expect(await screen.findByText("Checking your plan…")).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+
+    await act(() => tauri.emitEvent("capture_plan_changed", { state: "ready", message: null, action: null }));
+    expect(screen.queryByTestId("capture-plan-status")).not.toBeInTheDocument();
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
+  });
+
+  it("refuses a plan that could not be read, in Rust's words, with a Retry that reads it again", async () => {
+    tauri.onInvoke("capture_plan_status", () => unreachable);
+    tauri.onInvoke("capture_plan_retry", () => checking);
+    setup();
+    expect(await screen.findByText(unreachable.message)).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(called("capture_plan_retry")).toBe(true));
+    expect(await screen.findByText("Checking your plan…")).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("offers Upgrade to an account with no Drive storage, through Rust", async () => {
+    const message = "Captures are saved to Hippius Drive, and this account has no Drive storage yet. Choose a plan to start capturing.";
+    tauri.onInvoke("capture_plan_status", () => ({ state: "refused", message, action: "upgrade" }));
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    setup();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    await waitFor(() => expect(called("capture_limit_upgrade")).toBe(true));
+    expect(confirmButton()).toBeDisabled();
+  });
+
+  it("hides the free plan line until the plan is read", async () => {
+    tauri.onInvoke("capture_plan_status", () => checking);
+    tauri.onInvoke("capture_free_plan_notice", () => ({ used: 3, limit: 25, maxRecordingMins: 5 }));
+    setup();
+    await screen.findByText("Checking your plan…");
+    expect(screen.queryByTestId("capture-free-plan")).not.toBeInTheDocument();
+    await act(() => tauri.emitEvent("capture_plan_changed", { state: "ready", message: null, action: null }));
+    expect(await screen.findByTestId("capture-free-plan")).toBeInTheDocument();
   });
 });
