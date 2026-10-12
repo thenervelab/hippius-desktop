@@ -3227,7 +3227,26 @@ async fn start_recording(app: &AppHandle, selection: Selection) -> Result<()> {
         tracing::info!(error = %e, "an earlier recording start ended after a newer one began; the newer one is kept");
         return Ok(());
     }
+    if started.is_ok() {
+        mark_recording(&state).await;
+    }
     started
+}
+
+/// The recording is under way: should the app quit (or crash) before it
+/// reaches the drive, the next sign-in offers what was saved
+/// (`kept_failed`). Its folder is marked; a start that did not end up
+/// recording has no folder left to mark.
+async fn mark_recording(state: &AppState) {
+    let Some(dir) = lock(&state.capture.recording_dir).clone() else { return };
+    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
+        return;
+    };
+    let poster = lock(&state.capture.poster).clone();
+    let (destination, awaiting_setup) = marker_destination(state, &account_id, None).await;
+    let account = crate::auth::account_key::account_key(&account_id);
+    let kept = super::kept_failed::KeptFailed::in_flight(&account, CaptureKind::Recording, destination, awaiting_setup, poster);
+    super::kept_failed::write_in(&root, &dir, &kept);
 }
 
 /// [`start_recording`]'s work, for the start numbered `start`.
@@ -3949,17 +3968,17 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>) {
     let state = app.state::<AppState>();
     let started_ms = chrono::Utc::now().timestamp_millis();
-    let card_destination = card_id.and_then(|id| {
-        lock(&state.capture.preview)
-            .as_ref()
-            .filter(|c| c.id == id && !c.kept_locally)
-            .map(|c| c.destination.clone())
-    });
+    let card = card_id.and_then(|id| lock(&state.capture.preview).as_ref().filter(|c| c.id == id).cloned());
+    let card_destination = card.as_ref().filter(|c| !c.kept_locally).map(|c| c.destination.clone());
+    // Marked before anything can fail or the app can quit, so the capture is
+    // never left in the temp folder with nothing to offer it again.
+    let marked = mark_delivery(&state, path, card.as_ref(), card_destination.clone()).await;
+    let mut sent_to: Option<CaptureDestination> = None;
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
         let destination = match card_destination {
-            Some(d) => d,
+            Some(d) => moved_on_from(app, &account_id, card_id, d).await,
             None => match super::setup::ensure(app, &account_id).await? {
                 super::setup::Ensured::Ready(d) => {
                     if let Some(id) = card_id {
@@ -3970,6 +3989,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 super::setup::Ensured::Kept(kept) => return Ok(Delivery::KeptHere(kept)),
             },
         };
+        sent_to = Some(destination.clone());
         let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
         let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
         Ok::<_, AppError>(Delivery::Placed {
@@ -4030,31 +4050,80 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 notify(app, title, body);
             }
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
-            let message = super::deliver::failure_copy(&e);
-            let shown = card_id.is_some_and(|id| {
-                update_card(app, &state.capture, id, |card| {
-                    card.status = PreviewStatus::Failed {
-                        message: message.clone(),
-                        reason: super::deliver::failure_reason(&e),
-                        retryable: path.exists(),
-                    };
-                })
-            });
+        Err(e) => announce_failed(app, path, card_id, &e, marked, sent_to),
+    }
+}
+
+/// A capture that could not be delivered: its card says why (when one is
+/// still on screen), its marker keeps it for Retry card or no card, and a
+/// notification says it was kept.
+fn announce_failed(
+    app: &AppHandle,
+    path: &Path,
+    card_id: Option<u64>,
+    e: &AppError,
+    marked: Option<super::kept_failed::KeptFailed>,
+    sent_to: Option<CaptureDestination>,
+) {
+    let state = app.state::<AppState>();
+    tracing::warn!(error = %e, "capture could not be delivered; kept on disk");
+    let message = super::deliver::failure_copy(e);
+    let shown = card_id.is_some_and(|id| {
+        update_card(app, &state.capture, id, |card| {
+            card.status = PreviewStatus::Failed {
+                message: message.clone(),
+                reason: super::deliver::failure_reason(e),
+                retryable: path.exists(),
+            };
+        })
+    });
+    if path.exists()
+        && let Some(marked) = marked
+    {
+        keep_failed(path, marked, sent_to, message.clone(), super::deliver::failure_reason(e));
+    }
+    let _ = app.emit(
+        FAILED_EVENT,
+        FailedPayload {
+            message,
+            card_showing: shown,
+        },
+    );
+    let (title, body) = super::deliver::failed_notice(e, shown);
+    notify(app, title, body);
+    // The captures folder is gone: the dialog that chooses it opens,
+    // the one Settings moves it with.
+    if super::deliver::is_missing_root(e) {
+        super::setup::ask_for_location(app);
+    }
+}
+
+/// The drive a card's Retry goes to: its own, unless that drive's folder
+/// here is gone (`deliver::refuse_missing_root`) and the captures drive was
+/// chosen again since, in which case the card takes the new one. Otherwise
+/// a capture refused for a moved folder could never be sent once the user
+/// chose the folder again.
+async fn moved_on_from(app: &AppHandle, account_id: &str, card_id: Option<u64>, own: CaptureDestination) -> CaptureDestination {
+    let state = app.state::<AppState>();
+    let Ok(pool) = state.pool() else { return own };
+    if own.owner_ss58.is_some() {
+        return own;
+    }
+    let gone = match destination::own_local_path(pool, account_id, &own.label).await {
+        Ok(Some(root)) => !root.is_dir(),
+        _ => false,
+    };
+    if !gone {
+        return own;
+    }
+    match destination::load(pool, account_id).await.ok().flatten() {
+        Some(chosen) if chosen.label != own.label => {
             if let Some(id) = card_id {
-                keep_failed_card(app, id);
+                adopt_destination(app, account_id, id, &chosen).await;
             }
-            let _ = app.emit(
-                FAILED_EVENT,
-                FailedPayload {
-                    message,
-                    card_showing: shown,
-                },
-            );
-            let (title, body) = super::deliver::failed_notice(&e, shown);
-            notify(app, title, body);
+            chosen
         }
+        _ => own,
     }
 }
 
@@ -4506,9 +4575,17 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     end_camera(app).await;
     let path = match stopped {
         Ok(path) => path,
+        // The stop went wrong (no answer in time, a refusal, no finished
+        // file), but the recorder writes as it goes: what it saved plays up
+        // to its last fragment and is the user's recording, delivered like
+        // any other rather than thrown away with its folder.
         Err(e) => {
-            fail_capture(app, &e).await;
-            return Err(e);
+            let Some(path) = salvage_after_failed_stop(&state.capture) else {
+                fail_capture(app, &e).await;
+                return Err(e);
+            };
+            tracing::warn!(error = %e, "the recording did not stop cleanly; delivering what was saved");
+            path
         }
     };
     // The session ends here: the file exists, and the card owns the upload.
@@ -4539,6 +4616,13 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
+}
+
+/// The recording a failed stop left in the live recording's folder, when
+/// it holds at least a fragment (`kept_failed::salvageable_recording`).
+fn salvage_after_failed_stop(state: &CaptureState) -> Option<PathBuf> {
+    let dir = lock(&state.recording_dir).clone()?;
+    super::kept_failed::salvageable_recording(&dir)
 }
 
 #[tauri::command]
@@ -4917,20 +5001,75 @@ fn settle_closed_card(state: &CaptureState, card: PreviewCard) {
     }
 }
 
-/// A failed card writes its marker beside its file, so the capture is
-/// offered again after a restart (`kept_failed`). Parking alone is memory.
-fn keep_failed_card(app: &AppHandle, id: u64) {
-    let state = app.state::<AppState>();
-    let (Ok(account_id), Ok(root)) = (state.current_account_id(), super::screenshot::capture_tmp_root()) else {
-        return;
-    };
-    let card = lock(&state.capture.preview).clone().filter(|c| c.id == id);
-    let account = crate::auth::account_key::account_key(&account_id);
-    if let Some(card) = card
-        && let Some(kept) = super::kept_failed::KeptFailed::from_card(&account, &card)
-    {
-        super::kept_failed::write(&root, &card.file_path, &kept);
+/// Where a capture's marker says it was going (`kept_failed`): the card's
+/// own drive, else the captures drive, else (nobody has set one up yet) the
+/// drive that would be made, marked as waiting for setup.
+async fn marker_destination(state: &AppState, account_id: &str, card_destination: Option<CaptureDestination>) -> (CaptureDestination, bool) {
+    if let Some(d) = card_destination {
+        return (d, false);
     }
+    let stored = match state.pool() {
+        Ok(pool) => destination::load(pool, account_id).await.ok().flatten(),
+        Err(_) => None,
+    };
+    let name = super::naming::DEFAULT_DRIVE_NAME;
+    stored.map_or_else(|| (CaptureDestination::own(name, name), true), |d| (d, false))
+}
+
+/// [`mark_in_flight`] for a delivery: as its card says (kind, picture,
+/// stopped at the free limit), or from the file's name with no card.
+async fn mark_delivery(
+    state: &AppState,
+    path: &Path,
+    card: Option<&PreviewCard>,
+    card_destination: Option<CaptureDestination>,
+) -> Option<super::kept_failed::KeptFailed> {
+    let video = path
+        .file_name()
+        .is_some_and(|n| super::recording_allowance::is_video_name(&n.to_string_lossy()));
+    let by_name = if video { CaptureKind::Recording } else { CaptureKind::Screenshot };
+    let kind = card.map_or(by_name, |c| c.kind);
+    let at_limit = card.is_some_and(|c| c.stopped_at_free_limit);
+    mark_in_flight(state, path, kind, card_destination, card.and_then(|c| c.thumbnail.clone()), at_limit).await
+}
+
+/// Mark `path` as a capture this run is recording or uploading, so it is
+/// offered again with Retry if the app quits before it reaches the drive
+/// (`kept_failed`). Returns the marker, for the failure that may replace it.
+async fn mark_in_flight(
+    state: &AppState,
+    path: &Path,
+    kind: CaptureKind,
+    card_destination: Option<CaptureDestination>,
+    thumbnail: Option<String>,
+    stopped_at_free_limit: bool,
+) -> Option<super::kept_failed::KeptFailed> {
+    let account_id = state.current_account_id().ok()?;
+    let root = super::screenshot::capture_tmp_root().ok()?;
+    let (destination, awaiting_setup) = marker_destination(state, &account_id, card_destination).await;
+    let account = crate::auth::account_key::account_key(&account_id);
+    let kept = super::kept_failed::KeptFailed {
+        stopped_at_free_limit,
+        ..super::kept_failed::KeptFailed::in_flight(&account, kind, destination, awaiting_setup, thumbnail)
+    };
+    super::kept_failed::write(&root, path, &kept);
+    Some(kept)
+}
+
+/// A capture that could not be delivered writes its marker beside its file
+/// from what the delivery knew, whether or not its card is still on screen
+/// (closed, or replaced by a newer capture's while it uploaded), so it is
+/// offered again on the next capture and after a restart, as the
+/// notification says. Parking alone is memory, and only for a card.
+fn keep_failed(
+    path: &Path,
+    marked: super::kept_failed::KeptFailed,
+    sent_to: Option<CaptureDestination>,
+    message: String,
+    reason: super::preview::FailureReason,
+) {
+    let Ok(root) = super::screenshot::capture_tmp_root() else { return };
+    super::kept_failed::write(&root, path, &marked.failed(sent_to, message, reason));
 }
 
 /// The newest failed capture kept from before a restart (`kept_failed`)
