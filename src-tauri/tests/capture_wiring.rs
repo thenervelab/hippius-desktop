@@ -1412,10 +1412,10 @@ fn windows_records_in_its_own_child_and_stays_out_of_production() {
 }
 
 /// Linux records in the app's own child, waits for the user in the
-/// desktop's screen-sharing dialog, and ships to staging and beta, not to
-/// production until its checklist passes on real sessions.
+/// desktop's screen-sharing dialog, and ships on every lane now that its
+/// checklist passed on Ubuntu GNOME.
 #[test]
-fn linux_records_in_its_own_child_and_stays_out_of_production() {
+fn linux_records_in_its_own_child_on_every_lane() {
     let linux = read("src/capture/recording/linux.rs");
     assert!(fn_body(&linux, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&linux, "pub fn start(").contains("helper::start_within("));
@@ -1425,10 +1425,7 @@ fn linux_records_in_its_own_child_and_stays_out_of_production() {
     for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
         assert!(enabled(ReleaseChannel::Staging, platform, Feature::Recording));
         assert!(enabled(ReleaseChannel::Beta, platform, Feature::Recording));
-        assert!(
-            !enabled(ReleaseChannel::Production, platform, Feature::Recording),
-            "{platform:?} recording reaches production only once its Linux checklist passes"
-        );
+        assert!(enabled(ReleaseChannel::Production, platform, Feature::Recording), "{platform:?}");
     }
 }
 

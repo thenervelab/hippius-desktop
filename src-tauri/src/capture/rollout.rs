@@ -59,11 +59,17 @@ pub const fn floor(platform: Platform, feature: Feature) -> Option<ReleaseChanne
     match (platform, feature) {
         // macOS ships wherever the frontend switch does.
         (MacOs, Screenshots | Recording) => Some(ReleaseChannel::Production),
-        // Windows and Linux ship to beta testers ahead of their hardware
-        // checklists; production waits for those, and Windows recording also
-        // for a signed installer.
-        (Windows, Screenshots | Recording) => Some(ReleaseChannel::Beta),
-        (LinuxX11 | LinuxWayland, Screenshots | Recording) => Some(ReleaseChannel::Beta),
+        // Windows screenshots ship everywhere. Windows recording waits for a
+        // signed installer (`tests/release_lane_pins.rs`): an unsigned binary
+        // that records the screen and the microphone is what SmartScreen and
+        // Defender look at hardest.
+        (Windows, Screenshots) => Some(ReleaseChannel::Production),
+        (Windows, Recording) => Some(ReleaseChannel::Beta),
+        // Linux screenshots and recording ship everywhere, checked on Ubuntu
+        // GNOME (X11 and Wayland).
+        (LinuxX11 | LinuxWayland, Screenshots | Recording) => Some(ReleaseChannel::Production),
+        // The GlobalShortcuts portal stays with beta testers: capture works
+        // from the menu bar and the app without it.
         (LinuxWayland, ShortcutPortal) => Some(ReleaseChannel::Beta),
         (MacOs | Windows | LinuxX11, ShortcutPortal) => None,
     }
@@ -160,18 +166,19 @@ mod tests {
         }
     }
 
-    /// Today's lanes: macOS everywhere the frontend switch is; Windows and
-    /// Linux in staging and beta, not production.
+    /// Today's lanes: macOS and Linux everywhere the frontend switch is;
+    /// Windows screenshots everywhere, Windows recording in staging and beta
+    /// until the installer is signed.
     #[test]
-    fn today_windows_and_linux_reach_beta_not_production() {
+    fn today_only_windows_recording_stays_out_of_production() {
         for feature in [Feature::Screenshots, Feature::Recording] {
-            assert!(enabled(ReleaseChannel::Production, Platform::MacOs, feature));
-            for platform in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
-                assert!(enabled(ReleaseChannel::Staging, platform, feature), "{platform:?} {feature:?}");
-                assert!(enabled(ReleaseChannel::Beta, platform, feature), "{platform:?} {feature:?}");
-                assert!(!enabled(ReleaseChannel::Production, platform, feature), "{platform:?} {feature:?}");
+            for platform in [Platform::MacOs, Platform::LinuxX11, Platform::LinuxWayland] {
+                assert!(enabled(ReleaseChannel::Production, platform, feature), "{platform:?} {feature:?}");
             }
         }
+        assert!(enabled(ReleaseChannel::Production, Platform::Windows, Feature::Screenshots));
+        assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
+        assert!(!enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording));
     }
 
     #[test]

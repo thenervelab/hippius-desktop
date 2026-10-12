@@ -37,9 +37,9 @@ answered), the tray through `useTrayCaptureView`; pinned by
 `app/lib/capture/__tests__/captureProductionGates.test.tsx`. Platforms:
 **screenshots on macOS, Windows and Linux**; **recording on macOS 13+**
 when `HippiusCapture` is built, and on Windows 10 2004+ and Linux (X11 and
-Wayland). Windows and Linux are on in debug, staging and beta builds and off
-in production (`capture::rollout`, until each platform's hardware checklist
-passes, and for Windows recording a signed installer).
+Wayland). Lanes (`capture::rollout`): macOS and Linux everywhere; Windows
+screenshots everywhere; Windows recording in debug, staging and beta only,
+until the installer is signed; the Wayland shortcut portal in beta only.
 
 **Windows and Linux parity plan:** `docs/plans/2026-10-01-capture-windows-linux.md`.
 Read it before touching a non-macOS capture path. Its load-bearing decisions:
