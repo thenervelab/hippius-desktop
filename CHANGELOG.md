@@ -15,6 +15,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-12
+
+### Fixed
+
+- **Uploads, syncing and share links are reliable again.** Fixed an issue that could make them unavailable on some accounts.
+
 ## [0.6.7] - 2026-10-06
 
 Folders sync on the Free plan, and Hippius is more careful with your
