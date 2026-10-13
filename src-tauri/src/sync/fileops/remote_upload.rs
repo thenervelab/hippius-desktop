@@ -312,13 +312,14 @@ where
 {
     use std::io::Read;
 
+    let request = hcfs_shared::network::CreateSessionRequest {
+        manifest,
+        chunk_count,
+        chunk_size: UPLOAD_CHUNK_SIZE,
+        ciphertext_size,
+    };
     let session = client
-        .create_upload_session(&hcfs_shared::network::CreateSessionRequest {
-            manifest,
-            chunk_count,
-            chunk_size: UPLOAD_CHUNK_SIZE,
-            ciphertext_size,
-        })
+        .create_upload_session(&request)
         .await
         .map_err(|e| AppError::Hcfs(format!("Could not start the upload: {e}")))?;
 
@@ -342,8 +343,13 @@ where
 
     // Only finalize claims the upload succeeded; a session left unfinalized
     // is discarded server-side rather than becoming a partial file.
+    //
+    // With the manifest, hcfs checks a resent finalize against the server's
+    // entry: a resend whose first copy committed gets 404 (or 409 while that
+    // copy is still committing), and is the success it was when the entry is
+    // this upload. The bare `finalize_session` would fail it.
     client
-        .finalize_session(&session.session_id)
+        .finalize_session_for_file(&session.session_id, &request.manifest)
         .await
         .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")))?;
     Ok(())
@@ -1033,5 +1039,96 @@ mod tests {
     fn a_size_past_the_wire_type_is_refused() {
         let too_big = (u64::from(u32::MAX) + 1) * UPLOAD_CHUNK_SIZE;
         assert!(transport_chunk_count(too_big).is_err());
+    }
+
+    /// A server that takes the session and its chunk, answers the finalize
+    /// with 404 `session_not_found` (what a resent finalize gets once its
+    /// first copy committed), and lists `docs/big.bin` at the content and
+    /// revision sequence of [`committed_manifest`].
+    async fn serve_lost_finalize() -> String {
+        use axum::http::StatusCode;
+        use axum::routing::{get, post, put};
+        use axum::{Json, Router};
+        use serde_json::json;
+
+        let router = Router::new()
+            .route(
+                "/upload/session",
+                post(|| async {
+                    let created = json!({ "Success": { "session_id": "s1", "expires_at": 9_999_999_999_i64 } });
+                    (StatusCode::CREATED, Json(created))
+                }),
+            )
+            .route("/upload/session/s1/chunk/{index}", put(|| async { Json(json!({ "chunk_index": 0 })) }))
+            .route(
+                "/upload/session/s1/finalize",
+                post(|| async {
+                    let gone = json!({ "error": "session_not_found", "message": "Upload session not found" });
+                    (StatusCode::NOT_FOUND, Json(gone))
+                }),
+            )
+            .route(
+                "/browse/{ss58}/{folder_hash}",
+                get(|| async {
+                    Json(json!({ "Success": {
+                        "ss58_address": "5Owner",
+                        "folder_hash": "0123456789abcdef",
+                        "path": "docs",
+                        "folders": [],
+                        "files": [{
+                            "path_hash": vec![7u8; 32],
+                            "salted_hash": vec![3u8; 32],
+                            "size_bytes": 5,
+                            "revision_seq": 4,
+                            "revision_id": vec![5u8; 32],
+                            "arion_hash": "blob-1",
+                            "updated_at": 11,
+                        }],
+                        "total_count": 1,
+                        "has_more": false,
+                        "offset": 0,
+                        "limit": 1000,
+                    }}))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        format!("http://{addr}")
+    }
+
+    /// The manifest of the upload the mock server lists as committed.
+    fn committed_manifest() -> Manifest {
+        Manifest {
+            ss58_address: "5Owner".to_string(),
+            folder_hash: "0123456789abcdef".to_string(),
+            ciphertext_hash: "aa".to_string(),
+            size_bytes: 5,
+            path_hash: [7u8; 32],
+            salted_hash: [3u8; 32],
+            revision_seq: 4,
+            relative_path: Some("docs/big.bin".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// A finalize whose first copy committed is the success it was: the
+    /// session's manifest goes with it, so hcfs checks the server's entry
+    /// instead of failing the upload on the 404.
+    #[tokio::test]
+    async fn a_finalize_resent_after_its_own_commit_succeeds() {
+        let base = serve_lost_finalize().await;
+        let identity = DriveIdentity::own("5Owner", "0123456789abcdef");
+        let config = crate::sync::drive::config::build_hcfs_config(&base, "bearer", &identity);
+        let client = hcfs_client::client::HcfsClient::new(config).expect("client");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let ciphertext = dir.path().join("ciphertext");
+        std::fs::write(&ciphertext, b"bytes").expect("write ciphertext");
+
+        send_in_session(&client, committed_manifest(), &ciphertext, 5, 1, None::<&fn(u64, u64)>)
+            .await
+            .expect("the committed first copy is this upload");
     }
 }
