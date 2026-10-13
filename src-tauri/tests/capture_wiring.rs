@@ -159,10 +159,23 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     let body = fn_body(&src, "async fn deliver_and_announce(");
     let ok_arm = body.find("Ok(Delivery::Placed {").expect("success arm");
     let err_arm = body.find("Err(e) =>").expect("failure arm");
-    let removal = body.find("remove_temp_dir(path)").expect("the temp copy is removed somewhere");
-    assert!(ok_arm < removal && removal < err_arm, "the removal must sit in the success arm only");
-    assert_eq!(body.matches("remove_temp_dir(").count(), 1, "exactly one removal, on success");
+    // The removal is handed to the task that sends the chat preview, so the
+    // copy is not removed while the preview is still reading it.
+    let removal = body
+        .find("let temp = (!keep).then(|| path.to_path_buf());")
+        .expect("the temp copy is removed somewhere");
+    let handed = body.find("spawn_preview_then_cleanup(").expect("removed after the preview read it");
+    assert!(
+        ok_arm < removal && removal < handed && handed < err_arm,
+        "the removal must sit in the success arm only"
+    );
+    assert!(!body.contains("remove_temp_dir("), "removed only through the cleanup task");
     assert!(!body.contains("remove_dir_all"), "never a bare remove_dir_all of the file's parent");
+    let cleanup = fn_body(&src, "fn spawn_preview_then_cleanup(");
+    assert_eq!(cleanup.matches("remove_temp_dir(").count(), 1, "exactly one removal, on success");
+    let read = cleanup.find("read.await").expect("the preview read is awaited");
+    let removed = cleanup.find("remove_temp_dir(&temp)").expect("then the copy goes");
+    assert!(read < removed, "the copy goes only once the preview has read it");
     let keep = fn_body(&src, "async fn keep_here(");
     assert!(!keep.contains("remove_dir_all"), "a kept capture never removes a folder itself");
 }
@@ -2931,4 +2944,44 @@ fn a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed() {
     assert!(managed < remembered, "remember_launch_shortcut reads AppState, so it runs after manage");
     let commands = read("src/capture/commands.rs");
     assert!(fn_body(&commands, "pub fn remember_launch_shortcut").contains("app.state::<AppState>()"));
+}
+
+/// Every capture that makes a link (the instant shortcut included) sends a
+/// chat preview only when Settings' "Show a preview in chats" is on, reads
+/// it while the link is minted, and never lets it fail the delivery.
+#[test]
+fn a_captures_chat_preview_follows_the_settings_default() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn deliver_and_announce(");
+    assert!(body.contains("o.chat_preview"), "the stored default is read");
+    let gate = body
+        .find("let preview = (mint_link && chat_preview).then(||")
+        .expect("no preview without a link or with the default off");
+    let link = body.find("link_for(").expect("the link is made");
+    assert!(gate < link, "the preview is read while the link is minted");
+    let cleanup = fn_body(&src, "fn spawn_preview_then_cleanup(");
+    assert!(cleanup.contains("tauri::async_runtime::spawn("), "sent in the background");
+    assert!(cleanup.contains("preview::send_rendered("), "a failed upload is only logged");
+}
+
+/// The dialog and Finder mints never send a preview for a password link:
+/// the server cannot tell those apart, so the client must not ask.
+#[test]
+fn no_password_share_sends_a_chat_preview() {
+    let shares = read("src/shares/commands.rs");
+    for name in ["pub async fn hcfs_create_share(", "pub async fn hcfs_create_remote_share("] {
+        let body = fn_body(&shares, name);
+        assert!(
+            body.contains("preview::allowed(&choice, chat_preview.unwrap_or(false))"),
+            "{name} must ask the password rule"
+        );
+    }
+    let finder = read("src/finder_bridge/commands.rs");
+    let confirm = fn_body(&finder, "pub async fn hcfs_finder_confirm_share(");
+    assert!(confirm.contains("preview::allowed(&choice, chat_preview.unwrap_or(false))"));
+    let set = fn_body(&shares, "pub async fn hcfs_set_share_preview(");
+    assert!(
+        set.contains("ShareSecret::Public(_)"),
+        "turning it back on checks the link has no password"
+    );
 }
