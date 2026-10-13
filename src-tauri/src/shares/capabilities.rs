@@ -75,6 +75,17 @@ pub struct ServerCapabilities {
     /// shows for a file link (`shares::preview`). Absent on older servers,
     /// which then get no preview and no request.
     pub share_preview: bool,
+    /// Share link insights (hcfs #670): `GET /v1/shares/{token}/insights`
+    /// and `PATCH /v1/shares/{token}/settings`. Absent on older servers,
+    /// which then get no switches sent and show no Insights.
+    pub share_insights: bool,
+    /// Encrypted comments and reactions on share links (hcfs #671). Absent
+    /// on older servers: no Comments or Reactions switch, no comment list.
+    pub share_comments: bool,
+    /// Email notifications about share links (hcfs #672),
+    /// `/v1/notification-preferences`. Absent on older servers, which show
+    /// no such preferences.
+    pub share_notifications: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -194,7 +205,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true,"share_insights":true,"share_comments":true,"share_notifications":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -206,6 +217,9 @@ mod tests {
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
         assert!(caps.share_preview);
+        assert!(caps.share_insights);
+        assert!(caps.share_comments);
+        assert!(caps.share_notifications);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -221,6 +235,9 @@ mod tests {
                 "folder_shares",
                 "member_folder_shares",
                 "share_owner_wrap",
+                "share_comments",
+                "share_insights",
+                "share_notifications",
                 "share_preview",
                 "shares",
                 "upload_folder_shares"
@@ -238,6 +255,9 @@ mod tests {
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
         assert!(!old.share_preview, "a server without the preview routes is never sent one");
+        assert!(!old.share_insights, "a server without insights is sent no switches");
+        assert!(!old.share_comments, "a server without comments shows none");
+        assert!(!old.share_notifications, "a server without email preferences shows none");
     }
 
     /// Uploaded-copy folder links ship after browsable folder shares, so a

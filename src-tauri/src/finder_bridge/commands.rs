@@ -43,6 +43,7 @@ pub async fn hcfs_finder_confirm_share(
     visibility: String,
     password: Option<String>,
     chat_preview: Option<bool>,
+    link_settings: Option<crate::shares::insights::LinkSettings>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<crate::shares::commands::ShareLink> {
     #[cfg(any(unix, windows))]
@@ -84,10 +85,15 @@ pub async fn hcfs_finder_confirm_share(
             cancel,
         };
         let link = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, mint).await?;
+        let is_file = tokio::fs::metadata(&pending.path).await.is_ok_and(|m| m.is_file());
+        // The switches are for file links: a folder link has no insights yet.
+        if is_file && let (Some(settings), Ok(account_id)) = (link_settings, state.current_account_id()) {
+            crate::shares::insights::spawn_apply(&app, &account_id, &link.share_token, settings);
+        }
         // Files only: a folder link has no single picture. The clicked file
         // stays where it is, so the preview reads it in place.
         if send_preview
-            && tokio::fs::metadata(&pending.path).await.is_ok_and(|m| m.is_file())
+            && is_file
             && let (Ok(account_id), Some(file_name)) = (
                 state.current_account_id(),
                 pending.path.file_name().and_then(|n| n.to_str()).map(str::to_owned),
@@ -99,7 +105,17 @@ pub async fn hcfs_finder_confirm_share(
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (&app, &state, request_id, ttl, visibility, password, chat_preview, on_progress);
+        let _ = (
+            &app,
+            &state,
+            request_id,
+            ttl,
+            visibility,
+            password,
+            chat_preview,
+            link_settings,
+            on_progress,
+        );
         // Unreachable from the UI (the FE only invokes this on macOS); a typed
         // Validation rather than the catch-all Other keeps it consistent with the
         // error-taxonomy migration (illu review L4).
