@@ -861,11 +861,15 @@ fn the_windows_lane_runs_clippy_and_the_capture_tests_for_capture_prs() {
 /// Linux recording links GStreamer (gstreamer-rs), so every Linux build
 /// needs its development files: a lane without them fails at `pkg-config`
 /// only when it next builds, which for production is the release itself.
-/// The recorder's encoders and parsers are the distro's plugins, which the
-/// deb only RECOMMENDS: a minimal system still installs Hippius and is told
-/// which packages to add (`codecsMissing`).
+/// The recorder's plugins are the distro's. Every recording needs the base,
+/// good and bad plugins (`videoconvert`, `mp4mux`, `h264parse`), which have
+/// no alternative, so the deb DEPENDS on them: installing the .deb on its
+/// own, or with recommends off, would otherwise leave recording broken. The
+/// encoders (x264 or a VA driver, libav), PipeWire's plugin (Wayland only)
+/// and the portal stay RECOMMENDED, and a system without them is told which
+/// packages to add (`codecsMissing`).
 #[test]
-fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
+fn every_linux_build_has_gstreamer_and_the_deb_requires_the_plugins_every_recording_needs() {
     const DEV: [&str; 2] = ["libgstreamer1.0-dev", "libgstreamer-plugins-base1.0-dev"];
     let setup = repo_file("../.github/actions/rust-ci-setup/action.yml");
     for package in DEV {
@@ -905,21 +909,24 @@ fn every_linux_build_has_gstreamer_and_the_deb_recommends_its_plugins() {
         .iter()
         .filter_map(|r| r.as_str())
         .collect();
-    for plugin in [
-        "gstreamer1.0-pipewire",
-        "gstreamer1.0-plugins-base",
-        "gstreamer1.0-plugins-good",
-        "gstreamer1.0-plugins-bad",
-        "gstreamer1.0-plugins-ugly",
-        "gstreamer1.0-libav",
-    ] {
+    let depends: Vec<&str> = deb["depends"]
+        .as_array()
+        .expect("deb depends")
+        .iter()
+        .filter_map(|d| d.as_str())
+        .collect();
+    let required = ["gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good", "gstreamer1.0-plugins-bad"];
+    for plugin in required {
+        assert!(depends.contains(&plugin), "the deb must depend on {plugin}");
+        assert!(!recommends.contains(&plugin), "{plugin} is a dependency, not a recommendation");
+    }
+    assert!(
+        depends.iter().filter(|d| d.contains("gstreamer")).all(|d| required.contains(d)),
+        "only the plugins every recording needs are required"
+    );
+    for plugin in ["gstreamer1.0-pipewire", "gstreamer1.0-plugins-ugly", "gstreamer1.0-libav"] {
         assert!(recommends.contains(&plugin), "the deb must recommend {plugin}");
     }
-    let depends = deb["depends"].as_array().expect("deb depends");
-    assert!(
-        !depends.iter().any(|d| d.as_str().is_some_and(|d| d.contains("gstreamer"))),
-        "GStreamer plugins are recommended, never required"
-    );
 }
 
 /// Staging also builds an `.rpm`, so Fedora can be tested from an artifact
