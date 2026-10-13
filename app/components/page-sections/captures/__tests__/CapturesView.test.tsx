@@ -156,6 +156,22 @@ describe("the Captures page", () => {
     expect(await screen.findByTestId("drive")).toHaveAttribute("data-label", "Hippius Captures");
   });
 
+  it("says how many free recordings are used, on the free plan only", async () => {
+    tauri.onInvoke("capture_drive_status", () => READY);
+    tauri.onInvoke("capture_free_plan_notice", () => ({ used: 7, limit: 25, maxRecordingMins: 5 }));
+    renderView();
+    expect(await screen.findByTestId("captures-free-recordings")).toHaveTextContent("7 of 25 free recordings used");
+  });
+
+  it("says nothing about free recordings on a paid or unknown plan", async () => {
+    tauri.onInvoke("capture_drive_status", () => READY);
+    tauri.onInvoke("capture_free_plan_notice", () => null);
+    renderView();
+    await screen.findByTestId("drive");
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_free_plan_notice"));
+    expect(screen.queryByTestId("captures-free-recordings")).toBeNull();
+  });
+
   it("offers Try again when the status cannot be read", async () => {
     let fail = true;
     tauri.onInvoke("capture_drive_status", () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Doc } from "../model";
-import { applyRedactions, arrowHead, contrastOn, exportPng, exportRegion } from "../render";
+import { applyRedactions, arrowHead, contrastOn, exportPng, exportRegion, redactRegions } from "../render";
 
 /**
  * A stand-in for a 2D canvas that keeps real pixels for get/putImageData and
@@ -131,5 +131,61 @@ describe("drawing helpers", () => {
     expect(Array.from(px.data.slice(0, 4))).toEqual(untouched);
     const at = (x: number, y: number) => Array.from(px.data.slice((y * 4 + x) * 4, (y * 4 + x) * 4 + 4));
     expect(at(2, 2)).toEqual(at(3, 3));
+  });
+});
+
+describe("redactRegions", () => {
+  /** A picture of distinct pixels behind a get/put surface, as a canvas holds it. */
+  function surface(w: number, h: number) {
+    const data = new Uint8ClampedArray(w * h * 4);
+    let seed = 11;
+    for (let i = 0; i < data.length; i += 4) {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      data[i] = seed & 255;
+      data[i + 1] = (seed >> 8) & 255;
+      data[i + 2] = (seed >> 16) & 255;
+      data[i + 3] = 255;
+    }
+    const reads: number[] = [];
+    const ctx = {
+      getImageData: (x: number, y: number, bw: number, bh: number) => {
+        reads.push(bw * bh);
+        const out = new Uint8ClampedArray(bw * bh * 4);
+        for (let row = 0; row < bh; row++) out.set(data.subarray(((y + row) * w + x) * 4, ((y + row) * w + x + bw) * 4), row * bw * 4);
+        return { data: out, width: bw, height: bh } as unknown as ImageData;
+      },
+      putImageData: (img: ImageData, x: number, y: number) => {
+        for (let row = 0; row < img.height; row++) data.set(img.data.subarray(row * img.width * 4, (row + 1) * img.width * 4), ((y + row) * w + x) * 4);
+      },
+    };
+    return { ctx, data, reads };
+  }
+
+  const doc: Doc = {
+    crop: null,
+    annotations: [
+      { id: "b", kind: "blur", color: "#000000", width: 1, rect: { x: 10.5, y: 4.25, w: 37, h: 21 } },
+      { id: "p", kind: "pixelate", color: "#000000", width: 1, rect: { x: 30, y: 15, w: 40, h: 30 } },
+      { id: "edge", kind: "blur", color: "#000000", width: 1, rect: { x: 70, y: 50, w: 40, h: 40 } },
+      { id: "a", kind: "arrow", color: "#ff0000", width: 4, from: { x: 0, y: 0 }, to: { x: 5, y: 5 } },
+    ],
+  } as Doc;
+
+  it("writes the same pixels as redacting the whole picture", () => {
+    const w = 80;
+    const h = 60;
+    const whole = surface(w, h);
+    const px = whole.ctx.getImageData(0, 0, w, h);
+    applyRedactions(px, doc, { x: 0, y: 0 }, 6);
+    const boxed = surface(w, h);
+    redactRegions(boxed.ctx, doc.annotations, w, h, 6);
+    expect(Array.from(boxed.data)).toEqual(Array.from(px.data));
+  });
+
+  it("reads only each redaction's own box, never the whole picture", () => {
+    const boxed = surface(80, 60);
+    redactRegions(boxed.ctx, doc.annotations, 80, 60, 6);
+    expect(boxed.reads).toHaveLength(3);
+    for (const n of boxed.reads) expect(n).toBeLessThan(80 * 60);
   });
 });

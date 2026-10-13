@@ -65,6 +65,26 @@ export function useRetainedCompletedUploads(
       if (serverKeys.has(key)) cache.delete(key);
     }
 
+    // Evict a row the server has moved past. The server list is only the
+    // newest few uploads (Recent Files asks for 10), so after a batch the
+    // older retained rows never appear in it and were never confirmed: they
+    // stayed pinned above newer files until the page was left and rebuilt.
+    // A server row newer than the one we hold means the server is caught up
+    // past it and it simply ranks below the cut. Only once the snapshot has
+    // let go of it, or the next merge would capture it again with a fresh
+    // stamp.
+    if (recentUploads.length > 0) {
+      const oldestShown = Math.min(...recentUploads.map((f) => f.createdAt));
+      const live = new Set(
+        snapshotFiles
+          .filter((fp) => fp.action === "upload")
+          .map((fp) => dedupKey({ label: fp.label, actualFileName: fp.path, name: fp.fileName })),
+      );
+      for (const [key, item] of [...cache.entries()]) {
+        if (!live.has(key) && item.createdAt < oldestShown) cache.delete(key);
+      }
+    }
+
     // Bound memory: oldest-first eviction (Map preserves insertion order).
     while (cache.size > MAX_RETAINED) {
       const oldest = cache.keys().next().value;

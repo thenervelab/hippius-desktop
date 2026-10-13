@@ -15,6 +15,68 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-10-13
+
+Screenshots and screen recording are here for everyone, on Mac, Windows and
+Linux. Capture an area, a window or your whole screen, and it lands in your
+drive with a share link ready to paste.
+
+### Added
+
+- **Screenshots and screen recording.** Take a screenshot or record your
+  screen from the Screenshot and Record buttons in Drive, the menu bar, or a
+  keyboard shortcut (Shift-Command-2 for a screenshot, Option-Shift-Command-2
+  to record; Ctrl+Shift+2 and Ctrl+Alt+Shift+2 on Windows and Linux). Change or turn them
+  off in Settings, under Screenshots & Recording.
+- **Record with your camera and microphone.** Show your face in a bubble while
+  you record, pause and resume, mute or switch microphone, resize the bubble,
+  and restart a take without starting over. On a Mac you can also record your
+  computer's sound.
+- **Captures have a drive of their own.** Everything you capture goes to your
+  Hippius Captures drive, and a Captures page in the sidebar lists them.
+- **A share link, ready to paste.** Each capture gets a link copied for you.
+  Anyone with it can view the capture in their browser, and the link never
+  expires; the capture's card says so, and Manage link opens it in Shared
+  Links. Recordings start playing straight away from the link.
+- **Mark up a screenshot before you share it.** Arrows, shapes, text, blur and
+  more, then save a copy or replace the original. Edit opens any PNG or JPEG
+  in your drives, and Annotate in the menu bar opens your latest screenshot.
+- **The free plan includes screenshots and recording.** Free captures carry a
+  small Hippius watermark, recordings stop at 5 minutes, and the free plan
+  includes 25 recordings; the capture bar shows how many you have used before
+  you start. Paid plans have none of these limits. Every video in your
+  Hippius Captures drive counts toward the 25, whatever it is called, so
+  renaming a recording does not free a slot.
+- **A menu in the menu bar window.** Open a file, upload, and reach Settings
+  from the menu bar window.
+
+### Changed
+
+- **Captures check your plan before they start.** The capture bar says
+  "Checking your plan..." until your plan has loaded. If it cannot be read,
+  for example when you are offline, nothing is captured and you can try again.
+  Accounts that sign in with an access key need a plan to capture.
+- **Deleting a file or folder reminds you about its share links**, which keep
+  working until you revoke them in Shared Links.
+
+### Fixed
+
+- **A capture is never lost.** A capture that could not upload is kept, comes
+  back with Retry after a restart, and is offered again if Hippius closed
+  mid-recording or mid-upload. If stopping a recording fails, what was
+  recorded is kept.
+- **A moved or deleted Captures folder is never recreated.** Hippius asks you
+  to choose the folder again, so older captures are not removed from your
+  drive.
+- **Videos play in the viewer on Linux**, and a video that keeps stopping can
+  open in your own video player.
+- **Command-comma opens Settings** from the main window.
+
+### Notes
+
+- **Windows:** the installer is not code signed yet, so Windows may show a
+  SmartScreen warning when you install it. Choose More info, then Run anyway.
+
 ## [0.6.8] - 2026-10-12
 
 ### Fixed

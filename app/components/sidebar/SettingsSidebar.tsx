@@ -1,11 +1,11 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useAtom } from "jotai";
+import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "./sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
-import { ChevronLeft, SunMoon } from "lucide-react";
+import { Camera, ChevronLeft, SunMoon } from "lucide-react";
 import SidebarFooter from "./SidebarFooter";
 import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -13,8 +13,10 @@ import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
   API_TOKEN_FEATURE_ENABLED,
+  SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
-import { filterSettingsNavItems } from "./settingsNavGating";
+import { captureSupportedAtom } from "@/app/lib/capture/captureFlow";
+import { CAPTURE_SETTINGS_SECTION, filterSettingsNavItems } from "./settingsNavGating";
 import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const ICON_CLASS = "size-[18px]";
@@ -25,6 +27,11 @@ export const settingsNavItems = [
     label: "Sync & Storage",
     section: "sync",
     icon: <Icons.Folder className={ICON_CLASS} />,
+  },
+  {
+    label: "Screenshots & Recording",
+    section: CAPTURE_SETTINGS_SECTION,
+    icon: <Camera className={ICON_CLASS} strokeWidth={2} />,
   },
   {
     label: "Wallets",
@@ -78,6 +85,9 @@ const SettingsSidebar: React.FC = () => {
   const searchParams = useSearchParams();
   const activeSection = searchParams.get("section") ?? "sync";
   const [collapsed] = useAtom(sidebarCollapsedAtom);
+  // Rust's answer, set by CaptureHost: the tab shows where the capture
+  // cards would, never on a computer that cannot capture.
+  const captureSupported = useAtomValue(captureSupportedAtom);
 
   return (
     <div
@@ -135,11 +145,13 @@ const SettingsSidebar: React.FC = () => {
 
           <div className="flex flex-col w-full gap-y-0.5">
             {/* VPN, Wallets and API Token are hidden behind feature flags
-                (entries kept in the array). */}
+                (entries kept in the array); Screenshots & Recording behind
+                the capture flag and Rust's support for this computer. */}
             {filterSettingsNavItems(settingsNavItems, {
               vpnEnabled: VPN_FEATURE_ENABLED,
               walletEnabled: WALLET_FEATURE_ENABLED,
               apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
+              captureEnabled: SCREEN_CAPTURE_ENABLED && captureSupported,
             })
               .map((item) => {
                 const isActive = activeSection === item.section;

@@ -28,7 +28,7 @@ use serde::Serialize;
 use super::protocol::{
     CropCommand, HelperEvent, Incoming, SimpleCommand, StartCommand, StreamCrop, StreamStill, SwitchMicrophoneCommand, parse_event,
 };
-use super::{MediaDevice, RecordOptions, Recorder};
+use super::{MediaDevice, RecordOptions, RecordedClock, Recorder};
 use crate::capture::screenshot::Selection;
 use crate::error::{AppError, Result};
 
@@ -265,8 +265,9 @@ pub struct HelperRecorder {
     next_id: u64,
     output: PathBuf,
     microphone: bool,
-    running_since: Option<Instant>,
-    accumulated: Duration,
+    /// Recorded time, pauses left out: what the pill shows and what the
+    /// free plan's length cap counts.
+    clock: RecordedClock,
     paused: bool,
     /// A Wayland area recording waits for its area: the monitor's first
     /// picture until [`Recorder::take_area_still`] takes it, and `true`
@@ -315,8 +316,7 @@ impl HelperRecorder {
             next_id: 0,
             output,
             microphone,
-            running_since: None,
-            accumulated: Duration::ZERO,
+            clock: RecordedClock::default(),
             paused: false,
             area_still: None,
             awaiting_crop: false,
@@ -333,7 +333,7 @@ impl HelperRecorder {
                 session.area_still = Some(still);
                 session.awaiting_crop = true;
             }
-            _ => session.running_since = Some(Instant::now()),
+            _ => session.clock.start(),
         }
         Ok(session)
     }
@@ -368,9 +368,7 @@ impl HelperRecorder {
     }
 
     fn freeze_elapsed(&mut self) {
-        if let Some(since) = self.running_since.take() {
-            self.accumulated += since.elapsed();
-        }
+        self.clock.freeze();
     }
 
     /// Why the recorder stopped, waiting briefly for the reader thread to
@@ -439,7 +437,7 @@ impl Recorder for HelperRecorder {
             return Ok(());
         }
         self.command("resume", |e| matches!(e, HelperEvent::Resumed), COMMAND_WITHIN)?;
-        self.running_since = Some(Instant::now());
+        self.clock.start();
         self.paused = false;
         Ok(())
     }
@@ -476,11 +474,7 @@ impl Recorder for HelperRecorder {
     }
 
     fn elapsed_secs(&self) -> u64 {
-        let mut total = self.accumulated;
-        if let Some(since) = self.running_since {
-            total += since.elapsed();
-        }
-        total.as_secs()
+        self.clock.elapsed().as_secs()
     }
 
     fn microphone(&self) -> bool {
@@ -539,7 +533,7 @@ impl Recorder for HelperRecorder {
         self.wait(id, |e| matches!(e, HelperEvent::Started), START_WITHIN)?;
         self.awaiting_crop = false;
         self.area_still = None;
-        self.running_since = Some(Instant::now());
+        self.clock.start();
         Ok(())
     }
 }
@@ -686,8 +680,7 @@ mod tests {
             next_id: 0,
             output: PathBuf::from("/nonexistent/out.mp4"),
             microphone: false,
-            running_since: None,
-            accumulated: Duration::ZERO,
+            clock: RecordedClock::default(),
             paused: false,
             area_still: None,
             awaiting_crop: false,
@@ -718,8 +711,7 @@ mod tests {
             next_id: 0,
             output: PathBuf::from("/nonexistent/out.mp4"),
             microphone: true,
-            running_since: None,
-            accumulated: Duration::ZERO,
+            clock: RecordedClock::default(),
             paused: false,
             area_still: None,
             awaiting_crop: false,
@@ -852,8 +844,7 @@ mod tests {
             next_id: 0,
             output: PathBuf::from("/tmp/s.mp4"),
             microphone: false,
-            running_since: None,
-            accumulated: Duration::ZERO,
+            clock: RecordedClock::default(),
             paused: false,
             area_still: None,
             awaiting_crop: false,
@@ -902,7 +893,7 @@ mod tests {
             StartCommand::from_selection(id, Selection::Screen { display_id: 0 }, Path::new("/tmp/a.mp4"), options)
         })
         .expect("answered with the picture");
-        assert!(recorder.running_since.is_none(), "nothing is recorded while the area is drawn");
+        assert!(!recorder.clock.is_running(), "nothing is recorded while the area is drawn");
         let still = recorder.take_area_still().expect("the monitor's picture");
         assert_eq!((still.width, still.height), (2880, 1800));
         assert!(recorder.take_area_still().is_none(), "handed out once");
@@ -913,7 +904,7 @@ mod tests {
             height: 604,
         };
         recorder.crop(area).expect("started");
-        assert!(recorder.running_since.is_some());
+        assert!(recorder.clock.is_running());
         assert_eq!(child.join().unwrap(), area);
         assert!(recorder.crop(area).is_err(), "only one area per recording");
     }

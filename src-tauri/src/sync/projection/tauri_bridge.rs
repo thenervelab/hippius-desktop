@@ -262,6 +262,9 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // The cycle may have changed the drive's rows; one-off downloads must
     // not keep verifying against the listing from before it.
     app_state.remote_listing_cache.invalidate(&payload.label);
+    // The captures drive's recording count is read again too: an upload or
+    // a delete just reached the server (`capture::recording_allowance`).
+    crate::capture::recording_allowance::invalidate_label(&app_state, &payload.label);
 
     // Update per-file failure counters from the finalized session.
     update_failure_counts(app, &payload.label);
@@ -1115,6 +1118,8 @@ fn handle_sync_reset<R: tauri::Runtime>(app: &AppHandle<R>, account_id: String, 
     app_state.empty_remote.clear_all();
     // Cached listings belong to the previous account's drives.
     app_state.remote_listing_cache.clear_all();
+    // And the recording counts, read from the previous account's drive.
+    crate::capture::recording_allowance::clear(&app_state);
     // And for the folder-restore gate — its armed flags describe the previous
     // account's drives, and a label reused by the new account must be re-armed
     // from that account's own baseline at init, never inherited.

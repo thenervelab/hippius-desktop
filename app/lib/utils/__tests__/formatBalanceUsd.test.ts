@@ -63,6 +63,12 @@ describe("formatBalanceUsd from the HIP string Rust already formatted", () => {
     expect(formatBalanceUsd("5.13")).toBe(formatBalanceUsd(planck));
   });
 
+  it("reads a signed string, as a balance below zero arrives", () => {
+    expect(formatBalanceUsd("-2.5")).toBe("-$2.50");
+    expect(formatBalanceUsd(" 0 ")).toBe("$0.00");
+    expect(formatBalanceUsd("-")).toBe("---");
+  });
+
   it("treats an unparseable string as unknown rather than zero", () => {
     expect(formatBalanceUsd("")).toBe("---");
     expect(formatBalanceUsd("not a number")).toBe("---");

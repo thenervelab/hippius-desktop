@@ -41,6 +41,7 @@ mod test_helpers;
 pub mod tray;
 pub mod updates;
 mod utils;
+pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
 
@@ -86,7 +87,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes};
+use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -266,19 +267,35 @@ fn main() {
 
     load_env();
 
+    // Linux: where PipeWire's `pipewiresrc` is too old to open a camera,
+    // cameras open through V4L2 (`capture::camera_provider`). It sets an
+    // environment variable, so it runs here, before any thread starts.
+    #[cfg(target_os = "linux")]
+    let camera_provider = crate::capture::camera_provider::apply();
+
     // Linux: the app id GNOME matches windows to the installed app by, set
     // before GTK starts (`utils::app_id` says why).
     crate::utils::app_id::apply();
+    // Linux: on GNOME's Wayland session, connect through XWayland so the
+    // recording pill and camera bubble can stay on top (`utils::display_backend`
+    // says why). Before GTK starts; logged once logging is up. The recorder
+    // child and the CLI modes above open no window and never get here.
+    let display_backend = crate::utils::display_backend::apply();
 
     // Initialize tracing (stdout + daily rolling file under ~/.hippius/logs/).
     // The guard must outlive the app so the non-blocking file writer keeps
     // flushing — see `init_logging`. Holding it in this `main` local does that.
     let _log_guard = init_logging();
+    info!(?display_backend, "display backend chosen");
 
     // A packaged app's stderr goes nowhere, so an uncaptured panic is the one
     // event guaranteed to be missing from a support bundle. Installed after
     // logging init so the hook's error! has a subscriber to land in.
     diagnostics::install_panic_hook();
+    // Linux: GTK's and GLib's own warnings and fatal errors into the same log
+    // (and a fatal one straight to `crash.log`), not only to stderr.
+    #[cfg(target_os = "linux")]
+    diagnostics::install_glib_log_bridge();
 
     // Which build wrote this log file — support's first question. The bundle
     // also carries the same facts as system-info.txt, for logs old enough
@@ -291,6 +308,8 @@ fn main() {
         arch = identity.arch,
         "Application starting"
     );
+    #[cfg(target_os = "linux")]
+    camera_provider.log();
 
     // hcfs hashes and encrypts on a rayon pool it owns, and that pool runs at
     // FULL priority on every core unless the host opts out. The default is
@@ -329,6 +348,11 @@ fn main() {
                 crate::capture::commands::on_shortcut(app);
                 return;
             }
+            // `hippius --record`: the Record shortcut, bound the same way.
+            if crate::cli::argv_requests_record(&argv) {
+                crate::capture::commands::on_record_shortcut(app);
+                return;
+            }
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(e) = window.unminimize() {
                     debug!("Failed to unminimize window: {e}");
@@ -339,6 +363,10 @@ fn main() {
                 if let Err(e) = window.set_focus() {
                     debug!("Failed to set window focus: {e}");
                 }
+                // Opened again mid-recording (the app grid, a launcher): the
+                // user took the app back, so the recording's end leaves it up
+                // even where the desktop withholds the keyboard from it.
+                crate::capture::commands::on_main_window_focused(app);
             }
             // On macOS, a URL-forwarder helper sends deep link URLs
             // via the single-instance socket as argv entries.
@@ -492,6 +520,11 @@ fn main() {
             get_thumbnail,
             prepare_motion_photo_preview,
             read_preview_bytes,
+            resolve_drive_file_source,
+            // The viewer's video source: the asset URL, or on Linux the
+            // loopback stream (WebKitGTK cannot play media from `asset://`).
+            crate::video_stream::video_playback_source,
+            crate::video_stream::video_stream_release,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
@@ -691,6 +724,7 @@ fn main() {
             // Screen capture
             crate::capture::commands::capture_start,
             crate::capture::commands::capture_overlay_context,
+            crate::capture::commands::capture_overlay_backdrop,
             crate::capture::commands::capture_select,
             crate::capture::commands::capture_pause,
             crate::capture::commands::capture_resume,
@@ -726,6 +760,7 @@ fn main() {
             crate::capture::commands::capture_add_desktop_shortcut,
             crate::capture::commands::capture_camera_context,
             crate::capture::commands::capture_set_cameras,
+            crate::capture::camera_report::capture_camera_report,
             crate::capture::commands::capture_cameras,
             crate::capture::commands::capture_microphones,
             crate::capture::commands::capture_mic_meter_start,
@@ -736,6 +771,8 @@ fn main() {
             crate::capture::commands::capture_microphone_switch,
             crate::capture::commands::capture_camera_switch,
             crate::capture::commands::capture_controls_menu,
+            crate::capture::commands::capture_controls_menu_side,
+            crate::capture::commands::capture_panel_fit,
             crate::capture::commands::capture_camera_set_size,
             crate::capture::commands::capture_camera_dismiss,
             crate::capture::commands::capture_share_targets,
@@ -748,8 +785,15 @@ fn main() {
             crate::capture::commands::capture_relaunch_for_permission,
             crate::capture::commands::capture_preview_mint_link,
             crate::capture::commands::capture_preview_revoke_link,
+            crate::capture::commands::capture_preview_manage_link,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
+            crate::capture::commands::capture_limit_upgrade,
+            crate::capture::commands::capture_check_recording_start,
+            crate::capture::commands::capture_free_plan_notice,
+            crate::capture::commands::capture_plan_status,
+            crate::capture::commands::capture_plan_retry,
+            crate::capture::commands::capture_launch_shortcut,
             crate::capture::commands::capture_preview_upgrade,
             crate::capture::editor::capture_preview_edit,
             crate::capture::editor::capture_editor_open_file,
@@ -993,9 +1037,24 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
 
             #[cfg(not(target_os = "macos"))]
             {
+                // Mid-capture the close is the desktop's (the main window is
+                // hidden), not the user's: hide instead of quitting, so the
+                // recording is not thrown away with the app. No exit follows
+                // here, so cancelling is safe (H-003 is cancel THEN exit).
+                let phase = window.app_handle().state::<crate::app_state::AppState>().capture.current();
+                if !crate::capture::own_windows::closing_main_quits(phase) {
+                    api.prevent_close();
+                    info!(
+                        ?phase,
+                        "Window close requested during a capture: hiding the main window instead of quitting"
+                    );
+                    if let Err(e) = window.hide() {
+                        warn!("Failed to hide window: {e}");
+                    }
+                    return;
+                }
                 // Do not cancel the close: doing so and then exit(0) from
                 // inside the GTK/WebKit handler orphans the process (H-003).
-                let _ = api;
                 info!("Window close requested — exiting app");
                 crate::tray::panel::quit_desktop(window.app_handle());
             }
@@ -1075,6 +1134,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // any recording puts that menu on the icon.
         #[cfg(target_os = "linux")]
         crate::capture::commands::listen_to_recording_menu(app.handle());
+        // Which display GTK opened: XWayland can be chosen and still fall
+        // back to Wayland (`utils::display_backend`).
+        #[cfg(target_os = "linux")]
+        info!(display = ?crate::utils::display_backend::active_display(), "GTK display opened");
 
         // macOS 26+ (Tahoe) mounts legacy transparent .icns icons onto a white
         // rounded tile in the Dock, but renders a RUNTIME-set application icon
@@ -1168,6 +1231,15 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
         let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
+
+        // `hippius --capture` / `--record` that started the app: the
+        // single-instance handler sees them only when it is already running,
+        // so this launch's are kept for the signed-in app. They are kept in
+        // AppState, so this MUST sit after `manage`: called before it, a
+        // Wayland Record shortcut pressed with the app closed crashed the
+        // app as it started. Pinned by
+        // `a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed`.
+        crate::capture::commands::remember_launch_shortcut(app.handle(), std::env::args().skip(1).collect::<Vec<_>>());
 
         // Reclaim upload-chunk staging directories abandoned by earlier runs.
         //

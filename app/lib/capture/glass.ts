@@ -41,6 +41,14 @@ export const GLASS_PILL =
 export const GLASS_PANEL =
   "border border-white/10 bg-[#1c1d21]/95 text-white shadow-[0_18px_40px_rgba(0,0,0,0.45)] backdrop-blur-xl";
 
+/**
+ * Menus in a window fitted to its content (Wayland's recording panel): the
+ * menu glass with the pill's tight shadow, which the window's edge does not
+ * cut into a hard line.
+ */
+export const GLASS_PANEL_TIGHT =
+  "border border-white/10 bg-[#1c1d21]/95 text-white shadow-[0_2px_6px_rgba(0,0,0,0.35)] backdrop-blur-xl";
+
 /** A plain button on the glass (icon or text). */
 export const GLASS_BUTTON = `text-white/85 transition-colors hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 ${GLASS_FOCUS}`;
 

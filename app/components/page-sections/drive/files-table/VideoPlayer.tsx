@@ -23,10 +23,10 @@ import VideoPlayerError from "./VideoPlayerError";
 // which is available regardless of the `withGlobalTauri` setting)
 const isTauri = isTauriRuntime();
 
-// Platform info loaded from Rust. The file viewer does not mount this player
-// on Linux at all (`supportsInAppVideo` is false there: WebKitGTK showed a
-// recording as a black frame; see `VideoPreviewBody`). Elsewhere a file
-// reaches the media element and only falls back after a real decoder error.
+// Platform info loaded from Rust. On Linux the viewer hands this player a
+// loopback URL from Rust (`video_playback_source`; WebKitGTK cannot play
+// media from `asset://`) and watches for the first frame itself through
+// `onPlaybackStarted` / `onPlaybackFailed` (see `VideoPreviewBody`).
 let _unsupportedEngine = false;
 if (isTauri) {
   import("@tauri-apps/api/core").then(({ invoke }) =>
@@ -83,13 +83,29 @@ interface VideoPlayerProps {
     file: FormattedUserFile,
     polkadotAddress: string
   ) => void;
+  /** The first frame is ready (`loadeddata`). */
+  onPlaybackStarted?: () => void;
+  /** The media element reported an error. */
+  onPlaybackFailed?: () => void;
+  /**
+   * Playback stopped to wait for data for more than `STUTTER_MS` after the
+   * first frame (once per video). The Linux viewer then offers the system's
+   * video player next to this one.
+   */
+  onPlaybackStuttered?: () => void;
 }
+
+/** A wait this long mid-playback counts as a stutter worth mentioning. */
+export const STUTTER_MS = 1500;
 
 const VideoPlayer: React.FC<VideoPlayerProps> = ({
   videoUrl,
   fileFormat,
   file,
-  handleFileDownload
+  handleFileDownload,
+  onPlaybackStarted,
+  onPlaybackFailed,
+  onPlaybackStuttered,
 }) => {
   const [error, setError] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -103,6 +119,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // `waiting` state and nudge / soft-reload it if no progress is made.
   const stallTimerRef = useRef<number | null>(null);
   const stallStartedAtRef = useRef<number | null>(null);
+  // Where a soft reload picks up: a reload that restarted at 0 turned a
+  // short stall into the video starting over.
+  const resumeAtRef = useRef<number | null>(null);
+  const hasPlayedRef = useRef(false);
+  const stutterToldRef = useRef(false);
 
   // 120s everywhere: a shorter ceiling trips on
   // perfectly healthy videos that simply take a moment to load from
@@ -159,6 +180,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ? Date.now() - stallStartedAtRef.current
         : 0;
 
+      if (stalledMs > STUTTER_MS && hasPlayedRef.current && !stutterToldRef.current) {
+        stutterToldRef.current = true;
+        onPlaybackStuttered?.();
+      }
+
       if (ahead < 0.3 && stalledMs > 3000 && stalledMs <= 6000) {
         try {
           media.currentTime = Math.max(0, ct + 0.01);
@@ -166,11 +192,12 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           // ignore – seeking can throw on unseekable streams
         }
       } else if (ahead < 0.3 && stalledMs > 6000) {
+        resumeAtRef.current = ct > 0 ? ct : null;
         stopStallWatch();
         handleReload();
       }
     }, 750) as unknown as number;
-  }, [handleReload, stopStallWatch]);
+  }, [handleReload, stopStallWatch, onPlaybackStuttered]);
 
   // Enter fullscreen - both Tauri window and CSS
   const enterFullscreen = useCallback(async () => {
@@ -359,10 +386,21 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }}
         onLoadedMetadata={() => {
           clearLoadTimer();
+          const resumeAt = resumeAtRef.current;
+          resumeAtRef.current = null;
+          const media = playerRef.current?.el?.querySelector("video");
+          if (resumeAt !== null && media) {
+            try {
+              media.currentTime = resumeAt;
+            } catch {
+              // An unseekable stream starts over instead.
+            }
+          }
         }}
         onLoadedData={() => {
           clearLoadTimer();
           stopStallWatch();
+          onPlaybackStarted?.();
         }}
         onCanPlay={() => {
           clearLoadTimer();
@@ -372,6 +410,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           startStallWatch();
         }}
         onPlaying={() => {
+          hasPlayedRef.current = true;
           clearLoadTimer();
           stopStallWatch();
         }}
@@ -388,6 +427,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           );
           clearLoadTimer();
           stopStallWatch();
+          onPlaybackFailed?.();
           setError(
             "This video format (." + fileFormat + ") can't be played in the built-in player.",
           );

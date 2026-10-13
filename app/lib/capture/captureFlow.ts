@@ -1,7 +1,7 @@
 import { atom } from "jotai";
 import type { CaptureSurfaces } from "@/app/lib/tauri/capture";
 import type { SupportedModes } from "./modes";
-import { isScreenRecordingPermissionMissing } from "@/app/lib/tauri/capture";
+import { isRecordingLimitReached, isScreenRecordingPermissionMissing, planRefusalAction } from "@/app/lib/tauri/capture";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
 /**
@@ -13,12 +13,19 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
  * asks, with the capture kept safe meanwhile) and moved from Settings, the
  * Captures page and the Capture menus.
  */
-export type CaptureDialog = { kind: "captureDrive" } | { kind: "permission" };
+export type CaptureDialog = { kind: "captureDrive" } | { kind: "permission" } | { kind: "recordingLimit" };
 
 export const captureDialogAtom = atom<CaptureDialog | null>(null);
 
 /** Whether this build and platform can capture screenshots, from Rust. */
 export const captureSupportedAtom = atom<boolean>(false);
+
+/**
+ * Whether Rust has answered `capture_support` yet (or failed to). Until it
+ * has, `captureSupportedAtom` is a placeholder `false`, not a "no": a gate
+ * that redirects or resets on "no" must wait for this (`useCaptureAvailability`).
+ */
+export const captureSupportKnownAtom = atom<boolean>(false);
 
 /** Whether Record actions should be offered (macOS helper present). */
 export const captureRecordingAtom = atom<boolean>(false);
@@ -49,15 +56,22 @@ export const capturePermissionPaneAtom = atom<string | null>(null);
 /** What `capture_start`'s refusal asks the UI to do next. */
 export type CaptureRefusal =
   | { next: "grant-permission" }
+  | { next: "recording-limit" }
+  | { next: "plan"; message: string; action: "retry" | "upgrade" }
   | { next: "show-error"; message: string };
 
 /**
  * Sort a `capture_start` failure by what answers it. Matched on the structured
  * `subkind`, never the message: `NotReady` is silenced wholesale on several
- * generic error paths, so these two must be picked out explicitly or they
+ * generic error paths, so these must be picked out explicitly or they
  * vanish without a dialog.
  */
 export function classifyCaptureRefusal(error: unknown): CaptureRefusal {
   if (isScreenRecordingPermissionMissing(error)) return { next: "grant-permission" };
+  if (isRecordingLimitReached(error)) return { next: "recording-limit" };
+  // Refused on the plan: it could not be read (or the recordings counted),
+  // or the account has no Drive storage. Rust's words, with the way out.
+  const action = planRefusalAction(error);
+  if (action) return { next: "plan", message: errorMessage(error), action };
   return { next: "show-error", message: errorMessage(error) };
 }

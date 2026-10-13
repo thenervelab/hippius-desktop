@@ -2,13 +2,14 @@
 
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Circle, Maximize2, Minimize2, Video, VideoOff, X } from "lucide-react";
+import { Video, VideoOff, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
   cancelCapture,
   dismissCaptureCamera,
   getCaptureCameraContext,
   getCaptureState,
+  reportCameraStep,
   setCaptureCameras,
   setCaptureCameraSize,
   type CaptureCameraState,
@@ -16,6 +17,7 @@ import {
 import { GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { stepIndex } from "@/app/capture-overlay/keyNav";
 import {
+  afterNoFrames,
   CAMERA_FRAME_LAYOUT,
   cameraFrameShape,
   camerasAreNamed,
@@ -23,6 +25,7 @@ import {
   cameraCloseLabel,
   exactCameraConstraints,
   MUTE_RECOVERY_MS,
+  NO_FRAMES_MS,
   nextRoundSize,
   openedAnotherCamera,
   resolveCameraId,
@@ -33,8 +36,17 @@ import {
   VIDEO_TAKES_NO_POINTER,
   videoConstraints,
   type RoundSize,
-  type SizeIcon,
 } from "./cameraDevices";
+import { SizeGlyph } from "./SizeGlyph";
+import {
+  describeConstraints,
+  describeDevices,
+  describeError,
+  describeMediaSupport,
+  describeTrack,
+  describeVideo,
+} from "./cameraReport";
+import { problemFromAccess, problemFromError, problemText, type CameraProblem } from "./cameraProblem";
 
 /**
  * The camera, Loom style: a round bubble over the screen (small or large), a
@@ -50,8 +62,10 @@ import {
  * The size strip exists only while choosing: this window is filmed, so a
  * strip that appeared under the pointer mid-recording was in the video.
  * Rust's camera state says when a recording is starting or running
- * (`recording`), so the page follows no phase of its own. The pill hides
- * the bubble while recording. While choosing the strip is always
+ * (`recording`), so the page follows no phase of its own. Mid-recording the
+ * bubble's controls (sizes, pause) are a window of their own over it
+ * (`app/capture-bubble-controls`), which the recording leaves out; the pill
+ * hides the bubble. While choosing the strip is always
  * in the page (faded out until the pointer or keyboard focus is on it), so
  * Tab reaches it; the arrow keys move along it. At full size its third button
  * leaves full size (as Escape does), back to the round size from before.
@@ -63,7 +77,7 @@ import {
  * starts playback itself. For the same reason the video never takes the
  * pointer: WebKit drew a pause button over a hovered picture, which did
  * nothing (the click began a window drag) and was filmed. The frame behind
- * it is the drag region; pause is the pill's. Until then, and while the camera is muted, the
+ * it is the drag region; pause is the pill's and the bubble controls'. Until then, and while the camera is muted, the
  * bubble shows a "starting" placeholder rather than black.
  *
  * This page must be the only one capturing: WebKit mutes every other page's
@@ -79,10 +93,16 @@ import {
  * placeholder may say in words what is happening.
  */
 
-function SizeGlyph({ icon }: { icon: SizeIcon }) {
-  if (icon === "enterFull") return <Maximize2 className="size-3.5" aria-hidden />;
-  if (icon === "exitFull") return <Minimize2 className="size-3.5" aria-hidden />;
-  return <Circle className={icon === "small" ? "size-2.5" : "size-3.5"} strokeWidth={2.4} aria-hidden />;
+/**
+ * One step of opening the camera, for the app log (`camera:` lines, Rust
+ * throttles them). Never awaited: the camera does not wait on the log.
+ */
+function report(step: string, detail: string) {
+  try {
+    void reportCameraStep(step, detail).catch(() => undefined);
+  } catch {
+    // No IPC (tests without a handler): nothing to log to.
+  }
 }
 
 /** Start the camera picture; WebKit may leave a new stream paused. */
@@ -97,7 +117,9 @@ function playVideo(video: HTMLVideoElement | null) {
 
 export default function CaptureCameraPage() {
   const [camera, setCamera] = useState<CaptureCameraState | null>(null);
-  const [failed, setFailed] = useState(false);
+  /** Why the camera is not showing, once opening it failed (null: no failure). */
+  const [problem, setProblem] = useState<CameraProblem | null>(null);
+  const failed = problem !== null;
   const stripRef = useRef<HTMLDivElement | null>(null);
   // Rust reports the pointer over the window (a window that is not key does
   // not always get the webview's own hover on macOS); the webview's own
@@ -124,6 +146,14 @@ export default function CaptureCameraPage() {
   const [muted, setMuted] = useState(false);
   /** Reopens in a row for a muted camera; reset when it unmutes. */
   const muteTries = useRef(0);
+  /** Where the current open is, named in the log when no frame comes. */
+  const stage = useRef("idle");
+  /** The stream that has shown a frame (the no-frames watch leaves it alone). */
+  const playedStream = useRef<MediaStream | null>(null);
+  /** Reopens in a row for a stream that showed no frame (`afterNoFrames`). */
+  const noFrameReopens = useRef(0);
+  /** Open again even if the stream on screen looks right (it shows nothing). */
+  const forceReopen = useRef(false);
 
   useEffect(() => {
     cameraRef.current = camera;
@@ -162,7 +192,11 @@ export default function CaptureCameraPage() {
 
   // The recorder has the camera: this page must not hold it.
   const handedOver = !!camera?.recorderOwnsCamera;
-  const live = !!camera?.shape && !camera.hidden && !handedOver;
+  // Rust asks the system for the camera first (Linux): while the question is
+  // up, or after a no, the page never calls getUserMedia.
+  const accessProblem = problemFromAccess(camera?.access);
+  const cameraPresent = camera?.cameraPresent;
+  const live = !!camera?.shape && !camera.hidden && !handedOver && accessProblem === null;
   const deviceId = camera?.deviceId ?? null;
   const deviceName = camera?.deviceName ?? null;
 
@@ -173,6 +207,8 @@ export default function CaptureCameraPage() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     openFor.current = null;
+    noFrameReopens.current = 0;
+    stage.current = "idle";
     setMuted(false);
   }, [live]);
 
@@ -191,9 +227,12 @@ export default function CaptureCameraPage() {
     if (!live) return;
     const media = navigator.mediaDevices;
     if (!media?.getUserMedia) {
-      setFailed(true);
+      report("no-media-devices", describeMediaSupport(navigator, window.isSecureContext, window.location.origin));
+      setProblem("unsupported");
       return;
     }
+    const force = forceReopen.current;
+    forceReopen.current = false;
     const mine = ++run.current;
     const stale = () => run.current !== mine;
 
@@ -206,32 +245,49 @@ export default function CaptureCameraPage() {
         playVideo(videoRef.current);
       }
       const track = s.getVideoTracks()[0];
+      stage.current = "waiting for the first frame";
+      report("opened", describeTrack(track));
       // An unplugged camera ends its track; look again.
-      track?.addEventListener("ended", () => setDevicesSeen((n) => n + 1));
+      track?.addEventListener("ended", () => {
+        report("track-ended", describeTrack(track));
+        setDevicesSeen((n) => n + 1);
+      });
       // Muted by WebKit (another page started capturing) or the system: the
       // picture is black until it unmutes or is opened again.
       setMuted(track?.muted ?? false);
       if (!track?.muted) muteTries.current = 0;
       track?.addEventListener("mute", () => {
-        if (streamRef.current === s) setMuted(true);
+        if (streamRef.current !== s) return;
+        report("track-muted", describeTrack(track));
+        setMuted(true);
       });
       track?.addEventListener("unmute", () => {
         if (streamRef.current !== s) return;
         muteTries.current = 0;
         setMuted(false);
       });
-      setFailed(false);
+      setProblem(null);
     };
 
     const open = async () => {
+      stage.current = "listing cameras";
       const before = await media.enumerateDevices();
       if (stale()) return;
       let wanted = resolveCameraId(before, deviceId, deviceName);
+      const found = wanted ? "found by name or id" : deviceName ? "not found, opening the default" : "opening the default";
+      report("devices", `${describeDevices(before)}; chosen ${deviceName ? `"${deviceName}"` : "none"}, ${found}`);
       const current = streamRef.current?.getVideoTracks()[0];
-      // A muted track is not kept: opening the camera again is what unmutes it.
-      if (current?.readyState === "live" && !current.muted && openFor.current === (wanted ?? "default")) return;
+      // A muted track is not kept: opening the camera again is what unmutes
+      // it. Nor is one that showed no frame (`force`).
+      if (!force && current?.readyState === "live" && !current.muted && openFor.current === (wanted ?? "default")) {
+        stage.current = playedStream.current === streamRef.current ? "playing" : "waiting for the first frame";
+        return;
+      }
 
-      let s = await media.getUserMedia({ video: videoConstraints(wanted), audio: false });
+      const asked = videoConstraints(wanted);
+      stage.current = "waiting for getUserMedia";
+      report("request", describeConstraints(asked));
+      let s = await media.getUserMedia({ video: asked, audio: false });
       if (stale()) {
         s.getTracks().forEach((t) => t.stop());
         return;
@@ -260,9 +316,11 @@ export default function CaptureCameraPage() {
       // Asked for by id, another camera opened: ask for that one exactly.
       // Refused (it went away meanwhile), the camera that opened is kept.
       if (wanted && openedAnotherCamera(wanted, s.getVideoTracks()[0]?.getSettings?.().deviceId)) {
-        const exact = await media
-          .getUserMedia({ video: exactCameraConstraints(wanted), audio: false })
-          .catch(() => null);
+        report("request", `another camera opened, asking exactly: ${describeConstraints(exactCameraConstraints(wanted))}`);
+        const exact = await media.getUserMedia({ video: exactCameraConstraints(wanted), audio: false }).catch((e: unknown) => {
+          report("exact-refused", `${describeError(e)}; keeping the camera that opened`);
+          return null;
+        });
         if (stale()) {
           exact?.getTracks().forEach((t) => t.stop());
           s.getTracks().forEach((t) => t.stop());
@@ -277,9 +335,14 @@ export default function CaptureCameraPage() {
       void setCaptureCameras(camerasFrom(after)).catch(() => undefined);
     };
 
-    open().catch(() => {
-      if (!stale()) setFailed(true);
+    open().catch((e: unknown) => {
+      if (stale()) return;
+      report("error", `${describeError(e)} (while ${stage.current})`);
+      stage.current = "failed";
+      setProblem(problemFromError(e, cameraPresent));
     });
+    // `cameraPresent` only words a failure; it never reopens the camera.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, deviceId, deviceName, devicesSeen]);
 
   // A camera that stays muted is opened again, a bounded number of times.
@@ -292,6 +355,34 @@ export default function CaptureCameraPage() {
     }, MUTE_RECOVERY_MS);
     return () => window.clearTimeout(t);
   }, [live, muted, devicesSeen]);
+
+  // A stream that shows no frame (or a `getUserMedia` that never answers) is
+  // opened again once, then the bubble says the camera is unavailable
+  // instead of pulsing on its placeholder for ever. Each time the log says
+  // where it stopped. Never after the stream's first frame.
+  useEffect(() => {
+    if (!live || playing || failed) return;
+    const t = window.setTimeout(() => {
+      const stream = streamRef.current;
+      if (stream && playedStream.current === stream) return;
+      const where = `${stage.current}; ${describeTrack(stream?.getVideoTracks()[0])}; ${describeVideo(videoRef.current)}`;
+      report("no-frames", `no picture after ${NO_FRAMES_MS / 1000} s: ${where}`);
+      if (afterNoFrames(noFrameReopens.current) === "reopen") {
+        noFrameReopens.current += 1;
+        forceReopen.current = true;
+        setDevicesSeen((n) => n + 1);
+        return;
+      }
+      report("gave-up", "showing the camera as unavailable");
+      run.current += 1;
+      stream?.getTracks().forEach((tr) => tr.stop());
+      streamRef.current = null;
+      openFor.current = null;
+      stage.current = "gave up";
+      setProblem("noPicture");
+    }, NO_FRAMES_MS);
+    return () => window.clearTimeout(t);
+  }, [live, playing, failed, devicesSeen]);
 
   // A re-render can swap the <video> (failed, then recovered); keep it fed.
   useEffect(() => {
@@ -349,6 +440,12 @@ export default function CaptureCameraPage() {
   const hasStrip = bubble && stripShown(camera);
   const placeholder = showsPlaceholder(playing, muted);
   const hovered = hoverRust || hoverDom;
+  const shownProblem = accessProblem ?? problem;
+  const problemCopy = shownProblem ? problemText(shownProblem, camera.privacyPlace) : null;
+  // A small round bubble has room for the title only; the line saying what
+  // to do shows on the larger shapes, and on the small one while pointed at.
+  // The system's question is always explained: the user has to act on it.
+  const showsHint = !round || camera.size === "large" || hovered || shownProblem === "asking";
   const closeLabel = cameraCloseLabel(camera);
   const controls = sizeControls(camera.size, lastRound);
   // The Tab stop: the size shown now, or the full-size toggle while full.
@@ -383,15 +480,23 @@ export default function CaptureCameraPage() {
         data-testid="camera-frame"
         className={`relative cursor-grab overflow-hidden bg-[#1c1d21] shadow-[0_10px_30px_rgba(0,0,0,0.45)] ring-2 ring-white/85 transition-[border-radius] duration-200 active:cursor-grabbing motion-reduce:transition-none ${cameraFrameShape(round)}`}
       >
-        {failed ? (
+        {problemCopy ? (
           <div
             data-tauri-drag-region
-            className="flex h-full w-full flex-col items-center justify-center gap-2 px-4 text-center text-[12px] leading-snug text-white/75"
+            data-testid="camera-problem"
+            data-problem={shownProblem ?? undefined}
+            role="status"
+            className={`flex h-full w-full flex-col items-center justify-center gap-1.5 bg-gradient-to-br from-[#2a2c33] to-[#1c1d21] px-5 text-center leading-snug text-white/85 ${
+              shownProblem === "asking" ? "animate-pulse motion-reduce:animate-none" : ""
+            }`}
           >
-            <VideoOff className="pointer-events-none size-6" aria-hidden />
-            <span className="pointer-events-none">
-              {round ? "Camera unavailable" : "The camera could not be opened. Check it is connected and allowed in System Settings."}
-            </span>
+            {shownProblem === "asking" ? (
+              <Video className="pointer-events-none size-6 text-white/75" aria-hidden />
+            ) : (
+              <VideoOff className="pointer-events-none size-6 text-white/75" aria-hidden />
+            )}
+            <span className="pointer-events-none text-[13px] font-medium">{problemCopy.title}</span>
+            {showsHint && <span className="pointer-events-none text-[11px] text-white/70">{problemCopy.hint}</span>}
           </div>
         ) : (
           <video
@@ -400,7 +505,16 @@ export default function CaptureCameraPage() {
             muted
             playsInline
             disablePictureInPicture
-            onPlaying={() => setPlaying(true)}
+            onPlaying={(e) => {
+              setPlaying(true);
+              const stream = streamRef.current;
+              if (stream && playedStream.current !== stream) {
+                playedStream.current = stream;
+                noFrameReopens.current = 0;
+                stage.current = "playing";
+                report("playing", `${describeTrack(stream.getVideoTracks()[0])}; ${describeVideo(e.currentTarget)}`);
+              }
+            }}
             // WebKit pauses a video it cannot see; hide it (its play button
             // would show, mirrored) and start it again.
             onPause={(e) => {
@@ -419,7 +533,7 @@ export default function CaptureCameraPage() {
           />
         )}
 
-        {!failed && placeholder && (
+        {!problemCopy && placeholder && (
           // Until the first frame (and while muted): a soft placeholder, never
           // a black disc. The bubble is filmed, so it says nothing in words.
           <div

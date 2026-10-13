@@ -9,11 +9,14 @@
 //! ConsentStore each time the bar opens (`permissions::windows_privacy_blocks`),
 //! since the user may have just flipped it.
 //!
-//! macOS asks through its own prompts and Linux has no such switches, so
-//! both report nothing blocked.
+//! macOS asks through its own prompts, so it reports nothing blocked. Linux
+//! asks its Camera portal before the bubble opens the camera
+//! (`camera_access`); after a no, or with camera access off for every app,
+//! the camera row says so here too.
 
 use serde::Serialize;
 
+use super::camera_access::CameraAccess;
 use super::permissions::PrivacyDevice;
 use super::rollout::Platform;
 
@@ -60,13 +63,29 @@ pub fn device_privacy_for(platform: Platform, recording: bool, blocked: impl Fn(
     }
 }
 
-/// What this machine's switches say now.
+/// Linux's camera row: what the system answered when Hippius asked for the
+/// camera (`camera_access`), in the same field Windows' switch uses.
 #[must_use]
-pub fn device_privacy() -> DevicePrivacy {
-    device_privacy_for(
-        super::rollout::current_platform(),
-        super::recording::recording_supported(),
-        super::permissions::windows_privacy_blocks,
+pub fn with_linux_camera(privacy: DevicePrivacy, platform: Platform, recording: bool, camera: CameraAccess) -> DevicePrivacy {
+    if !matches!(platform, Platform::LinuxX11 | Platform::LinuxWayland) || !recording {
+        return privacy;
+    }
+    DevicePrivacy {
+        camera_unavailable_message: super::camera_access::bar_line(camera),
+        ..privacy
+    }
+}
+
+/// What this machine's switches say now, with Linux's last camera answer.
+#[must_use]
+pub fn device_privacy(linux_camera: CameraAccess) -> DevicePrivacy {
+    let platform = super::rollout::current_platform();
+    let recording = super::recording::recording_supported();
+    with_linux_camera(
+        device_privacy_for(platform, recording, super::permissions::windows_privacy_blocks),
+        platform,
+        recording,
+        linux_camera,
     )
 }
 
@@ -131,6 +150,36 @@ mod tests {
                 "privacyBlocked": { "microphone": true, "camera": true },
                 "cameraUnavailableMessage": CAMERA_BLOCKED_WINDOWS,
             })
+        );
+    }
+
+    #[test]
+    fn linux_says_why_the_camera_is_refused_and_nothing_else_changes() {
+        for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
+            let base = device_privacy_for(platform, true, |_| true);
+            assert_eq!(
+                with_linux_camera(base, platform, true, CameraAccess::Denied).camera_unavailable_message,
+                Some(super::super::camera_access::CAMERA_DENIED_LINUX)
+            );
+            assert_eq!(
+                with_linux_camera(base, platform, true, CameraAccess::TurnedOff).camera_unavailable_message,
+                Some(super::super::camera_access::CAMERA_TURNED_OFF_LINUX)
+            );
+            for fine in [CameraAccess::Unknown, CameraAccess::Asking, CameraAccess::Granted] {
+                assert_eq!(with_linux_camera(base, platform, true, fine), DevicePrivacy::default(), "{fine:?}");
+            }
+            assert_eq!(
+                with_linux_camera(base, platform, false, CameraAccess::Denied),
+                DevicePrivacy::default(),
+                "no recorder, no camera row"
+            );
+        }
+        // Windows keeps its own switch's line; macOS has none.
+        let windows = device_privacy_for(Platform::Windows, true, |_| true);
+        assert_eq!(with_linux_camera(windows, Platform::Windows, true, CameraAccess::Denied), windows);
+        assert_eq!(
+            with_linux_camera(DevicePrivacy::default(), Platform::MacOs, true, CameraAccess::Denied),
+            DevicePrivacy::default()
         );
     }
 

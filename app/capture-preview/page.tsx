@@ -13,6 +13,7 @@ import {
   MoreHorizontal,
   Pencil,
   RotateCw,
+  Settings2,
   Sparkles,
   Trash2,
   Video,
@@ -27,6 +28,7 @@ import {
   editCapturePreview,
   getCapturePreview,
   getCapturePreviewPointer,
+  manageCapturePreviewLink,
   mintCapturePreviewLink,
   retryCapturePreview,
   revealCapturePreview,
@@ -73,10 +75,10 @@ const MENU_ITEM = `flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-
  * label ever wraps. A failed card offers Upgrade / Retry / Discard the same
  * way, Discard becoming an icon when all three are there.
  *
- * Sized for Rust's 316 x 330 pt window in every state (16:9 picture, the
- * failure reason on one line with the whole of it in the tooltip): the card
- * sits at the window's bottom, so anything taller is cut off at the TOP,
- * close button first.
+ * Sized for Rust's 316 x 346 pt window in every state (16:9 picture, the
+ * failure reason on one line with the whole of it in the tooltip, a notice on
+ * two): the card sits at the window's bottom, so anything taller is cut off
+ * at the TOP, close button first.
  */
 export default function CapturePreviewPage() {
   const [card, setCard] = useState<CapturePreviewCard | null>(null);
@@ -323,9 +325,24 @@ export default function CapturePreviewPage() {
             {failed && !waiting && <AlertCircle aria-hidden className="size-3.5 shrink-0 text-[#FF453A]" />}
             <span className="truncate">{view.text}</span>
           </p>
-          <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
-            {destinationText(card)}
-          </p>
+          {card.notice ? (
+            // Rust's line about the capture (a Free plan recording stopped at
+            // its limit) takes the destination's place, two lines at most.
+            <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
+              {card.notice}
+            </p>
+          ) : card.linkNote ? (
+            // A public link says who can open it, in the destination's place
+            // (still in the tooltip) so the card keeps its height. More >
+            // Manage link changes it.
+            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)} data-testid="capture-link-note">
+              {card.linkNote}
+            </p>
+          ) : (
+            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
+              {destinationText(card)}
+            </p>
+          )}
           {!uploaded && !failed && (
             <div
               className="h-1 overflow-hidden rounded-full bg-white/15"
@@ -415,9 +432,16 @@ export default function CapturePreviewPage() {
             </>
           ) : (
             <>
-              <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
-                <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
-              </button>
+              {actions.upgrade ? (
+                // Show in folder stays one click away on the picture.
+                <button type="button" onClick={() => run(upgradeFromCapturePreview)} className={PRIMARY_ACTION}>
+                  <Sparkles aria-hidden className="size-3.5 shrink-0" /> Upgrade
+                </button>
+              ) : (
+                <button type="button" onClick={showInFolder} className={PRIMARY_ACTION}>
+                  <FolderOpen aria-hidden className="size-3.5 shrink-0" /> Show in folder
+                </button>
+              )}
               {actions.mintLink ? (
                 <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
                   <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
@@ -428,7 +452,7 @@ export default function CapturePreviewPage() {
                   {copied ? "Copied" : "Copy link"}
                 </button>
               )}
-              {(actions.reveal || actions.revokeLink || canEdit) && (
+              {(actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
                 <button
                   ref={menuButton}
                   type="button"
@@ -442,7 +466,7 @@ export default function CapturePreviewPage() {
                   <MoreHorizontal aria-hidden className="size-4" />
                 </button>
               )}
-              {menuOpen && (actions.reveal || actions.revokeLink || canEdit) && (
+              {menuOpen && (actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
                 // Opens upward over the picture: the card sits at the window's
                 // bottom edge, so there is no room below.
                 <div
@@ -477,6 +501,20 @@ export default function CapturePreviewPage() {
                       className={MENU_ITEM}
                     >
                       <FolderSearch aria-hidden className="size-3.5 shrink-0" /> Show in {fileManager}
+                    </button>
+                  )}
+                  {actions.manageLink && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        run(manageCapturePreviewLink);
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <Settings2 aria-hidden className="size-3.5 shrink-0" /> Manage link
                     </button>
                   )}
                   {actions.revokeLink && (

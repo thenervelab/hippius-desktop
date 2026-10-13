@@ -1,6 +1,6 @@
 "use client";
 
-import React, { type ReactNode, useEffect, useRef } from "react";
+import React, { type ReactNode, useEffect, useId, useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -43,6 +43,12 @@ export interface FramedDialogProps {
    * `onClose` is never called while this is set.
    */
   preventClose?: boolean;
+  /**
+   * The id(s) of the text that describes the dialog, for
+   * `aria-describedby`. Left out, the whole body describes it, so a screen
+   * reader hears more than the title when the dialog opens.
+   */
+  describedBy?: string;
 }
 
 export function FramedDialog({
@@ -61,8 +67,10 @@ export function FramedDialog({
   preventClose = false,
   headerLayout = "centered",
   subtitle,
+  describedBy,
 }: FramedDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
+  const bodyId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -100,7 +108,7 @@ export function FramedDialog({
             fire either. */}
         <Dialog.Content
           ref={contentRef}
-          aria-describedby={undefined}
+          aria-describedby={describedBy ?? bodyId}
           className="fixed top-0 left-0 right-0 h-screen z-[61] flex items-center justify-center p-3 sm:p-6"
           onClick={preventClose ? undefined : onClose}
           onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : undefined}
@@ -211,7 +219,7 @@ export function FramedDialog({
                 )}
 
                 {/* Body */}
-                {children}
+                <div id={bodyId}>{children}</div>
               </div>
             </div>
           </BackgroundContainer>

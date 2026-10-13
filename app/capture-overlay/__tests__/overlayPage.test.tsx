@@ -57,6 +57,8 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
   destination: { label: "Work", displayName: "Work" },
   pending: { target: "area", displayId: 1, rect: AREA },
   instant: false,
+  panel: false,
+  frozen: false,
   ...over,
 });
 
@@ -86,8 +88,21 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
 
 const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c === cmd);
 
+/** The bar's Capture / Record once Rust has said the plan is read (it is disabled until then). */
+async function enabledButton(name: string): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", { name });
+  await waitFor(() => expect(button).toBeEnabled());
+  return button;
+}
+
 beforeEach(() => {
   tauri.reset();
+  // Rust's recording gate lets a recording start unless a test says not.
+  tauri.onInvoke("capture_check_recording_start", () => null);
+  // A paid or unknown plan: no free plan notice unless a test says so.
+  tauri.onInvoke("capture_free_plan_notice", () => null);
+  // Rust has read the plan for this capture unless a test says otherwise.
+  tauri.onInvoke("capture_plan_status", () => ({ state: "ready", message: null, action: null }));
   confirm = vi.fn(() => new Promise(() => undefined));
   window.history.replaceState({}, "", "/capture-overlay?display=1");
 });
@@ -269,6 +284,21 @@ describe("the capture overlay's keyboard", () => {
 });
 
 describe("the capture bar's words", () => {
+  it("tells the free plan about the watermark, the 5 minutes and its recordings before capturing", async () => {
+    tauri.onInvoke("capture_free_plan_notice", () => ({ used: 4, limit: 25, maxRecordingMins: 5 }));
+    setup();
+    expect(await screen.findByTestId("capture-free-plan")).toHaveTextContent(
+      "Free plan: captures carry a small Hippius watermark and recordings stop at 5 minutes. 4 of 25 free recordings used.",
+    );
+  });
+
+  it("says nothing about a plan that is paid or unknown", async () => {
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    await waitFor(() => expect(called("capture_free_plan_notice")).toBe(true));
+    expect(screen.queryByTestId("capture-free-plan")).toBeNull();
+  });
+
   it("shows Record disabled with Rust's reason when this build has no helper, and does not switch to it", async () => {
     tauri.onInvoke("capture_set_mode", () => null);
     setup({
@@ -507,6 +537,10 @@ describe("the Options menu", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     vi.useFakeTimers();
     fireEvent.keyDown(window, { key: "Enter" });
+    // Rust's recording gate answers before the count starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(screen.getByText("Recording in 5")).toBeInTheDocument();
   });
 
@@ -790,6 +824,10 @@ describe("click to capture", () => {
     expect(await screen.findByText("Click to record this screen")).toBeInTheDocument();
     vi.useFakeTimers();
     click(el, 300, 300);
+    // Rust's recording gate answers before the count starts.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(screen.getByText("Recording in 3")).toBeInTheDocument();
     expect(called("capture_select")).toBe(false);
     // One second per number; each re-render arms the next.
@@ -888,16 +926,14 @@ describe("the camera and microphone menus", () => {
   });
 });
 
-/** Rust's context for the Wayland recording panel (`selection: systemPicker`). */
+/** Rust's context for the Wayland recording panel (`panel`). */
 const PANEL: Partial<CaptureOverlayContext> = {
   kind: "recording",
   mode: "window",
   displayId: 0,
-  selection: "systemPicker",
-  modes: { screenshot: [], recording: ["window", "screen"] },
-  screenshotTimer: false,
+  panel: true,
+  modes: { screenshot: ["area", "screen"], recording: ["window", "screen"] },
   recordCountdown: false,
-  systemPickerNote: "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.",
   linuxSession: "wayland",
   cameraOnlyAvailable: false,
   pending: null,
@@ -910,19 +946,21 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
 
   it("is the bar alone in a panel, with no selection surface and no list of windows", async () => {
     setup(PANEL);
-    await screen.findByRole("toolbar", { name: "Capture" });
-    expect(screen.getByTestId("capture-panel")).toHaveAttribute("data-tauri-drag-region");
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture" });
+    // The bar's own empty parts move the window: there is nothing else in it.
+    expect(toolbar).toHaveAttribute("data-tauri-drag-region");
     expect(screen.queryByRole("button", { name: /Choose (window|screen)/ })).toBeNull();
-    expect(screen.queryByRole("radio", { name: /Capture/ })).toBeNull();
+    expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
     expect(screen.getByRole("radio", { name: "Record a window" })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "Record entire screen" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTestId("capture-plan-status")).toBeNull());
     expect(screen.getByRole("status")).toHaveTextContent("then choose a window in your desktop's sharing dialog");
   });
 
   /** No window to click there: Record goes on to Rust, which asks the desktop. */
   it("records a window without asking for a click", async () => {
     setup(PANEL);
-    fireEvent.click(await screen.findByRole("button", { name: "Record" }));
+    fireEvent.click(await enabledButton("Record"));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 0 }));
     expect(screen.queryByText(/Click a window/)).toBeNull();
   });
@@ -947,9 +985,137 @@ describe("the recording panel where the desktop's dialog chooses (Wayland)", () 
     expect(screen.getByText("Record system audio")).toBeInTheDocument();
   });
 
+  /**
+   * The panel used to draw a 520 x 600 box of dark glass with a border
+   * behind the bar, which on a Wayland desktop was a big dark frame around a
+   * small bar. Now nothing but the bar is drawn, and the window is fitted to
+   * it: grown below the bar when a menu opens, shrunk back when it closes.
+   */
+  it("draws only the bar and fits its window to the bar and an open menu", async () => {
+    const fits: Array<{ width: number; height: number }> = [];
+    tauri.onInvoke("capture_panel_fit", (args) => {
+      fits.push(args as { width: number; height: number });
+      return null;
+    });
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    // jsdom lays nothing out: the bar is 480 x 200 at the panel's 12 px
+    // inset, and a menu hangs 150 px below it.
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testid === "capture-panel") return box(12, 12, 480, 200);
+      if (this.getAttribute("role") === "menu") return box(236, 222, 256, 140);
+      return real.call(this);
+    });
+    try {
+      setup(PANEL);
+      await screen.findByRole("toolbar", { name: "Capture" });
+      const panel = screen.getByTestId("capture-panel");
+      // No glass, frame or rounding of the panel's own around the bar.
+      expect(panel.className).not.toMatch(/bg-|border|rounded/);
+      expect(panel).not.toHaveAttribute("data-tauri-drag-region");
+      await waitFor(() => expect(fits).toContainEqual({ width: 504, height: 224 }));
+
+      fireEvent.click(screen.getByRole("button", { name: /Options/ }));
+      await screen.findByRole("menu", { name: "Capture options" });
+      await waitFor(() => expect(fits.at(-1)).toEqual({ width: 504, height: 374 }));
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("menu", { name: "Capture options" })).toBeNull());
+      await waitFor(() => expect(fits.at(-1)).toEqual({ width: 504, height: 224 }));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  /** A full-screen overlay is not fitted to anything. */
+  it("never fits an overlay", async () => {
+    window.history.replaceState({}, "", "/capture-overlay?display=1");
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    fireEvent.click(screen.getByRole("button", { name: /Options/ }));
+    await screen.findByRole("menu", { name: "Capture options" });
+    expect(called("capture_panel_fit")).toBe(false);
+  });
+
+  /** A screenshot is chosen on the frozen overlay: the switch is Rust's, which swaps the windows. */
+  it("hands a switch to a screenshot to Rust", async () => {
+    setup(PANEL);
+    tauri.onInvoke("capture_set_mode", () => null);
+    fireEvent.click(await screen.findByRole("radio", { name: "Capture an area" }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_mode", { kind: "screenshot", mode: "area" }),
+    );
+  });
+
+  /**
+   * The panel's device menu drops over the toolbar below its row; the
+   * sources panel it lives in is stacked above the toolbar so the menu is
+   * not drawn under the bar's buttons.
+   */
+  it("opens the microphone menu above the toolbar, not behind it", async () => {
+    setup(PANEL);
+    tauri.onInvoke("capture_microphones", () => [
+      { id: "mic-1", name: "Built-in Audio", isDefault: true, continuity: false },
+    ]);
+    fireEvent.click(await screen.findByRole("button", { name: /^Microphone:/ }));
+    const menu = await screen.findByRole("menu", { name: "Choose a microphone" });
+    const sources = screen.getByRole("group", { name: "Recording sources" });
+    expect(sources).toContainElement(menu);
+    expect(sources.className.split(/\s+/)).toEqual(expect.arrayContaining(["relative", "z-20"]));
+    expect(screen.getByRole("toolbar", { name: "Capture" }).className).not.toMatch(/(^|\s)z-/);
+  });
+
   it("says what Record leads to for a whole screen", async () => {
     setup({ ...PANEL, mode: "screen" });
     expect(await screen.findByRole("status")).toHaveTextContent("then choose a screen in your desktop's sharing dialog");
+  });
+});
+
+/** Rust's context for a Wayland screenshot, chosen over a still of the desktop. */
+const FROZEN: Partial<CaptureOverlayContext> = {
+  frozen: true,
+  modes: { screenshot: ["area", "screen"], recording: ["window", "screen"] },
+  linuxSession: "wayland",
+};
+const STILL = "data:image/jpeg;base64,c3RpbGw=";
+
+describe("a Wayland screenshot over a still of the desktop", () => {
+  it("draws the overlay over this display's still, read once", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup(FROZEN);
+    const still = await screen.findByTestId("capture-backdrop");
+    expect(still).toHaveAttribute("src", STILL);
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_overlay_backdrop", { displayId: 1 });
+    // Behind the selection surface, which keeps its dim and its area.
+    expect(still.nextElementSibling).toContainElement(screen.getByRole("toolbar", { name: "Capture" }));
+    expect(tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_overlay_backdrop")).toHaveLength(1);
+  });
+
+  it("offers an area and the entire screen, never a window", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup(FROZEN);
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(screen.getByRole("radio", { name: "Capture an area" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Capture entire screen" })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Capture a window" })).toBeNull();
+  });
+
+  /** The timer exists so the screen can change: the count is over the live screen, and Rust takes a fresh still. */
+  it("hides the still while the timer counts", async () => {
+    tauri.onInvoke("capture_overlay_backdrop", () => STILL);
+    setup({ ...FROZEN, countdownSecs: 5 });
+    await screen.findByTestId("capture-backdrop");
+    fireEvent.keyDown(window, { key: "Enter" });
+    await screen.findByRole("button", { name: "Capture now" });
+    expect(screen.queryByTestId("capture-backdrop")).toBeNull();
+  });
+
+  it("asks for no still on the live overlay", async () => {
+    setup();
+    await screen.findByRole("toolbar", { name: "Capture" });
+    expect(called("capture_overlay_backdrop")).toBe(false);
+    expect(screen.queryByTestId("capture-backdrop")).toBeNull();
   });
 });
 
@@ -1152,5 +1318,122 @@ describe("drawing over an area that is already there", () => {
     expect(handedOver()).toEqual([]);
     expect(screen.getByText("400 × 300")).toBeInTheDocument();
     expect(screen.queryByText("0 × 0")).toBeNull();
+  });
+});
+
+describe("Record on a free plan whose recordings are used up", () => {
+  const LIMIT = {
+    kind: "NotReady",
+    subkind: "RECORDING_LIMIT_REACHED",
+    message: "You've used your 25 free recordings Upgrade your plan to record more, or delete an older recording.",
+  };
+  const recording = { kind: "recording" as const, countdownSecs: 3 };
+  const refuse = () => {
+    throw LIMIT;
+  };
+
+  it("shows the limit panel at once, before any countdown, and records nothing", async () => {
+    tauri.onInvoke("capture_check_recording_start", refuse);
+    setup(recording);
+    fireEvent.click(await enabledButton("Record"));
+    const panel = await screen.findByRole("alertdialog", { name: "You've used your 25 free recordings" });
+    expect(panel).toHaveTextContent("Upgrade your plan to record more, or delete an older recording.");
+    expect(screen.queryByRole("button", { name: "Record now" })).toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("shows it when Rust refuses at Record itself", async () => {
+    tauri.onInvoke("capture_check_recording_start", () => null);
+    confirm = vi.fn(() => Promise.reject(LIMIT));
+    setup({ kind: "recording" });
+    fireEvent.click(await enabledButton("Record"));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(confirm).toHaveBeenCalledWith({ displayId: 1 });
+  });
+
+  it("Upgrade goes through Rust; Not now and Escape leave the bar up", async () => {
+    tauri.onInvoke("capture_check_recording_start", refuse);
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    setup(recording);
+    fireEvent.click(await enabledButton("Record"));
+    fireEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.getByRole("toolbar", { name: "Capture" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(called("capture_cancel")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Record" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Upgrade/ }));
+    await waitFor(() => expect(called("capture_limit_upgrade")).toBe(true));
+  });
+
+  it("never asks the gate for a screenshot", async () => {
+    setup({ countdownSecs: 0 });
+    fireEvent.click(await enabledButton("Capture"));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(called("capture_check_recording_start")).toBe(false);
+  });
+});
+
+describe("the plan read before a capture", () => {
+  const checking = { state: "checking", message: "Checking your plan…", action: null };
+  const unreachable = {
+    state: "refused",
+    message: "We couldn't check your plan. Check your connection and try again.",
+    action: "retry",
+  };
+  const confirmButton = () => screen.getByRole("button", { name: "Capture" });
+
+  it("says it is checking and cannot be captured until Rust has read the plan", async () => {
+    tauri.onInvoke("capture_plan_status", () => checking);
+    setup();
+    expect(await screen.findByText("Checking your plan…")).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+
+    await act(() => tauri.emitEvent("capture_plan_changed", { state: "ready", message: null, action: null }));
+    expect(screen.queryByTestId("capture-plan-status")).not.toBeInTheDocument();
+    expect(confirmButton()).toBeEnabled();
+    fireEvent.click(confirmButton());
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
+  });
+
+  it("refuses a plan that could not be read, in Rust's words, with a Retry that reads it again", async () => {
+    tauri.onInvoke("capture_plan_status", () => unreachable);
+    tauri.onInvoke("capture_plan_retry", () => checking);
+    setup();
+    expect(await screen.findByText(unreachable.message)).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(called("capture_plan_retry")).toBe(true));
+    expect(await screen.findByText("Checking your plan…")).toBeInTheDocument();
+    expect(confirmButton()).toBeDisabled();
+    expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("offers Upgrade to an account with no Drive storage, through Rust", async () => {
+    const message = "Captures are saved to Hippius Drive, and this account has no Drive storage yet. Choose a plan to start capturing.";
+    tauri.onInvoke("capture_plan_status", () => ({ state: "refused", message, action: "upgrade" }));
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    setup();
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Upgrade" }));
+    await waitFor(() => expect(called("capture_limit_upgrade")).toBe(true));
+    expect(confirmButton()).toBeDisabled();
+  });
+
+  it("hides the free plan line until the plan is read", async () => {
+    tauri.onInvoke("capture_plan_status", () => checking);
+    tauri.onInvoke("capture_free_plan_notice", () => ({ used: 3, limit: 25, maxRecordingMins: 5 }));
+    setup();
+    await screen.findByText("Checking your plan…");
+    expect(screen.queryByTestId("capture-free-plan")).not.toBeInTheDocument();
+    await act(() => tauri.emitEvent("capture_plan_changed", { state: "ready", message: null, action: null }));
+    expect(await screen.findByTestId("capture-free-plan")).toBeInTheDocument();
   });
 });

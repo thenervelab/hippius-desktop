@@ -27,6 +27,22 @@
 //! there and the tray sends no click). Once the user has it, the end of the recording
 //! leaves it where it is and does not hand the keyboard back to the app
 //! that was in front when the capture began.
+//!
+//! **Linux: the dock.** GNOME's dock (and Alt+Tab) raises the app's first
+//! window, visible windows first, and on Wayland every Hippius window counts:
+//! GTK 3 cannot mark a Wayland window "skip taskbar", so the pill and the
+//! camera bubble are ordinary windows of the app. With the main window
+//! hidden, a dock click raised the pill and nothing else happened. On X11
+//! the dock does honour "skip taskbar", so the main window is minimized
+//! instead of hidden there ([`main_away`]) and the dock's click is a plain
+//! unminimize. On Wayland it stays hidden (a minimized Wayland window comes
+//! back only through an activation the compositor refuses without fresh
+//! input, so the tray's Open Hippius and the end of the recording could no
+//! longer bring it back), and a capture window that takes the keyboard while
+//! the pointer is not on it brings the main window
+//! ([`capture_window_focus_shows_main`]).
+
+use std::time::Duration;
 
 use super::rollout::Platform;
 use super::session::CapturePhase;
@@ -39,6 +55,9 @@ pub enum OwnWindow {
     Overlay,
     /// The recording pill.
     Pill,
+    /// The camera bubble's controls, over the bubble mid-recording
+    /// (`bubble_controls`). The bubble itself is filmed; these never are.
+    BubbleControls,
     /// The preview card in the corner.
     Card,
     /// The tray popover, opened during a recording (`recording`) or not.
@@ -54,7 +73,7 @@ pub const fn content_protected(platform: Platform, window: OwnWindow) -> bool {
     match window {
         // On screen while a screenshot is read, on every platform.
         OwnWindow::Overlay => true,
-        OwnWindow::Pill | OwnWindow::Card => !recorder_leaves_app_out(platform),
+        OwnWindow::Pill | OwnWindow::BubbleControls | OwnWindow::Card => !recorder_leaves_app_out(platform),
         OwnWindow::TrayPopover { recording } => recording && !recorder_leaves_app_out(platform),
     }
 }
@@ -133,10 +152,101 @@ pub const fn focus_keeps_main(phase: CapturePhase) -> bool {
     recording_on(phase)
 }
 
+/// How the main window is kept out of a capture while one runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MainAway {
+    /// Hidden: off screen and out of the taskbar, dock and Alt+Tab.
+    Hidden,
+    /// Minimized: off screen (so not filmed) but still the app's window in
+    /// the dock, whose click brings it back. X11 only: there the pill and the
+    /// bubble are "skip taskbar", so a hidden main window left the dock with
+    /// no window to raise.
+    Minimized,
+}
+
+/// How `platform` puts the main window away when a capture starts.
+#[must_use]
+pub const fn main_away(platform: Platform) -> MainAway {
+    match platform {
+        Platform::LinuxX11 => MainAway::Minimized,
+        Platform::MacOs | Platform::Windows | Platform::LinuxWayland => MainAway::Hidden,
+    }
+}
+
+/// Whether the main window is on screen as the capture starts, the thing
+/// the end of the capture puts back. A minimized window is "visible" to the
+/// toolkit; on Linux it is left minimized afterwards rather than brought up.
+/// (Elsewhere a minimized window has always been treated as shown, and
+/// still is.)
+#[must_use]
+pub const fn main_on_screen(platform: Platform, visible: bool, minimized: bool) -> bool {
+    match platform {
+        Platform::LinuxX11 | Platform::LinuxWayland => visible && !minimized,
+        Platform::MacOs | Platform::Windows => visible,
+    }
+}
+
+/// How long after a capture window is mapped its first focus is the
+/// compositor's doing (GNOME focuses a newly shown window), not the user's.
+pub const MAPPED_FOCUS_GRACE: Duration = Duration::from_millis(1500);
+
+/// A capture window (the pill, the camera bubble, its controls, the card)
+/// took the keyboard on Wayland during a recording, with the main window
+/// hidden. When the pointer is not on that window, no click on it did this:
+/// the dock or Alt+Tab raised it in place of Hippius's main window, which
+/// they cannot see (it is hidden, [`main_away`]). The main window comes
+/// forward, as the macOS Dock and Cmd+Tab bring it.
+///
+/// Not a window the pointer is over (a click on Pause, a drag of the bubble),
+/// not one just shown (`since_mapped` within [`MAPPED_FOCUS_GRACE`]: the
+/// compositor focuses a new window itself), and only on Wayland (X11's dock
+/// unminimizes the main window directly).
+#[must_use]
+pub fn capture_window_focus_shows_main(
+    platform: Platform,
+    phase: CapturePhase,
+    main_on_screen: bool,
+    pointer_over: bool,
+    since_mapped: Option<Duration>,
+) -> bool {
+    let just_shown = since_mapped.is_some_and(|d| d < MAPPED_FOCUS_GRACE);
+    matches!(platform, Platform::LinuxWayland) && recording_on(phase) && !main_on_screen && !pointer_over && !just_shown
+}
+
+/// Whether closing the main window may quit the app now (Windows and Linux,
+/// where closing it quits). Not while a capture is under way: the main
+/// window is hidden then, and a close it gets is the desktop's, not the
+/// user's (GNOME's dock or Activities closing "every window" of the app
+/// while the pill and bubble are its only visible ones). Quitting there
+/// threw the capture away with the app; the window is hidden instead and
+/// the capture goes on.
+#[must_use]
+pub fn closing_main_quits(phase: CapturePhase) -> bool {
+    phase == CapturePhase::Idle
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::capture::session::CaptureKind;
+
+    #[test]
+    fn closing_the_main_window_never_quits_mid_capture() {
+        assert!(closing_main_quits(CapturePhase::Idle));
+        for phase in [
+            CapturePhase::Selecting {
+                kind: CaptureKind::Recording,
+                mode: crate::capture::session::CaptureMode::Screen,
+            },
+            CapturePhase::Capturing {
+                kind: CaptureKind::Recording,
+            },
+            RECORDING,
+            CapturePhase::Finalizing,
+        ] {
+            assert!(!closing_main_quits(phase), "{phase:?}");
+        }
+    }
 
     const RECORDING: CapturePhase = CapturePhase::Recording {
         elapsed_secs: 0,
@@ -149,6 +259,7 @@ mod tests {
     fn macos_protects_only_the_overlays() {
         assert!(content_protected(Platform::MacOs, OwnWindow::Overlay));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Pill));
+        assert!(!content_protected(Platform::MacOs, OwnWindow::BubbleControls));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Card));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: true }));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: false }));
@@ -163,6 +274,7 @@ mod tests {
         for w in [
             OwnWindow::Overlay,
             OwnWindow::Pill,
+            OwnWindow::BubbleControls,
             OwnWindow::Card,
             OwnWindow::TrayPopover { recording: true },
         ] {
@@ -271,5 +383,77 @@ mod tests {
         assert!(!focus_keeps_main(CapturePhase::Capturing {
             kind: CaptureKind::Recording
         }));
+    }
+
+    /// X11's dock honours "skip taskbar": the main window is minimized there
+    /// so it stays the dock's one window. Wayland keeps hiding it (a
+    /// minimized Wayland window cannot be brought back without the
+    /// compositor's consent), and macOS and Windows are unchanged.
+    #[test]
+    fn only_x11_minimizes_the_main_window() {
+        assert_eq!(main_away(Platform::LinuxX11), MainAway::Minimized);
+        assert_eq!(main_away(Platform::LinuxWayland), MainAway::Hidden);
+        assert_eq!(main_away(Platform::MacOs), MainAway::Hidden);
+        assert_eq!(main_away(Platform::Windows), MainAway::Hidden);
+    }
+
+    /// A main window the user had minimized before the capture is not
+    /// brought up at its end on Linux; macOS and Windows keep their rule.
+    #[test]
+    fn a_minimized_main_window_is_not_on_screen_on_linux() {
+        for p in [Platform::LinuxX11, Platform::LinuxWayland] {
+            assert!(main_on_screen(p, true, false), "{p:?}");
+            assert!(!main_on_screen(p, true, true), "{p:?}");
+            assert!(!main_on_screen(p, false, false), "{p:?}");
+        }
+        for p in [Platform::MacOs, Platform::Windows] {
+            assert!(main_on_screen(p, true, true), "{p:?}");
+            assert!(!main_on_screen(p, false, false), "{p:?}");
+        }
+    }
+
+    /// The Wayland dock raises the pill or the bubble, with the pointer on
+    /// the dock: that brings the hidden main window. A click on the pill
+    /// (pointer on it), a window the compositor focused as it was shown, a
+    /// main window already up, or a phase with no recording does not.
+    #[test]
+    fn the_wayland_dock_raising_a_capture_window_brings_the_main_window() {
+        let long_ago = Some(Duration::from_secs(30));
+        let wl = Platform::LinuxWayland;
+        assert!(capture_window_focus_shows_main(wl, RECORDING, false, false, long_ago));
+        assert!(capture_window_focus_shows_main(wl, CapturePhase::Finalizing, false, false, None));
+        assert!(capture_window_focus_shows_main(
+            wl,
+            CapturePhase::Paused {
+                elapsed_secs: 4,
+                microphone: false
+            },
+            false,
+            false,
+            long_ago
+        ));
+        assert!(
+            !capture_window_focus_shows_main(wl, RECORDING, false, true, long_ago),
+            "a click on the pill"
+        );
+        assert!(!capture_window_focus_shows_main(wl, RECORDING, true, false, long_ago), "already up");
+        assert!(
+            !capture_window_focus_shows_main(wl, RECORDING, false, false, Some(Duration::from_millis(200))),
+            "the compositor focused a window as it was shown"
+        );
+        assert!(capture_window_focus_shows_main(wl, RECORDING, false, false, Some(MAPPED_FOCUS_GRACE)));
+        assert!(!capture_window_focus_shows_main(wl, CapturePhase::Idle, false, false, long_ago));
+        assert!(!capture_window_focus_shows_main(
+            wl,
+            CapturePhase::Capturing {
+                kind: CaptureKind::Recording
+            },
+            false,
+            false,
+            long_ago
+        ));
+        for p in [Platform::LinuxX11, Platform::MacOs, Platform::Windows] {
+            assert!(!capture_window_focus_shows_main(p, RECORDING, false, false, long_ago), "{p:?}");
+        }
     }
 }

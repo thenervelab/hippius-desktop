@@ -17,9 +17,12 @@ describe("Drive's Edit image item", () => {
     const item = source.slice(source.indexOf("offersImageEditor({"), source.indexOf('itemTitle:"Editimage"') + 400);
     expect(item).toContain("cloudOnly:isCloudOnlyRow(file)");
     expect(item).toContain("memberDrive:isMemberDriveLabel(file.label,memberDriveLabels)");
+    expect(item).toContain("serverFileId:file.fileId");
     expect(item).toContain(
-      "openFileInEditor(file.label,resolveRelativePath(parentSubFolderPath??normalizedSubfolderPath,file.actualFileName||file.name,),)",
+      "openFileInEditor(file.label,resolveRelativePath(parentSubFolderPath??normalizedSubfolderPath,file.actualFileName||file.name,),",
     );
+    // A picture only on the server is opened by its id and content hash.
+    expect(item).toContain("{fileId:file.fileId,arionHash:file.arionCid}");
     expect(item).toContain(".catch((error)=>toast.error(tauriErrorMessage(error)))");
   });
 });

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { getSavePreference, setSavePreference, type SavePreference } from "@/app/lib/tauri/captureEditor";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { SettingIcon } from "./SettingIcon";
 
 const OPTIONS: { value: SavePreference; label: string }[] = [
   { value: "ask", label: "Ask" },
@@ -44,7 +45,9 @@ export default function EditedImageSetting({ rowClassName }: { rowClassName: str
   return (
     <div className={rowClassName}>
       <div className="flex min-w-0 items-start gap-3">
-        <PenLine className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
+        <SettingIcon>
+          <PenLine className="size-[18px]" strokeWidth={2} />
+        </SettingIcon>
         <div className="min-w-0">
           <p className="text-sm font-medium text-grey-10 dark:text-white">When saving an edited image</p>
           <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">

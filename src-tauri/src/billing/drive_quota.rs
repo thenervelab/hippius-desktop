@@ -176,15 +176,16 @@ const OWN_DRIVE_PREFLIGHT_LABEL: &str = "own-drive-preflight";
 
 /// Who the pre-flight asks about.
 ///
-/// The hash is never empty. The server uses it to tell a Drive write from
-/// other storage, which is paid for differently and has no free allowance, so
-/// an empty hash is checked against the wrong allowance and refused.
+/// The hash is never empty. hcfs-server picks the billing product from it: an
+/// empty `folder_hash` is the S3 rail (credits, no free tier), a real one is
+/// the Drive rail. Sending `""` for an own drive was correct until hcfs #586
+/// split the two, then refused every account with `zero_balance`.
 ///
 /// - A drive in scope (own or member) sends its wire pair. For a member drive
 ///   that names the OWNER, whose allowance pays; storage there is paid for by
 ///   them.
 /// - No drive in scope sends the caller with a placeholder hash. The server
-///   only needs a non-empty hash to check the Drive plan, and the owner is
+///   only needs a non-empty hash to choose the Drive rail, and the owner is
 ///   authorised for any hash under their own address. The quota it measures is
 ///   the account's Drive plan, which does not depend on which drive.
 ///
@@ -194,7 +195,7 @@ const OWN_DRIVE_PREFLIGHT_LABEL: &str = "own-drive-preflight";
 fn preflight_request(caller_ss58: &str, incoming_bytes: u64, drive: Option<&crate::sync::identity::DriveIdentity>) -> CanUploadRequest {
     // An identity built for a listing client carries an empty hash
     // (`DriveIdentity::own(acct, "")`); it names no drive, so it gets the
-    // placeholder rather than being checked against the wrong allowance.
+    // placeholder rather than the S3 rail.
     let (ss58_address, folder_hash) = match drive.filter(|d| !d.wire_folder_hash.is_empty()) {
         Some(d) => (d.wire_ss58.clone(), d.wire_folder_hash.clone()),
         None => (caller_ss58.to_owned(), crate::sync::mnemonic::folder_hash(OWN_DRIVE_PREFLIGHT_LABEL)),
@@ -280,18 +281,16 @@ mod tests {
         assert_eq!(req.size_bytes, 100);
     }
 
-    /// The server checks an empty hash against a different allowance with no
-    /// free tier, so no pre-flight may send one.
+    /// hcfs-server reads an empty hash as the S3 rail (credits, no free tier),
+    /// so no pre-flight may send one: it answered `zero_balance` to every
+    /// account after hcfs #586.
     #[test]
     fn a_preflight_never_sends_an_empty_hash() {
         let own = DriveIdentity::own("5Me", "abc123");
         let listing_client = DriveIdentity::own("5Me", "");
         for drive in [None, Some(&own), Some(&member("5Owner", "def456")), Some(&listing_client)] {
             let req = preflight_request("5Me", 100, drive);
-            assert!(
-                !req.folder_hash.is_empty(),
-                "an empty hash is checked against the wrong allowance: {drive:?}"
-            );
+            assert!(!req.folder_hash.is_empty(), "an empty hash is the S3 rail: {drive:?}");
         }
     }
 

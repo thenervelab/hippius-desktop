@@ -74,6 +74,19 @@ export const TRAY_FILE_ACTION_EVENT = "hippius:tray-file-action";
 export interface TrayFileActionRequest {
   action: TrayMainWindowAction;
   file: FormattedUserFile;
+  /**
+   * For "preview": the list the viewer walks with its arrows and thumbnail
+   * rail (the popover tab the file was opened from). Absent, the viewer
+   * shows the file alone.
+   */
+  siblings?: FormattedUserFile[];
+}
+
+/** A file-shaped object from another webview: it has a name to show. */
+function isFileLike(value: unknown): value is FormattedUserFile {
+  if (!value || typeof value !== "object") return false;
+  const name = (value as Record<string, unknown>).name;
+  return typeof name === "string" && name.length > 0;
 }
 
 /** Shape check for a request arriving from another webview: the payload is
@@ -85,13 +98,32 @@ export function parseTrayFileActionRequest(
   const { action, file } = payload as Record<string, unknown>;
   if (typeof action !== "string") return null;
   if (!MAIN_WINDOW_ACTIONS.has(action as TrayRowActionId)) return null;
-  if (!file || typeof file !== "object") return null;
-  const name = (file as Record<string, unknown>).name;
-  if (typeof name !== "string" || name.length === 0) return null;
+  if (!isFileLike(file)) return null;
+  const { siblings } = payload as Record<string, unknown>;
+  const list = Array.isArray(siblings) ? siblings.filter(isFileLike) : [];
   return {
     action: action as TrayMainWindowAction,
-    file: file as FormattedUserFile,
+    file,
+    // A list that does not hold the file would show the viewer with no
+    // current item, so it is dropped rather than half-used.
+    ...(list.length > 0 && list.some((f) => sameTrayFile(f, file))
+      ? { siblings: list }
+      : {}),
   };
+}
+
+/** Same drive and same drive-relative path: one file. */
+export function sameTrayFile(a: FormattedUserFile, b: FormattedUserFile): boolean {
+  return (a.label ?? "") === (b.label ?? "") && trayRowRelativePath(a) === trayRowRelativePath(b);
+}
+
+/**
+ * Whether pressing the row's picture or name opens the file in the app's
+ * viewer (`UnifiedMediaDialog`, in the main window): the same rule as the
+ * menu's "View", a finished file the viewer can show.
+ */
+export function trayRowOpensViewer(item: UploadFeedItem): boolean {
+  return item.feedStatus === "completed" && !item.isFolder && isPreviewableFileName(item.name);
 }
 
 /** The row's drive-relative path. */
@@ -154,8 +186,11 @@ export function trayDriveLocation(item: FormattedUserFile): {
  * drives are shared with the account (a provider-free webview), so a
  * member drive's picture is offered here and refused by Rust, which checks
  * every rule again when the editor opens.
+ *
+ * `editorEnabled`: capture is on for this computer (the popover's
+ * `useTrayCaptureView` is `ready`), the flag AND Rust's support.
  */
-export function canEditTrayRow(item: UploadFeedItem): boolean {
+export function canEditTrayRow(item: UploadFeedItem, editorEnabled: boolean): boolean {
   return (
     item.feedStatus === "completed" &&
     offersImageEditor({
@@ -163,8 +198,9 @@ export function canEditTrayRow(item: UploadFeedItem): boolean {
       isFolder: Boolean(item.isFolder),
       label: item.label,
       cloudOnly: isCloudOnlyRow(item),
+      serverFileId: item.fileId,
       memberDrive: false,
-    })
+    }, editorEnabled)
   );
 }
 
@@ -184,14 +220,15 @@ export function canRevealTrayRow(item: UploadFeedItem): boolean {
 export function getTrayRowActions(
   item: UploadFeedItem,
   fileManager: string,
+  editorEnabled: boolean,
 ): TrayRowAction[] {
   const actions: TrayRowAction[] = [];
   const completed = item.feedStatus === "completed";
 
-  if (completed && !item.isFolder && isPreviewableFileName(item.name)) {
+  if (trayRowOpensViewer(item)) {
     actions.push({ id: "preview", label: "View" });
   }
-  if (canEditTrayRow(item)) {
+  if (canEditTrayRow(item, editorEnabled)) {
     actions.push({ id: "edit", label: "Edit image" });
   }
   if (completed && !item.isFolder && hasDrive(item)) {
@@ -237,9 +274,9 @@ export function getTrayRowActions(
  * primary one) and, for a picture, Edit. Everything else is one click away
  * in the row's menu.
  */
-export function getTrayQuickActions(item: UploadFeedItem): TrayRowActionId[] {
+export function getTrayQuickActions(item: UploadFeedItem, editorEnabled: boolean): TrayRowActionId[] {
   const quick: TrayRowActionId[] = [];
   if (canLinkTrayRow(item)) quick.push("copy-link");
-  if (canEditTrayRow(item)) quick.push("edit");
+  if (canEditTrayRow(item, editorEnabled)) quick.push("edit");
   return quick;
 }

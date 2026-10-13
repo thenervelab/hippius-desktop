@@ -7,11 +7,13 @@ import { emit } from "@tauri-apps/api/event";
 import { Upload, Check, AlertCircle } from "lucide-react";
 import "./tray-panel.css";
 import TrayTiles from "./TrayTiles";
+import TrayHeaderMenu from "./TrayHeaderMenu";
 import TrayUploadRow, { ProgressRing } from "./TrayUploadRow";
-import { openMainFiles, revealMain } from "./trayMainWindow";
+import { openMainUpload, openMainWindow, revealMain } from "./trayMainWindow";
 import { useTrayCaptureView } from "./useTrayCaptureView";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
 import { getTraySyncLine } from "@/app/lib/tray/traySyncSummary";
+import { trayRowOpensViewer } from "@/app/lib/tray/trayRowActions";
 import {
   DEFAULT_TRAY_TAB,
   readTrayTab,
@@ -61,6 +63,11 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  * field mirrors the sidebar's search styling.
  */
 export default function TrayPanelPage() {
+  const { view: captureView, shortcut } = useTrayCaptureView();
+  // Capture is on for this computer: the flag AND Rust's support, which
+  // production gives macOS only. Rows offer Edit and the Captures list is
+  // fetched only then.
+  const capturesOn = captureView.state === "ready";
   const {
     menu,
     feed,
@@ -71,8 +78,7 @@ export default function TrayPanelPage() {
     unreadCount,
     chatUnread,
     loading,
-  } = useTrayPanelData();
-  const { view: captureView, shortcut } = useTrayCaptureView();
+  } = useTrayPanelData(capturesOn);
   // Where capture is off or unsupported there is no Captures tab: the list
   // is every upload, as before the tabs.
   const hasCapturesTab = captureView.state !== "hidden";
@@ -96,6 +102,9 @@ export default function TrayPanelPage() {
   // Date-bucketed for the headed list (Today / Yesterday / This Week / …).
   // Live uploading/failed rows carry createdAt=now, so they lead "Today".
   const groups = groupUploadFeed(list);
+  // What the viewer walks when a row is opened: the files of this tab it
+  // can show, in the tab's order.
+  const viewable = useMemo(() => list.filter(trayRowOpensViewer), [list]);
 
   // ⌘/Ctrl+F mirrors clicking the "Search Files" field (`openMainSearch`): the
   // popover has no search of its own, so the shortcut reveals the main window
@@ -143,8 +152,10 @@ export default function TrayPanelPage() {
       >
         <Header
           balance={menu?.balance ?? null}
+          accountId={menu?.sessionReady ? (menu.substrateAddress ?? null) : null}
           unreadCount={unreadCount}
           chatUnread={chatUnread}
+          showCapturesFolder={hasCapturesTab}
         />
         {/* Screenshot / Record / Upload, above the search field. Only Upload
             where capture is off or unsupported (see TrayTiles). */}
@@ -190,7 +201,7 @@ export default function TrayPanelPage() {
                   <Button
                     variant="primary"
                     size="auto"
-                    onClick={() => void openMainFiles()}
+                    onClick={() => void openMainUpload()}
                     className="flex h-11 w-full items-center justify-center gap-2 rounded-xl text-[15px] font-medium"
                   >
                     <Upload className="size-4" />
@@ -215,6 +226,8 @@ export default function TrayPanelPage() {
                       item={item}
                       accountId={menu?.substrateAddress ?? null}
                       isCapture={tab === "captures" || captureKeys.has(dedupKey(item))}
+                      siblings={viewable}
+                      editorEnabled={capturesOn}
                     />
                   ))}
                 </ul>
@@ -240,16 +253,24 @@ export default function TrayPanelPage() {
  *  main window and opens its existing notifications dropdown. While chat has
  *  unread DMs/mentions (the dock-badge number), a chat button with that count
  *  sits before the bell and opens the main window's chat page; it is absent at
- *  zero so a user without chat sees the header unchanged. */
+ *  zero so a user without chat sees the header unchanged. The ⋮ menu
+ *  (`TrayHeaderMenu`) ends the pill: balance and Top up, the plan, the app's
+ *  pages and Quit. */
 function Header({
   balance,
+  accountId,
   unreadCount,
   chatUnread,
+  showCapturesFolder,
 }: {
   /** The billing API's exact decimal string; dollars, one credit = $1. */
   balance: string | null;
+  /** The signed-in account once its session is ready, for the menu's plan. */
+  accountId: string | null;
   unreadCount: number;
   chatUnread: number;
+  /** Capture is offered here, so the menu can open the captures folder. */
+  showCapturesFolder: boolean;
 }) {
   return (
     <header className="flex items-center justify-between px-5 pt-5">
@@ -323,6 +344,7 @@ function Header({
             </span>
           )}
         </button>
+        <TrayHeaderMenu balance={balance} accountId={accountId} showCapturesFolder={showCapturesFolder} />
       </div>
     </header>
   );
@@ -454,7 +476,7 @@ function SyncLine({ snapshot }: { snapshot: SyncSnapshot }) {
 }
 
 /** The list's empty state: a single simple rounded card with copy and,
- *  for All files, the Upload CTA that opens the Drive page. */
+ *  for All files, the Upload CTA that opens the main window's upload dialog. */
 function EmptyCard({
   title,
   body,
@@ -630,23 +652,6 @@ function Footer({
 }
 
 // ── Cross-window navigation ────────────────────────────────────────────────
-
-/**
- * Reveal the main app window (optionally navigating it), then hide the popover.
- *
- * The popover runs in its own webview, so `getCurrentWindow()` here is the
- * panel — the main window must be addressed explicitly by its `"main"` label.
- * Navigation is requested via a backend event the main window already listens
- * for, keeping cross-window routing out of this throwaway window.
- */
-async function openMainWindow() {
-  try {
-    await revealMain();
-    await invoke("hide_tray_panel");
-  } catch (error) {
-    console.error("[TrayPanel] Failed to open main window:", error);
-  }
-}
 
 /**
  * Focus the main window and open its existing top-bar notifications dropdown

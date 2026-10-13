@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type Doc, EMPTY_DOC, bounds } from "../model";
-import { type Bounds, type Style, drag, finishText, press, release } from "../gesture";
+import { type Bounds, type Style, cursorAt, drag, finishText, press, release } from "../gesture";
 
 const style: Style = { color: "#FF3B30", stroke: 4, textSize: 24 };
 const b: Bounds = { imageW: 400, imageH: 300, tolerance: 4, ratio: null };
@@ -100,5 +100,85 @@ describe("text", () => {
     expect(finishText(doc, { id, at: { x: 0, y: 0 } }, "Hi", style)).toBeNull();
     expect(finishText(doc, { id, at: { x: 0, y: 0 } }, "", style)?.annotations).toEqual([]);
     expect(finishText(doc, { id, at: { x: 0, y: 0 } }, "Hello", style)?.annotations[0]).toMatchObject({ text: "Hello" });
+  });
+});
+
+// The reported bug: with a drawing tool still active, pressing the handles or
+// the body of the shape just drawn started another shape, so a drawn arrow
+// could not be stretched and a drawn box could not be moved.
+describe("a drawing tool and the shape it just drew", () => {
+  const arrowDoc = stroke("arrow", EMPTY_DOC, { x: 50, y: 50 }, { x: 150, y: 100 }).committed!;
+  const arrowId = arrowDoc.annotations[0].id;
+
+  it("stretches the selected arrow from its handle instead of drawing a second one", () => {
+    const { pressed, committed } = stroke("arrow", arrowDoc, { x: 150, y: 100 }, { x: 250, y: 200 }, arrowId);
+    expect(pressed.gesture?.type).toBe("resize");
+    expect(committed!.annotations).toHaveLength(1);
+    expect(committed!.annotations[0]).toMatchObject({ from: { x: 50, y: 50 }, to: { x: 250, y: 200 } });
+  });
+
+  it("moves the selected arrow by its shaft", () => {
+    const { committed } = stroke("arrow", arrowDoc, { x: 100, y: 75 }, { x: 110, y: 95 }, arrowId);
+    expect(committed!.annotations).toHaveLength(1);
+    expect(committed!.annotations[0]).toMatchObject({ from: { x: 60, y: 70 }, to: { x: 160, y: 120 } });
+  });
+
+  it("still draws a new arrow from beside the selected one", () => {
+    // Inside the arrow's bounding box but well off its shaft.
+    const { committed } = stroke("arrow", arrowDoc, { x: 140, y: 55 }, { x: 200, y: 20 }, arrowId);
+    expect(committed!.annotations).toHaveLength(2);
+  });
+
+  it.each(["rect", "ellipse", "blur", "pixelate"] as const)("moves a selected %s by its inside and resizes it by a corner", (kind) => {
+    const drawn = stroke(kind, EMPTY_DOC, { x: 10, y: 10 }, { x: 110, y: 60 }).committed!;
+    const id = drawn.annotations[0].id;
+
+    const moved = stroke(kind, drawn, { x: 60, y: 35 }, { x: 80, y: 45 }, id).committed!;
+    expect(moved.annotations).toHaveLength(1);
+    expect(bounds(moved.annotations[0])).toEqual({ x: 30, y: 20, w: 100, h: 50 });
+
+    const resized = stroke(kind, drawn, { x: 10, y: 10 }, { x: 0, y: 0 }, id).committed!;
+    expect(resized.annotations).toHaveLength(1);
+    expect(bounds(resized.annotations[0])).toEqual({ x: 0, y: 0, w: 110, h: 60 });
+  });
+
+  it("draws a new shape on top of one that is NOT selected", () => {
+    const drawn = stroke("rect", EMPTY_DOC, { x: 10, y: 10 }, { x: 110, y: 60 }).committed!;
+    const { committed } = stroke("rect", drawn, { x: 60, y: 35 }, { x: 90, y: 55 }, null);
+    expect(committed!.annotations).toHaveLength(2);
+  });
+
+  it("drags a selected step marker rather than placing another", () => {
+    const placed = press("step", EMPTY_DOC, null, { x: 100, y: 100 }, style, b);
+    const { committed } = stroke("step", placed.doc, { x: 100, y: 100 }, { x: 140, y: 120 }, placed.selected);
+    expect(committed!.annotations).toHaveLength(1);
+    expect(committed!.annotations[0]).toMatchObject({ at: { x: 140, y: 120 } });
+  });
+
+  it("leaves the text tool editing the text it lands on", () => {
+    const typed = finishText(EMPTY_DOC, { id: null, at: { x: 20, y: 20 } }, "Hello", style)!;
+    const id = typed.annotations[0].id;
+    expect(press("text", typed, id, { x: 22, y: 25 }, style, b).text).toEqual({ id, at: { x: 20, y: 20 } });
+  });
+});
+
+describe("cursor", () => {
+  const drawn = stroke("rect", EMPTY_DOC, { x: 10, y: 10 }, { x: 110, y: 60 }).committed!;
+  const id = drawn.annotations[0].id;
+
+  it("says what a press will do over the selected shape", () => {
+    expect(cursorAt("rect", drawn, id, { x: 10, y: 10 }, 4)).toBe("nwse-resize");
+    expect(cursorAt("rect", drawn, id, { x: 110, y: 10 }, 4)).toBe("nesw-resize");
+    expect(cursorAt("rect", drawn, id, { x: 60, y: 35 }, 4)).toBe("move");
+    expect(cursorAt("rect", drawn, id, { x: 300, y: 250 }, 4)).toBe("crosshair");
+  });
+
+  it("keeps the tool's own cursor where nothing is selected, and for crop", () => {
+    expect(cursorAt("arrow", drawn, null, { x: 60, y: 35 }, 4)).toBe("crosshair");
+    expect(cursorAt("select", drawn, null, { x: 10, y: 30 }, 4)).toBe("move");
+    expect(cursorAt("select", drawn, null, { x: 300, y: 250 }, 4)).toBe("default");
+    expect(cursorAt("crop", drawn, id, { x: 10, y: 10 }, 4)).toBe("crosshair");
+    expect(cursorAt("text", drawn, id, { x: 60, y: 35 }, 4)).toBe("text");
+    expect(cursorAt("rect", drawn, id, null, 4)).toBe("crosshair");
   });
 });

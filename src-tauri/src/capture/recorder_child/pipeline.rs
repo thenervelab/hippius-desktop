@@ -44,6 +44,9 @@ pub struct Pipeline<E: Encoder> {
     /// The capture-clock time of the first picture: time zero.
     origin: Option<u64>,
     frames_written: u64,
+    /// The Free plan's watermark, blended into each picture as it arrives
+    /// (`capture::watermark`), after anything else was drawn into it.
+    watermark: Option<crate::capture::watermark::Nv12Stamp>,
 }
 
 /// Microseconds to 100 ns units.
@@ -67,7 +70,14 @@ impl<E: Encoder> Pipeline<E> {
             mixer: Mixer::new(sources),
             origin: None,
             frames_written: 0,
+            watermark: None,
         }
+    }
+
+    /// Watermark every picture from now on: `stamp` is made for the
+    /// recording's size, so it is worked out once, not per picture.
+    pub fn set_watermark(&mut self, stamp: crate::capture::watermark::Nv12Stamp) {
+        self.watermark = Some(stamp);
     }
 
     #[must_use]
@@ -87,15 +97,32 @@ impl<E: Encoder> Pipeline<E> {
         self.frames_written
     }
 
+    /// The recording starts at `origin` (capture clock, placed): the moment
+    /// the encoder is ready and Start is answered. The encoder is made from
+    /// the first picture, which can take seconds on a slow machine; that
+    /// wait is not part of the recording, so a picture taken during it is
+    /// the opening picture at zero (the newest one wins) and sound from
+    /// before `origin` is dropped. Without a call the first picture is zero.
+    pub fn start_at(&mut self, origin: u64) {
+        self.origin.get_or_insert(origin);
+    }
+
     /// A picture taken at `time`.
     ///
     /// # Errors
     /// The encoder failed.
-    pub fn video(&mut self, time: u64, nv12: Vec<u8>) -> Result<(), String> {
+    pub fn video(&mut self, time: u64, mut nv12: Vec<u8>) -> Result<(), String> {
         let origin = *self.origin.get_or_insert(time);
-        let Some(at) = time.checked_sub(origin) else {
-            return Ok(());
+        let at = match time.checked_sub(origin) {
+            Some(at) => at,
+            // Taken before the start (while the encoder was being made):
+            // the opening picture, until one after the start has come.
+            None if self.frames_written == 0 && self.hold.held_since().is_none_or(|t| t == 0) => 0,
+            None => return Ok(()),
         };
+        if let Some(stamp) = &self.watermark {
+            stamp.apply(&mut nv12);
+        }
         match self.hold.push(Arc::new(nv12), at) {
             Some(timed) => self.write_video(&timed),
             None => Ok(()),
@@ -177,14 +204,17 @@ mod tests {
         audio: Vec<(i64, i64, usize)>,
         finished: bool,
         fail_video_after: Option<usize>,
+        /// The pictures themselves, as the encoder got them.
+        pictures: Vec<Vec<u8>>,
     }
 
     impl Encoder for &mut Fake {
-        fn video(&mut self, _nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
+        fn video(&mut self, nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
             if self.fail_video_after.is_some_and(|n| self.video.len() >= n) {
                 return Err("encoder gone".into());
             }
             self.video.push((start, duration));
+            self.pictures.push(nv12.to_vec());
             Ok(())
         }
         fn audio(&mut self, pcm: &[i16], start: i64, duration: i64) -> Result<(), String> {
@@ -215,6 +245,68 @@ mod tests {
         assert!(fake.finished);
         let (start, duration, len) = fake.audio[0];
         assert_eq!((start, duration, len), (0, 200_000, 960 * 2), "20 ms from zero");
+    }
+
+    /// A Free plan recording's every picture reaches the encoder with the
+    /// watermark in it, the repeated last one included, and only the corner
+    /// changes; without a stamp the pictures pass untouched.
+    #[test]
+    fn a_watermarked_recording_stamps_every_picture() {
+        let (w, h) = (640u32, 360u32);
+        let blank = vec![16u8; w as usize * h as usize * 3 / 2];
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[]);
+        p.set_watermark(crate::capture::watermark::Nv12Stamp::new(w, h).unwrap());
+        p.video(1_000_000, blank.clone()).unwrap();
+        p.video(1_033_333, blank.clone()).unwrap();
+        p.finish(2_000_000).unwrap();
+        assert_eq!(fake.pictures.len(), 2);
+        for picture in &fake.pictures {
+            assert_ne!(picture, &blank, "stamped");
+            let first = picture.iter().zip(&blank).position(|(a, b)| a != b).unwrap();
+            assert!(first / w as usize > h as usize / 2, "only the bottom of the picture changes");
+        }
+
+        let mut plain = Fake::default();
+        let mut p = Pipeline::new(&mut plain, &[]);
+        p.video(1_000_000, blank.clone()).unwrap();
+        p.finish(2_000_000).unwrap();
+        assert_eq!(plain.pictures, vec![blank]);
+    }
+
+    /// The encoder took 2 s to make from the first picture: the file starts
+    /// when Start was answered, on the newest picture from that wait, and
+    /// the wait itself is not in the file.
+    #[test]
+    fn the_time_spent_making_the_encoder_is_not_recorded() {
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[Source::Microphone]);
+        p.start_at(3_000_000);
+        // Taken while the encoder was being made: the newest is the opening
+        // picture, and sound from then is dropped.
+        p.video(1_000_000, vec![1; 6]).unwrap();
+        p.audio(Source::Microphone, 2_000_000, &packet(20)).unwrap();
+        p.video(2_900_000, vec![2; 6]).unwrap();
+        p.video(3_100_000, vec![3; 6]).unwrap();
+        p.audio(Source::Microphone, 3_100_000, &packet(20)).unwrap();
+        p.finish(4_000_000).unwrap();
+        assert_eq!(fake.video, vec![(0, 1_000_000), (1_000_000, 9_000_000)], "1 s long, not 3");
+        let (start, duration, _) = *fake.audio.last().unwrap();
+        assert_eq!(start + duration, 1_200_000, "sound from 3.1 s lands at 0.1 s");
+    }
+
+    /// Once a picture after the start is in, a late one from before it is
+    /// dropped rather than moved to zero.
+    #[test]
+    fn a_picture_from_before_the_start_is_dropped_once_the_file_moved_on() {
+        let mut fake = Fake::default();
+        let mut p = Pipeline::new(&mut fake, &[]);
+        p.start_at(1_000_000);
+        p.video(1_100_000, vec![0; 6]).unwrap();
+        p.video(1_200_000, vec![0; 6]).unwrap();
+        p.video(900_000, vec![0; 6]).unwrap();
+        p.finish(1_300_000).unwrap();
+        assert_eq!(fake.video, vec![(1_000_000, 1_000_000), (2_000_000, 1_000_000)]);
     }
 
     #[test]

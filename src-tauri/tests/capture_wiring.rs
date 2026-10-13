@@ -167,6 +167,170 @@ fn the_temp_copy_is_removed_only_after_the_upload_lands() {
     assert!(!keep.contains("remove_dir_all"), "a kept capture never removes a folder itself");
 }
 
+/// The free plan's recording limit is decided at the START of a recording,
+/// by ONE gate, `recording_allowance::require_can_start`, on every path that
+/// can start one, and before anything records or a take is thrown away.
+/// Nothing is recorded and then held back.
+#[test]
+fn every_recording_start_path_goes_through_the_one_gate() {
+    const GATE: &str = "recording_allowance::require_can_start(&state).await";
+    let src = read("src/capture/commands.rs");
+
+    // The tray's Record tile, the Capture menus' Record items and the record
+    // shortcut all reach Rust through `capture_start` with the kind set.
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let begin = fn_body(&src, "async fn begin_plan_read(");
+    let gate = begin
+        .find("recording_allowance::require_can_start(state).await")
+        .expect("capture_start asks the gate");
+    assert!(
+        begin[..gate].contains("kind == Some(CaptureKind::Recording)"),
+        "only a Record start is gated on the count; a screenshot never is"
+    );
+    let gated = start
+        .find("begin_plan_read(&app, state.inner(), kind).await?")
+        .expect("capture_start begins with the plan");
+    let opened = start
+        .find("advance(&app, &state.capture, CaptureEvent::Start")
+        .expect("the session starts");
+    assert!(gated < opened, "refused before any window opens");
+
+    // The bar's Record, an overlay click, the share picker and camera only all
+    // take the selection through `select_inner`.
+    for caller in ["pub async fn capture_confirm(", "pub async fn capture_select("] {
+        assert!(fn_body(&src, caller).contains("select_inner(&app, selection).await"), "{caller}");
+    }
+    let select = fn_body(&src, "async fn select_inner(");
+    let gate = select.find(GATE).expect("select_inner asks the gate");
+    assert!(
+        select[..gate].contains("if kind == CaptureKind::Recording"),
+        "a screenshot is never gated"
+    );
+    let moved = select.find("CaptureEvent::Selected").expect("the phase moves on");
+    let begin = select.find("start_recording(app, selection)").expect("then the recorder starts");
+    assert!(gate < moved && gate < begin, "refused while the bar is still up, before anything records");
+
+    // Restart starts a new recording: gated before the take is discarded.
+    let restart = fn_body(&src, "pub async fn capture_restart(");
+    let gate = restart.find(GATE).expect("Restart asks the gate");
+    let discard = restart.find("discard_recording(").expect("the take is thrown away");
+    let begin = restart.find("start_recording(&app, selection)").expect("and started again");
+    assert!(gate < discard && gate < begin, "a refused restart keeps the recording");
+
+    // The bar asks the same gate before its countdown, so a refusal is not
+    // counted down to.
+    assert!(fn_body(&src, "pub async fn capture_check_recording_start(").contains(GATE));
+    // A refused Restart says so outside the filmed screen.
+    assert!(restart.contains("notify(&app, LIMIT_TITLE.into(), LIMIT_BODY.into())"));
+
+    // No other path can start the recorder.
+    assert_eq!(
+        src.matches("start_recording(").count(),
+        3,
+        "start_recording is defined once and called only from select_inner and capture_restart"
+    );
+    assert_eq!(
+        src.matches("begin_recording(").count(),
+        2,
+        "begin_recording is defined once and called only from start_recording"
+    );
+
+    // The gate reads the capture session's plan, the one the watermark and
+    // the length cap use, and the count from the server's listings of every
+    // captures drive; neither an unread plan nor an unread count lets a
+    // recording through.
+    let allowance = read("src/capture/recording_allowance.rs");
+    let check = fn_body(&allowance, "pub async fn require_can_start(");
+    let plan = check
+        .find("allowance::session_tier(state).await?")
+        .expect("the session's plan, refusals passed on");
+    let count = check
+        .find("recording_count(state, &state.current_account_id()?)")
+        .expect("then the count");
+    assert!(plan < count);
+    assert!(check.contains("StartVerdict::CountUnavailable => {"), "an unread count is refused");
+    assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
+    let list = fn_body(&allowance, "async fn list_recordings(");
+    assert!(
+        list.contains("remote::list_remote_folder_files_inner("),
+        "the count comes from the server listing the remote-folder browser uses"
+    );
+    assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
+}
+
+/// The app's dialog and the bar's panel say what Rust's refusal says.
+#[test]
+fn the_limit_dialog_uses_rusts_words() {
+    let allowance = read("src/capture/recording_allowance.rs");
+    let words = read("../app/lib/capture/recordingLimit.ts");
+    for name in ["LIMIT_TITLE", "LIMIT_BODY"] {
+        let line = allowance
+            .lines()
+            .find(|l| l.starts_with(&format!("pub const {name}: &str = ")))
+            .unwrap_or_else(|| panic!("{name} is declared"));
+        let text = line.split('"').nth(1).expect("a string literal");
+        assert!(words.contains(&format!("\"{text}\"")), "{name} differs in recordingLimit.ts");
+    }
+}
+
+/// Delivery no longer decides anything about the count: every recording that
+/// was allowed to start is placed and shared as usual, and is counted at once.
+#[test]
+fn a_delivered_recording_is_placed_as_usual_and_counted() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn deliver_and_announce(");
+    assert!(body.contains("super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?"));
+    for gone in ["place_unless_held", "Delivery::Held", "hold_and_announce", "recording_gate("] {
+        assert!(!src.contains(gone), "nothing holds a recording after the fact ({gone})");
+    }
+    let placed = body.find("announce_placed(").expect("the card hears it is placed");
+    let noted = body
+        .find("recording_allowance::note_delivered(&state, &account_id, &destination, &placed.file_name)")
+        .expect("a delivered recording counts at once");
+    assert!(placed < noted);
+    // A sync cycle or a delete in the drive makes the next start read the
+    // count again.
+    let bridge = read("src/sync/projection/tauri_bridge.rs");
+    assert!(bridge.contains("recording_allowance::invalidate_label(&app_state, &payload.label)"));
+    assert!(bridge.contains("recording_allowance::clear(&app_state)"));
+    assert!(read("src/sync/fileops/folders.rs").contains("recording_allowance::invalidate_label(&state, &label)"));
+}
+
+/// Recordings an earlier build held are still released once allowed, each
+/// delivered exactly like a fresh one, and only as many as the plan allows.
+#[test]
+fn recordings_held_by_an_earlier_build_are_released_like_fresh_ones() {
+    let src = read("src/capture/commands.rs");
+    assert!(fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_release_held(&app)"));
+    let release = fn_body(&src, "async fn release_held(");
+    let unseal = release.find("unseal_for_release(").expect("release unseals");
+    let deliver = release
+        .find("deliver_and_announce(app, &path, card_id)")
+        .expect("then delivers as normal");
+    assert!(unseal < deliver);
+    assert!(
+        release.contains("release_count(tier, counted, waiting.len())"),
+        "only as many as the plan allows"
+    );
+    let held = read("src/capture/held_recordings.rs");
+    assert!(!held.contains("pub async fn hold("), "nothing is held any more");
+}
+
+/// The recorder writes the in-progress file under a hidden app folder that
+/// no drive's engine walks, and refuses to record should a drive ever hold
+/// it, so nothing can upload a half-written recording.
+#[test]
+fn the_recorder_never_writes_into_a_synced_folder() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let check = begin.find("refuse_a_synced_temp(&state, &tmp_root)").expect("the temp root is checked");
+    let dir = begin.find("fresh_capture_dir(&tmp_root)").expect("the recording's folder is made there");
+    assert!(check < dir, "checked before the folder is made");
+    assert!(fn_body(&src, "async fn refuse_a_synced_temp(").contains("unsynced_by_every_drive("));
+    let shot = read("src/capture/screenshot.rs");
+    assert!(fn_body(&shot, "pub fn capture_tmp_root(").contains(r#"join(".hippius")"#));
+}
+
 /// The card hears that the file is in the drive before the link is made,
 /// and a synced capture is followed from that moment. Waiting for both held
 /// the card on "Preparing upload" through the whole upload and the mint.
@@ -187,7 +351,18 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     }
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
-    assert!(follow.contains("link_fallback_applies("), "the bounded fallback must be applied");
+    assert!(
+        follow.contains("link_finishes_card("),
+        "a public link finishes a card the engine has not started on"
+    );
+    assert!(
+        !follow.contains("is_any_sync_in_progress("),
+        "the card waits for its own upload, never for the rest of the sync"
+    );
+    assert!(
+        facts.contains("FileStatus::Pending => SyncRow::Queued"),
+        "a queued row is told apart from a running one"
+    );
     // The cycle is started, never waited for, by the placement.
     let place = fn_body(&read("src/capture/deliver.rs"), "pub async fn place(");
     let spawn = place.find("async_runtime::spawn(").expect("the sync is started in the background");
@@ -674,19 +849,52 @@ fn signing_out_ends_the_capture_and_the_shortcut() {
     let cleared = body.find("auth_logout_internal(").expect("logout_full clears the session");
     assert!(ended < cleared, "the capture ends before the session is cleared");
     let end = fn_body(&read("src/capture/commands.rs"), "pub async fn end_for_logout(");
-    assert!(end.contains("cancel_inner(") && end.contains("shortcut::apply(app, None)"));
+    assert!(end.contains("cancel_inner("));
+    assert!(
+        end.contains("for kind in ShortcutKind::ALL") && end.contains("shortcut::apply(app, kind, None)"),
+        "both shortcuts are let go at sign-out"
+    );
 }
 
-/// The shortcut toggles, decided in Rust; it no longer only emits.
+/// The shortcuts toggle, decided in Rust; they no longer only emit. The
+/// plugin's one handler tells the two apart by the keys pressed.
 #[test]
 fn the_shortcut_is_handled_in_rust() {
     let src = read("src/capture/shortcut.rs");
     let plugin = fn_body(&src, "pub fn plugin(");
-    assert!(plugin.contains("on_shortcut(app)"), "the handler must go through commands::on_shortcut");
-    let on = fn_body(&read("src/capture/commands.rs"), "pub fn on_shortcut(");
+    assert!(plugin.contains("kind_pressed(&registered(), shortcut)"));
+    assert!(
+        plugin.contains("on_shortcut_of(app, kind)"),
+        "the handler must go through commands::on_shortcut_of"
+    );
+    let commands = read("src/capture/commands.rs");
+    let on = fn_body(&commands, "pub fn on_shortcut_of(");
     for action in ["stop_inner(", "cancel_inner(", "SHORTCUT_EVENT", "show_main_window("] {
-        assert!(on.contains(action), "on_shortcut must handle {action}");
+        assert!(on.contains(action), "on_shortcut_of must handle {action}");
     }
+    assert!(fn_body(&commands, "pub fn on_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Screenshot)"));
+    assert!(fn_body(&commands, "pub fn on_record_shortcut(").contains("on_shortcut_of(app, ShortcutKind::Record)"));
+}
+
+/// Both shortcuts are registered at start-up, each with its own problem
+/// line; a change refuses the other one's keys before anything is
+/// registered; and `hippius --record` (a Wayland desktop's own shortcut)
+/// reaches the Record shortcut's action without showing the main window.
+#[test]
+fn the_record_shortcut_is_wired_like_the_screenshot_one() {
+    let commands = read("src/capture/commands.rs");
+    let sync = fn_body(&commands, "pub async fn capture_sync_shortcut(");
+    assert!(sync.contains("shortcut::load_both(") && sync.contains("for kind in ShortcutKind::ALL"));
+    let set = fn_body(&commands, "pub async fn capture_set_shortcut(");
+    let checked = set.find("shortcut::check_not_taken(").expect("the other one's keys are refused");
+    let applied = set.find("shortcut::apply(&app, kind, next)").expect("the new keys are registered");
+    let saved = set.find("shortcut::save(pool, kind, next)").expect("then saved");
+    assert!(checked < applied && applied < saved);
+    let main = read("src/main.rs");
+    let record = main.find("crate::cli::argv_requests_record(&argv)").expect("--record is handled");
+    let shown = main.find("window.unminimize()").expect("the plain second launch shows the window");
+    assert!(record < shown, "--record returns before the main window is shown");
+    assert!(main.contains("crate::capture::commands::on_record_shortcut(app);"));
 }
 
 /// Old capture temp folders are cleared at launch, off the start-up path.
@@ -713,9 +921,16 @@ fn the_card_and_session_commands_are_registered() {
         "capture_relaunch_for_permission",
         "capture_preview_mint_link",
         "capture_preview_revoke_link",
+        "capture_preview_manage_link",
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
+        "capture_limit_upgrade",
+        "capture_check_recording_start",
+        "capture_free_plan_notice",
+        "capture_plan_status",
+        "capture_plan_retry",
+        "capture_launch_shortcut",
     ] {
         assert!(
             main.contains(&format!("crate::capture::commands::{name},")),
@@ -988,7 +1203,7 @@ fn capture_follows_the_rollout_gate() {
     let src = read("src/capture/commands.rs");
     assert!(fn_body(&src, "pub fn capture_supported()").contains("rollout::allows(super::rollout::Feature::Screenshots)"));
     assert!(fn_body(&src, "pub async fn capture_start(").contains("!capture_supported()"));
-    assert!(fn_body(&src, "pub fn capture_support()").contains("supported: capture_supported()"));
+    assert!(fn_body(&src, "pub fn support_now()").contains("supported: capture_supported()"));
     let recording = read("src/capture/recording/mod.rs");
     assert!(fn_body(&recording, "pub fn recording_unavailable()").contains("rollout::allows(super::rollout::Feature::Recording)"));
 }
@@ -1029,22 +1244,85 @@ fn the_mic_meter_lets_go_before_the_recorder_starts() {
     );
 }
 
-/// Wayland: a screenshot goes straight to the desktop's screenshot tool.
-/// No Hippius overlay may open first (on Wayland it could neither cover the
-/// screen nor see the windows under it), and the session is decided by
-/// Rust's surfaces, never by the frontend checking the platform.
+/// Wayland: a screenshot goes straight to the desktop's own tool (the
+/// portal with `interactive = true`), so GNOME's screenshot UI is the one
+/// selection step and no share dialog follows a still taken first. The
+/// still's path (`frozen_shot`) stays wired but is off in `support`. The
+/// session is decided by Rust's surfaces, never by the frontend checking
+/// the platform.
 #[test]
-fn a_wayland_screenshot_skips_the_overlay_for_the_desktops_picker() {
+fn a_wayland_screenshot_goes_to_the_desktops_tool() {
+    let support = read("src/capture/support.rs");
+    let surfaces = fn_body(&support, "pub fn surfaces_for(");
+    assert!(
+        surfaces.contains("selection: if wayland { SelectionUi::SystemPicker }"),
+        "Wayland screenshots are chosen in the desktop's tool"
+    );
+    assert!(surfaces.contains("frozen_screenshot: false,"), "no still first, on any platform");
+    assert!(surfaces.contains("system_picker_note: wayland.then_some(WAYLAND_SCREENSHOT_NOTE)"));
+
     let src = read("src/capture/commands.rs");
+    // The panel switching to a screenshot hands it to the desktop's tool
+    // rather than leaving the session choosing with nothing on screen.
+    let swap = fn_body(&src, "async fn swap_selection_windows(");
+    let picker = swap.find("StartPlan::SystemPicker =>").expect("a switch to the desktop's tool");
+    assert!(swap[picker..].contains("system_picker_screenshot(&app)"));
     let start = fn_body(&src, "pub async fn capture_start(");
     let plan = start.find("support::start_plan(").expect("capture_start asks for the plan");
-    let picker = start.find("system_picker_screenshot(").expect("the picker path is spawned");
+    let frozen = start.find("start_without_live_overlay(&app").expect("the Wayland screenshot starts");
     let overlay = start.find("open_capture_ui(").expect("the overlay path");
-    assert!(plan < picker && picker < overlay, "the picker returns before any overlay opens");
-    let take = fn_body(&src, "async fn take_with_system_picker(");
-    assert!(take.contains("linux_portal::request()") && take.contains("linux_portal::settle("));
+    assert!(plan < frozen && frozen < overlay, "a Wayland screenshot returns before the live overlay");
+    let branch = fn_body(&src, "fn start_without_live_overlay(");
     assert!(
-        take.find("open_preview(").unwrap() < take.find("CaptureEvent::Captured").unwrap(),
+        branch.contains("frozen_screenshot(&app)") && branch.contains("system_picker_screenshot(&app)"),
+        "the still, or the desktop's tool"
+    );
+    assert!(
+        start.find("hide_own_windows(").unwrap() < frozen,
+        "the main window is gone before the still is taken"
+    );
+
+    let flow = fn_body(&src, "async fn frozen_screenshot(");
+    assert!(
+        flow.find("system_picker_screenshot(app)").unwrap() < flow.find("open_frozen_overlays(").unwrap(),
+        "no still, the desktop's tool: the user is never stuck"
+    );
+    assert!(flow.contains("fail_capture("));
+    let still = fn_body(&src, "async fn portal_still(");
+    assert!(still.contains("linux_portal::request(false)") && still.contains("linux_portal::settle("));
+    assert!(still.contains("remove_dir_all"), "the portal's file leaves no copy behind");
+
+    // One overlay per monitor, full screen on it, with no display watch or
+    // bar follow (both read X11, which on Wayland is only XWayland).
+    let open = fn_body(&src, "async fn open_frozen_overlays(");
+    assert!(open.find("*lock(&state.capture.frozen) = Some(frozen)").unwrap() < open.find("open_frozen_overlay(").unwrap());
+    assert!(!open.contains("spawn_display_watch") && !open.contains("spawn_bar_follow"));
+    let one = fn_body(&src, "async fn open_frozen_overlay(");
+    assert!(one.contains("build_overlay(app, &label, display, instant)") && one.contains("fullscreen_on_monitor(&window, index)"));
+
+    // The shot is cut from the still, a fresh one after a countdown.
+    let finish = fn_body(&src, "async fn finish_screenshot(");
+    assert!(finish.find("take_from_still(").unwrap() < finish.find("take_screenshot(").unwrap());
+    let take = fn_body(&src, "async fn take_from_still(");
+    assert!(take.find("frozen_shot::retakes(").unwrap() < take.find("portal_still()").unwrap());
+    assert!(take.contains("cut_latest("));
+    for ending in ["async fn fail_capture(", "pub(crate) async fn cancel_inner("] {
+        assert!(
+            fn_body(&src, ending).contains("lock(&state.capture.frozen).take()"),
+            "{ending} drops the still"
+        );
+    }
+
+    // The bar switching kind swaps the still's overlays for the panel.
+    let set_mode = fn_body(&src, "pub async fn capture_set_mode(");
+    assert!(set_mode.contains("support::switch_plan(") && set_mode.contains("swap_selection_windows("));
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_overlay_backdrop,"));
+
+    // The interactive tool, unchanged.
+    let picked = fn_body(&src, "async fn take_with_system_picker(");
+    assert!(picked.contains("linux_portal::request(true)") && picked.contains("linux_portal::settle("));
+    assert!(
+        picked.find("open_preview(").unwrap() < picked.find("CaptureEvent::Captured").unwrap(),
         "the card opens before the session ends, as for an overlay screenshot"
     );
     // A cancel in the desktop's tool is a cancel, not a failure.
@@ -1132,10 +1410,9 @@ fn only_the_camera_and_overlay_webviews_may_open_devices() {
 }
 
 /// The Windows recorder is the app's own executable started without a
-/// console window, and Windows recording ships to staging and beta, not to
-/// production until its hardware checklist passes and the installer is signed.
+/// console window, and Windows recording ships on every lane.
 #[test]
-fn windows_records_in_its_own_child_and_stays_out_of_production() {
+fn windows_records_in_its_own_child_on_every_lane() {
     let windows = read("src/capture/recording/windows.rs");
     assert!(fn_body(&windows, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&windows, "pub fn helper_command(").contains("CREATE_NO_WINDOW"));
@@ -1143,17 +1420,14 @@ fn windows_records_in_its_own_child_and_stays_out_of_production() {
     use tauri_project_lib::release_channel::ReleaseChannel;
     assert!(enabled(ReleaseChannel::Staging, Platform::Windows, Feature::Recording));
     assert!(enabled(ReleaseChannel::Beta, Platform::Windows, Feature::Recording));
-    assert!(
-        !enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording),
-        "Windows recording reaches production only once its hardware checklist passes"
-    );
+    assert!(enabled(ReleaseChannel::Production, Platform::Windows, Feature::Recording));
 }
 
 /// Linux records in the app's own child, waits for the user in the
-/// desktop's screen-sharing dialog, and ships to staging and beta, not to
-/// production until its checklist passes on real sessions.
+/// desktop's screen-sharing dialog, and ships on every lane now that its
+/// checklist passed on Ubuntu GNOME.
 #[test]
-fn linux_records_in_its_own_child_and_stays_out_of_production() {
+fn linux_records_in_its_own_child_on_every_lane() {
     let linux = read("src/capture/recording/linux.rs");
     assert!(fn_body(&linux, "pub fn helper_command(").contains("own_recorder_command()"));
     assert!(fn_body(&linux, "pub fn start(").contains("helper::start_within("));
@@ -1163,10 +1437,7 @@ fn linux_records_in_its_own_child_and_stays_out_of_production() {
     for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
         assert!(enabled(ReleaseChannel::Staging, platform, Feature::Recording));
         assert!(enabled(ReleaseChannel::Beta, platform, Feature::Recording));
-        assert!(
-            !enabled(ReleaseChannel::Production, platform, Feature::Recording),
-            "{platform:?} recording reaches production only once its Linux checklist passes"
-        );
+        assert!(enabled(ReleaseChannel::Production, platform, Feature::Recording), "{platform:?}");
     }
 }
 
@@ -1203,7 +1474,7 @@ fn the_linux_recorder_opens_the_camera_only_where_no_window_can_be_filmed() {
     assert!(camera_state.contains("recorder_owns_camera: recording && recorder_opens_camera(shape)"));
     let page = read("../app/capture-camera/page.tsx");
     assert!(
-        page.contains("const live = !!camera?.shape && !camera.hidden && !handedOver;"),
+        page.contains("const live = !!camera?.shape && !camera.hidden && !handedOver && accessProblem === null;"),
         "the stage page closes its stream when the recorder has the camera"
     );
 }
@@ -1265,6 +1536,103 @@ fn the_wayland_panel_hands_the_choice_to_the_desktop() {
     assert!(begin.contains("screencast_token::for_start(") && begin.contains("screencast_token::remember("));
 }
 
+/// Wayland's panel is fitted to the bar, not a fixed box: it opens at a
+/// first size, the page measures the bar and any open menu and Rust sizes
+/// the window in logical pixels (the page's CSS pixels at every scale). The
+/// page draws no glass of its own behind the bar.
+#[test]
+fn the_wayland_panel_is_fitted_to_the_bar() {
+    let src = read("src/capture/commands.rs");
+    assert!(!src.contains("PANEL_SIZE"), "no fixed panel size");
+    assert!(fn_body(&src, "async fn open_panel(").contains("support::PANEL_FIRST_SIZE"));
+    let fit = fn_body(&src, "pub fn capture_panel_fit(");
+    assert!(fit.contains("support::panel_window_size(width, height)"));
+    assert!(
+        fit.contains("tauri::LogicalSize::new(w, h)"),
+        "sized in logical pixels, never scaled again"
+    );
+    assert!(fit.contains("CapturePhase::Selecting"), "only while a capture is being chosen");
+    assert!(
+        fit.contains("lock(&state.capture.frozen).is_none()"),
+        "never while a frozen screenshot's full-screen overlays are up"
+    );
+    assert!(read("src/main.rs").contains("crate::capture::commands::capture_panel_fit,"));
+
+    let page = read("../app/capture-overlay/page.tsx");
+    assert!(
+        page.contains("usePanelFit(panelRef, context?.panel === true)"),
+        "only the panel is fitted"
+    );
+    assert!(page.contains("layout={panel ? \"panel\" : \"overlay\"}"));
+    assert!(!page.contains("GLASS_PANEL"), "the panel draws no glass behind the bar");
+    assert!(read("../app/lib/tauri/capture.ts").contains("invoke(\"capture_panel_fit\", { width, height })"));
+}
+
+/// The dock during a recording on Linux. X11: the main window is minimized,
+/// not hidden, so it stays the dock's window (the pill and bubble skip the
+/// taskbar there), and it is unminimized when the recording ends. Wayland:
+/// the dock raises the pill or the bubble (GTK 3 cannot keep a Wayland
+/// window out of it), so each capture window is watched for taking the
+/// keyboard with the pointer elsewhere, which brings the main window and
+/// counts as the user taking it back. Launching Hippius again counts too.
+#[test]
+fn the_linux_dock_brings_hippius_back_during_a_recording() {
+    let src = read("src/capture/commands.rs");
+    let hide = fn_body(&src, "async fn hide_own_windows(");
+    assert!(hide.contains("own_windows::main_on_screen("));
+    assert!(hide.contains("own_windows::main_away(platform)") && hide.contains("main.minimize()") && hide.contains("main.hide()"));
+    let restore = fn_body(&src, "fn restore_main_window(");
+    assert!(
+        restore.find("main.unminimize()").unwrap() < restore.find("match plan {").unwrap(),
+        "a minimized main window is unminimized before it is put back"
+    );
+
+    // Every capture window the dock can raise is watched.
+    for builder in [
+        "fn open_controls(",
+        "fn open_preview_window(",
+        "fn open_camera_window(",
+        "fn bubble_controls_window(",
+    ] {
+        assert!(
+            fn_body(&src, builder).contains("watch_capture_window_focus(&window)"),
+            "{builder} is watched"
+        );
+    }
+    let watch = fn_body(&src, "fn watch_capture_window_focus(");
+    assert!(watch.contains("Platform::LinuxWayland") && watch.contains("focus_watch_gtk::watch(window)"));
+    let focused = fn_body(&src, "pub(super) fn on_capture_window_focused(");
+    assert!(focused.contains("own_windows::capture_window_focus_shows_main("));
+    assert!(
+        focused.find("bring_main_forward(&main)").unwrap() < focused.find("on_main_window_focused(app)").unwrap(),
+        "the main window comes forward and the recording's end leaves it up"
+    );
+
+    let gtk = read("src/capture/focus_watch_gtk.rs");
+    for signal in [
+        "connect_enter_notify_event",
+        "connect_leave_notify_event",
+        "connect_map_event",
+        "connect_focus_in_event",
+    ] {
+        assert!(gtk.contains(signal), "the watch follows {signal}");
+    }
+    assert!(
+        gtk.contains("gdk::NotifyType::Inferior"),
+        "moving onto the webview inside is not leaving the window"
+    );
+    assert!(gtk.contains("commands::on_capture_window_focused("));
+    assert!(read("src/capture/mod.rs").contains("#[cfg(target_os = \"linux\")]\nmod focus_watch_gtk;"));
+
+    let main = read("src/main.rs");
+    let instance = &main[main.find("tauri_plugin_single_instance::init(").unwrap()..];
+    let instance = &instance[..instance.find("deep-link://new-url").unwrap()];
+    assert!(
+        instance.find("window.set_focus()").unwrap() < instance.find("on_main_window_focused(app)").unwrap(),
+        "opening Hippius again mid-recording keeps it up when the recording ends"
+    );
+}
+
 /// WebKitGTK never offers `getUserMedia` unless media stream is on, and
 /// denies what nobody answers: on Linux the camera bubble needs both. Both
 /// are given to the capture windows only (the same gate as WebView2's), for
@@ -1279,9 +1647,70 @@ fn linux_webviews_open_devices_only_in_the_capture_windows() {
     assert!(linux.contains("webview_media_gtk::attach(&webview)"));
     let gtk = read("src/capture/webview_media_gtk.rs");
     assert!(gtk.contains("set_enable_media_stream(true)"));
-    assert!(gtk.contains("is::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
+    assert!(gtk.contains("downcast_ref::<UserMediaPermissionRequest>()") && gtk.contains("is::<DeviceInfoPermissionRequest>()"));
     assert!(gtk.contains("is_app_origin(&uri)") && gtk.contains("request.deny()"));
     assert!(gtk.contains("return false;"), "other requests keep WebKitGTK's default");
+}
+
+/// The bubble's page loads while the window is being built, before the
+/// media stream is turned on: a page that already finished loading is
+/// loaded again, or it has no `navigator.mediaDevices` for its whole life.
+/// Every answer to a camera request is logged next to the page's own
+/// reports.
+#[test]
+fn linux_reloads_a_page_that_loaded_before_the_media_stream_and_logs_its_answers() {
+    let gtk = read("src/capture/webview_media_gtk.rs");
+    let attach = fn_body(&gtk, "pub fn attach(");
+    let on = attach.find("set_enable_media_stream(true)").expect("media stream on");
+    let reload = attach.find("view.reload()").expect("a loaded page is loaded again");
+    assert!(on < reload, "turn the media stream on before loading the page again");
+    assert!(attach.contains("needs_reload(was_on, view.is_loading(), uri.as_deref())"));
+    assert!(attach.contains("camera: allowed a request for the"));
+}
+
+/// Where PipeWire is too old for `pipewiresrc` to open a camera, the
+/// PipeWire device provider is ranked NONE so WebKitGTK and the recorder
+/// child open cameras with `v4l2src`. It sets an environment variable, so it
+/// runs in `main` before logging (whose writer is a thread) and before the
+/// builder; the recorder child returns earlier and inherits it from the app.
+#[test]
+fn linux_picks_the_camera_provider_before_any_thread_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let child = body.find("recorder_child::run(").expect("the recorder child branch");
+    let apply = body
+        .find("crate::capture::camera_provider::apply()")
+        .expect("the provider is chosen in main");
+    let logging = body.find("let _log_guard = init_logging();").expect("logging starts in main");
+    let builder = body.find("Builder::default()").expect("the builder");
+    assert!(child < apply && apply < logging && logging < builder);
+    assert!(body.contains("camera_provider.log();"), "the decision is logged once logging is up");
+    let provider = read("src/capture/camera_provider.rs");
+    assert!(provider.contains("pub const RANK_VAR: &str = \"GST_PLUGIN_FEATURE_RANK\";"));
+    assert!(provider.contains("pub const PROVIDER: &str = \"pipewiredeviceprovider\";"));
+}
+
+/// The camera page reports each step of opening the camera to the app log;
+/// a report command that is not registered fails in a window nobody watches.
+#[test]
+fn the_camera_page_reports_to_the_app_log() {
+    let main = read("src/main.rs");
+    assert!(main.contains("crate::capture::camera_report::capture_camera_report,"));
+    let ipc = read("../app/lib/tauri/capture.ts");
+    assert!(ipc.contains("invoke(\"capture_camera_report\", { step, detail })"));
+    let page = read("../app/capture-camera/page.tsx");
+    for step in [
+        "no-media-devices",
+        "devices",
+        "request",
+        "opened",
+        "playing",
+        "error",
+        "no-frames",
+        "gave-up",
+    ] {
+        assert!(page.contains(&format!("report(\"{step}\"")), "the camera page reports {step}");
+    }
 }
 
 /// Windows' meter is the recorder child's WASAPI client, the same program
@@ -1365,7 +1794,7 @@ fn the_privacy_settings_button_opens_only_rusts_pages() {
     let commands = read("src/capture/commands.rs");
     let open = fn_body(&commands, "pub fn capture_open_privacy_settings(");
     assert!(open.contains("privacy::settings_uri_for(") && open.contains("open_url(uri"));
-    assert!(fn_body(&commands, "pub async fn capture_overlay_context(").contains("privacy::device_privacy()"));
+    assert!(fn_body(&commands, "pub async fn capture_overlay_context(").contains("privacy::device_privacy("));
     let bar = read("../app/capture-overlay/CaptureBar.tsx");
     assert!(bar.contains("openCapturePrivacySettings(device)"));
     assert!(!bar.contains("ms-settings:"), "the bar never names a Settings URI itself");
@@ -1529,6 +1958,149 @@ fn the_pill_menus_grow_the_protected_pill_window() {
     assert!(fn_body(&src, "fn open_controls(").contains("pill_menu).take()"));
 }
 
+/// The bar must not move while a menu opens or closes. Growing the pill's
+/// window upward drew the pill at the top of the grown window for a moment
+/// (the page laid out for the old size, or for the side not yet known), a
+/// menu's height above where it was. On macOS the page is therefore laid
+/// out once at full height and never resized: every frame change of the
+/// pill goes through `set_pill_frame`, which places the page inside the
+/// window (`live_controls::page_top`) in the same main-thread turn as the
+/// window, with screen updates held. Elsewhere the page anchors the pill to
+/// the edge that stays put (`capture_controls_menu_side`) before it asks for
+/// the room.
+#[test]
+fn the_pill_never_moves_while_a_menu_opens_or_closes() {
+    let src = read("src/capture/commands.rs");
+    let menu = fn_body(&src, "pub async fn capture_controls_menu(");
+    assert!(menu.contains("set_pill_frame(&window, grown, scale, Some(above))"));
+    assert!(menu.contains("set_pill_frame(&window, back, scale, None)"));
+    assert!(!menu.contains("set_camera_frame("), "the pill's frame is never set without its page");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains("set_pill_frame(&window, frame, area.scale, None)"));
+    assert!(
+        !open.contains("place(&window"),
+        "a pill placed without its page would show the wrong slice"
+    );
+    let set = fn_body(&src, "fn set_pill_frame(");
+    for needle in [
+        "disableScreenUpdatesUntilFlush",
+        "setAutoresizingMask: 0usize",
+        "live_controls::page_top(menu, room)",
+        "live_controls::page_height(CONTROLS_HEIGHT, room)",
+        "setFrame: rect display: objc::runtime::YES animate: objc::runtime::NO",
+    ] {
+        assert!(set.contains(needle), "set_pill_frame lost {needle}");
+    }
+    let page_frame = set.find("setFrame: page_frame").expect("the page is placed");
+    let window_frame = set.find("setFrame: rect").expect("the window is placed");
+    assert!(page_frame < window_frame, "the page is placed before the window is drawn at its new size");
+    let side = fn_body(&src, "pub fn capture_controls_menu_side(");
+    assert!(side.contains("live_controls::menu_above("), "the side is the one the window will grow to");
+    assert!(
+        fn_body(&src, "pub async fn capture_controls_context(").contains("live_controls::fixed_menu_room("),
+        "the page is told how much room it keeps"
+    );
+
+    let page = read("../app/capture-controls/page.tsx");
+    let side_call = page.find("getCaptureControlsMenuSide()").expect("the page asks the side first");
+    let grow = page.find("setCaptureControlsMenu(true)").expect("then the room");
+    assert!(side_call < grow, "anchored before the window grows");
+    assert!(
+        page.contains("style={fixed ? { height: menuRoom } : undefined}"),
+        "fixed room on both sides"
+    );
+}
+
+/// The pill's page is taller than its window and sticks out above it, which
+/// WebKit took for a title bar: its automatic content insets cut the room
+/// above off the page's viewport, the pill was laid out that much lower,
+/// below the window, and no recording showed its controls. `set_pill_frame`
+/// turns the insets off before it places the page.
+#[test]
+fn the_pill_page_viewport_is_its_whole_frame() {
+    let src = read("src/capture/commands.rs");
+    let set = fn_body(&src, "fn set_pill_frame(");
+    for needle in [
+        "setObscuredContentInsets: NoInsets::default()",
+        "_setAutomaticallyAdjustsContentInsets: objc::runtime::NO",
+        "_setTopContentInset: 0.0f64",
+    ] {
+        assert!(set.contains(needle), "set_pill_frame lost {needle}");
+    }
+    let insets = set.find("_setAutomaticallyAdjustsContentInsets").expect("insets off");
+    let page = set.find("setFrame: page_frame").expect("the page is placed");
+    assert!(insets < page, "the insets are off before the page sticks out of the window");
+}
+
+/// The camera bubble's own controls mid-recording are never in the video.
+/// The bubble's window is filmed, so they are a window of their own, which
+/// every recorder leaves out: on macOS the helper films only the main window
+/// and the bubble of Hippius's windows (`filmed_own_windows`, by window
+/// number; the bubble's number is the camera window's alone) or, recording a
+/// window, only that window and the bubble; on Windows the window is content
+/// protected; Linux has none (`bubble_controls::supported`).
+#[test]
+fn the_bubble_controls_are_never_filmed() {
+    let src = read("src/capture/commands.rs");
+    let build = fn_body(&src, "fn bubble_controls_window(");
+    assert!(build.contains("BUBBLE_CONTROLS_LABEL"));
+    assert!(
+        build.contains(".content_protected(super::own_windows::content_protected(") && build.contains("OwnWindow::BubbleControls"),
+        "the controls' protection is own_windows' decision"
+    );
+    assert!(build.contains(".focused(false)") && build.contains(".accept_first_mouse(true)"));
+    // Only the camera window's number is ever remembered as the bubble's.
+    assert_eq!(src.matches("    remember_camera_window_number(").count(), 1);
+    assert!(fn_body(&src, "fn open_camera_window(").contains("remember_camera_window_number(app, &window)"));
+    assert!(
+        src.contains("super::own_windows::filmed_own_windows(main_window_number(app).await, filmed_camera_window(&state.capture))"),
+        "the helper films the main window and the bubble only"
+    );
+    assert!(!fn_body(&src, "fn filmed_camera_window(").contains("BUBBLE_CONTROLS"));
+    let swift = read("../macos/HippiusCapture/Sources/HippiusCapture.swift");
+    assert!(swift.contains("SCContentFilter(display: screen, excludingApplications: [app], exceptingWindows: kept)"));
+    assert!(swift.contains("SCContentFilter(display: screen, including: [window, camera])"));
+
+    // Shown from Rust's pointer watch, on the bubble only while recording,
+    // and gone with the camera.
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_camera_hover_watch(");
+    assert!(watch.contains("bubble_controls::offered(") && watch.contains("bubble_controls::shown("));
+    assert!(watch.contains("bubble_controls::frame("));
+    assert!(fn_body(&src, "async fn end_camera(").contains("close_bubble_controls(app)"));
+
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const BUBBLE_CONTROLS_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("BUBBLE_CONTROLS_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-bubble-controls.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label]);
+    let permissions: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(permissions.iter().all(|p| p.starts_with("core:")), "{permissions:?}");
+    assert!(read("tauri.conf.json").contains("\"capture-bubble-controls\""));
+
+    // The same commands as the pill, so the bar, the bubble and the file agree.
+    let page = read("../app/capture-bubble-controls/page.tsx");
+    for call in ["setCaptureCameraSize(c.target)", "resumeCapture", "pauseCapture"] {
+        assert!(page.contains(call), "the bubble's controls call {call}");
+    }
+    assert!(page.contains("camera.resizeFromPill"), "sizes only where Rust offers them");
+    assert!(!page.contains("title="), "a native tooltip is a window of its own");
+    let shell = read("../app/components/AppShell.tsx");
+    assert!(shell.contains("\"/capture-bubble-controls\""), "a capture route boots provider-free");
+}
+
 /// The bubble's size changes mid-recording by moving its window inside what
 /// is filmed, so the camera in the file follows; the camera only stage is
 /// never resized (it is the recording).
@@ -1622,8 +2194,10 @@ fn a_wayland_area_is_remembered_and_keeps_the_pill_out() {
 #[test]
 fn the_shortcut_starts_the_instant_area_screenshot() {
     let src = read("src/capture/commands.rs");
-    let on = fn_body(&src, "pub fn on_shortcut(");
-    assert!(on.contains("shortcut::ShortcutStart::PRESSED"), "the press says what to start");
+    let on = fn_body(&src, "pub fn on_shortcut_of(");
+    assert!(on.contains("kind.start()"), "the press says what to start");
+    let kinds = fn_body(&read("src/capture/shortcut.rs"), "pub const fn start(");
+    assert!(kinds.contains("Self::Screenshot => ShortcutStart::PRESSED"));
     let start = fn_body(&src, "pub async fn capture_start(");
     assert!(start.contains("instant::start_choice("), "Rust decides what an instant start is");
     assert!(start.contains("state.capture.instant.store(choice.instant"));
@@ -1672,6 +2246,26 @@ fn hippius_can_be_opened_during_a_recording() {
     let watch = read("src/capture/activation.rs");
     assert!(watch.contains("NSApplicationDidBecomeActiveNotification"));
     assert!(watch.contains("pressedMouseButtons"));
+}
+
+/// A Drive file only on the server is edited too: downloaded the viewer's
+/// way, saved back by upload, and never written into the preview cache.
+#[test]
+fn the_editor_opens_and_saves_a_server_only_file() {
+    let editor = read("src/capture/editor.rs");
+    let open_file = fn_body(&editor, "pub async fn capture_editor_open_file(");
+    assert!(
+        open_file.contains("open_remote_file("),
+        "a server-only file opens through the remote path"
+    );
+    let remote = fn_body(&editor, "async fn open_remote_file(");
+    assert!(remote.contains("is_member"), "a drive shared with this account is refused");
+    assert!(remote.contains("cache_remote_file("), "downloaded the way the viewer downloads it");
+    assert!(remote.contains("SaveTarget::Remote"), "saved back by upload");
+    assert!(
+        remote.contains("temp: PathBuf::new()"),
+        "a save must not write the edit into the preview cache"
+    );
 }
 
 /// The screenshot editor: a layer of the main window, never a window of its
@@ -1900,4 +2494,441 @@ fn the_bar_follows_the_pointer_to_another_display() {
     assert!(main.contains("crate::capture::commands::capture_hold_bar,"));
     let page = read("../app/capture-overlay/page.tsx");
     assert!(page.contains("holdCaptureBar(holdsBar)"), "the bar's overlay holds the bar");
+}
+
+/// GNOME's Wayland session ignores a Wayland client's keep-above, so the
+/// pill and the bubble fell behind other windows and the camera went
+/// missing from the recording. XWayland, which Mutter keeps above, is only
+/// used when `HIPPIUS_XWAYLAND` asks for it (native Wayland by default:
+/// XWayland drew the area overlay at the wrong size on scaled displays). It
+/// is decided before GTK starts (after the
+/// recorder child, which opens no window), and through GDK's allowed
+/// backends, never `GDK_BACKEND`, which every program the app starts would
+/// inherit. XWayland comes first and Wayland after it, so the app still
+/// opens where XWayland cannot.
+#[test]
+fn gnome_wayland_connects_through_xwayland_before_gtk_starts() {
+    let main = read("src/main.rs");
+    let body = fn_body(&main, "fn main()");
+    let chosen = body.find("display_backend::apply()").expect("main chooses the display backend");
+    let recorder = body.find("argv_requests_recorder(").expect("recorder branch");
+    let builder = body.find("Builder::default()").expect("builder");
+    assert!(recorder < chosen, "the recorder child opens no window and needs no backend");
+    assert!(chosen < builder, "GDK reads its allowed backends only before GTK starts");
+
+    let module = read("src/utils/display_backend.rs");
+    let apply = fn_body(&module, "pub fn apply() -> Choice {");
+    assert!(apply.contains("choose(&SessionEnv"), "apply asks the pure decision");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("if !truthy(env.xwayland_opt_in)"),
+        "native Wayland unless XWayland is asked for"
+    );
+    assert!(apply.contains("set_allowed_backends(XWAYLAND_FIRST)"));
+    assert!(module.contains("pub const XWAYLAND_FIRST: &str = \"x11,wayland\";"));
+    for forbidden in ["set_var(", "remove_var("] {
+        assert!(
+            !module.contains(forbidden),
+            "the backend choice must not change the environment ({forbidden})"
+        );
+    }
+}
+
+/// An XWayland client on a Wayland session is still on Wayland: its X
+/// connection sees only XWayland windows, so screenshots, recording and the
+/// shortcut must keep using the portals. The session is read from
+/// `XDG_SESSION_TYPE` / `WAYLAND_DISPLAY` alone, which the backend choice
+/// never touches, and never from GDK's display or `GDK_BACKEND`.
+#[test]
+fn an_xwayland_client_keeps_the_wayland_capture_paths() {
+    let rollout = read("src/capture/rollout.rs");
+    let current = fn_body(&rollout, "pub fn current_platform() -> Platform {");
+    assert!(current.contains("\"XDG_SESSION_TYPE\"") && current.contains("\"WAYLAND_DISPLAY\""));
+    for not_read in ["GDK_BACKEND", "\"DISPLAY\"", "gdk::", "Display::default"] {
+        assert!(!current.contains(not_read), "the session must not follow the GDK backend ({not_read})");
+    }
+    let module = read("src/utils/display_backend.rs");
+    assert!(
+        fn_body(&module, "pub fn choose(").contains("rollout::linux_platform("),
+        "the backend choice and the capture paths agree on what Wayland is"
+    );
+}
+
+/// The pill and the bubble ask to stay on top; under XWayland that request
+/// is what Mutter honours.
+#[test]
+fn the_pill_and_the_bubble_ask_to_stay_on_top() {
+    let src = read("src/capture/commands.rs");
+    for builder in ["fn open_controls(", "fn open_camera_window("] {
+        assert!(fn_body(&src, builder).contains(".always_on_top(true)"), "{builder}");
+    }
+}
+
+/// The Free plan's length limit is decided from the plan when a recording
+/// starts, set before the recording is adopted (so its first phase already
+/// carries it), and enforced by the tick through the same `stop_inner` Stop
+/// uses, so the file is saved and delivered as usual. Each link fails
+/// silently: a recording that is never capped, or one that is cut without
+/// being saved.
+#[test]
+fn the_free_recording_limit_is_decided_at_start_and_stops_like_stop() {
+    let src = read("src/capture/commands.rs");
+    let begin = fn_body(&src, "async fn begin_recording(");
+    assert!(
+        fn_body(&src, "fn prefetch_tier(").contains("allowance::recording_tier("),
+        "the session's read reads the tier"
+    );
+    assert!(
+        fn_body(&src, "async fn capture_tier(").contains("allowance::session_tier("),
+        "a capture takes the session's read, or reads it when there is none"
+    );
+    let lookup = begin.find("capture_tier(app).await?").expect("the tier is read as the recording starts");
+    let set = begin
+        .find("set_recording_limit(tier.max_recording())")
+        .expect("the limit comes from the tier");
+    let adopt = begin.find("adopt_recorder(").expect("the recorder is adopted");
+    assert!(lookup < set && set < adopt, "the limit is set before the recording is adopted");
+
+    let tick = fn_body(&src, "fn tick_once(");
+    let at_limit = tick.find("at_recording_limit(elapsed)").expect("each tick checks the limit");
+    let after = &tick[at_limit..];
+    let branch = &after[..after.find("return Tick::Done").expect("the loop ends")];
+    assert!(branch.contains("stopped_at_limit.store(true") && branch.contains("stop_inner(&app)"));
+
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    assert!(stop.contains("stopped_at_limit.swap(false"), "the flag is read once and cleared");
+    assert!(stop.contains("card.stopped_at_free_limit = true"), "the card says why");
+
+    // The pill's time left rides on every phase broadcast.
+    assert!(fn_body(&src, "fn phase_event(").contains("allowance::remaining_to_show("));
+    for builder in ["fn apply(", "fn rebroadcast(", "fn snapshot(", "fn adopt_recorder("] {
+        assert!(
+            fn_body(&src, builder).contains("self.phase_event("),
+            "{builder} builds its event through phase_event"
+        );
+    }
+}
+
+/// The Free plan's watermark is decided from the same one read of the plan
+/// as the length limit, before the recorder starts (so its first frame has
+/// it), and goes into a screenshot's pixels before its PNG is written. The
+/// read starts with the session, so neither usually waits for it. Each link
+/// fails silently: a free capture without the watermark, or a recording
+/// whose watermark and limit disagree.
+#[test]
+fn the_watermark_follows_the_capture_tier() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let advanced = start.find("CaptureEvent::Start { kind, mode }").expect("the session starts");
+    let read = start.find("begin_plan_read(").expect("the plan is read as the session starts");
+    assert!(read < advanced, "read before anything opens, so a refusal comes first");
+    let begin = fn_body(&src, "async fn begin_plan_read(");
+    let prefetch = begin.find("prefetch_tier(app, &state.capture)").expect("the read begins");
+    assert!(begin[..prefetch].contains("if idle {"), "a capture already under way keeps its own read");
+
+    let begin = fn_body(&src, "async fn begin_recording(");
+    let tier = begin.find("let tier = capture_tier(app).await?").expect("one read");
+    let mark = begin
+        .find("watermark: super::watermark::applies(tier)")
+        .expect("the watermark follows it");
+    let recorder = begin.find("recording::start(selection").expect("the recorder starts");
+    let limit = begin.find("tier.max_recording()").expect("the limit follows the same read");
+    assert!(tier < mark && mark < recorder && tier < limit);
+    assert_eq!(begin.matches("capture_tier(").count(), 1, "the plan is read once per recording");
+
+    let shot = fn_body(&src, "async fn finish_screenshot(");
+    let decided = shot
+        .find("watermark::applies(capture_tier(app).await?)")
+        .expect("a screenshot's watermark comes from the session's plan");
+    let taken = shot.find("take_screenshot(selection, clear)").expect("the pixels are read");
+    let stamp = shot.find("watermark::stamp_image(&mut image)").expect("a screenshot is watermarked");
+    let save = shot.find("save_png(&image, &path)").expect("then written");
+    assert!(decided < taken, "decided before anything is captured");
+    assert!(stamp < save);
+    let portal = fn_body(&src, "async fn take_with_system_picker(");
+    let decided = portal
+        .find("watermark::applies(capture_tier(app).await?)")
+        .expect("the desktop's tool follows the same plan");
+    let asked = portal.find("linux_portal::request(true)").expect("the desktop's tool opens");
+    assert!(decided < asked, "no screenshot through the desktop's tool on an unknown plan");
+    assert!(
+        portal.contains("stamp_portal_shot(&path, image)"),
+        "the desktop's own screenshot tool is watermarked too"
+    );
+}
+
+/// No capture is taken on a plan that is not known. Every way a capture
+/// starts waits for the session's plan read and passes its refusal on
+/// before anything is captured: the bar's selection (`select_inner`), and
+/// at `capture_start` every start with no bar to show "Checking your plan"
+/// on. The bar is told where the read is.
+#[test]
+fn every_capture_waits_for_the_plan() {
+    let src = read("src/capture/commands.rs");
+
+    let select = fn_body(&src, "async fn select_inner(");
+    let plan = select
+        .find("super::allowance::session_tier(&state).await?")
+        .expect("select_inner waits for the plan");
+    let moved = select.find("CaptureEvent::Selected").expect("the phase moves on");
+    assert!(plan < moved, "refused while the bar is still up, screenshots included");
+    assert!(
+        !select[..plan].contains("if kind == CaptureKind::Recording {"),
+        "every kind, not only a recording"
+    );
+
+    let start = fn_body(&src, "pub async fn capture_start(");
+    let plan = start
+        .find("wait_for_plan_without_bar(state.inner(), idle && shows_no_plan_status(choice.instant, plan)).await?")
+        .expect("a start with no bar waits for the plan");
+    assert!(fn_body(&src, "async fn wait_for_plan_without_bar(").contains("allowance::session_tier(state).await?"));
+    let opened = start
+        .find("advance(&app, &state.capture, CaptureEvent::Start")
+        .expect("the session starts");
+    assert!(plan < opened, "refused before anything opens or is grabbed");
+    let no_bar = fn_body(&src, "fn shows_no_plan_status(");
+    for case in ["instant", "StartPlan::Frozen", "StartPlan::SystemPicker"] {
+        assert!(no_bar.contains(case), "{case} has no bar to wait on");
+    }
+
+    // The bar follows the read and can ask for it again.
+    let prefetch = fn_body(&src, "fn prefetch_tier(");
+    assert!(prefetch.contains("capture.plan.begin()") && prefetch.contains("emit_plan_status("));
+    assert!(fn_body(&src, "pub fn capture_plan_retry(").contains("prefetch_tier(&app, &state.capture)"));
+}
+
+/// The tier reads the plan through the same fold the storage overview and
+/// sharing use, never a parse or a request of its own, and no verdict is
+/// kept to stand in for a failed read.
+#[test]
+fn the_recording_tier_reads_the_plan_the_way_the_overview_does() {
+    let allowance = read("src/capture/allowance.rs");
+    assert!(allowance.contains("storage_overview::fetch_plan_reads("));
+    assert!(allowance.contains("sharing_entitlement::active_drive_plan_code("));
+    assert!(allowance.contains("storage_overview::drive_code_is_free("));
+    assert!(!allowance.contains("\"/api/"), "no request of its own");
+    let overview = read("src/billing/storage_overview.rs");
+    assert!(
+        !overview.contains("capture::allowance::"),
+        "the overview keeps no capture verdict: a stored tier never decides a capture"
+    );
+    assert!(!allowance.contains("user_preferences") && !allowance.contains("last_known"));
+    assert!(
+        allowance.contains("storage_overview::free_tier_entitled("),
+        "no Drive storage is decided by the overview's own rule"
+    );
+    assert!(fn_body(&overview, "pub(crate) async fn fetch_can_share_drives(").contains("fetch_plan_reads("));
+}
+
+/// The bubble opens the camera itself on Linux, as it did before the Camera
+/// portal pre-check: nothing asks the portal ahead of `getUserMedia` or
+/// moves the capture windows aside, so the camera state's `access` stays
+/// `unknown` and the page opens the camera and says what failed if it
+/// fails. `camera_access` keeps the answer types for when the pre-check is
+/// wired again.
+#[test]
+fn linux_bubble_opens_the_camera_without_a_portal_pre_check() {
+    let src = read("src/capture/commands.rs");
+    let sync = fn_body(&src, "async fn sync_camera(");
+    assert!(sync.contains("open_camera_window(app, shape"), "the bubble opens here");
+    for gone in [
+        "ask_camera_access",
+        "step_aside_for_system_question",
+        "come_back_after_system_question",
+        "camera_access::ask_portal",
+        "begin_asking()",
+    ] {
+        assert!(!src.contains(gone), "no camera pre-check: {gone}");
+    }
+    let state = fn_body(&src, "async fn camera_state_for(");
+    assert!(state.contains("access: state.capture.camera_access.current()"));
+}
+
+/// `capture_support` waits on the Linux recorder's probe (up to 20 s on a
+/// first run): as a sync command it ran on the GTK main thread and froze the
+/// app until GNOME offered to force-quit it.
+#[test]
+fn capture_support_never_blocks_the_main_thread() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "pub async fn capture_support()");
+    assert!(body.contains("spawn_blocking(support_now)"), "{body}");
+    assert!(!src.contains("pub fn capture_support()"), "a sync command runs on the main thread");
+}
+
+/// Closing the main window quits on Windows and Linux, but never during a
+/// capture: the close is then the desktop's (the window is hidden), and
+/// quitting threw the recording away with the app.
+#[test]
+fn closing_the_main_window_mid_capture_hides_it_instead_of_quitting() {
+    let main = read("src/main.rs");
+    let handler = &main[main.find("WindowEvent::CloseRequested").expect("close handler")..];
+    let guard = handler.find("closing_main_quits(phase)").expect("the capture guard");
+    let quit = handler.find("crate::tray::panel::quit_desktop").expect("quit");
+    let non_mac = handler.find("#[cfg(not(target_os = \"macos\"))]").expect("non-mac branch");
+    assert!(non_mac < guard && guard < quit, "checked before the quit");
+    assert!(handler[guard..quit].contains("api.prevent_close()") && handler[guard..quit].contains("return;"));
+}
+
+/// A crash leaves evidence: the panic hook writes `crash.log` synchronously,
+/// and on Linux GLib's messages (GTK's fatal errors included) reach the log.
+#[test]
+fn a_crash_leaves_a_record_beside_the_logs() {
+    let main = read("src/main.rs");
+    let hook = main.find("diagnostics::install_panic_hook();").expect("panic hook");
+    let bridge = main.find("diagnostics::install_glib_log_bridge();").expect("glib bridge");
+    let logging = main.find("let _log_guard = init_logging();").expect("logging");
+    let builder = main.find("let builder = Builder::default()").expect("builder");
+    assert!(logging < hook && hook < bridge && bridge < builder);
+    let diagnostics = read("src/diagnostics.rs");
+    let install = fn_body(&diagnostics, "pub fn install_panic_hook()");
+    let write = install.find("append_crash_record(").expect("written at once");
+    let traced = install.find("tracing::error!(").expect("and traced");
+    assert!(write < traced, "the file first: the queued log line can die with the process");
+}
+
+/// A recording start cancelled while the desktop's dialog was up, then
+/// overtaken by a new Record, must neither adopt its recorder into the new
+/// session nor end it when it fails: it throws away only its own recorder
+/// and folder.
+#[test]
+fn a_superseded_recording_start_leaves_the_new_session_alone() {
+    let src = read("src/capture/commands.rs");
+    let wrapper = fn_body(&src, "async fn start_recording(");
+    assert!(wrapper.contains("recording_start.fetch_add(1"), "each start is numbered");
+    let failed = wrapper.find("start_superseded(start").expect("a failure checks the number");
+    assert!(wrapper[failed..].contains("return Ok(());"), "a superseded failure ends nothing");
+    let start = fn_body(&src, "async fn begin_recording(");
+    let check = start.find("start_superseded(start").expect("checked before adopting");
+    let adopt = start.find("adopt_recorder(recorder").expect("adopt");
+    assert!(check < adopt);
+    assert!(
+        start[check..adopt].contains("discard_recording(Some(recorder), Some(dir))"),
+        "only its own folder"
+    );
+}
+
+/// A failed direct capture outlives a restart: the failure writes its marker,
+/// reaching the drive clears it, sign-in offers it again, and each capture
+/// start brings one back while nothing is parked. Discard is the only way
+/// its file is removed.
+#[test]
+fn a_failed_capture_is_offered_again_after_a_restart() {
+    let src = read("src/capture/commands.rs");
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let clear = deliver.find("kept_failed::clear(").expect("a delivered capture's marker goes");
+    let placed = deliver.find("announce_placed(").expect("placement is announced");
+    assert!(clear < placed, "cleared as soon as delivery succeeds");
+    assert!(deliver.contains("announce_failed(app, path, card_id, &e, marked, sent_to)"));
+    assert!(
+        fn_body(&src, "fn announce_failed(").contains("keep_failed(path, marked, sent_to,"),
+        "a failure writes its marker from the delivery itself, card or no card"
+    );
+    assert!(!deliver.contains("keep_failed_card"), "never only when its card is still on screen");
+    assert!(
+        fn_body(&src, "pub async fn capture_sync_shortcut(").contains("spawn_offer_kept_failed(&app)"),
+        "sign-in offers a kept failure again"
+    );
+    assert!(fn_body(&src, "pub async fn capture_start(").contains("bring_back_failed_or_kept(&app, &state.capture).await"));
+    assert!(fn_body(&src, "async fn bring_back_failed_or_kept(").contains("next_kept_failed(app).await"));
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(!kept.contains("remove_dir"), "nothing here deletes a capture");
+}
+
+/// A recording or upload the app quits on is marked before it can be lost:
+/// the recording once it is under way, the delivery before anything can
+/// fail. The next run offers it with Retry (`kept_failed::this_run`).
+#[test]
+fn a_capture_the_app_quits_on_is_offered_again() {
+    let src = read("src/capture/commands.rs");
+    let start = fn_body(&src, "async fn start_recording(");
+    assert!(
+        start.contains("if started.is_ok() {\n        mark_recording(&state).await;"),
+        "a recording that started is marked"
+    );
+    assert!(fn_body(&src, "async fn mark_recording(").contains("kept_failed::write_in(&root, &dir, &kept)"));
+    let deliver = fn_body(&src, "async fn deliver_and_announce(");
+    let in_flight = deliver.find("mark_delivery(").expect("a delivery is marked");
+    let outcome = deliver.find("let outcome = async").expect("delivery runs");
+    assert!(in_flight < outcome, "marked before anything can fail");
+    let kept = read("src/capture/kept_failed.rs");
+    assert!(
+        fn_body(&kept, "fn list_for_run(").contains("kept.run.as_deref() == Some(run)"),
+        "this run's own are skipped"
+    );
+}
+
+/// A stop that errors keeps what the recorder saved (it writes fragments
+/// as it goes) instead of throwing the folder away with the error.
+#[test]
+fn a_recording_whose_stop_fails_is_salvaged_not_discarded() {
+    let src = read("src/capture/commands.rs");
+    let stop = fn_body(&src, "pub(crate) async fn stop_inner(");
+    let stopped = stop.find("recorder.stop()").expect("the recorder stops");
+    let after = &stop[stopped..];
+    assert!(after.contains("let Some(path) = salvage_after_failed_stop"), "salvaged before failing");
+    assert!(after.contains("fail_capture(app, &e)"), "nothing saved: the capture fails");
+}
+
+/// A captures folder that was set up and is gone now is never made again
+/// by delivery; first-time setup makes the folder before the drive exists.
+#[test]
+fn a_missing_captures_folder_is_never_made_again() {
+    let deliver = read("src/capture/deliver.rs");
+    let place = fn_body(&deliver, "pub async fn place(");
+    let refused = place.find("refuse_missing_root(&root)?").expect("a gone folder is refused");
+    let moved = place.find("place_in_folder(").expect("the capture is moved in");
+    assert!(refused < moved, "refused before the folder could be made");
+    let setup = read("src/capture/setup.rs");
+    let add = fn_body(&setup, "async fn add_drive(");
+    let made = add.find("create_dir_all(dir)").expect("first setup makes the folder");
+    let added = add.find("add_local_sync_folder(").expect("then adds the drive");
+    assert!(made < added, "the folder exists before delivery can see the drive");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "fn announce_failed(").contains("is_missing_root(e)"));
+}
+
+/// `--capture` / `--record` on the launch that starts the app are kept in
+/// setup and run by the signed-in app once it listens; a second launch is
+/// still the single-instance handler's.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_not_dropped() {
+    let main = read("src/main.rs");
+    assert!(main.contains("remember_launch_shortcut(app.handle(), std::env::args()"));
+    let commands = read("src/capture/commands.rs");
+    let run = fn_body(&commands, "pub fn capture_launch_shortcut(");
+    assert!(run.contains(".take()"), "run once");
+    assert!(run.contains("on_shortcut_of(&app, kind)"), "exactly what the shortcut does");
+}
+
+/// A Free plan recording on Linux (X11 and Wayland alike) carries the
+/// watermark: the child hands `StartCommand.watermark` to the shared writer,
+/// which stamps the pipeline (`writer_loop`'s own tests pin the stamping).
+/// The Linux child only compiles on Linux, so its wiring is pinned here.
+#[test]
+fn linux_recordings_hand_the_watermark_to_the_writer() {
+    let linux = read("src/capture/recorder_child/linux/mod.rs");
+    assert!(
+        fn_body(&linux, "fn record(").contains("cmd.watermark"),
+        "record passes the plan's watermark on"
+    );
+    let spawn = fn_body(&linux, "fn spawn_writer(");
+    assert!(spawn.contains("writer_loop::run(&rx, &shared, &out, &sources, &ready, watermark,"));
+    let writer = fn_body(&read("src/capture/recorder_child/writer_loop.rs"), "pub fn run<");
+    assert!(writer.contains("if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1)"));
+    assert!(writer.contains("p.set_watermark(stamp)"));
+}
+
+/// The launch's shortcut is kept in AppState, and `state::<AppState>()`
+/// panics before `manage`: called at the top of setup, `hippius --record`
+/// (a Wayland desktop's Record shortcut with the app closed) crashed the app
+/// as it started.
+#[test]
+fn a_launch_for_a_capture_shortcut_is_remembered_after_appstate_is_managed() {
+    let main = read("src/main.rs");
+    let setup = fn_body(&main, "builder.setup(");
+    let managed = setup.find("app_handle.manage(app_state)").expect("setup manages AppState");
+    let remembered = setup.find("remember_launch_shortcut(").expect("setup remembers the launch's shortcut");
+    assert_eq!(setup.matches("remember_launch_shortcut(").count(), 1, "remembered once");
+    assert!(managed < remembered, "remember_launch_shortcut reads AppState, so it runs after manage");
+    let commands = read("src/capture/commands.rs");
+    assert!(fn_body(&commands, "pub fn remember_launch_shortcut").contains("app.state::<AppState>()"));
 }

@@ -54,6 +54,12 @@ describe("editor keys", () => {
 describe("Drive's Edit image", () => {
   const row = { name: "Shot.png", isFolder: false, label: "Work", cloudOnly: false, memberDrive: false };
 
+  // The reported gap: pictures in a remote folder could not be edited.
+  it("is offered for a picture only on the server when the row has its file id", () => {
+    expect(offersImageEditor({ ...row, cloudOnly: true, serverFileId: "ab12" }, true)).toBe(true);
+    expect(offersImageEditor({ ...row, cloudOnly: true, serverFileId: "ab12", memberDrive: true }, true)).toBe(false);
+  });
+
   it("is offered for a PNG or JPEG in an own drive on this computer", () => {
     expect(offersImageEditor(row, true)).toBe(true);
     expect(offersImageEditor({ ...row, name: "photo.JPEG" }, true)).toBe(true);
@@ -63,6 +69,7 @@ describe("Drive's Edit image", () => {
   it("is not offered for folders, cloud-only rows, shared drives, other files, or with capture off", () => {
     expect(offersImageEditor({ ...row, isFolder: true }, true)).toBe(false);
     expect(offersImageEditor({ ...row, cloudOnly: true }, true)).toBe(false);
+    expect(offersImageEditor({ ...row, cloudOnly: true, serverFileId: "" }, true)).toBe(false);
     expect(offersImageEditor({ ...row, memberDrive: true }, true)).toBe(false);
     expect(offersImageEditor({ ...row, label: null }, true)).toBe(false);
     expect(offersImageEditor({ ...row, name: "anim.gif" }, true)).toBe(false);

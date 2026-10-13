@@ -106,6 +106,15 @@ pub struct StartCommand {
     /// wire when false so the Swift helper never sees it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub synthetic: bool,
+    /// Burn the Free plan's watermark into every frame. The Rust child
+    /// draws it itself; left off the wire when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub watermark: bool,
+    /// The watermark's atlas file (`capture::watermark::atlas`). Only the
+    /// Swift helper reads it, and blends the watermark only when it is
+    /// given; left off the wire when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark_atlas: Option<String>,
 }
 
 /// `switch_microphone`: record another microphone from now on, in the same
@@ -233,6 +242,13 @@ impl StartCommand {
             pick_area: false,
             camera: options.camera.clone(),
             synthetic: false,
+            watermark: options.watermark,
+            watermark_atlas: options
+                .watermark_atlas
+                .as_deref()
+                .filter(|_| options.watermark)
+                .and_then(|p| p.to_str())
+                .map(str::to_string),
         };
         match selection {
             Selection::Screen { display_id } => {
@@ -599,6 +615,8 @@ mod tests {
                 restore_token: None,
                 pick_area: false,
                 camera: None,
+                watermark: false,
+                watermark_atlas: None,
             },
         )
         .unwrap();
@@ -620,6 +638,29 @@ mod tests {
         // Swift helper.
         assert!(v.get("synthetic").is_none(), "{v}");
         assert!(v.get("restoreToken").is_none(), "{v}");
+        // A paid or unknown plan sends nothing about the watermark.
+        assert!(v.get("watermark").is_none(), "{v}");
+        assert!(v.get("watermarkAtlas").is_none(), "{v}");
+    }
+
+    /// A Free plan recording asks the child for the watermark, and names the
+    /// Swift helper's atlas; the atlas never travels without the watermark.
+    #[test]
+    fn the_watermark_goes_out_with_start() {
+        let options = RecordOptions {
+            watermark: true,
+            watermark_atlas: Some("/tmp/cap/.hippius-watermark".into()),
+            ..RecordOptions::default()
+        };
+        let cmd = StartCommand::from_selection(5, Selection::Screen { display_id: 1 }, Path::new("/tmp/cap/r.mp4"), options.clone()).unwrap();
+        let line = serde_json::to_string(&cmd).unwrap();
+        assert!(line.contains(r#""watermark":true"#), "{line}");
+        assert!(line.contains(r#""watermarkAtlas":"/tmp/cap/.hippius-watermark""#), "{line}");
+        assert_eq!(parse_command(&line), Ok(Command::Start(cmd)));
+        let off = RecordOptions { watermark: false, ..options };
+        let v = serde_json::to_value(StartCommand::from_selection(5, Selection::Screen { display_id: 1 }, Path::new("/tmp/cap/r.mp4"), off).unwrap())
+            .unwrap();
+        assert!(v.get("watermarkAtlas").is_none(), "{v}");
     }
 
     /// Wayland: the portal's token goes to the child with `start` and comes

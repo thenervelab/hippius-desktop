@@ -10,8 +10,12 @@
  * Drive page is not mounted yet when the event arrives.
  */
 
-/** Backend event the popover emits for the Drive page (its Upload tile). */
+/** Backend event the popover emits to send the main window to the Drive page. */
 export const TRAY_OPEN_FILES_TAURI_EVENT = "hippius:tray-open-files";
+
+/** Backend event the popover's Upload tile emits: the main window opens its
+ *  "Upload File" dialog over the page it is on (`TrayUploadDialogHost`). */
+export const TRAY_OPEN_UPLOAD_EVENT = "hippius:tray-open-upload";
 
 /** Backend event the popover emits with `{ paths }` when files are dropped on it. */
 export const TRAY_UPLOAD_PATHS_EVENT = "hippius:tray-upload-paths";

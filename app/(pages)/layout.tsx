@@ -17,6 +17,7 @@ import NewFolderDialog from "@/components/page-sections/drive/NewFolderDialog";
 import CaptureHost from "@/components/capture/CaptureHost";
 import ScreenshotEditorHost from "@/components/capture/editor/ScreenshotEditorHost";
 import TrayFileActionHost from "@/components/tray/TrayFileActionHost";
+import TrayUploadDialogHost from "@/components/tray/TrayUploadDialogHost";
 import AppContextMenu from "@/components/ui/context-menu/AppContextMenu";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
@@ -52,6 +53,8 @@ export default function ProtectedLayout({
           <ScreenshotEditorHost />
           {/* Runs the tray popover's file actions (view, share, rename...). */}
           <TrayFileActionHost />
+          {/* The tray's Upload tile: the "Upload File" dialog over any page. */}
+          <TrayUploadDialogHost />
           {/* Replaces the WebView's Back / Reload / Inspect Element menu.
             Yields to the row and card menus, which handle their own
             right-clicks. */}

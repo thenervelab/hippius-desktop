@@ -29,6 +29,7 @@ vi.mock("@/app/lib/tray/trayWindowActions", async (importOriginal) => ({
 vi.mock("@/app/lib/featureFlags", () => ({ SCREEN_CAPTURE_ENABLED: true }));
 vi.mock("../CaptureDriveDialog", () => ({ default: () => null }));
 vi.mock("../CapturePermissionDialog", () => ({ default: () => null }));
+vi.mock("../RecordingLimitDialog", () => ({ default: () => null }));
 
 import CaptureHost from "../CaptureHost";
 import { useStartCapture } from "@/app/lib/capture/useStartCapture";
@@ -141,10 +142,21 @@ describe("CaptureHost", () => {
     expect(h.toastError).not.toHaveBeenCalled();
   });
 
+  it("asks Rust to run a launch's capture shortcut once it listens", async () => {
+    mountHost();
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("capture_launch_shortcut"));
+  });
+
   it("opens the plans on the card's Upgrade", async () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_open_plans", null));
     expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
+  });
+
+  it("opens Shared Links at the capture's link on the card's Manage link", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_manage_link", { shareToken: "tok1" }));
+    expect(h.push).toHaveBeenCalledWith("/shares?highlight=file%3Atok1");
   });
 
   // The shortcut is the one-step area screenshot: Rust's payload says so and
@@ -157,6 +169,14 @@ describe("CaptureHost", () => {
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null });
     await act(() => tauri.emitEvent("hippius:tray-capture", { kind: "screenshot", mode: "area" }));
     expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "screenshot", mode: "area" });
+  });
+
+  // The Record shortcut opens the bar on Record, on the last mode, exactly
+  // as the tray's Record tile does.
+  it("opens the bar on Record for the Record shortcut", async () => {
+    mountHost();
+    await act(() => tauri.emitEvent("capture_shortcut_pressed", { instant: false, kind: "recording" }));
+    expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: "recording", mode: null });
   });
 
   // The tray popover's Record button sends no mode: the bar opens on the last one.
@@ -191,6 +211,58 @@ describe("useStartCapture's answer to a refusal", () => {
     await act(() => start());
     expect(h.openAppWindow).toHaveBeenCalled();
     expect(store.get(captureDialogAtom)).toEqual({ kind: "permission" });
+  });
+
+  // A Record start from the tray, a menu or the record shortcut on a free
+  // plan whose recordings are used up: nothing opened, the app says why.
+  it("brings the app forward with the recording limit dialog", async () => {
+    tauri.onInvoke("capture_start", () => {
+      throw { kind: "NotReady", subkind: "RECORDING_LIMIT_REACHED", message: "You've used your 25 free recordings" };
+    });
+    const { store, start } = hook();
+    await act(() => start("recording"));
+    expect(h.openAppWindow).toHaveBeenCalled();
+    expect(store.get(captureDialogAtom)).toEqual({ kind: "recordingLimit" });
+    expect(h.toastError).not.toHaveBeenCalled();
+  });
+
+  // Nothing is captured on a plan that could not be read: Rust's words, and
+  // a Retry that starts the very same capture again.
+  it("refuses an unread plan in Rust's words with a Retry of the same start", async () => {
+    const message = "We couldn't check your plan. Check your connection and try again.";
+    let refuse = true;
+    tauri.onInvoke("capture_start", () => {
+      if (refuse) throw { kind: "NotReady", subkind: "CAPTURE_PLAN_UNAVAILABLE", message };
+      return null;
+    });
+    const { store, start } = hook();
+    await act(() => start(undefined, undefined, true));
+    expect(h.openAppWindow).toHaveBeenCalled();
+    expect(store.get(captureDialogAtom)).toBeNull();
+    const [shown, options] = h.toastError.mock.calls[0];
+    expect(shown).toBe(message);
+    expect(options.action.label).toBe("Retry");
+
+    refuse = false;
+    tauri.core.invoke.mockClear();
+    await act(async () => options.action.onClick());
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_start", { kind: null, mode: null, instant: true }),
+    );
+  });
+
+  it("offers Upgrade, through Rust, to an account with no Drive storage", async () => {
+    tauri.onInvoke("capture_start", () => {
+      throw { kind: "NotReady", subkind: "CAPTURE_NO_DRIVE_PLAN", message: "No Drive storage yet." };
+    });
+    tauri.onInvoke("capture_limit_upgrade", () => null);
+    const { start } = hook();
+    await act(() => start("screenshot"));
+    const [shown, options] = h.toastError.mock.calls[0];
+    expect(shown).toBe("No Drive storage yet.");
+    expect(options.action.label).toBe("Upgrade");
+    await act(async () => options.action.onClick());
+    await waitFor(() => expect(tauri.core.invoke.mock.calls.some(([c]) => c === "capture_limit_upgrade")).toBe(true));
   });
 
   it("shows anything else as a message, without a dialog", async () => {

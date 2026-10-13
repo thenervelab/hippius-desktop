@@ -17,7 +17,6 @@ import {
   mergeRemoteUploads,
   type RemoteUploadProgress,
 } from "@/app/lib/remote-upload/remoteUploadFeed";
-import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
 
 /** Mirrors Rust's `RecentCaptures` (`get_recent_captures`). */
 export interface RecentCaptures {
@@ -78,8 +77,13 @@ const MAX_NOT_READY_POLLS = 2;
  * Server slices refresh on mount, on a light interval, and whenever the
  * popover regains focus (each re-show). The live snapshot updates from its
  * event stream, so uploading rows animate without polling.
+ *
+ * @param capturesEnabled capture is on for this computer (the capture flag
+ *   AND Rust's `capture_support`; `useTrayCaptureView` is `ready`). The
+ *   Captures list is fetched only then: production carries the flag on
+ *   every platform but turns capture on for macOS only.
  */
-export function useTrayPanelData() {
+export function useTrayPanelData(capturesEnabled: boolean) {
   const [menu, setMenu] = useState<TrayMenuData | null>(null);
   const [recentUploads, setRecentUploads] = useState<FormattedUserFile[]>([]);
   // The Captures tab: the account's newest screenshots and recordings, as
@@ -110,6 +114,8 @@ export function useTrayPanelData() {
   // The window is prewarmed/reused, so a boot-gap fetch (no session yet) keeps
   // this true and the skeleton shows on the first open instead of "no uploads".
   const [loading, setLoading] = useState(true);
+  // Read by `refresh` (stable, polled) rather than closed over.
+  const capturesEnabledRef = useRef(capturesEnabled);
   // Tracks the snapshot's last completion state so we refresh the server list
   // only on the rising edge (session finishes), not on every snapshot tick.
   const prevCompletedRef = useRef(false);
@@ -145,8 +151,8 @@ export function useTrayPanelData() {
             console.error("[TrayPanel] Failed to load recent uploads:", error);
             return [] as FormattedUserFile[];
           }),
-          // Off for this lane: there is no Captures tab to fill.
-          SCREEN_CAPTURE_ENABLED
+          // Off for this computer: there is no Captures tab to fill.
+          capturesEnabledRef.current
             ? invoke<RecentCaptures>("get_recent_captures", {
                 accountId: address,
                 limit: FEED_LIMIT,
@@ -193,6 +199,17 @@ export function useTrayPanelData() {
       console.error("[TrayPanel] Failed to load data:", error);
     }
   }, []);
+
+  // Rust answers `capture_support` after the first refresh has run, so fetch
+  // the Captures list as soon as capture turns out to be on here, and drop
+  // it if it turns off. Only on a change: the mount effect below does the
+  // first refresh.
+  useEffect(() => {
+    if (capturesEnabledRef.current === capturesEnabled) return;
+    capturesEnabledRef.current = capturesEnabled;
+    if (capturesEnabled) void refresh();
+    else setRecentCaptures(NO_CAPTURES);
+  }, [capturesEnabled, refresh]);
 
   useEffect(() => {
     void refresh();

@@ -108,12 +108,71 @@ async fn fetch_credit_balance(api_client: &reqwest::Client, pool: &sqlx::SqliteP
     }
 }
 
-/// The `balance` field of a billing-API balance response, kept only when it
-/// is a number. A missing field reads as zero (the API omits it for an
-/// account that has never been funded); anything unparseable is unknown.
+/// The `balance` field of a billing-API balance response, as a plain
+/// decimal the popover's formatter reads. A missing field reads as zero (the
+/// API omits it for an account that has never been funded); anything that is
+/// not a number is unknown. A number the API writes another way (`0E-18`, a
+/// sign, a JSON number) is rewritten digit for digit by [`plain_decimal`],
+/// never through a float: the formatter only reads plain digits, and showed
+/// "---" for an empty balance written as `0E-18`.
 fn parse_balance(data: &serde_json::Value) -> Option<String> {
-    let raw = data.get("balance").and_then(|v| v.as_str()).unwrap_or("0").trim();
-    raw.parse::<f64>().ok().map(|_| raw.to_string())
+    match data.get("balance") {
+        None | Some(serde_json::Value::Null) => Some("0".into()),
+        Some(serde_json::Value::String(raw)) => plain_decimal(raw),
+        Some(serde_json::Value::Number(n)) => plain_decimal(&n.to_string()),
+        Some(_) => None,
+    }
+}
+
+/// `raw` (an optional sign, digits with an optional point, an optional
+/// `e`/`E` exponent) as a plain decimal: no exponent, no `+`, no leading or
+/// trailing zeros beyond one before the point, and zero never negative.
+/// `None` for anything else. Exact: the digits are moved, never computed.
+fn plain_decimal(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let (negative, rest) = match raw.as_bytes().first()? {
+        b'-' => (true, &raw[1..]),
+        b'+' => (false, &raw[1..]),
+        _ => (false, raw),
+    };
+    let (mantissa, exponent) = match rest.find(['e', 'E']) {
+        Some(i) => (&rest[..i], rest[i + 1..].parse::<i32>().ok()?),
+        None => (rest, 0),
+    };
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    if whole.is_empty() && fraction.is_empty() {
+        return None;
+    }
+    if !whole.bytes().chain(fraction.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    // A huge exponent is not a balance; refuse it rather than allocate.
+    if exponent.unsigned_abs() > 64 {
+        return None;
+    }
+    let digits = format!("{whole}{fraction}");
+    let point = i64::try_from(whole.len()).ok()? + i64::from(exponent);
+    let (int_part, frac_part) = if point <= 0 {
+        (String::new(), format!("{}{digits}", "0".repeat(usize::try_from(-point).ok()?)))
+    } else if usize::try_from(point).ok()? >= digits.len() {
+        (
+            format!("{digits}{}", "0".repeat(usize::try_from(point).ok()? - digits.len())),
+            String::new(),
+        )
+    } else {
+        let at = usize::try_from(point).ok()?;
+        (digits[..at].to_string(), digits[at..].to_string())
+    };
+    let int_part = int_part.trim_start_matches('0');
+    let frac_part = frac_part.trim_end_matches('0');
+    let int_part = if int_part.is_empty() { "0" } else { int_part };
+    let zero = int_part == "0" && frac_part.is_empty();
+    let sign = if negative && !zero { "-" } else { "" };
+    Some(if frac_part.is_empty() {
+        format!("{sign}{int_part}")
+    } else {
+        format!("{sign}{int_part}.{frac_part}")
+    })
 }
 
 /// The label an OAuth account is known by, mirroring the main window's
@@ -238,6 +297,38 @@ mod tests {
         assert_eq!(parse_balance(&data).as_deref(), Some("737553.122357"));
         assert_eq!(parse_balance(&serde_json::json!({})).as_deref(), Some("0"));
         assert_eq!(parse_balance(&serde_json::json!({ "balance": "n/a" })), None);
+        assert_eq!(parse_balance(&serde_json::json!({ "balance": null })).as_deref(), Some("0"));
+        assert_eq!(parse_balance(&serde_json::json!({ "balance": 0 })).as_deref(), Some("0"));
+        assert_eq!(parse_balance(&serde_json::json!({ "balance": 12.5 })).as_deref(), Some("12.5"));
+        assert_eq!(parse_balance(&serde_json::json!({ "balance": true })), None);
+    }
+
+    /// An empty balance written the way a decimal column prints it (`0E-18`)
+    /// showed "---" in the popover: the formatter reads plain digits only.
+    #[test]
+    fn a_balance_in_any_number_form_becomes_a_plain_decimal() {
+        for (raw, plain) in [
+            ("0", "0"),
+            ("0E-18", "0"),
+            ("0e-18", "0"),
+            ("-0", "0"),
+            ("0.000000000000000000", "0"),
+            ("1.5E+2", "150"),
+            ("1.5e-3", "0.0015"),
+            ("12E2", "1200"),
+            ("-0.50", "-0.5"),
+            ("+3.25", "3.25"),
+            (".5", "0.5"),
+            ("5.", "5"),
+            ("007.10", "7.1"),
+            ("737553.122357", "737553.122357"),
+            (" 2 ", "2"),
+        ] {
+            assert_eq!(plain_decimal(raw).as_deref(), Some(plain), "{raw}");
+        }
+        for bad in ["", "-", ".", "e5", "1e", "1.2.3", "1,000", "abc", "1e999", "--1"] {
+            assert_eq!(plain_decimal(bad), None, "{bad}");
+        }
     }
 
     /// An access-key account keeps the address layout: it has no sign-in

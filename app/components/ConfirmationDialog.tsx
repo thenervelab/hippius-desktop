@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 import { ArrowRight } from "lucide-react";
 
 import { Button, type ButtonProps } from "@/components/ui/button";
@@ -83,6 +83,10 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
   // colour — drive's DeleteConfirmationDialog overrides with `text-white`,
   // which is the canonical look for coral pills in this app.
   const isDestructive = confirmVariant === "destructive";
+  // The question and its helper line describe the dialog; the buttons and
+  // any list below them do not.
+  const textId = useId();
+  const helperId = useId();
   const destructiveTextClass = isDestructive ? "text-white" : undefined;
 
   return (
@@ -96,9 +100,11 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
       maxWidth={maxWidth}
       cardClassName={cn("bg-white dark:bg-[#161616]", cardClassName)}
       contentClassName={contentClassName}
+      describedBy={helperText ? `${textId} ${helperId}` : textId}
     >
       <div className="font-geist">
         <p
+          id={textId}
           className={cn(
             "text-center text-base font-medium leading-[22px] tracking-[-0.32px] text-grey-20 dark:text-grey-dark-700",
             helperText ? "mb-2" : "mb-4",
@@ -108,7 +114,7 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
         </p>
 
         {helperText ? (
-          <div className="mb-4 text-center text-sm font-medium leading-5 text-grey-50 dark:text-grey-dark-700">
+          <div id={helperId} className="mb-4 text-center text-sm font-medium leading-5 text-grey-50 dark:text-grey-dark-700">
             {helperText}
           </div>
         ) : null}

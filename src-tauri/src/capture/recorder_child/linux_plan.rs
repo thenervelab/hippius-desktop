@@ -43,6 +43,7 @@ use std::fmt::Write as _;
 use serde::{Deserialize, Serialize};
 
 use super::plan::{self, PixelRect};
+use super::sizing::RateControl;
 use crate::capture::recording::protocol::StartCommand;
 use crate::capture::recording::{MediaDevice, RecordingUnavailable, tidy_devices};
 use crate::capture::targets::DisplayTarget;
@@ -73,21 +74,30 @@ impl H264Encoder {
         }
     }
 
-    /// The element with its bit rate and a keyframe every 2 s at 30 fps
-    /// (the Swift helper's GOP). Units differ: x264 and the VA encoders take
-    /// kbit/s, OpenH264 bit/s.
+    /// The element with the shared average bit rate and a keyframe every
+    /// 2 s at 30 fps ([`KEYFRAME_FRAMES`]), each encoder in its own default
+    /// rate control. This is the form Linux recordings used before the
+    /// encoders were put in VBR / constant-quality modes with a ceiling: on
+    /// real GNOME machines (hardware VA encoders) that change came with
+    /// recordings stopping at Record with GStreamer's "Internal data stream
+    /// error", so the plain settings are back. Units differ: x264 and the
+    /// VA encoders take kbit/s, OpenH264 bit/s.
     #[must_use]
-    pub fn element(self, bits_per_second: u32) -> String {
-        let kbps = bits_per_second.div_ceil(1000);
+    pub fn element(self, rate: RateControl) -> String {
+        let kbps = rate.average_kbps();
         match self {
-            Self::Va => format!("vah264enc bitrate={kbps} key-int-max=60"),
-            Self::Vaapi => format!("vaapih264enc bitrate={kbps} keyframe-period=60"),
+            Self::Va => format!("vah264enc bitrate={kbps} key-int-max={KEYFRAME_FRAMES}"),
+            Self::Vaapi => format!("vaapih264enc bitrate={kbps} keyframe-period={KEYFRAME_FRAMES}"),
             // `veryfast` keeps a 4K30 screen real time on a laptop CPU.
-            Self::X264 => format!("x264enc bitrate={kbps} key-int-max=60 speed-preset=veryfast"),
-            Self::OpenH264 => format!("openh264enc bitrate={bits_per_second} gop-size=60"),
+            Self::X264 => format!("x264enc bitrate={kbps} key-int-max={KEYFRAME_FRAMES} speed-preset=veryfast"),
+            Self::OpenH264 => format!("openh264enc bitrate={} gop-size={KEYFRAME_FRAMES}", rate.average),
         }
     }
 }
+
+/// The Linux encoders' keyframe interval in frames: every 2 s at 30 fps,
+/// one per fragment ([`FRAGMENT_MS`]).
+pub const KEYFRAME_FRAMES: u32 = 60;
 
 /// An AAC encoder element, in the order the plan prefers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,6 +227,14 @@ pub struct Probe {
     /// `None` from an older probe.
     #[serde(default)]
     pub camera: Option<bool>,
+    /// The highest-ranked H.264 decoder GStreamer would pick (what
+    /// WebKitGTK plays a video with; `video_stream::decoder_missing_line`).
+    /// Found by caps, not by name, as WebKit's own registry scan does.
+    #[serde(default)]
+    pub h264_decoder: Option<String>,
+    /// The same for AAC, the sound of every Hippius recording.
+    #[serde(default)]
+    pub aac_decoder: Option<String>,
 }
 
 impl Probe {
@@ -244,6 +262,9 @@ impl Probe {
             session: Some(if wayland { "wayland" } else { "x11" }.to_string()),
             screencast_portal: None,
             camera: Some(NEEDED_FOR_CAMERA.iter().all(|e| installed(e)) && CAMERA_SOURCES.iter().any(|e| installed(e))),
+            // Decoders are found by caps in the child (`linux::probe`).
+            h264_decoder: None,
+            aac_decoder: None,
         }
     }
 
@@ -428,7 +449,8 @@ pub fn quoted(value: &str) -> String {
 
 /// Frames per second, as on macOS.
 pub const FPS: u32 = 30;
-/// Fragment length in ms: what a killed recorder can lose at most.
+/// Fragment length in ms: about what a killed recorder can lose (a fragment
+/// may wait for the next keyframe, at most `sizing::KEYFRAME_SECONDS` away).
 pub const FRAGMENT_MS: u32 = 2000;
 /// The named elements the recorder looks up.
 pub const VIDEO_SINK: &str = "video";
@@ -645,7 +667,7 @@ pub fn encode(plan: &EncodePlan) -> String {
         "appsrc name={VIDEO_SRC} format=time is-live=false do-timestamp=false caps={caps} ! \
          queue ! videoconvert ! {venc} ! h264parse ! {unbounded} ! mux. ",
         caps = quoted(&video_caps),
-        venc = plan.encoders.video.element(super::sizing::video_bit_rate(plan.width, plan.height)),
+        venc = plan.encoders.video.element(RateControl::for_size(plan.width, plan.height)),
     );
     if plan.audio {
         let audio_caps = "audio/x-raw,format=S16LE,rate=48000,channels=2,layout=interleaved";
@@ -880,12 +902,11 @@ mod tests {
 
     #[test]
     fn bit_rates_are_in_each_encoders_own_units() {
-        assert_eq!(
-            H264Encoder::X264.element(14_000_000),
-            "x264enc bitrate=14000 key-int-max=60 speed-preset=veryfast"
-        );
-        assert_eq!(H264Encoder::OpenH264.element(14_000_000), "openh264enc bitrate=14000000 gop-size=60");
-        assert_eq!(H264Encoder::Va.element(2_000_500), "vah264enc bitrate=2001 key-int-max=60");
+        let hd = RateControl::for_size(1920, 1080);
+        assert_eq!(H264Encoder::X264.element(hd), "x264enc bitrate=5000 key-int-max=60 speed-preset=veryfast");
+        assert_eq!(H264Encoder::OpenH264.element(hd), "openh264enc bitrate=5000000 gop-size=60");
+        assert_eq!(H264Encoder::Va.element(hd), "vah264enc bitrate=5000 key-int-max=60");
+        assert_eq!(H264Encoder::Vaapi.element(hd), "vaapih264enc bitrate=5000 keyframe-period=60");
         assert_eq!(AacEncoder::Avenc.element(), "avenc_aac bitrate=160000");
     }
 
@@ -1149,7 +1170,7 @@ mod tests {
     #[test]
     fn the_writer_encodes_one_video_and_one_audio_track_in_fragments() {
         let text = encode(&encode_plan(true));
-        let kbps = super::super::sizing::video_bit_rate(3840, 2160).div_ceil(1000);
+        let kbps = RateControl::for_size(3840, 2160).average_kbps();
         assert!(text.contains(&format!("x264enc bitrate={kbps} ")), "{text}");
         assert!(
             text.contains("caps=\"video/x-raw,format=NV12,width=3840,height=2160,framerate=30/1"),
@@ -1165,6 +1186,36 @@ mod tests {
             text.matches("queue max-size-buffers=0 max-size-bytes=0 max-size-time=0 ! mux.").count(),
             2
         );
+    }
+
+    /// Every encoder keeps its own default rate control (no VBR or
+    /// constant-quality mode, no ceiling), the average bit rate and a
+    /// keyframe every 2 s, at every size.
+    #[test]
+    fn every_encoder_keeps_its_default_rate_control_and_keyframes_alike() {
+        for (w, h) in [(1280, 720), (1920, 1080), (3456, 2234), (3840, 2160)] {
+            let rate = RateControl::for_size(w, h);
+            for encoder in H264Encoder::PREFERENCE {
+                let element = encoder.element(rate);
+                assert!(element.starts_with(encoder.factory()), "{element}");
+                for mode in [
+                    "rate-control=",
+                    "pass=",
+                    "quantizer=",
+                    "target-percentage=",
+                    "max-bitrate=",
+                    "vbv-buf-capacity=",
+                ] {
+                    assert!(!element.contains(mode), "{mode} in {element}");
+                }
+                let gop = match encoder {
+                    H264Encoder::Va | H264Encoder::X264 => "key-int-max",
+                    H264Encoder::Vaapi => "keyframe-period",
+                    H264Encoder::OpenH264 => "gop-size",
+                };
+                assert!(element.split(' ').any(|p| p == format!("{gop}=60")), "{element}");
+            }
+        }
     }
 
     #[test]

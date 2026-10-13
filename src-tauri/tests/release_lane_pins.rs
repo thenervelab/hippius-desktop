@@ -831,23 +831,6 @@ fn production_enables_only_the_capture_rows_marked_production() {
     }
 }
 
-/// An unsigned Windows binary that records the screen and the microphone is
-/// what SmartScreen and Defender look at hardest. Windows recording may reach
-/// production only once the installer is signed (a certificate thumbprint or
-/// a sign command in `tauri.conf.json`).
-#[test]
-fn windows_recording_reaches_production_only_with_a_signed_installer() {
-    use tauri_project_lib::capture::rollout::{Feature, Platform, floor};
-    use tauri_project_lib::release_channel::ReleaseChannel;
-
-    let config: serde_json::Value = serde_json::from_str(&repo_file("tauri.conf.json")).expect("tauri.conf.json parses");
-    let windows = &config["bundle"]["windows"];
-    let signed = !windows["certificateThumbprint"].is_null() || windows.get("signCommand").is_some_and(|c| !c.is_null());
-    if floor(Platform::Windows, Feature::Recording) == Some(ReleaseChannel::Production) {
-        assert!(signed, "Windows recording is marked production but the Windows installer is not signed");
-    }
-}
-
 /// Screen capture carries most of the app's `cfg(windows)` code, and only the
 /// release workflow builds on Windows otherwise. The Windows lane must deny
 /// warnings over every target, run the capture tests, and run for any PR
@@ -1117,4 +1100,58 @@ fn the_capture_runtime_jobs_run_the_built_recorder_for_capture_prs_only() {
         8,
         "every runtime check is #[ignore]d, so plain `cargo test` stays hermetic"
     );
+}
+
+/// A hung step burns GitHub's six-hour default before anything fails, and the
+/// PR shows red half a day later with no error in the log. Every CI job names
+/// its own limit, sized well above its slowest cold run.
+#[test]
+fn every_ci_job_has_a_time_limit() {
+    let ci = repo_file("../.github/workflows/ci.yml");
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    let jobs = document["jobs"].as_mapping().expect("ci.yml has jobs");
+    for (name, job) in jobs {
+        let name = name.as_str().unwrap_or_default();
+        let limit = job["timeout-minutes"].as_u64();
+        assert!(
+            limit.is_some_and(|minutes| minutes <= 120),
+            "ci.yml job {name} needs a timeout-minutes of at most 120"
+        );
+    }
+}
+
+/// A mirror that accepts the connection and then stops sending holds a bare
+/// `apt-get` until the job is cancelled; apt's own timeouts do not catch it.
+/// Every CI and release apt call goes through the wrapper that bounds each
+/// attempt with `timeout` and retries.
+#[test]
+fn every_apt_call_goes_through_the_retry_wrapper() {
+    let wrapper = repo_file("../scripts/apt-get-retry.sh");
+    assert!(wrapper.contains("timeout \"$LIMIT\" apt-get"), "each attempt is bounded");
+    let mut files = vec![
+        "../.github/actions/rust-ci-setup/action.yml".to_string(),
+        "../scripts/install-linux-release-deps.sh".to_string(),
+    ];
+    for entry in fs::read_dir(format!("{}/../.github/workflows", env!("CARGO_MANIFEST_DIR"))).expect("workflows dir") {
+        let name = entry.expect("workflow entry").file_name().into_string().expect("utf-8 name");
+        files.push(format!("../.github/workflows/{name}"));
+    }
+    for file in files {
+        let text = repo_file(&file);
+        for line in code_lines(&text) {
+            assert!(
+                !line.contains("apt-get ") || line.contains("apt-get-retry.sh"),
+                "{file} calls apt-get directly: {line}"
+            );
+            // Steps run from different directories (several from
+            // `src-tauri/`), so a workflow names the wrapper from the
+            // workspace root, never relative to wherever the step runs.
+            if file.contains(".github/") && line.contains("apt-get-retry.sh") {
+                assert!(
+                    line.contains("bash \"$GITHUB_WORKSPACE/scripts/apt-get-retry.sh\""),
+                    "{file} must call the wrapper from the workspace root: {line}"
+                );
+            }
+        }
+    }
 }

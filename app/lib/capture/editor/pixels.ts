@@ -67,16 +67,43 @@ export function pixelate(px: Pixels, r: Rect, block: number): void {
 }
 
 /**
- * Blur inside `r`: pixelate at half the strength, then three box-blur
- * passes each way (close to a Gaussian). Only pixels inside `r` change;
- * the smoothing reads only inside `r` too, so nothing from outside the box
- * bleeds in and the box's edge stays where it was drawn.
+ * How coarse a blur of `r` must be to hide what is under it, in picture
+ * pixels: never finer than the picture's `block`, and coarse enough that the
+ * region's short side holds at most {@link BLUR_CELLS_ACROSS} cells. A box
+ * drawn around one line of text is about one line tall, so this puts no more
+ * than a few cells across each letter's height whatever the picture's
+ * resolution, and the letters cannot be told apart. Capped at
+ * {@link BLUR_MAX_FACTOR} blocks so a large region is a soft wash rather than
+ * a few giant tiles.
+ */
+export function blurCell(r: Rect, block: number): number {
+  const base = Math.max(2, Math.round(block));
+  const short = Math.min(Math.abs(r.w), Math.abs(r.h));
+  const byRegion = Math.ceil(short / BLUR_CELLS_ACROSS);
+  return Math.min(base * BLUR_MAX_FACTOR, Math.max(base, byRegion));
+}
+
+/** Cells across a blurred region's short side, at most (see `blurCell`). */
+export const BLUR_CELLS_ACROSS = 2;
+/** A blur cell is never coarser than this many picture blocks. */
+export const BLUR_MAX_FACTOR = 3;
+
+/**
+ * Blur inside `r`: pixelate at the full blur cell (`blurCell`), then three
+ * box-blur passes each way at the same radius (close to a Gaussian). The
+ * pixelate is what hides the content: each cell keeps only its average, so
+ * no amount of sharpening brings a letter back. It used to run at half the
+ * picture's block, which on a Retina screenshot left bold text readable
+ * through the wash. Only pixels inside `r` change; the smoothing reads only
+ * inside `r` too, so nothing from outside the box bleeds in and the box's
+ * edge stays where it was drawn.
  */
 export function blur(px: Pixels, r: Rect, strength: number): void {
   const box = pixelBox(r, px.width, px.height);
   if (!box) return;
-  pixelate(px, r, Math.max(2, Math.round(strength / 2)));
-  const radius = Math.max(1, Math.round(strength / 2));
+  const cell = blurCell(r, strength);
+  pixelate(px, r, cell);
+  const radius = Math.max(1, cell);
   const w = box.x1 - box.x0;
   const h = box.y1 - box.y0;
   const buf = new Float32Array(w * h * 4);

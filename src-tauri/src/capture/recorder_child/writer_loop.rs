@@ -44,8 +44,10 @@ pub enum Msg {
     Audio { source: Source, time: u64, samples: Vec<f32> },
     /// What was recorded went away (window closed, sharing stopped).
     Ended(String),
-    /// Stop: finish the file and answer.
-    Finish(Sender<Result<(), String>>),
+    /// Stop, asked at `at` (capture clock): finish the file there and
+    /// answer. The time is taken when Stop arrives, before the sources are
+    /// shut down, so tearing them down is not recorded.
+    Finish { reply: Sender<Result<(), String>>, at: u64 },
     /// Discard: drop the file unfinished and answer.
     Cancel(Sender<()>),
 }
@@ -121,13 +123,15 @@ const NOTHING_CAPTURED: &str = "The recording stopped before anything was captur
 /// The writer thread: owns the pipeline until Finish, Cancel, or every
 /// sender is gone (then it finishes and keeps the file). `create` makes the
 /// encoder for the first picture's size; `ready` hears that size (or why the
-/// encoder could not start) once.
+/// encoder could not start) once. `watermark` burns the Free plan's mark
+/// into every picture (`StartCommand.watermark`).
 pub fn run<E: Encoder>(
     rx: &Receiver<Msg>,
     shared: &Shared,
     out: &Output,
     sources: &[Source],
     ready: &Sender<Result<(u32, u32), String>>,
+    watermark: bool,
     mut create: impl FnMut((u32, u32)) -> Result<E, String>,
 ) {
     let mut pipeline: Option<Pipeline<E>> = None;
@@ -167,7 +171,16 @@ pub fn run<E: Encoder>(
                 if pipeline.is_none() {
                     match create(size) {
                         Ok(encoder) => {
-                            pipeline = Some(Pipeline::new(encoder, sources));
+                            let mut p = Pipeline::new(encoder, sources);
+                            if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1) {
+                                p.set_watermark(stamp);
+                            }
+                            // Time zero is now, as Start is answered, not
+                            // when the first picture was taken: making the
+                            // encoder can take seconds, and the app's timer
+                            // only starts at `started`.
+                            p.start_at(shared.place(shared.now()).unwrap_or(time));
+                            pipeline = Some(p);
                             let _ = ready.send(Ok(size));
                         }
                         Err(e) => {
@@ -209,10 +222,10 @@ pub fn run<E: Encoder>(
                 say(&format!("recording ended on its own: {reason}"));
                 done = Some(result);
             }
-            Msg::Finish(reply) => {
+            Msg::Finish { reply, at } => {
                 let result = match (done.take(), pipeline.as_mut()) {
                     (Some(result), _) => result,
-                    (None, Some(p)) => end_now(p, shared),
+                    (None, Some(p)) => end_at(p, shared, at),
                     (None, None) => Err(NOTHING_CAPTURED.into()),
                 };
                 let _ = reply.send(result);
@@ -230,7 +243,11 @@ pub fn run<E: Encoder>(
 
 /// Finish the file where the recording is now.
 fn end_now<E: Encoder>(pipeline: &mut Pipeline<E>, shared: &Shared) -> Result<(), String> {
-    let now = shared.now();
+    end_at(pipeline, shared, shared.now())
+}
+
+/// Finish the file where the recording was at `now` (capture clock).
+fn end_at<E: Encoder>(pipeline: &mut Pipeline<E>, shared: &Shared, now: u64) -> Result<(), String> {
     let end = shared
         .timeline
         .lock()
@@ -260,6 +277,9 @@ mod tests {
     #[derive(Default)]
     struct Log {
         video: Vec<(i64, i64)>,
+        /// Whether each picture reached the encoder with anything drawn on
+        /// it (the rig sends blank ones).
+        drawn: Vec<bool>,
         audio: usize,
         finished: bool,
     }
@@ -270,11 +290,13 @@ mod tests {
     }
 
     impl Encoder for Fake {
-        fn video(&mut self, _nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
+        fn video(&mut self, nv12: &[u8], start: i64, duration: i64) -> Result<(), String> {
             if self.fail_video {
                 return Err("encoder gone".into());
             }
-            self.log.lock().unwrap().video.push((start, duration));
+            let mut log = self.log.lock().unwrap();
+            log.video.push((start, duration));
+            log.drawn.push(nv12.iter().any(|&b| b != 0));
             Ok(())
         }
         fn audio(&mut self, _pcm: &[i16], _start: i64, _duration: i64) -> Result<(), String> {
@@ -317,6 +339,13 @@ mod tests {
     }
 
     fn rig(sources: &'static [Source], fail_create: bool, fail_video: bool) -> Rig {
+        rig_with(sources, fail_create, fail_video, 0, false)
+    }
+
+    /// A rig whose encoder takes `create_takes` microseconds of the capture
+    /// clock to make, as a software H.264 encoder on a busy machine does,
+    /// and that watermarks its pictures when `watermark` is set.
+    fn rig_with(sources: &'static [Source], fail_create: bool, fail_video: bool, create_takes: u64, watermark: bool) -> Rig {
         let (tx, rx) = mpsc::channel();
         let clock = Arc::new(AtomicU64::new(1_000_000));
         let shared = Arc::new(Shared::new(tx, {
@@ -330,8 +359,10 @@ mod tests {
         let thread = std::thread::spawn({
             let shared = Arc::clone(&shared);
             let log = Arc::clone(&log);
+            let clock = Arc::clone(&clock);
             move || {
-                run(&rx, &shared, &out, sources, &ready_tx, |_size| {
+                run(&rx, &shared, &out, sources, &ready_tx, watermark, |_size| {
+                    clock.fetch_add(create_takes, Ordering::SeqCst);
                     if fail_create {
                         Err("no H.264 encoder".to_string())
                     } else {
@@ -363,7 +394,8 @@ mod tests {
 
     fn finish(rig: Rig) -> (Result<(), String>, Rig) {
         let (tx, rx) = mpsc::channel();
-        assert!(rig.shared.send(Msg::Finish(tx)));
+        let at = rig.shared.now();
+        assert!(rig.shared.send(Msg::Finish { reply: tx, at }));
         let result = rx.recv_timeout(Duration::from_secs(5)).unwrap();
         (result, rig)
     }
@@ -412,6 +444,75 @@ mod tests {
         let log = rig.log.lock().unwrap();
         let (start, duration) = *log.video.last().unwrap();
         assert_eq!(start + duration, 4_000_000, "0.4 s recorded, the 2 s pause gone");
+    }
+
+    /// Making the encoder took 2 s: the file starts when Start is answered,
+    /// so it is as long as the recording the app timed, not 2 s longer.
+    #[test]
+    fn the_time_spent_making_the_encoder_is_not_recorded() {
+        let rig = rig_with(&[], false, false, 2_000_000, false);
+        frame(&rig, 1_000_000);
+        assert_eq!(rig.ready.recv_timeout(Duration::from_secs(5)).unwrap(), Ok((2, 2)));
+        // Answered at 3 s; recorded until 4.5 s.
+        frame(&rig, 3_500_000);
+        rig.clock.store(4_500_000, Ordering::SeqCst);
+        let (result, rig) = finish(rig);
+        assert_eq!(result, Ok(()));
+        rig.thread.join().unwrap();
+        let log = rig.log.lock().unwrap();
+        assert_eq!(log.video.first(), Some(&(0, 5_000_000)), "the opening picture starts at zero");
+        let (start, duration) = *log.video.last().unwrap();
+        assert_eq!(start + duration, 15_000_000, "1.5 s recorded, not 3.5 s");
+    }
+
+    /// The file ends when Stop was asked, however long the sources then take
+    /// to shut down.
+    #[test]
+    fn the_file_ends_when_stop_was_asked() {
+        let rig = rig(&[], false, false);
+        frame(&rig, 1_000_000);
+        let (tx, rx) = mpsc::channel();
+        // Stop asked at 2 s; the sources took until 2.4 s to stop.
+        rig.clock.store(2_400_000, Ordering::SeqCst);
+        assert!(rig.shared.send(Msg::Finish { reply: tx, at: 2_000_000 }));
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)).unwrap(), Ok(()));
+        rig.thread.join().unwrap();
+        let log = rig.log.lock().unwrap();
+        let (start, duration) = *log.video.last().unwrap();
+        assert_eq!(start + duration, 10_000_000, "1 s, from the first picture to Stop");
+    }
+
+    /// A blank picture at the size a Free plan recording is stamped at.
+    fn blank_frame(rig: &Rig, at: u64, size: (u32, u32)) {
+        rig.clock.store(at, Ordering::SeqCst);
+        let placed = rig.shared.place(at).expect("not paused");
+        let bytes = super::super::frame::nv12_len(size.0, size.1);
+        assert!(rig.shared.send_frame(placed, vec![0; bytes], size));
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    /// A Free plan recording (`watermark` set) has the mark on every
+    /// picture the encoder gets, the repeated last one included; a paid one
+    /// passes its pictures through untouched.
+    #[test]
+    fn the_watermark_is_drawn_only_when_asked() {
+        for watermark in [true, false] {
+            let rig = rig_with(&[], false, false, 0, watermark);
+            blank_frame(&rig, 1_000_000, (640, 360));
+            assert_eq!(rig.ready.recv_timeout(Duration::from_secs(5)).unwrap(), Ok((640, 360)));
+            blank_frame(&rig, 1_100_000, (640, 360));
+            rig.clock.store(1_500_000, Ordering::SeqCst);
+            let (result, rig) = finish(rig);
+            assert_eq!(result, Ok(()));
+            rig.thread.join().unwrap();
+            let log = rig.log.lock().unwrap();
+            assert!(!log.drawn.is_empty());
+            assert!(
+                log.drawn.iter().all(|&drawn| drawn == watermark),
+                "watermark {watermark}: {:?}",
+                log.drawn
+            );
+        }
     }
 
     /// An encoder that cannot start fails Start with its reason.

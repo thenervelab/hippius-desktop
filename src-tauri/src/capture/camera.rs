@@ -74,6 +74,14 @@ pub struct CameraState {
     pub switch_from_pill: bool,
     /// The recording pill offers the bubble's sizes mid-recording.
     pub resize_from_pill: bool,
+    /// What the system said about the camera (`camera_access`): the page
+    /// waits while it is `asking` and says why after a no.
+    pub access: super::camera_access::CameraAccess,
+    /// Whether the system sees a camera at all, when it said.
+    pub camera_present: Option<bool>,
+    /// Where this system's camera switch is, for the page's "allow it in"
+    /// line.
+    pub privacy_place: &'static str,
 }
 
 /// Whether a capture in `phase` is recording, or about to (the countdown is

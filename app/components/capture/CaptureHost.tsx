@@ -14,6 +14,7 @@ import {
   capturePermissionPaneAtom,
   captureRecordingAtom,
   captureRecordingNoteAtom,
+  captureSupportKnownAtom,
   captureSupportedAtom,
   captureSurfacesAtom,
 } from "@/app/lib/capture/captureFlow";
@@ -23,18 +24,22 @@ import {
   CAPTURE_DRIVE_SETUP_NEEDED_EVENT,
   getCaptureSupport,
   syncCaptureShortcut,
+  takeCaptureLaunchShortcut,
   type CaptureFailed,
   type CaptureKind,
+  type CaptureManageLink,
   type CaptureShortcutStart,
   type CaptureMode,
   type CaptureShowInFolder,
 } from "@/app/lib/tauri/capture";
 import { BILLING_ROUTE, capturesRoute, driveFolderRoute } from "@/app/lib/routes";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
+import { fileShareRowId, sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { openAppWindow, TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import CaptureDriveDialog from "./CaptureDriveDialog";
 import CapturePermissionDialog from "./CapturePermissionDialog";
+import RecordingLimitDialog from "./RecordingLimitDialog";
 
 /**
  * Mounted once in the protected layout. Owns the capture dialogs and the
@@ -46,6 +51,7 @@ import CapturePermissionDialog from "./CapturePermissionDialog";
  */
 export default function CaptureHost() {
   const setSupported = useSetAtom(captureSupportedAtom);
+  const setSupportKnown = useSetAtom(captureSupportKnownAtom);
   const setRecording = useSetAtom(captureRecordingAtom);
   const setRecordingNote = useSetAtom(captureRecordingNoteAtom);
   const setPermissionPane = useSetAtom(capturePermissionPaneAtom);
@@ -67,6 +73,7 @@ export default function CaptureHost() {
         setPermissionPane(s.permissionPane);
         setModes(supportedModesOf(s));
         setSurfaces(s);
+        setSupportKnown(true);
         // The saved shortcut is registered once the signed-in app is up.
         if (s.supported) void syncCaptureShortcut().catch(() => undefined);
       })
@@ -74,8 +81,9 @@ export default function CaptureHost() {
         setSupported(false);
         setRecording(false);
         setRecordingNote(null);
+        setSupportKnown(true);
       });
-  }, [setSupported, setRecording, setRecordingNote, setPermissionPane, setModes, setSurfaces]);
+  }, [setSupported, setSupportKnown, setRecording, setRecordingNote, setPermissionPane, setModes, setSurfaces]);
 
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED) return;
@@ -95,9 +103,10 @@ export default function CaptureHost() {
       // A capture is waiting for the user to say where captures go. Rust has
       // brought this window forward and kept the capture safe meanwhile.
       listen(CAPTURE_DRIVE_SETUP_NEEDED_EVENT, () => setDialog({ kind: "captureDrive" })),
-      // The system-wide shortcut: what Rust says it starts (the one-step area screenshot).
+      // The system-wide shortcuts: what Rust says each starts (the one-step
+      // area screenshot, or the capture bar on Record).
       listen<CaptureShortcutStart>("capture_shortcut_pressed", (e) =>
-        void startCapture(undefined, undefined, e.payload?.instant ?? false),
+        void startCapture(e.payload?.kind, undefined, e.payload?.instant ?? false),
       ),
       listen<CaptureShowInFolder>("capture_show_in_folder", (e) => {
         const file = e.payload.fileName || undefined;
@@ -109,7 +118,17 @@ export default function CaptureHost() {
       }),
       // The card's Upgrade (the plan is full): the plans, where every upgrade prompt goes.
       listen("capture_open_plans", () => router.push(BILLING_ROUTE)),
+      // The card's Manage link: Shared Links, with this capture's link
+      // pointed out, where who can open it and when it expires are changed.
+      listen<CaptureManageLink>("capture_manage_link", (e) =>
+        router.push(sharesPageHref([fileShareRowId(e.payload.shareToken)])),
+      ),
     ];
+    // `hippius --capture` / `--record` that started the app: Rust runs it
+    // once this window listens for the start it emits.
+    void Promise.all(unlisteners)
+      .then(() => takeCaptureLaunchShortcut())
+      .catch(() => undefined);
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
     };
@@ -120,6 +139,7 @@ export default function CaptureHost() {
     <>
       <CaptureDriveDialog />
       <CapturePermissionDialog />
+      <RecordingLimitDialog />
     </>
   );
 }

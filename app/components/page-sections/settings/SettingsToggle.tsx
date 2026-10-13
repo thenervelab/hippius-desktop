@@ -4,6 +4,8 @@ interface SettingsToggleProps {
   checked: boolean;
   onCheckedChange: (v: boolean) => void;
   disabled?: boolean;
+  /** The switch's name, where no visible label is linked to it. */
+  ariaLabel?: string;
 }
 
 /**
@@ -18,12 +20,14 @@ export function SettingsToggle({
   checked,
   onCheckedChange,
   disabled,
+  ariaLabel,
 }: SettingsToggleProps) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={ariaLabel}
       onClick={() => !disabled && onCheckedChange(!checked)}
       disabled={disabled}
       className={cn(

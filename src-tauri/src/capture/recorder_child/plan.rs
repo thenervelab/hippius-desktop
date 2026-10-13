@@ -220,6 +220,21 @@ mod tests {
         );
     }
 
+    /// Every platform's recording starts with its index, so a share link's
+    /// page plays from the first bytes instead of downloading the whole file
+    /// to reach an index at the end (share links cannot be read from the
+    /// middle). The Mac's writer moves it there at Stop; Windows and Linux
+    /// write fragmented files whose index is first.
+    #[test]
+    fn recordings_put_their_index_first() {
+        let swift = include_str!("../../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
+        assert!(swift.contains("writer.shouldOptimizeForNetworkUse = true"), "macOS: index at the front");
+        let windows = include_str!("windows/writer.rs");
+        assert!(windows.contains("MFTranscodeContainerType_FMPEG4"), "Windows: fragmented MP4");
+        let linux = include_str!("linux_plan.rs");
+        assert!(linux.contains("mp4mux name=mux fragment-duration="), "Linux: fragmented MP4");
+    }
+
     /// The stage inset is the Swift helper's, which is pinned against the
     /// camera page; both platforms trim the same margin.
     #[test]

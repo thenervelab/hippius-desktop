@@ -3,13 +3,20 @@
 //! both `capture_support` and the overlay's `OverlayContext`.
 //!
 //! macOS, Windows and Linux on X11 use the overlay, offer every mode and the
-//! screenshot timer. Wayland cannot draw over the screen, so a screenshot
-//! there is the desktop's own screenshot tool (`SystemPicker`): Hippius
-//! offers no mode and no timer, and says so in `systemPickerNote`. A
-//! Wayland recording opens the capture bar alone in a small window (the
-//! panel: sources, window or screen, options) and Record hands the choice
-//! to the desktop's screen-sharing dialog; its countdown runs in the pill
-//! once the dialog is answered. The shortcut is the plugin's on macOS,
+//! screenshot timer. Wayland cannot draw over the live screen, so a
+//! screenshot there opens the desktop's own screenshot tool straight away
+//! (the Screenshot portal with `interactive = true`: GNOME Shell's
+//! screenshot UI, KDE's dialog), which chooses an area, a window or a
+//! screen; Hippius shows no bar for it and then files, uploads and copies
+//! the link as elsewhere. Rust's `systemPickerNote` says so in the Capture
+//! menu and Settings. Choosing on a still of the desktop (`frozen_shot`)
+//! is kept but off ([`surfaces_for`]): GNOME 46's portal asks to share
+//! every still before Hippius can show it, so the user met GNOME's dialog
+//! as well as the bar, and the still did not line up with the overlay on
+//! scaled displays. A Wayland recording opens the capture bar alone in a
+//! small window (the panel: sources, window or screen, options) and Record
+//! hands the choice to the desktop's screen-sharing dialog; its countdown
+//! runs in the pill once the dialog is answered. The shortcut is the plugin's on macOS,
 //! Windows and X11; on Wayland it is the GlobalShortcuts portal's where the
 //! desktop has one, and elsewhere `shortcut.unavailableMessage` and
 //! `shortcut.command` tell the user what to bind in the desktop's settings
@@ -83,7 +90,20 @@ pub enum LinuxSession {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Surfaces {
+    /// How a SCREENSHOT is chosen (the Capture menu and the tray branch on
+    /// it): Hippius's overlay, or on Wayland the desktop's own tool.
     pub selection: SelectionUi,
+    /// How a RECORDING is chosen: the desktop's screen-sharing dialog on
+    /// Wayland (the panel), the overlay elsewhere. Rust's alone: each
+    /// overlay window is told whether it is the panel (`OverlayContext.panel`).
+    #[serde(skip_serializing)]
+    pub record_selection: SelectionUi,
+    /// A screenshot is chosen on a still of the desktop taken through the
+    /// Screenshot portal (`frozen_shot`), not over the live screen. Rust's
+    /// alone: the overlay is told `frozen` per session. Off on every
+    /// platform for now (see the module's notes).
+    #[serde(skip_serializing)]
+    pub frozen_screenshot: bool,
     pub modes: Modes,
     /// Whether the screenshot timer is offered.
     pub screenshot_timer: bool,
@@ -105,6 +125,8 @@ pub struct Surfaces {
     /// phones are not offered that way (Continuity is macOS only).
     pub continuity_hint: Option<&'static str>,
     pub shortcut: ShortcutSupport,
+    /// How the Record shortcut works here ([`record_shortcut_for`]).
+    pub record_shortcut: ShortcutSupport,
     /// With the system picker, the line that says the desktop's own tool
     /// chooses what is captured (the Capture menu and Settings show it);
     /// `None` with Hippius's overlay.
@@ -122,14 +144,14 @@ pub const MIC_NOT_YET: &str = "Recording the microphone isn't available on this 
 pub const CONTINUITY_HINT: &str =
     "iPhone not listed? Keep it close by, signed in to the same Apple Account, with Wi-Fi and Bluetooth on. It can take a few seconds to appear.";
 
-/// Wayland: what the Capture menu and Settings say about the screenshot.
-pub const WAYLAND_SCREENSHOT_NOTE: &str = "Your desktop's screenshot tool opens, so you can choose an area, a window or a whole screen there.";
-
 /// Windows records it, but its privacy settings keep desktop apps from it.
 pub const MIC_BLOCKED_WINDOWS: &str =
     "Windows is blocking the microphone. Turn on microphone access for desktop apps in Settings, Privacy & security, Microphone.";
 
 const ALL_MODES: [CaptureMode; 3] = [CaptureMode::Area, CaptureMode::Window, CaptureMode::Screen];
+/// What the Capture menu and Settings say where the desktop's own tool
+/// takes the screenshot (Wayland), so nobody looks for Hippius's bar there.
+pub const WAYLAND_SCREENSHOT_NOTE: &str = "On this desktop, your system's screenshot tool opens so you can choose an area, a window or a whole screen. Hippius then uploads it like any other capture.";
 
 /// What `platform` offers, given what this build can record.
 #[must_use]
@@ -137,8 +159,11 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
     let wayland = platform == Platform::LinuxWayland;
     Surfaces {
         // Wayland: no app may draw over the screen or see other windows, so
-        // the desktop's own picker chooses.
+        // the desktop's own tool chooses a screenshot and its own dialog a
+        // recording's screen or window.
         selection: if wayland { SelectionUi::SystemPicker } else { SelectionUi::Overlay },
+        record_selection: if wayland { SelectionUi::SystemPicker } else { SelectionUi::Overlay },
+        frozen_screenshot: false,
         modes: Modes {
             // The desktop's tool offers its own area, window and screen;
             // Hippius offers none of its own there.
@@ -167,6 +192,7 @@ pub fn surfaces_for(platform: Platform, recording: bool, microphone: bool) -> Su
         },
         continuity_hint: (platform == Platform::MacOs).then_some(CONTINUITY_HINT),
         shortcut: shortcut_for(platform, super::shortcut_portal::PortalStatus::Missing),
+        record_shortcut: record_shortcut_for(platform),
         system_picker_note: wayland.then_some(WAYLAND_SCREENSHOT_NOTE),
         linux_session: match platform {
             Platform::LinuxX11 => Some(LinuxSession::X11),
@@ -200,6 +226,29 @@ pub fn shortcut_for(platform: Platform, portal: super::shortcut_portal::PortalSt
             via: ShortcutVia::DesktopSettings,
             unavailable_message: Some(super::desktop_shortcut::DESKTOP_SETTINGS_LINE),
             command: Some(super::desktop_shortcut::command()),
+        },
+    }
+}
+
+/// How the Record shortcut works on `platform`: the plugin's key grab
+/// wherever the screenshot shortcut has it. On Wayland always a shortcut
+/// the user adds in the desktop's keyboard settings, running
+/// `<this app> --record`: the portal session binds only the screenshot
+/// shortcut, and that command works on every Wayland desktop.
+#[must_use]
+pub fn record_shortcut_for(platform: Platform) -> ShortcutSupport {
+    match platform {
+        Platform::MacOs | Platform::Windows | Platform::LinuxX11 => ShortcutSupport {
+            supported: true,
+            via: ShortcutVia::Plugin,
+            unavailable_message: None,
+            command: None,
+        },
+        Platform::LinuxWayland => ShortcutSupport {
+            supported: false,
+            via: ShortcutVia::DesktopSettings,
+            unavailable_message: Some(super::desktop_shortcut::RECORD_DESKTOP_SETTINGS_LINE),
+            command: Some(super::desktop_shortcut::record_command()),
         },
     }
 }
@@ -240,13 +289,15 @@ pub const fn pill_filmed(platform: Platform) -> bool {
 /// the 380 pt pill.
 pub const PILL_FILMED_NOTE: &str = "These controls show in screen recordings. They stay small; point at them to use them.";
 
-/// How a capture starts: Hippius's overlay, or (a screenshot on Wayland)
-/// straight to the desktop's screenshot tool with no Hippius window at all,
-/// or (a recording on Wayland) the capture bar alone in a small window
-/// whose Record opens the desktop's screen-sharing dialog.
+/// How a capture starts: Hippius's overlay over the live screen; (a
+/// screenshot on Wayland) the desktop's own screenshot tool at once
+/// (`SystemPicker`); the overlay over a still of the desktop (`Frozen`,
+/// off for now); or (a recording on Wayland) the capture bar alone in a
+/// small window whose Record opens the desktop's screen-sharing dialog.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartPlan {
     Overlay,
+    Frozen,
     SystemPicker,
     Panel,
 }
@@ -254,17 +305,61 @@ pub enum StartPlan {
 /// The plan for a capture of `kind` with these surfaces.
 #[must_use]
 pub fn start_plan(surfaces: &Surfaces, kind: super::session::CaptureKind) -> StartPlan {
-    match (surfaces.selection, kind) {
-        (SelectionUi::SystemPicker, super::session::CaptureKind::Screenshot) => StartPlan::SystemPicker,
-        (SelectionUi::SystemPicker, super::session::CaptureKind::Recording) => StartPlan::Panel,
-        (SelectionUi::Overlay, _) => StartPlan::Overlay,
+    use super::session::CaptureKind::{Recording, Screenshot};
+    match kind {
+        Screenshot if surfaces.frozen_screenshot => StartPlan::Frozen,
+        Screenshot => match surfaces.selection {
+            SelectionUi::Overlay => StartPlan::Overlay,
+            SelectionUi::SystemPicker => StartPlan::SystemPicker,
+        },
+        Recording => match surfaces.record_selection {
+            SelectionUi::Overlay => StartPlan::Overlay,
+            SelectionUi::SystemPicker => StartPlan::Panel,
+        },
     }
+}
+
+/// What the bar switching from `from` to `to` opens instead of the windows
+/// on screen, when the two kinds start differently (Wayland: the desktop's
+/// tool for a screenshot, the panel for a recording); `None` when the same
+/// windows serve both and only the mode changes.
+#[must_use]
+pub fn switch_plan(surfaces: &Surfaces, from: super::session::CaptureKind, to: super::session::CaptureKind) -> Option<StartPlan> {
+    let next = start_plan(surfaces, to);
+    (start_plan(surfaces, from) != next).then_some(next)
 }
 
 /// The display id the panel's one window uses. Hippius sees no displays on
 /// Wayland; the panel is not a display's overlay, and the recorder ignores
 /// the id (the desktop's dialog chooses).
 pub const PANEL_DISPLAY_ID: u32 = 0;
+
+/// The panel's first size, in logical pixels, before its page has measured
+/// the bar: roomy enough for the bar and its sources, and transparent where
+/// they do not reach, so nothing but the bar shows while it is refitted.
+pub const PANEL_FIRST_SIZE: (f64, f64) = (560.0, 320.0);
+
+/// The smallest and largest the panel's window is made: a measurement of
+/// nothing (the page between two states) never folds it away, and a runaway
+/// one never covers the screen.
+const PANEL_MIN: (f64, f64) = (240.0, 64.0);
+const PANEL_MAX: (f64, f64) = (1200.0, 900.0);
+
+/// The panel's window for content the page measured at `width` x `height`
+/// CSS pixels (its margin included). CSS pixels are the window's logical
+/// pixels at any scale, fractional included, so the size is used as is,
+/// rounded up to whole pixels so nothing is cut by a fraction. `None` for a
+/// measurement that is not a size.
+#[must_use]
+pub fn panel_window_size(width: f64, height: f64) -> Option<(f64, f64)> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((
+        width.ceil().clamp(PANEL_MIN.0, PANEL_MAX.0),
+        height.ceil().clamp(PANEL_MIN.1, PANEL_MAX.1),
+    ))
+}
 
 /// What Record in the panel asks the recorder for: a window or a whole
 /// screen, chosen in the desktop's dialog, or an area, which is a screen
@@ -295,7 +390,7 @@ pub fn system_picker_selection(mode: CaptureMode) -> super::screenshot::Selectio
 /// picker. Everywhere else the area was drawn on the overlay already.
 #[must_use]
 pub fn picks_area_after_dialog(surfaces: &Surfaces, selection: super::screenshot::Selection) -> bool {
-    surfaces.selection == SelectionUi::SystemPicker && matches!(selection, super::screenshot::Selection::Area { .. })
+    surfaces.record_selection == SelectionUi::SystemPicker && matches!(selection, super::screenshot::Selection::Area { .. })
 }
 
 /// `mode` if these surfaces offer it for `kind`, else what they do offer
@@ -379,6 +474,7 @@ mod tests {
                 "microphoneUnavailableMessage": null,
                 "continuityHint": CONTINUITY_HINT,
                 "shortcut": { "supported": true, "via": "plugin", "unavailableMessage": null, "command": null },
+                "recordShortcut": { "supported": true, "via": "plugin", "unavailableMessage": null, "command": null },
                 "systemPickerNote": null,
                 "linuxSession": null,
             })
@@ -446,13 +542,18 @@ mod tests {
         assert!(!CONTINUITY_HINT.contains('\u{2014}'), "no em dashes in user copy");
     }
 
-    /// Wayland: the desktop's screenshot tool chooses, so Hippius offers no
-    /// mode and no timer for a screenshot, and says why in its own words.
+    /// Wayland: the desktop's own screenshot tool chooses a screenshot, at
+    /// once and with no bar of Hippius's (no modes, no timer), and the
+    /// Capture menu says so in Rust's words; a recording's screen or window
+    /// is chosen in the desktop's dialog. The still is off everywhere: on
+    /// GNOME it asked to share a whole-screen still before the bar showed.
     #[test]
-    fn wayland_hands_the_choice_to_the_desktop() {
+    fn wayland_shoots_and_records_through_the_desktop() {
         let s = surfaces_for(Platform::LinuxWayland, false, false);
-        assert_eq!(s.selection, SelectionUi::SystemPicker);
-        assert!(s.modes.screenshot.is_empty());
+        assert_eq!(s.selection, SelectionUi::SystemPicker, "the desktop's tool chooses");
+        assert_eq!(s.record_selection, SelectionUi::SystemPicker);
+        assert!(!s.frozen_screenshot);
+        assert!(s.modes.screenshot.is_empty(), "the desktop's tool offers its own");
         assert_eq!(
             s.modes.recording,
             [CaptureMode::Window, CaptureMode::Screen],
@@ -463,25 +564,45 @@ mod tests {
             ALL_MODES,
             "an area is a monitor cropped after the dialog"
         );
-        assert!(!s.screenshot_timer);
+        assert!(!s.screenshot_timer, "the desktop's tool has its own delay");
         assert_eq!(s.system_picker_note, Some(WAYLAND_SCREENSHOT_NOTE));
+        assert!(!WAYLAND_SCREENSHOT_NOTE.contains('\u{2014}'), "no em dashes in user copy");
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            let s = surfaces_for(platform, true, true);
+            assert!(!s.frozen_screenshot, "{platform:?}");
+            assert_eq!(s.record_selection, SelectionUi::Overlay, "{platform:?}");
+        }
         assert_eq!(s.linux_session, Some(LinuxSession::Wayland));
         assert_eq!(surfaces_for(Platform::LinuxX11, false, false).linux_session, Some(LinuxSession::X11));
         assert_eq!(surfaces_for(Platform::MacOs, true, true).linux_session, None);
     }
 
-    /// Only Wayland skips the overlay: a screenshot goes straight to the
-    /// desktop's tool, a recording to the panel. X11 draws its own overlay.
+    /// Wayland: a screenshot goes straight to the desktop's tool (one
+    /// GNOME step, never a still first and a share dialog after), a
+    /// recording to the panel, and the bar switching kind swaps one for the
+    /// other. X11 and the rest draw the live overlay for both, so a switch
+    /// keeps it.
     #[test]
-    fn wayland_goes_to_the_picker_or_the_panel() {
+    fn wayland_goes_to_the_desktops_tool_or_the_panel() {
         use crate::capture::session::CaptureKind::{Recording, Screenshot};
         let wayland = surfaces_for(Platform::LinuxWayland, true, true);
         assert_eq!(start_plan(&wayland, Screenshot), StartPlan::SystemPicker);
         assert_eq!(start_plan(&wayland, Recording), StartPlan::Panel);
+        assert_eq!(switch_plan(&wayland, Screenshot, Recording), Some(StartPlan::Panel));
+        assert_eq!(switch_plan(&wayland, Recording, Screenshot), Some(StartPlan::SystemPicker));
+        assert_eq!(switch_plan(&wayland, Screenshot, Screenshot), None);
+        for platform in Platform::ALL {
+            assert_ne!(
+                start_plan(&surfaces_for(platform, true, true), Screenshot),
+                StartPlan::Frozen,
+                "{platform:?}: no still first"
+            );
+        }
         for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
             let s = surfaces_for(platform, true, true);
             assert_eq!(start_plan(&s, Screenshot), StartPlan::Overlay, "{platform:?}");
             assert_eq!(start_plan(&s, Recording), StartPlan::Overlay, "{platform:?}");
+            assert_eq!(switch_plan(&s, Screenshot, Recording), None, "{platform:?}");
         }
     }
 
@@ -522,7 +643,11 @@ mod tests {
         assert!(wayland.countdown_after_picker);
         assert_eq!(countdown_secs(&wayland, 3, Recording), 0, "nothing counts before the dialog");
         assert_eq!(countdown_after_picker(&wayland, 3, Recording), 3, "the pill counts after it");
-        assert_eq!(countdown_secs(&wayland, 5, Screenshot), 5);
+        assert_eq!(
+            countdown_secs(&wayland, 5, Screenshot),
+            5,
+            "never asked: no screenshot timer is offered there"
+        );
         assert_eq!(countdown_after_picker(&wayland, 5, Screenshot), 0);
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert!(x11.record_countdown);
@@ -532,8 +657,8 @@ mod tests {
     }
 
     /// A remembered area opens a Wayland recording that cannot crop on the
-    /// whole screen; an offered mode is kept, and a kind with no modes of
-    /// its own (Wayland's screenshot, the desktop's tool) is left as it was.
+    /// whole screen; an offered mode is kept. A Wayland screenshot offers
+    /// no modes of its own (the desktop's tool chooses), so any is kept.
     #[test]
     fn a_mode_this_platform_lacks_falls_back_to_one_it_offers() {
         use crate::capture::session::CaptureKind::{Recording, Screenshot};
@@ -543,6 +668,7 @@ mod tests {
         assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Area), CaptureMode::Area);
         assert_eq!(offered_mode(&wayland, Recording, CaptureMode::Window), CaptureMode::Window);
         assert_eq!(offered_mode(&wayland, Screenshot, CaptureMode::Area), CaptureMode::Area);
+        assert_eq!(offered_mode(&wayland, Screenshot, CaptureMode::Window), CaptureMode::Window);
         let x11 = surfaces_for(Platform::LinuxX11, true, true);
         assert_eq!(offered_mode(&x11, Recording, CaptureMode::Area), CaptureMode::Area);
     }
@@ -600,8 +726,48 @@ mod tests {
         }
         let v = serde_json::to_value(surfaces_for(Platform::LinuxWayland, false, false)).unwrap();
         assert_eq!(v["selection"], "systemPicker");
+        assert_eq!(v["systemPickerNote"], WAYLAND_SCREENSHOT_NOTE);
+        assert!(v.get("recordSelection").is_none() && v.get("frozenScreenshot").is_none(), "Rust's alone");
         assert_eq!(v["linuxSession"], "wayland");
         assert_eq!(v["shortcut"]["via"], "desktopSettings");
         assert!(v["shortcut"]["command"].as_str().is_some_and(|c| c.ends_with(" --capture")));
+    }
+
+    /// The Record shortcut goes where the screenshot one does, except on
+    /// Wayland, where it is always the desktop's keyboard settings with its
+    /// own command: the portal session binds only the screenshot shortcut.
+    #[test]
+    fn the_record_shortcut_route_mirrors_the_screenshot_ones() {
+        for platform in [Platform::MacOs, Platform::Windows, Platform::LinuxX11] {
+            assert_eq!(
+                record_shortcut_for(platform),
+                shortcut_for(platform, crate::capture::shortcut_portal::PortalStatus::Missing),
+                "{platform:?}"
+            );
+        }
+        let wayland = record_shortcut_for(Platform::LinuxWayland);
+        assert!(!wayland.supported);
+        assert_eq!(wayland.via, ShortcutVia::DesktopSettings);
+        assert_eq!(
+            wayland.unavailable_message,
+            Some(crate::capture::desktop_shortcut::RECORD_DESKTOP_SETTINGS_LINE)
+        );
+        assert!(wayland.command.is_some_and(|c| c.ends_with(" --record")), "{wayland:?}");
+        let v = serde_json::to_value(surfaces_for(Platform::LinuxWayland, true, true)).unwrap();
+        assert_eq!(v["recordShortcut"]["via"], "desktopSettings");
+    }
+
+    /// The panel fits what the page measured, in whole logical pixels,
+    /// within sane bounds; a measurement that is not a size changes nothing.
+    #[test]
+    fn the_panel_fits_its_measured_content() {
+        assert_eq!(panel_window_size(486.2, 212.0), Some((487.0, 212.0)));
+        assert_eq!(panel_window_size(10.0, 10.0), Some((240.0, 64.0)));
+        assert_eq!(panel_window_size(5000.0, 5000.0), Some((1200.0, 900.0)));
+        assert_eq!(panel_window_size(0.0, 200.0), None);
+        assert_eq!(panel_window_size(f64::NAN, 200.0), None);
+        assert_eq!(panel_window_size(300.0, f64::INFINITY), None);
+        // The first size is a size the panel may have.
+        assert_eq!(panel_window_size(PANEL_FIRST_SIZE.0, PANEL_FIRST_SIZE.1), Some(PANEL_FIRST_SIZE));
     }
 }

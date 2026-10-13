@@ -5,7 +5,9 @@ import {
   type Point,
   type Rect,
   addAnnotation,
+  bounds as annotationBounds,
   findAnnotation,
+  hits,
   hitHandle,
   hitTest,
   isTrivial,
@@ -82,14 +84,74 @@ function shapeFor(tool: ToolId, id: string, p: Point, style: Style): Annotation 
   }
 }
 
+/**
+ * Annotations whose inside counts as their body once selected: the press
+ * that moves them may land anywhere within their box, not only on the
+ * outline. A line or an arrow is not one of them: its box is mostly empty
+ * picture, and a new arrow drawn beside a selected one must start there.
+ */
+function grabsInside(a: Annotation): boolean {
+  return a.kind !== "arrow" && a.kind !== "line";
+}
+
+/** Whether `p` lands on the selected annotation `a`'s body. */
+function onBody(a: Annotation, p: Point, tolerance: number): boolean {
+  if (hits(a, p, tolerance)) return true;
+  if (!grabsInside(a)) return false;
+  const r = annotationBounds(a);
+  return p.x >= r.x - tolerance && p.x <= r.x + r.w + tolerance && p.y >= r.y - tolerance && p.y <= r.y + r.h + tolerance;
+}
+
+/**
+ * What a press at `p` does to the SELECTED annotation, whatever tool is
+ * active: a handle resizes it and its body moves it. Every tool asks this
+ * first, so once a shape shows its handles they work like any editor's:
+ * before, a drawing tool started a new shape wherever it was pressed, so
+ * dragging an arrow's handle drew a second arrow instead of stretching the
+ * first. A press anywhere else falls through to the tool.
+ */
+export function grabSelected(doc: Doc, selected: string | null, p: Point, tolerance: number): Gesture | null {
+  const current = findAnnotation(doc, selected);
+  if (!current) return null;
+  const handle = hitHandle(current, p, tolerance);
+  if (handle) return { type: "resize", base: doc, id: current.id, handle };
+  if (onBody(current, p, tolerance)) return { type: "move", base: doc, id: current.id, start: p };
+  return null;
+}
+
+/**
+ * The pointer's look over the picture, so a press does what it shows: a
+ * resize arrow on a selected shape's corner, a move cross on its body (and
+ * on any shape the select tool can pick up), else the tool's own.
+ */
+export function cursorAt(tool: ToolId, doc: Doc, selected: string | null, p: Point | null, tolerance: number): string {
+  const own = tool === "select" ? "default" : tool === "text" ? "text" : "crosshair";
+  if (!p || tool === "crop") return own;
+  const current = findAnnotation(doc, selected);
+  if (current) {
+    const handle = hitHandle(current, p, tolerance);
+    if (handle === "nw" || handle === "se") return "nwse-resize";
+    if (handle === "ne" || handle === "sw") return "nesw-resize";
+    if (handle) return "move";
+    // The text tool edits the text it lands on, so its body keeps the caret.
+    if (tool !== "text" && onBody(current, p, tolerance)) return "move";
+  }
+  if (tool === "select" && hitTest(doc, p, tolerance)) return "move";
+  return own;
+}
+
 /** The pointer went down at `p`. */
 export function press(tool: ToolId, doc: Doc, selected: string | null, p: Point, style: Style, b: Bounds): Pressed {
   const nothing: Pressed = { gesture: null, doc, selected, commit: false };
+  // The selected shape's handles and body win over every tool but crop
+  // (whose own handles are the crop's) and text (which edits the text it
+  // lands on).
+  if (tool !== "crop" && tool !== "text") {
+    const grab = grabSelected(doc, selected, p, b.tolerance);
+    if (grab) return { ...nothing, gesture: grab };
+  }
   switch (tool) {
     case "select": {
-      const current = findAnnotation(doc, selected);
-      const handle = current ? hitHandle(current, p, b.tolerance) : null;
-      if (current && handle) return { ...nothing, gesture: { type: "resize", base: doc, id: current.id, handle } };
       const id = hitTest(doc, p, b.tolerance);
       if (!id) return { ...nothing, selected: null };
       return { ...nothing, selected: id, gesture: { type: "move", base: doc, id, start: p } };

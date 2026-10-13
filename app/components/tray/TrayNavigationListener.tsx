@@ -13,6 +13,12 @@ import {
   type OpenDriveFolderDetail,
 } from "@/app/lib/drive/openDriveFolder";
 import {
+  parseTrayPagePayload,
+  trayPageRoute,
+  TRAY_OPEN_PAGE_EVENT,
+} from "@/app/lib/tray/trayHeaderMenu";
+import { openLinkByKey } from "@/app/lib/utils/links";
+import {
   parkTrayDrop,
   parseTrayDropPayload,
   TRAY_OPEN_FILES_TAURI_EVENT,
@@ -61,6 +67,19 @@ export default function TrayNavigationListener() {
     const unlistenChat = listen(TRAY_OPEN_CHAT_TAURI_EVENT, () =>
       goTo("/chat"),
     );
+    // The popover's ⋮ menu: a page by name (never a route or URL from the
+    // other webview), or Top up, which opens the console like every other
+    // Top up in the app.
+    const unlistenPage = listen(TRAY_OPEN_PAGE_EVENT, (event) => {
+      const page = parseTrayPagePayload(event.payload);
+      if (!page) return;
+      if (page === "top-up") {
+        void openLinkByKey("CREDITS");
+        return;
+      }
+      const route = trayPageRoute(page);
+      if (route) goTo(route);
+    });
 
     return () => {
       window.removeEventListener(TRAY_OPEN_FILES_EVENT, handleOpenFiles);
@@ -69,6 +88,7 @@ export default function TrayNavigationListener() {
       void unlisten.then((fn) => fn());
       void unlistenDrop.then((fn) => fn());
       void unlistenChat.then((fn) => fn());
+      void unlistenPage.then((fn) => fn());
     };
   }, [navigateToFilesView, push]);
 

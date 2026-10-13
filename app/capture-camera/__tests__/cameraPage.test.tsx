@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { CaptureCameraState } from "@/app/lib/tauri/capture";
@@ -11,7 +11,7 @@ vi.mock("@tauri-apps/api/core", () => tauri.core);
 vi.mock("@tauri-apps/api/event", () => tauri.event);
 
 import CaptureCameraPage from "../page";
-import { cameraCloseLabel, nextRoundSize, sizeControls, stripShown } from "../cameraDevices";
+import { cameraCloseLabel, NO_FRAMES_MS, nextRoundSize, sizeControls, stripShown } from "../cameraDevices";
 
 const BUBBLE: CaptureCameraState = {
   shape: "bubble",
@@ -33,6 +33,7 @@ function setup(camera: CaptureCameraState | Promise<CaptureCameraState> = BUBBLE
   tauri.onInvoke("capture_camera_set_size", (args) => (args as { size: string }).size);
   tauri.onInvoke("capture_cancel", () => null);
   tauri.onInvoke("capture_camera_dismiss", () => null);
+  tauri.onInvoke("capture_camera_report", () => null);
   return render(<CaptureCameraPage />);
 }
 
@@ -494,5 +495,182 @@ describe("the camera picture under the pointer", () => {
     await act(() => tauri.emitEvent("capture_camera_hover", true));
     fireEvent.mouseEnter(screen.getByTestId("camera-window"));
     expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+});
+
+/** The `camera:` lines the page sent to the app log, as [step, detail]. */
+function reports(): [string, string][] {
+  return tauri.core.invoke.mock.calls
+    .filter(([command]) => command === "capture_camera_report")
+    .map(([, args]) => {
+      const a = args as { step: string; detail: string };
+      return [a.step, a.detail];
+    });
+}
+
+// The bubble stayed on its placeholder with nothing to say why: the page
+// tells the app log each step, and stops waiting on a camera that never
+// shows a frame.
+describe("the camera that never shows a picture", () => {
+  type Listener = () => void;
+  const makeTrack = () => {
+    const listeners: Record<string, Listener[]> = {};
+    return {
+      label: "Integrated Camera: Integrated C",
+      muted: false,
+      enabled: true,
+      readyState: "live",
+      stop: vi.fn(),
+      getSettings: () => ({ width: 640, height: 480 }),
+      addEventListener: (name: string, fn: Listener) => (listeners[name] ??= []).push(fn),
+    };
+  };
+  const cameras = [{ kind: "videoinput", deviceId: "web-rgb-0123456789", label: "Integrated Camera: Integrated C", groupId: "" }];
+  let getUserMedia: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    getUserMedia = vi.fn(async () => {
+      const track = makeTrack();
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { enumerateDevices: vi.fn(async () => cameras), getUserMedia, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+    tauri.onInvoke("capture_set_cameras", () => null);
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("reports each step, opens the camera again once, then says it is unavailable", async () => {
+    setup({ ...BUBBLE, deviceId: "/dev/video0", deviceName: "Integrated Camera: Integrated C" });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reports().map(([step]) => step)).toContain("opened"));
+    const [devices, request, opened] = ["devices", "request", "opened"].map((step) => reports().find(([s]) => s === step)?.[1]);
+    expect(devices).toContain('"Integrated Camera: Integrated C"');
+    expect(devices).toContain("found by name or id");
+    expect(request).toBe("deviceId ideal web-rgb-..., size 1280x720, fps 30");
+    expect(opened).toBe('"Integrated Camera: Integrated C" live muted=false enabled=true 640x480');
+    expect(JSON.stringify(reports())).not.toContain("web-rgb-0123456789");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NO_FRAMES_MS + 10);
+    });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    const stalled = reports().find(([s]) => s === "no-frames")?.[1];
+    expect(stalled).toContain("waiting for the first frame");
+    expect(stalled).toContain("video readyState=");
+    // The first stream is let go of, so the camera light does not stay on.
+    expect((await getUserMedia.mock.results[0].value).getVideoTracks()[0].stop).toHaveBeenCalled();
+    expect(screen.queryByTestId("camera-problem")).toBeNull();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(NO_FRAMES_MS + 10);
+    });
+    await screen.findByText("No picture from the camera");
+    expect(reports().map(([s]) => s)).toContain("gave-up");
+    expect((await getUserMedia.mock.results[1].value).getVideoTracks()[0].stop).toHaveBeenCalled();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a camera that showed its picture alone", async () => {
+    const { container } = setup();
+    await waitFor(() => expect(container.querySelector("video")?.srcObject).toBeTruthy());
+    fireEvent(container.querySelector("video")!, new Event("playing"));
+    expect(reports().find(([s]) => s === "playing")?.[1]).toContain("live");
+    // WebKit pausing the picture later is not a camera that failed.
+    fireEvent(container.querySelector("video")!, new Event("pause"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * NO_FRAMES_MS);
+    });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("camera-problem")).toBeNull();
+    expect(reports().map(([s]) => s)).not.toContain("no-frames");
+  });
+
+  it("logs getUserMedia's error name and message", async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error("Failed starting capture of a video track"), { name: "NotReadableError" }));
+    setup();
+    await screen.findByText("Camera is in use");
+    expect(reports().find(([s]) => s === "error")?.[1]).toBe(
+      "NotReadableError: Failed starting capture of a video track (while waiting for getUserMedia)",
+    );
+  });
+
+  it("says when the webview has no getUserMedia at all", async () => {
+    Object.defineProperty(navigator, "mediaDevices", { configurable: true, value: undefined });
+    setup();
+    await screen.findByText("Camera not available here");
+    expect(reports().find(([s]) => s === "no-media-devices")?.[1]).toContain("navigator.mediaDevices missing");
+  });
+
+  // "Camera unavailable" told the user nothing: each failure says why, and
+  // what to do, in the system's own words for where the switch is.
+  it.each([
+    ["NotAllowedError", "Camera not allowed", "Allow Hippius in Settings, Privacy, Camera"],
+    ["NotFoundError", "No camera found", "Connect a camera"],
+    ["OverconstrainedError", "No camera found", "Connect a camera"],
+    ["AbortError", "Camera is in use", "Close other apps using the camera"],
+    ["TypeError", "Camera could not start", "restart Hippius"],
+  ])("says why after a %s, with what to do", async (name, title, hint) => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error("refused"), { name }));
+    setup({ ...BUBBLE, size: "large", privacyPlace: "Settings, Privacy, Camera" });
+    const problem = await screen.findByTestId("camera-problem");
+    expect(problem).toHaveAttribute("role", "status");
+    expect(problem).toHaveTextContent(title);
+    expect(problem).toHaveTextContent(hint);
+  });
+
+  it("keeps a small bubble to the title, and adds what to do when pointed at", async () => {
+    getUserMedia.mockRejectedValue(Object.assign(new Error("refused"), { name: "NotAllowedError" }));
+    setup({ ...BUBBLE, size: "small", privacyPlace: "Settings, Privacy, Camera" });
+    const problem = await screen.findByTestId("camera-problem");
+    expect(problem).toHaveTextContent("Camera not allowed");
+    expect(problem).not.toHaveTextContent("Allow Hippius");
+    await act(() => tauri.emitEvent("capture_camera_hover", true));
+    expect(problem).toHaveTextContent("Allow Hippius in Settings, Privacy, Camera");
+  });
+});
+
+// Linux asks the system for the camera before the bubble opens it (Rust's
+// `camera_access`). The page must not race that question with its own
+// getUserMedia, and after a no it must say so instead of trying.
+describe("the camera while the system is asked for it", () => {
+  let getUserMedia: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(() => Promise.resolve());
+    getUserMedia = vi.fn(async () => {
+      const track = { muted: false, readyState: "live", stop: vi.fn(), getSettings: () => ({}), addEventListener: vi.fn() };
+      return { getTracks: () => [track], getVideoTracks: () => [track] };
+    });
+    Object.defineProperty(navigator, "mediaDevices", {
+      configurable: true,
+      value: { enumerateDevices: vi.fn(async () => []), getUserMedia, addEventListener: vi.fn(), removeEventListener: vi.fn() },
+    });
+    tauri.onInvoke("capture_set_cameras", () => null);
+  });
+
+  it("waits for the answer, then opens the camera once it is yes", async () => {
+    setup({ ...BUBBLE, access: "asking" });
+    expect(await screen.findByText("Allow camera access")).toBeInTheDocument();
+    expect(screen.getByTestId("camera-problem")).toHaveTextContent("Answer the camera question on your screen.");
+    expect(getUserMedia).not.toHaveBeenCalled();
+
+    await act(() => tauri.emitEvent("capture_camera_state", { ...BUBBLE, access: "granted" }));
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("camera-problem")).toBeNull();
+  });
+
+  it.each([
+    ["denied", "Camera not allowed", "Allow Hippius in Settings, Privacy, Camera, then turn the camera off and on again."],
+    ["turnedOff", "Camera access is off", "Turn on camera access in Settings, Privacy, Camera, then turn the camera off and on again."],
+  ] as const)("after %s says why and never opens the camera", async (access, title, hint) => {
+    setup({ ...BUBBLE, size: "full", access, privacyPlace: "Settings, Privacy, Camera" });
+    const problem = await screen.findByTestId("camera-problem");
+    expect(problem).toHaveTextContent(title);
+    expect(problem).toHaveTextContent(hint);
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 });

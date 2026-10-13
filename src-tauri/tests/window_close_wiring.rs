@@ -55,10 +55,11 @@ fn close_handler_only_acts_on_the_main_window() {
     );
 }
 
-/// `prevent_close` on Linux/Windows is the H-003 trap. It may appear only
-/// in the macOS hide-to-tray arm.
+/// `prevent_close` then exit on Linux/Windows is the H-003 trap. Outside the
+/// macOS hide-to-tray arm, a cancelled close may only hide the window during
+/// a capture and return: it must never reach the quit path.
 #[test]
-fn prevent_close_is_macos_only() {
+fn prevent_close_never_leads_to_exit_off_macos() {
     let src = main_src();
     let body = fn_body(&src, "pub fn on_window_event(");
 
@@ -75,11 +76,25 @@ fn prevent_close_is_macos_only() {
         macos_arm.contains("prevent_close()"),
         "macOS red-X must prevent_close so hide-to-tray can run",
     );
-    assert!(
-        !rest.contains("prevent_close()"),
-        "Linux/Windows must not call prevent_close(): cancelling the close and \
-         exit(0) from inside the GTK handler orphans the process",
-    );
+    let quit_at = rest.find("quit_desktop").expect("non-macOS arm quits");
+    let mut from = 0;
+    while let Some(i) = rest[from..].find("prevent_close()") {
+        let cancel_at = from + i;
+        let return_at = rest[cancel_at..]
+            .find("return;")
+            .map(|r| cancel_at + r)
+            .expect("a cancelled close returns before the quit path");
+        assert!(
+            return_at < quit_at,
+            "Linux/Windows must not cancel the close and then exit: \
+             exit(0) from inside the GTK handler orphans the process",
+        );
+        assert!(
+            !rest[cancel_at..return_at].contains("exit(") && rest[cancel_at..return_at].contains(".hide()"),
+            "a cancelled close off macOS only hides the window",
+        );
+        from = cancel_at + 1;
+    }
 }
 
 /// The non-macOS close path must destroy the tray panel *before* exit so a

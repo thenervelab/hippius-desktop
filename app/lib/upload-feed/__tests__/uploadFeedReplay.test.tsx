@@ -147,6 +147,62 @@ describe("uploads feed replay — retain across the refetch gap (Bug 3)", () => 
   });
 });
 
+describe("uploads feed replay: a batch larger than the server's list", () => {
+  // The reported bug: after uploading more files than Recent Files shows, the
+  // older finished rows were never in the server's newest-N list, so they
+  // were never confirmed and stayed pinned at the top, above newer files,
+  // until the page was left and the feed rebuilt.
+  it("lets a finished row go once the server lists newer uploads without it", () => {
+    const { result, rerender } = renderHook(() => useUploadFeed(3), { wrapper });
+
+    clock.now = 2_000;
+    pushSnapshot([progressFile("old.png", "completed")]);
+    pushSnapshot([]);
+    expect(result.current.data.map((f) => f.name)).toEqual(["old.png"]);
+
+    // Three newer uploads land on the server; old.png ranks fourth and is
+    // not in the list of three.
+    act(() => {
+      serverState.data = [
+        serverFile("c.png", { createdAt: 5_000 }),
+        serverFile("b.png", { createdAt: 4_000 }),
+        serverFile("a.png", { createdAt: 3_000 }),
+      ];
+      rerender();
+    });
+    expect(result.current.data.map((f) => f.name)).toEqual(["c.png", "b.png", "a.png"]);
+  });
+
+  it("keeps a finished row while the server has not caught up to it", () => {
+    const { result, rerender } = renderHook(() => useUploadFeed(3), { wrapper });
+
+    clock.now = 9_000;
+    pushSnapshot([progressFile("new.png", "completed")]);
+    pushSnapshot([]);
+    // The refetch landed but predates new.png: every row is older than it.
+    act(() => {
+      serverState.data = [serverFile("a.png", { createdAt: 3_000 })];
+      rerender();
+    });
+    expect(result.current.data.map((f) => f.name)).toEqual(["new.png", "a.png"]);
+  });
+
+  it("does not drop a finished row the snapshot still lists, so it is never re-stamped", () => {
+    const { result, rerender } = renderHook(() => useUploadFeed(3), { wrapper });
+
+    clock.now = 2_000;
+    pushSnapshot([progressFile("old.png", "completed")]);
+    act(() => {
+      serverState.data = [serverFile("c.png", { createdAt: 5_000 })];
+      rerender();
+    });
+    clock.now = 8_000;
+    act(() => rerender());
+    const row = result.current.data.find((f) => f.name === "old.png");
+    expect(row?.createdAt).toBe(2_000);
+  });
+});
+
 describe("uploads feed replay — leading-slash dedup through the real chain (Bug 4)", () => {
   it("collapses a macOS leading-slash snapshot path against the trimmed server path", () => {
     const { result, rerender } = renderHook(() => useUploadFeed(50), { wrapper });

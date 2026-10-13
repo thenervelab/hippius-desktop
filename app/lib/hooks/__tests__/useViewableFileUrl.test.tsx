@@ -93,6 +93,38 @@ describe("useViewableFileUrl", () => {
     expect(tauri.core.invoke).not.toHaveBeenCalled();
   });
 
+  // The reported bug: a just-uploaded row in Recent Files (from the live sync
+  // snapshot) has no source and no server id, and the viewer refused it.
+  it("asks Rust where a just-uploaded feed row is on disk and serves it locally", async () => {
+    state.fileUrl = { isLocal: false, url: "" };
+    tauri.onInvoke("resolve_drive_file_source", () => "/Users/me/Photos/Trips/beach.png");
+    const { result } = renderHook(() =>
+      useViewableFileUrl(
+        file({ source: "", fileId: undefined, label: "photos", actualFileName: "Trips/beach.png" }),
+      ),
+    );
+
+    await waitFor(() => expect(result.current.url).toBe("asset:///Users/me/Photos/Trips/beach.png"));
+    expect(result.current.localPath).toBe("/Users/me/Photos/Trips/beach.png");
+    expect(result.current.error).toBeNull();
+    expect(tauri.core.invoke).toHaveBeenCalledWith("resolve_drive_file_source", {
+      label: "photos",
+      relativePath: "Trips/beach.png",
+    });
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("cache_remote_file", expect.anything());
+  });
+
+  it("says it can't preview a feed row whose file is not on this device", async () => {
+    state.fileUrl = { isLocal: false, url: "" };
+    tauri.onInvoke("resolve_drive_file_source", () => null);
+    const { result } = renderHook(() =>
+      useViewableFileUrl(file({ source: "", fileId: undefined, label: "shared:5x~ab", actualFileName: "a.jpg" })),
+    );
+
+    await waitFor(() => expect(result.current.error).toBe("This file can't be previewed."));
+    expect(result.current.url).toBe("");
+  });
+
   it("downloads + converts a cloud-only file", async () => {
     state.fileUrl = { isLocal: false, url: "" };
     tauri.onInvoke("cache_remote_file", () => "/cache/remote.jpg");

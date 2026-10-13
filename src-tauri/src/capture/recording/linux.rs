@@ -95,6 +95,18 @@ pub fn codecs_missing_line() -> &'static str {
     })
 }
 
+/// The file viewer's line when this machine has no H.264 decoder for its
+/// player (WebKitGTK plays through the same GStreamer), from the same
+/// once-per-launch probe; `None` = try to play. Blocks on the first call
+/// while the probe runs.
+pub fn video_decoder_missing_line() -> Option<String> {
+    use crate::capture::recorder_child::linux_plan::distro_family;
+    let os_release = std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .unwrap_or_default();
+    crate::video_stream::decoder_missing_line(&machine(), distro_family(&os_release))
+}
+
 /// The microphones, from the child (`--list-microphones`: PipeWire or
 /// PulseAudio inputs without the monitors, the default marked).
 pub fn list_microphones() -> Vec<MediaDevice> {

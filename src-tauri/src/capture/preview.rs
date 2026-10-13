@@ -44,8 +44,9 @@ pub enum PreviewStatus {
     },
 }
 
-/// Why an upload failed, as far as the card's next step goes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Why an upload failed, as far as the card's next step goes. Read back
+/// from a kept failure's marker (`kept_failed`) after a restart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureReason {
     /// No network: retry when back online.
@@ -89,7 +90,21 @@ impl LinkState {
             Self::Creating => Some("Creating link…"),
         }
     }
+
+    /// Who can open the link and for how long, while there is one. A
+    /// capture's link is public and never expires; the card says so, and
+    /// its More menu opens Shared Links to change it.
+    #[must_use]
+    pub fn note(&self) -> Option<&'static str> {
+        match self {
+            Self::Public { .. } => Some(PUBLIC_LINK_NOTE),
+            _ => None,
+        }
+    }
 }
+
+/// [`LinkState::note`] for a public link.
+pub const PUBLIC_LINK_NOTE: &str = "Anyone with the link can view. Never expires.";
 
 /// Which buttons the card offers now. Rust decides; the card draws them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
@@ -106,10 +121,14 @@ pub struct CardActions {
     pub mint_link: bool,
     /// Revoke the public link this capture made.
     pub revoke_link: bool,
+    /// Open this link's row in Shared Links, where who can open it and for
+    /// how long are changed.
+    pub manage_link: bool,
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
     /// Open the storage plans in the main window: the upload failed because
-    /// the plan is full, which Retry alone cannot fix.
+    /// the plan is full, which Retry alone cannot fix, or a Free plan
+    /// recording stopped at its length limit.
     pub upgrade: bool,
     /// Open the screenshot in the editor: a screenshot in the drive, with a
     /// file here to read, and no link being made from the unedited picture.
@@ -142,10 +161,17 @@ pub struct PreviewCard {
     /// [`LinkState::text`], sent so the card does not word it itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_text: Option<String>,
+    /// [`LinkState::note`], sent so the card does not word it itself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_note: Option<String>,
     pub actions: CardActions,
     /// The capture is in the drive and its link has settled: the card may
     /// slide away on its own. Worked out in [`PreviewCard::refreshed`].
     pub settled: bool,
+    /// One line about the capture itself, in Rust's words: why a Free plan
+    /// recording stopped on its own. Worked out in [`PreviewCard::refreshed`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
     /// The link Copy link puts on the clipboard. Never sent to the card.
     #[serde(skip)]
     pub share_url: Option<String>,
@@ -170,6 +196,11 @@ pub struct PreviewCard {
     /// the next capture, which makes its own attempt. Never sent to the card.
     #[serde(skip)]
     pub kept_locally: bool,
+    /// A Free plan recording that stopped at its length limit
+    /// (`capture::allowance`): the card says so and offers Upgrade, and
+    /// stays until closed so the line is not missed. Never sent to the card.
+    #[serde(skip)]
+    pub stopped_at_free_limit: bool,
 }
 
 /// The sync engine's row for a capture delivered through a synced folder.
@@ -177,7 +208,9 @@ pub struct PreviewCard {
 pub enum SyncRow {
     /// No row: the cycle has not picked the file up yet.
     Absent,
-    /// Queued or uploading.
+    /// In the engine's queue, behind other files, not started.
+    Queued,
+    /// Being encrypted or uploaded.
     Working,
     Completed,
     /// The engine's own error text, which is never shown as it is.
@@ -229,24 +262,17 @@ impl SyncFacts {
     }
 }
 
-/// How long a synced capture with a public link waits, with the engine idle
-/// and no row for the file anywhere, before its card says Uploaded anyway.
-/// The link is the capture's own encrypted copy on the server, so the file
-/// reached Hippius; the card must not say "uploading" for ever because the
-/// engine's bookkeeping missed it.
-pub const LINK_FALLBACK_AFTER: std::time::Duration = std::time::Duration::from_secs(45);
-
-/// Whether the bounded fallback applies (see [`LINK_FALLBACK_AFTER`]): the
-/// card is still syncing, has a public link, the engine has nothing for the
-/// file (no row, no failure) and is not syncing anything, and it has waited
-/// long enough.
+/// Whether the card's public link finishes it: the card is still syncing,
+/// its link is public and the engine has not started on the file (no row
+/// yet, or queued behind other files). Minting the link uploads the
+/// capture's own encrypted copy, so the capture is on the server and
+/// shareable; the drive copy follows whenever the engine gets to it. A card
+/// whose file the engine is uploading right now shows that upload instead.
 #[must_use]
-pub fn link_fallback_applies(card: &PreviewCard, row: &SyncRow, waited: std::time::Duration, engine_busy: bool) -> bool {
+pub fn link_finishes_card(card: &PreviewCard, row: &SyncRow) -> bool {
     matches!(card.status, PreviewStatus::Syncing { .. })
         && matches!(card.link, LinkState::Public { .. })
-        && *row == SyncRow::Absent
-        && !engine_busy
-        && waited >= LINK_FALLBACK_AFTER
+        && matches!(row, SyncRow::Absent | SyncRow::Queued)
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -258,7 +284,7 @@ pub fn status_after_sync_row(card: &PreviewCard, row: &SyncRow) -> Option<Previe
     let (link_copied, link_error) = card.link_fields();
     let next = match row {
         SyncRow::Absent => return None,
-        SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
+        SyncRow::Queued | SyncRow::Working => PreviewStatus::Syncing { link_copied, link_error },
         SyncRow::Completed => PreviewStatus::Uploaded { link_copied, link_error },
         SyncRow::Failed(error) => {
             let (message, reason) = super::deliver::sync_failure_copy(error.as_deref());
@@ -291,12 +317,22 @@ impl PreviewCard {
     #[must_use]
     pub fn refreshed(self) -> Self {
         let link_text = self.link.text().map(str::to_string);
+        let link_note = self.link.note().map(str::to_string);
         let actions = self.decide_actions();
-        let settled = matches!(self.status, PreviewStatus::Uploaded { .. }) && self.link != LinkState::Creating;
+        // A link still being made, or one that failed, holds the card: it
+        // must stay up to say the link was copied, or to offer Create link.
+        // A card explaining a stopped recording stays until it is closed:
+        // sliding away on its own, the reason would go unread.
+        let settled = matches!(self.status, PreviewStatus::Uploaded { .. })
+            && !matches!(self.link, LinkState::Creating | LinkState::Failed { .. })
+            && !self.stopped_at_free_limit;
+        let notice = self.stopped_at_free_limit.then(|| super::allowance::FREE_LIMIT_NOTICE.to_string());
         Self {
             link_text,
+            link_note,
             actions,
             settled,
+            notice,
             ..self
         }
     }
@@ -316,14 +352,16 @@ impl PreviewCard {
             // or the temp copy kept for exactly this.
             mint_link: in_drive && !has_link && self.placed_path.is_some() && self.link != LinkState::Creating,
             revoke_link: has_link && self.share_token.is_some(),
+            manage_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
-            upgrade: matches!(
-                self.status,
-                PreviewStatus::Failed {
-                    reason: FailureReason::StorageFull,
-                    ..
-                }
-            ),
+            upgrade: self.stopped_at_free_limit
+                || matches!(
+                    self.status,
+                    PreviewStatus::Failed {
+                        reason: FailureReason::StorageFull,
+                        ..
+                    }
+                ),
             edit: self.kind == CaptureKind::Screenshot
                 && in_drive
                 && self.placed_path.is_some()
@@ -388,6 +426,7 @@ mod tests {
             rel_path: rel_path_for("Recording 2026-09-29 at 15.42.10.mp4"),
             link: LinkState::None,
             link_text: None,
+            link_note: None,
             actions: CardActions::default(),
             settled: false,
             share_url: None,
@@ -396,8 +435,43 @@ mod tests {
             placed_path: None,
             destination: CaptureDestination::own("Work", "Work"),
             kept_locally: false,
+            stopped_at_free_limit: false,
+            notice: None,
         }
         .refreshed()
+    }
+
+    /// A Free plan recording stopped at its limit: the card says why in
+    /// Rust's words, offers Upgrade whatever the upload did, and does not
+    /// slide away before the line is read.
+    #[test]
+    fn a_recording_stopped_at_the_free_limit_says_so_and_offers_upgrade() {
+        let uploaded = || PreviewStatus::Uploaded {
+            link_copied: true,
+            link_error: None,
+        };
+        let plain = card(1).with_outcome(1, uploaded(), Some("https://x".into())).unwrap();
+        assert!(plain.settled);
+        assert_eq!(plain.notice, None);
+        assert!(!plain.actions.upgrade);
+
+        let capped = PreviewCard {
+            stopped_at_free_limit: true,
+            ..card(2)
+        }
+        .refreshed();
+        assert_eq!(
+            capped.notice.as_deref(),
+            Some("Free recordings stop at 5 minutes. Upgrade for longer recordings.")
+        );
+        assert!(capped.actions.upgrade, "while uploading too");
+        let done = capped.with_outcome(2, uploaded(), Some("https://x".into())).unwrap();
+        assert!(done.actions.upgrade && done.actions.copy_link, "{:?}", done.actions);
+        assert!(!done.settled, "it stays until closed");
+        let json = serde_json::to_value(&done).unwrap();
+        assert_eq!(json["notice"], super::super::allowance::FREE_LIMIT_NOTICE);
+        assert!(json.get("stoppedAtFreeLimit").is_none(), "the flag itself stays in Rust");
+        assert!(serde_json::to_value(&plain).unwrap().get("notice").is_none());
     }
 
     fn syncing(copied: bool) -> PreviewCard {
@@ -465,6 +539,17 @@ mod tests {
     #[test]
     fn the_link_line_is_worded_by_rust() {
         assert_eq!(LinkState::Public { copied: true }.text(), Some("Public link copied"));
+        // A public link says who can open it and that it never expires;
+        // no other state has a link to describe.
+        assert_eq!(LinkState::Public { copied: false }.note(), Some(PUBLIC_LINK_NOTE));
+        for other in [
+            LinkState::None,
+            LinkState::Revoked,
+            LinkState::Creating,
+            LinkState::Failed { message: "x".into() },
+        ] {
+            assert_eq!(other.note(), None, "{other:?}");
+        }
         assert_eq!(LinkState::Public { copied: false }.text(), Some("Public link ready"));
         assert_eq!(LinkState::None.text(), None);
         assert_eq!(LinkState::Revoked.text(), Some("Link revoked"));
@@ -478,7 +563,7 @@ mod tests {
         // Uploading: nothing yet.
         assert_eq!(card(1).actions, CardActions::default());
 
-        // Uploaded to a synced drive with a link: copy, revoke, reveal.
+        // Uploaded to a synced drive with a link: copy, manage, revoke, reveal.
         let mut c = card(1);
         c.placed_path = Some(PathBuf::from("/Users/x/Hippius/Work/Captures/Recording.mp4"));
         c.share_token = Some("tok".into());
@@ -497,6 +582,7 @@ mod tests {
             CardActions {
                 copy_link: true,
                 revoke_link: true,
+                manage_link: true,
                 reveal: true,
                 ..CardActions::default()
             }
@@ -649,9 +735,10 @@ mod tests {
                 "relPath": "Captures/Recording 2026-09-29 at 15.42.10.mp4",
                 "link": { "state": "public", "copied": true },
                 "linkText": "Public link copied",
+                "linkNote": "Anyone with the link can view. Never expires.",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "reveal": true, "upgrade": false, "edit": false
+                    "revokeLink": true, "manageLink": true, "reveal": true, "upgrade": false, "edit": false
                 },
                 "settled": true
             })
@@ -797,27 +884,55 @@ mod tests {
         assert!(copied.refreshed().settled);
     }
 
+    /// A link that could not be made kept nothing on the clipboard and
+    /// opened nothing: the card stays, saying so, with Create link.
     #[test]
-    fn a_link_and_an_idle_engine_finish_a_card_the_engine_lost_track_of() {
-        let long = LINK_FALLBACK_AFTER;
+    fn a_card_whose_link_failed_stays_up_with_create_link() {
+        let mut c = syncing(false);
+        c.status = PreviewStatus::Uploaded {
+            link_copied: false,
+            link_error: Some("The link couldn't be created. Try again in a moment.".into()),
+        };
+        c.link = LinkState::Failed {
+            message: "The link couldn't be created. Try again in a moment.".into(),
+        };
+        // The capture is in the drive's folder on this computer, linkless.
+        c.share_url = None;
+        c.placed_path = Some(std::path::PathBuf::from("/drive/Captures/Shot.png"));
+        let c = c.refreshed();
+        assert!(!c.settled, "it must not slide away without a link");
+        assert!(c.actions.mint_link, "Create link is offered");
+        let mut none = c.clone();
+        none.link = LinkState::None;
+        assert!(none.refreshed().settled, "a capture with no link wanted may slide away");
+    }
+
+    #[test]
+    fn a_public_link_finishes_a_card_the_engine_has_not_started() {
         let c = syncing(true);
-        assert!(link_fallback_applies(&c, &SyncRow::Absent, long, false));
-        // Not before the wait, not while the engine works, not over a row.
-        assert!(!link_fallback_applies(
-            &c,
-            &SyncRow::Absent,
-            long.saturating_sub(std::time::Duration::from_secs(1)),
-            false
-        ));
-        assert!(!link_fallback_applies(&c, &SyncRow::Absent, long, true));
-        assert!(!link_fallback_applies(&c, &SyncRow::Working, long, false));
-        assert!(!link_fallback_applies(&c, &SyncRow::Failed(None), long, false));
+        // Queued behind a long sync, or not picked up yet: the link's own
+        // copy is on the server, so the card does not wait for the queue.
+        assert!(link_finishes_card(&c, &SyncRow::Absent));
+        assert!(link_finishes_card(&c, &SyncRow::Queued));
+        // Its own upload running, done or failed: the engine's row decides.
+        assert!(!link_finishes_card(&c, &SyncRow::Working));
+        assert!(!link_finishes_card(&c, &SyncRow::Completed));
+        assert!(!link_finishes_card(&c, &SyncRow::Failed(None)));
         // No link means no evidence the bytes reached the server.
         let mut no_link = syncing(false);
         no_link.link = LinkState::None;
-        assert!(!link_fallback_applies(&no_link, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&no_link, &SyncRow::Queued));
         let mut creating = syncing(false);
         creating.link = LinkState::Creating;
-        assert!(!link_fallback_applies(&creating, &SyncRow::Absent, long, false));
+        assert!(!link_finishes_card(&creating, &SyncRow::Queued));
+        let mut failed_link = syncing(false);
+        failed_link.link = LinkState::Failed { message: "no".into() };
+        assert!(!link_finishes_card(&failed_link, &SyncRow::Queued));
+    }
+
+    #[test]
+    fn a_queued_card_keeps_syncing_until_its_link_or_its_upload_finishes_it() {
+        let c = syncing(true);
+        assert_eq!(status_after_sync_row(&c, &SyncRow::Queued), None, "still syncing");
     }
 }

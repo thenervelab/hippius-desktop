@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 import { useSetAtom } from "jotai";
 import { toast } from "sonner";
-import { startCapture, type CaptureKind, type CaptureMode } from "@/app/lib/tauri/capture";
+import { startCapture, upgradeFromRecordingLimit, type CaptureKind, type CaptureMode } from "@/app/lib/tauri/capture";
 import { openAppWindow } from "@/app/lib/tray/trayWindowActions";
 import { captureDialogAtom, classifyCaptureRefusal } from "./captureFlow";
 
@@ -21,8 +21,8 @@ import { captureDialogAtom, classifyCaptureRefusal } from "./captureFlow";
  */
 export function useStartCapture(): (kind?: CaptureKind, mode?: CaptureMode, instant?: boolean) => Promise<void> {
   const setDialog = useSetAtom(captureDialogAtom);
-  return useCallback(
-    async (kind?: CaptureKind, mode?: CaptureMode, instant?: boolean) => {
+  const start = useCallback(
+    async function run(kind?: CaptureKind, mode?: CaptureMode, instant?: boolean): Promise<void> {
       try {
         await startCapture(kind, mode, instant);
       } catch (error) {
@@ -30,6 +30,23 @@ export function useStartCapture(): (kind?: CaptureKind, mode?: CaptureMode, inst
         if (refusal.next === "grant-permission") {
           await openAppWindow();
           setDialog({ kind: "permission" });
+        } else if (refusal.next === "recording-limit") {
+          // A Record start on a free plan whose recordings are used up:
+          // nothing opened, so the main window says why.
+          await openAppWindow();
+          setDialog({ kind: "recordingLimit" });
+        } else if (refusal.next === "plan") {
+          // Nothing was captured: the plan could not be read (Retry starts
+          // the same capture again) or the account has no Drive storage
+          // (Upgrade has Rust open the plans, as every upgrade prompt does).
+          // Rust's words either way.
+          await openAppWindow();
+          toast.error(refusal.message, {
+            action:
+              refusal.action === "retry"
+                ? { label: "Retry", onClick: () => void run(kind, mode, instant) }
+                : { label: "Upgrade", onClick: () => void upgradeFromRecordingLimit().catch(() => undefined) },
+          });
         } else {
           toast.error(refusal.message);
         }
@@ -37,4 +54,5 @@ export function useStartCapture(): (kind?: CaptureKind, mode?: CaptureMode, inst
     },
     [setDialog],
   );
+  return start;
 }

@@ -184,3 +184,22 @@ export function shouldReopenMuted(muted: boolean, tries: number): boolean {
 export function showsPlaceholder(playing: boolean, muted: boolean): boolean {
   return !playing || muted;
 }
+
+/**
+ * How long a camera stream is given to show its first frame, and how many
+ * times it is opened again before the bubble says the camera is unavailable.
+ *
+ * Where the system's capture fails underneath, WebKit can hand the page a
+ * live track that never delivers a frame (WebKitGTK reports a GStreamer
+ * pipeline that stops with `not-negotiated` only in its own log), or never
+ * answer `getUserMedia`. The bubble then pulsed on its placeholder for
+ * ever. Measured from the start of each open, never after the first frame:
+ * a picture WebKit pauses later is not a camera that failed.
+ */
+export const NO_FRAMES_MS = 8000;
+export const NO_FRAMES_REOPENS = 1;
+
+/** What to do when a stream showed no frame in `NO_FRAMES_MS`, after `reopens` already. */
+export function afterNoFrames(reopens: number): "reopen" | "give-up" {
+  return reopens < NO_FRAMES_REOPENS ? "reopen" : "give-up";
+}

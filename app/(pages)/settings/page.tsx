@@ -22,7 +22,9 @@ import {
   WALLET_FEATURE_ENABLED,
   API_TOKEN_FEATURE_ENABLED,
 } from "@/app/lib/featureFlags";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import {
+  CAPTURE_SETTINGS_SECTION,
   DEFAULT_SETTINGS_SECTION,
   resolveSettingsSection,
 } from "@/app/components/sidebar/settingsNavGating";
@@ -86,6 +88,14 @@ const SECTION_META: Record<
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
   },
+  [CAPTURE_SETTINGS_SECTION]: {
+    title: "Screenshots & Recording",
+    description:
+      "Shortcuts, where captures are saved, and what happens after you take one.",
+    tooltip:
+      "These apply on this computer. The shortcuts work from any app while Hippius is running, and pressing either one during a recording stops it.",
+    showDescription: true,
+  },
   appearance: {
     title: "Appearance",
     description: "Personalize how Hippius looks on this device.",
@@ -146,6 +156,12 @@ const SECTION_META: Record<
 
 function SettingsContent() {
   const searchParams = useSearchParams();
+  // The capture flag AND Rust's answer for this computer: production builds
+  // carry capture everywhere but turn it on for macOS only. While Rust has
+  // not answered, the section is kept rather than reset: it is restored from
+  // the query string at launch, before the answer, and the tab hides its
+  // own rows until then. Once Rust says no, it falls back like any gated one.
+  const captureSection = useCaptureAvailability() !== "unavailable";
   // Resolved against the feature gates, not just read: the section comes
   // from the query string, so a hidden sidebar entry does not make it
   // unreachable. See `resolveSettingsSection`.
@@ -153,6 +169,7 @@ function SettingsContent() {
     vpnEnabled: VPN_FEATURE_ENABLED,
     walletEnabled: WALLET_FEATURE_ENABLED,
     apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
+    captureEnabled: captureSection,
   });
   const meta = SECTION_META[section] ?? SECTION_META[DEFAULT_SETTINGS_SECTION];
 
@@ -190,10 +207,12 @@ function SettingsContent() {
                 when this build carries no extension (Rust answers
                 `unsupported`), so a dev binary shows nothing here. */}
             {isMacPlatform() && <FinderExtensionSetting />}
-            {/* Screen capture: hides itself off-lane or where unsupported. */}
-            <CaptureSettings />
           </>
         )}
+
+        {/* Screen capture: the rows hide themselves where this computer
+            cannot capture. */}
+        {captureSection && section === CAPTURE_SETTINGS_SECTION && <CaptureSettings />}
 
         {section === "appearance" && <AppearanceSettings />}
 

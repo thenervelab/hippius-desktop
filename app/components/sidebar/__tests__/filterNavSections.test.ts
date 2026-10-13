@@ -114,11 +114,15 @@ describe("filterNavSections", () => {
     expect(infra(false)).not.toContain("Captures /captures");
   });
 
-  it("wires the Captures entry to SCREEN_CAPTURE_ENABLED by default", () => {
+  // The flag is on in production for every platform, but Rust turns capture
+  // on for macOS only: a caller that does not say capture is available here
+  // must not get the entry.
+  it("hides the Captures entry unless the caller says capture is available", () => {
     const labels = filterNavSections(navSections, { shareEnabled: true }).flatMap((s) =>
       s.items.map((i) => i.label),
     );
-    expect(labels.includes("Captures")).toBe(SCREEN_CAPTURE_ENABLED);
+    expect(SCREEN_CAPTURE_ENABLED).toBe(true);
+    expect(labels).not.toContain("Captures");
   });
 
   // Pins the WIRING (not today's flag values, which are release decisions):
@@ -169,5 +173,13 @@ describe("filterNavSections", () => {
     // Not at the top: Settings is opened for the device-scoped items, so
     // Billing sits with them rather than above them.
     expect(labels.indexOf("Billing")).toBeGreaterThan(labels.indexOf("Notifications"));
+  });
+
+  // Every capture setting has its own tab, right after Sync & Storage,
+  // where they used to sit at the bottom.
+  it("puts Screenshots & Recording right after Sync & Storage", () => {
+    const labels = settingsNavItems.map((i) => i.label);
+    expect(labels.indexOf("Screenshots & Recording")).toBe(labels.indexOf("Sync & Storage") + 1);
+    expect(settingsNavItems.find((i) => i.label === "Screenshots & Recording")?.section).toBe("capture");
   });
 });

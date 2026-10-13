@@ -1,0 +1,11 @@
+{
+    "$schema": "../gen/schemas/desktop-schema.json",
+    "identifier": "capture-bubble-controls",
+    "description": "Least-privilege capability for the camera bubble's own controls mid-recording (label capture-bubble-controls), a small window over the bubble that the recording leaves out. It listens for capture_state_changed and capture_camera_state, and calls the app-defined capture_state, capture_camera_context, capture_pause, capture_resume and capture_camera_set_size commands (not capability-gated). It is never dragged: the bubble under it is. core permissions only: it floats over every app.",
+    "windows": ["capture-bubble-controls"],
+    "permissions": [
+        "core:default",
+        "core:event:allow-listen",
+        "core:event:allow-unlisten"
+    ]
+}

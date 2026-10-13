@@ -19,14 +19,18 @@ export type CapturePhase =
   | { phase: "idle" }
   | { phase: "selecting"; kind: CaptureKind; mode: CaptureMode }
   | { phase: "capturing"; kind: CaptureKind }
-  | { phase: "recording"; elapsedSecs: number; microphone: boolean }
-  | { phase: "paused"; elapsedSecs: number; microphone: boolean }
+  | { phase: "recording"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
+  | { phase: "paused"; elapsedSecs: number; microphone: boolean; remainingSecs?: number }
   | { phase: "finalizing" };
 
 /**
  * `capture_state_changed` and `capture_state`: the phase plus `seq`, a number
  * that only goes up. A surface seeded from `capture_state` drops any event
  * whose `seq` is not newer than what it holds. Mirrors Rust's `PhaseEvent`.
+ *
+ * `remainingSecs` (recording and paused only): the seconds left before a Free
+ * plan recording stops on its own, present only in its last minute (Rust's
+ * `allowance::remaining_to_show`).
  */
 export type CapturePhaseEvent = CapturePhase & { seq: number };
 
@@ -97,6 +101,21 @@ export type CaptureSelectionUi = "overlay" | "systemPicker";
 export type CaptureShortcutVia = "plugin" | "portal" | "desktopSettings";
 
 /**
+ * How one shortcut works here. Mirrors Rust's `ShortcutSupport`.
+ * `unavailableMessage`: where Hippius cannot set the shortcut itself, Rust's line for what to do instead.
+ * `command`: with `desktopSettings`, the command a shortcut in the desktop's own keyboard settings runs.
+ */
+export interface CaptureShortcutSupport {
+  supported: boolean;
+  via: CaptureShortcutVia;
+  unavailableMessage: string | null;
+  command?: string | null;
+}
+
+/** Which system-wide shortcut. Mirrors Rust's `ShortcutKind`. */
+export type CaptureShortcutKind = "screenshot" | "record";
+
+/**
  * What this platform's capture surfaces may offer (Rust's `support::Surfaces`),
  * flattened into `capture_support` and the overlay context. Rust decides; the
  * frontend never checks the platform.
@@ -121,7 +140,13 @@ export interface CaptureSurfaces {
    * `unavailableMessage`: where Hippius cannot set the shortcut itself, Rust's line for what to do instead.
    * `command`: with `desktopSettings`, the command a shortcut in the desktop's own keyboard settings runs.
    */
-  shortcut: { supported: boolean; via: CaptureShortcutVia; unavailableMessage: string | null; command?: string | null };
+  shortcut: CaptureShortcutSupport;
+  /**
+   * The Record shortcut's route: the screenshot one's, except on Wayland, where it is always a
+   * shortcut the user adds in the desktop's keyboard settings (`<app> --record`). Absent from an
+   * older backend, which has no Record shortcut.
+   */
+  recordShortcut?: CaptureShortcutSupport;
   /** With the system picker, Rust's line saying the desktop's own tool chooses what is captured. */
   systemPickerNote: string | null;
   /** Which Linux session this is; null off Linux. */
@@ -165,6 +190,13 @@ export interface CaptureOverlayContext extends RecordingAvailability, CaptureSur
    * bar and nothing drawn in advance; releasing the drag takes the shot.
    */
   instant: boolean;
+  /** This window is Wayland's recording panel (the bar alone; the desktop's dialog chooses). */
+  panel: boolean;
+  /**
+   * The overlay is drawn over a still of the desktop (a Wayland screenshot):
+   * `getCaptureOverlayBackdrop` gives this display's picture.
+   */
+  frozen: boolean;
 }
 
 /** `capture_pending_changed`. `rect` is the held area (null when cleared), so every overlay mirrors Rust. */
@@ -203,7 +235,20 @@ export interface CaptureCameraState {
   switchFromPill: boolean;
   /** The pill offers the bubble's sizes mid-recording. */
   resizeFromPill: boolean;
+  /**
+   * What the system said about the camera (Rust's `camera_access`; Linux
+   * asks before the bubble opens it): the page waits while `asking` and
+   * says why after a no. Absent or `unknown`: open it and see.
+   */
+  access?: CaptureCameraAccess;
+  /** Whether the system sees a camera at all, when it said. */
+  cameraPresent?: boolean | null;
+  /** Where this system's camera switch is, for the "allow it in" line. */
+  privacyPlace?: string;
 }
+
+/** Rust's `CameraAccess`. */
+export type CaptureCameraAccess = "unknown" | "asking" | "granted" | "denied" | "turnedOff";
 
 /**
  * `capture_microphone_state`: the live recording's microphone, for the pill.
@@ -317,6 +362,8 @@ export interface CapturePreviewActions {
   /** "Create link". */
   mintLink: boolean;
   revokeLink: boolean;
+  /** Open this link in Shared Links, to change who can open it. Absent from an older backend = no. */
+  manageLink?: boolean;
   /** Reveal in Finder / Show in Explorer. */
   reveal: boolean;
   /** Open the storage plans: the upload failed because the plan is full. */
@@ -340,6 +387,8 @@ export interface CapturePreviewCard {
   link: CaptureLinkState;
   /** Rust's line about the link ("Public link copied"); absent = say nothing. */
   linkText?: string;
+  /** Rust's line on who can open the link ("Anyone with the link can view. Never expires."); absent = none. */
+  linkNote?: string;
   actions: CapturePreviewActions;
   /**
    * In the drive with its link settled (Rust's `settled`): only then does the
@@ -347,6 +396,8 @@ export interface CapturePreviewCard {
    * uploaded.
    */
   settled?: boolean;
+  /** Rust's line about the capture itself (a Free plan recording stopped at its limit); absent = none. */
+  notice?: string;
 }
 
 /** `capture_show_in_folder`: where to show the capture. */
@@ -471,6 +522,7 @@ export interface CaptureFailed {
 // `capture_preview_changed` → `CapturePreviewCard | null`,
 // `capture_show_in_folder` → `CaptureShowInFolder`,
 // `capture_open_plans` → nothing (the card's Upgrade),
+// `capture_manage_link` → `CaptureManageLink` (the card's Manage link),
 // `capture_shortcut_pressed` → `CaptureShortcutStart`,
 // `capture_camera_state` → `CaptureCameraState`,
 // `capture_cameras` → `CaptureDevice[]`,
@@ -479,9 +531,13 @@ export interface CaptureFailed {
 // `capture_share_art` → `ShareArt` (the bar's overlay only),
 // `capture_camera_hover` → `boolean` (the camera window only).
 
-/** `capture_shortcut_pressed`: what the shortcut starts, passed on to `startCapture` as is. */
+/**
+ * `capture_shortcut_pressed`: what the shortcut starts, passed on to `startCapture` as is:
+ * the instant screenshot, or (the Record shortcut) the bar on `kind`.
+ */
 export interface CaptureShortcutStart {
   instant: boolean;
+  kind?: CaptureKind;
 }
 
 /**
@@ -560,6 +616,16 @@ export function revokeCapturePreviewLink(): Promise<void> {
   return invoke("capture_preview_revoke_link");
 }
 
+/** "Manage link": the main window opens Shared Links at this capture's link. */
+export function manageCapturePreviewLink(): Promise<void> {
+  return invoke("capture_preview_manage_link");
+}
+
+/** `capture_manage_link`: the share whose row Shared Links points out. */
+export interface CaptureManageLink {
+  shareToken: string;
+}
+
 /** Reveal the capture's file in Finder / Explorer (a drive synced here). */
 export function revealCapturePreview(): Promise<void> {
   return invoke("capture_preview_reveal");
@@ -580,18 +646,24 @@ export function editCapturePreview(): Promise<void> {
   return invoke("capture_preview_edit");
 }
 
-/** Register the saved system-wide shortcut (called when the app mounts). */
+/** Register both saved system-wide shortcuts (called when the app mounts). */
 export function syncCaptureShortcut(): Promise<void> {
   return invoke("capture_sync_shortcut");
 }
 
-export function getCaptureShortcut(): Promise<CaptureShortcutSetting> {
-  return invoke("capture_get_shortcut");
+/** The screenshot shortcut (`kind` left out, as Rust reads it), or the Record one. */
+export function getCaptureShortcut(kind: CaptureShortcutKind = "screenshot"): Promise<CaptureShortcutSetting> {
+  return kind === "screenshot" ? invoke("capture_get_shortcut") : invoke("capture_get_shortcut", { kind });
 }
 
-/** Change the shortcut; `null` turns it off. Refused if another app holds it. */
-export function setCaptureShortcut(accelerator: string | null): Promise<void> {
-  return invoke("capture_set_shortcut", { accelerator });
+/**
+ * Change a shortcut; `null` turns it off. Refused (Rust's sentence) if another app holds it,
+ * or if the other shortcut already has those keys.
+ */
+export function setCaptureShortcut(accelerator: string | null, kind: CaptureShortcutKind = "screenshot"): Promise<void> {
+  return kind === "screenshot"
+    ? invoke("capture_set_shortcut", { accelerator })
+    : invoke("capture_set_shortcut", { accelerator, kind });
 }
 
 /** What the pill needs besides the phase. Mirrors Rust's `ControlsContext`. */
@@ -600,6 +672,13 @@ export interface CaptureControlsContext {
   compact: boolean;
   /** The first time ever, Rust's line saying it is filmed; null afterwards. */
   filmedNote: string | null;
+  /**
+   * The room the page keeps above and below the pill for a menu, in points
+   * (Rust's `live_controls::fixed_menu_room`). Above 0 (macOS) the page is
+   * laid out once at that height and the window shows the slice around the
+   * pill; at 0 the page is the window's own size and grows with it.
+   */
+  menuRoom: number;
 }
 
 export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
@@ -664,6 +743,15 @@ export function addCaptureDesktopShortcut(): Promise<void> {
 
 export function getCaptureCameraContext(): Promise<CaptureCameraState> {
   return invoke("capture_camera_context");
+}
+
+/**
+ * One step of the camera page opening the camera, for the app log (Rust
+ * logs it as a `camera:` line, throttled). Diagnostics only: nothing
+ * depends on the answer.
+ */
+export function reportCameraStep(step: string, detail: string): Promise<void> {
+  return invoke("capture_camera_report", { step, detail });
 }
 
 /** The camera window reports the cameras it can open, for the bar's picker. */
@@ -750,6 +838,16 @@ export function setCaptureControlsMenu(open: boolean): Promise<CapturePillMenu> 
   return invoke("capture_controls_menu", { open });
 }
 
+/** Wayland's recording panel: size its window to the bar and any open menu, in CSS pixels. */
+export function fitCapturePanel(width: number, height: number): Promise<void> {
+  return invoke("capture_panel_fit", { width, height });
+}
+
+/** Where a pill menu would open, with nothing moved yet: the side to anchor the pill to first. */
+export function getCaptureControlsMenuSide(): Promise<CapturePillMenu> {
+  return invoke("capture_controls_menu_side");
+}
+
 /** The bubble's size strip: Rust saves it and glides the window to its new frame. */
 export function setCaptureCameraSize(size: CameraSize): Promise<CameraSize> {
   return invoke("capture_camera_set_size", { size });
@@ -772,6 +870,11 @@ export function finishCaptureShare(token: number): Promise<void> {
 
 export function getCaptureOverlayContext(displayId: number): Promise<CaptureOverlayContext> {
   return invoke("capture_overlay_context", { displayId });
+}
+
+/** The still this display's overlay is drawn over (a JPEG data URL), or null without one. */
+export function getCaptureOverlayBackdrop(displayId: number): Promise<string | null> {
+  return invoke("capture_overlay_backdrop", { displayId });
 }
 
 export function selectCapture(selection: CaptureSelection): Promise<void> {
@@ -858,4 +961,76 @@ export function createCaptureDrive(folder: string | null): Promise<CaptureDriveS
 /** `capture_start` refused because macOS has not granted Screen Recording. */
 export function isScreenRecordingPermissionMissing(error: unknown): boolean {
   return isNotReady(error, "SCREEN_RECORDING_PERMISSION");
+}
+
+/** A recording was refused before it started: the free plan's recordings are used up. */
+export function isRecordingLimitReached(error: unknown): boolean {
+  return isNotReady(error, "RECORDING_LIMIT_REACHED");
+}
+
+/**
+ * Ask Rust's recording gate whether a recording may start now, before the
+ * bar counts down; refuses with `RECORDING_LIMIT_REACHED`. Record asks it
+ * again, so this only spares the countdown.
+ */
+export function checkRecordingStart(): Promise<void> {
+  return invoke("capture_check_recording_start");
+}
+
+/** Rust's `recording_allowance::FreePlanNotice`: only ever sent for a known free plan. */
+export interface FreePlanNotice {
+  /** Recordings counted so far, capped at `limit`; null when the count cannot be read. */
+  used: number | null;
+  limit: number;
+  maxRecordingMins: number;
+}
+
+/** The free plan's notice, or null for a paid plan or one that cannot be read. */
+export function getFreePlanNotice(): Promise<FreePlanNotice | null> {
+  return invoke("capture_free_plan_notice");
+}
+
+/** Run the `--capture` / `--record` that started the app, once; Rust decides whether one is due. */
+export function takeCaptureLaunchShortcut(): Promise<void> {
+  return invoke("capture_launch_shortcut");
+}
+
+/** The limit dialog's Upgrade from the capture bar: Rust closes the bar and the main window opens the plans. */
+export function upgradeFromRecordingLimit(): Promise<void> {
+  return invoke("capture_limit_upgrade");
+}
+
+/** Rust's `PLAN_CHANGED_EVENT`: where the capture session's plan read is. */
+export const CAPTURE_PLAN_CHANGED_EVENT = "capture_plan_changed";
+
+/**
+ * Rust's `allowance::CapturePlanStatus`: the bar's view of the plan read.
+ * `checking` means nothing can start yet; `refused` comes with Rust's words
+ * and the way out (`retry` reads the plan again, `upgrade` opens the plans).
+ */
+export interface CapturePlanStatus {
+  state: "checking" | "ready" | "refused";
+  message: string | null;
+  action: "retry" | "upgrade" | null;
+}
+
+/** Where this capture's plan read is; starts one if the session has none. */
+export function getCapturePlanStatus(): Promise<CapturePlanStatus> {
+  return invoke("capture_plan_status");
+}
+
+/** The bar's Retry after the plan could not be read: Rust reads it again. */
+export function retryCapturePlan(): Promise<CapturePlanStatus> {
+  return invoke("capture_plan_retry");
+}
+
+/**
+ * The way out of a capture refused on the plan, from Rust's structured
+ * refusal: `retry` when the plan or the recording count could not be read,
+ * `upgrade` when the account has no Drive storage; null for any other error.
+ */
+export function planRefusalAction(error: unknown): "retry" | "upgrade" | null {
+  if (isNotReady(error, "CAPTURE_PLAN_UNAVAILABLE") || isNotReady(error, "RECORDING_COUNT_UNAVAILABLE")) return "retry";
+  if (isNotReady(error, "CAPTURE_NO_DRIVE_PLAN")) return "upgrade";
+  return null;
 }

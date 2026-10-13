@@ -114,6 +114,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { failedRowMenuItem } from "./failedRowMenu";
 import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
 
@@ -638,6 +639,8 @@ const FilesTable: FC<FilesTableProps> = memo(
     const folderGrantsEnabled = useFolderShareInviteOffered();
     // Which of this listing's rows sit in a drive shared WITH this account.
     const memberDriveLabels = useMemberDriveLabels();
+    // "Edit image" is the screenshot editor: offered where capture is.
+    const imageEditorEnabled = useCaptureAvailability() === "available";
     // Whether a folder in one of those drives may be shared by link: an
     // Editor or Manager, on a server that takes `owner_ss58` (hcfs #458).
     const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
@@ -1081,8 +1084,9 @@ const FilesTable: FC<FilesTableProps> = memo(
             isFolder: Boolean(file.isFolder),
             label: file.label,
             cloudOnly: isCloudOnlyRow(file),
+            serverFileId: file.fileId,
             memberDrive: isMemberDriveLabel(file.label, memberDriveLabels),
-          })
+          }, imageEditorEnabled)
             ? [
                 {
                   icon: <PenLine className="size-4" />,
@@ -1095,6 +1099,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                         parentSubFolderPath ?? normalizedSubfolderPath,
                         file.actualFileName || file.name,
                       ),
+                      // A picture only on the server is edited by its id.
+                      { fileId: file.fileId, arionHash: file.arionCid },
                     ).catch((error) => toast.error(tauriErrorMessage(error)));
                   },
                   disabled: itemDeleting,
@@ -1343,6 +1349,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         // the server confirmed folder grants.
         folderGrantsEnabled,
         memberDriveLabels,
+        imageEditorEnabled,
         memberFolderShares,
         writableMemberDriveLabels,
         manageableLabels,

@@ -69,6 +69,42 @@ export function useViewableFileUrl(
       return;
     }
 
+    let cancelled = false;
+
+    // A row from this device's live upload feed (Recent Files, the tray)
+    // names its file only by drive and relative path: no `source`, no server
+    // id. Its file was uploaded from a drive synced here, so Rust says where
+    // it is on disk (`resolve_drive_file_source`, which refuses a path that
+    // leaves the drive). These rows used to fail with "can't be previewed"
+    // until the page was left and the feed rebuilt from the server.
+    if (!file.fileId && file.label && file.actualFileName) {
+      setState({ ...EMPTY, isLoading: true });
+      invoke<string | null>("resolve_drive_file_source", {
+        label: file.label,
+        relativePath: file.actualFileName,
+      })
+        .then((path) => {
+          if (cancelled) return;
+          if (!path) {
+            setState({ ...EMPTY, error: "This file can't be previewed." });
+            return;
+          }
+          const normalised = path.replace(/\\/g, "/");
+          setState({
+            url: convertFileSrc(normalised),
+            localPath: normalised,
+            isLoading: false,
+            error: null,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setState({ ...EMPTY, error: "This file can't be previewed." });
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     // Cloud path needs the server file id, its drive label, and the account.
     if (!file.fileId || !file.label || !polkadotAddress) {
       setState({
@@ -78,7 +114,6 @@ export function useViewableFileUrl(
       return;
     }
 
-    let cancelled = false;
     setState({ ...EMPTY, isLoading: true });
     invoke<string>("cache_remote_file", {
       accountId: polkadotAddress,

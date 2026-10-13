@@ -1,10 +1,14 @@
-//! Screenshots on Wayland, through the desktop's own screenshot tool.
+//! Screenshots on Wayland, through the xdg-desktop-portal Screenshot
+//! interface.
 //!
-//! A Wayland app can neither see other windows nor draw over the screen, so
-//! there is no Hippius overlay there: `capture_start` asks the
-//! xdg-desktop-portal Screenshot interface with `interactive = true`, and the
-//! desktop's tool (GNOME Shell's screenshot UI, KDE's dialog, the wlroots
-//! portal's picker) lets the user choose an area, a window or a screen. The
+//! A Wayland app can neither see other windows nor read the screen itself,
+//! so a screenshot asks with `interactive = true`: the desktop's tool
+//! (GNOME Shell's screenshot UI, KDE's dialog, the wlroots portal's picker)
+//! lets the user choose an area, a window or a screen, and that is the one
+//! step. `interactive = false` (a still of the whole desktop for
+//! `frozen_shot`, off for now) is not used for a screenshot: GNOME 46's
+//! portal answers it with its own "Share this screenshot" dialog, after the
+//! whole screen was already taken. The
 //! portal answers with a `file://` URI of the PNG it wrote, usually in
 //! `~/Pictures/Screenshots` or a temp folder. Hippius MOVES that file into
 //! its own capture folder under its own name, so the user is not left with a
@@ -187,25 +191,27 @@ pub fn settle(answer: PortalAnswer, dest: &Path) -> Result<PortalShot> {
     })
 }
 
-/// Ask the desktop's screenshot tool for a screenshot, letting the user
-/// choose what (`interactive`). Waits as long as the user takes.
+/// Ask the portal for a screenshot: `interactive`, the desktop's own tool
+/// lets the user choose what (and waits as long as the user takes); not, a
+/// still of the whole desktop at once (or after the desktop's one-time
+/// permission question).
 #[cfg(target_os = "linux")]
-pub async fn request() -> PortalAnswer {
+pub async fn request(interactive: bool) -> PortalAnswer {
     use ashpd::desktop::screenshot::Screenshot;
 
-    let sent = Screenshot::request().interactive(true).modal(false).send().await;
+    let sent = Screenshot::request().interactive(interactive).modal(false).send().await;
     match sent.and_then(|request| request.response()) {
         Ok(shot) => PortalAnswer::Saved(shot.uri().as_str().to_string()),
         Err(e) => classify(&e),
     }
 }
 
-/// No portal outside Linux. `capture_start` only takes this path where
-/// `support::Surfaces::selection` is the system picker (Wayland), so this
-/// answer is never reached; it keeps the session code the same on every OS.
+/// No portal outside Linux. `capture_start` only takes this path on
+/// Wayland, so this answer is never reached; it keeps the session code the
+/// same on every OS.
 #[cfg(not(target_os = "linux"))]
 #[allow(clippy::unused_async)]
-pub async fn request() -> PortalAnswer {
+pub async fn request(_interactive: bool) -> PortalAnswer {
     PortalAnswer::Missing
 }
 
@@ -227,7 +233,7 @@ pub(crate) fn classify(e: &ashpd::Error) -> PortalAnswer {
 /// The D-Bus error names that mean nobody serves the portal (Screenshot,
 /// and the recorder's ScreenCast).
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-fn is_missing_service(error_name: &str) -> bool {
+pub(crate) fn is_missing_service(error_name: &str) -> bool {
     matches!(
         error_name,
         "org.freedesktop.DBus.Error.ServiceUnknown"

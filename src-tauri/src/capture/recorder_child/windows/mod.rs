@@ -77,8 +77,13 @@ pub(crate) enum Msg {
     },
     /// What was recorded went away (window closed, display unplugged).
     Ended(String),
-    /// Stop: finish the file and answer.
-    Finish(Sender<Result<(), String>>),
+    /// Stop, asked at `at` (QPC microseconds): finish the file there and
+    /// answer. The time is taken when Stop arrives, before the sources are
+    /// shut down, so tearing them down is not recorded.
+    Finish {
+        reply: Sender<Result<(), String>>,
+        at: u64,
+    },
     /// Discard: drop the file unfinished and answer.
     Cancel(Sender<()>),
 }
@@ -210,7 +215,8 @@ fn start_recording(cmd: &StartCommand, out: &Output) -> Result<Started, String> 
         let shared = Arc::clone(&shared);
         let out = Arc::clone(out);
         let output = output.clone();
-        move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx)
+        let watermark = cmd.watermark;
+        move || writer_loop(&rx, &shared, &out, &output, &sources, &ready_tx, watermark)
     });
 
     let capture = match wgc::start(target, Arc::clone(&shared), camera) {
@@ -308,9 +314,10 @@ impl Live for Session {
     }
 
     fn finish(mut self: Box<Self>) -> Result<(), String> {
+        let at = com::qpc_micros();
         self.stop_sources();
         let (reply_tx, reply_rx) = mpsc::channel();
-        if !self.shared.send(Msg::Finish(reply_tx)) {
+        if !self.shared.send(Msg::Finish { reply: reply_tx, at }) {
             self.join_writer();
             return Err("The recorder's writer had already stopped.".into());
         }
@@ -345,6 +352,7 @@ fn writer_loop(
     output: &std::path::Path,
     sources: &[Source],
     ready: &Sender<Result<(u32, u32), String>>,
+    watermark: bool,
 ) {
     let _com = com::Apartment::enter();
     let _media = com::MediaFoundation::start();
@@ -386,7 +394,17 @@ fn writer_loop(
                 if pipeline.is_none() {
                     match writer::MfWriter::create(output, size.0, size.1, !sources.is_empty()) {
                         Ok(w) => {
-                            pipeline = Some(Pipeline::new(w, sources));
+                            let mut p = Pipeline::new(w, sources);
+                            if watermark && let Some(stamp) = crate::capture::watermark::Nv12Stamp::new(size.0, size.1) {
+                                p.set_watermark(stamp);
+                            }
+                            // Time zero is now, as Start is answered, not
+                            // when the first picture was taken: making the
+                            // H.264 encoder can take seconds on a slow
+                            // machine, and the app's timer only starts at
+                            // `started`.
+                            p.start_at(shared.place(com::qpc_micros()).unwrap_or(time));
+                            pipeline = Some(p);
                             let _ = ready.send(Ok(size));
                         }
                         Err(e) => {
@@ -426,10 +444,10 @@ fn writer_loop(
                 let _ = writeln_stderr(&format!("recording ended on its own: {reason}"));
                 done = Some(result);
             }
-            Msg::Finish(reply) => {
+            Msg::Finish { reply, at } => {
                 let result = match (done.take(), pipeline.as_mut()) {
                     (Some(result), _) => result,
-                    (None, Some(p)) => end_now(p, shared),
+                    (None, Some(p)) => end_at(p, shared, at),
                     (None, None) => Err("The recording stopped before anything was captured.".into()),
                 };
                 let _ = reply.send(result);
@@ -447,7 +465,11 @@ fn writer_loop(
 
 /// Finish the file where the recording is now.
 fn end_now(pipeline: &mut Pipeline<writer::MfWriter>, shared: &Shared) -> Result<(), String> {
-    let now = com::qpc_micros();
+    end_at(pipeline, shared, com::qpc_micros())
+}
+
+/// Finish the file where the recording was at `now` (QPC microseconds).
+fn end_at(pipeline: &mut Pipeline<writer::MfWriter>, shared: &Shared, now: u64) -> Result<(), String> {
     let end = shared
         .timeline
         .lock()

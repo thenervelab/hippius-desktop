@@ -47,8 +47,13 @@ export function formatBalanceUsd(
 ): string {
   if (balance === null || balance === undefined) return "---";
 
+  // A string may carry a sign (a balance can go below zero); the unit
+  // parser reads unsigned amounts only, so the sign is taken off first.
+  const text = typeof balance === "string" ? balance.trim() : null;
+  const minus = text?.startsWith("-") ?? false;
+  const unsigned = text === null ? null : parseUnitsToBase(minus ? text.slice(1) : text, 18);
   const planck =
-    typeof balance === "string" ? parseUnitsToBase(balance, 18) : balance;
+    text === null ? (balance as bigint) : unsigned === null ? null : minus ? -unsigned : unsigned;
   // Unparseable is unknown, not zero, for the same reason as null.
   if (planck === null) return "---";
 

@@ -50,7 +50,7 @@ const READY: TrayCaptureView = {
 };
 const capture = vi.hoisted(() => ({ view: null as TrayCaptureView | null }));
 vi.mock("../useTrayCaptureView", () => ({
-  useTrayCaptureView: () => ({ view: capture.view, shortcut: [] }),
+  useTrayCaptureView: () => ({ view: capture.view, shortcut: { screenshot: [], record: [] } }),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -98,7 +98,7 @@ const REPORT = file("report.pdf");
 function rowNames() {
   return within(screen.getByRole("tabpanel"))
     .queryAllByRole("listitem")
-    .map((li) => li.querySelector("p")?.getAttribute("title"));
+    .map((li) => li.querySelector("[data-testid=tray-row-name]")?.getAttribute("title"));
 }
 
 beforeEach(() => {

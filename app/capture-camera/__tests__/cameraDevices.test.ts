@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  afterNoFrames,
   camerasAreNamed,
   camerasFrom,
   exactCameraConstraints,
@@ -115,5 +116,27 @@ describe("a muted camera", () => {
     expect(showsPlaceholder(false, false)).toBe(true);
     expect(showsPlaceholder(true, true)).toBe(true);
     expect(showsPlaceholder(true, false)).toBe(false);
+  });
+});
+
+// A live track that never shows a frame left the bubble pulsing for ever
+// (WebKitGTK with a camera its GStreamer pipeline could not open).
+describe("afterNoFrames", () => {
+  it("opens the camera again once, then gives up", () => {
+    expect(afterNoFrames(0)).toBe("reopen");
+    expect(afterNoFrames(1)).toBe("give-up");
+    expect(afterNoFrames(5)).toBe("give-up");
+  });
+});
+
+// WebKitGTK and `--list-cameras` both name cameras as GStreamer does; a
+// laptop's colour and infrared cameras differ only in the last word.
+describe("resolveCameraId with GStreamer's names", () => {
+  it("finds the chosen camera, not its infrared twin", () => {
+    const devices = [
+      dev("videoinput", "web-ir", "Integrated Camera: Integrated I"),
+      dev("videoinput", "web-rgb", "Integrated Camera: Integrated C"),
+    ];
+    expect(resolveCameraId(devices, "/dev/video0", "Integrated Camera: Integrated C")).toBe("web-rgb");
   });
 });

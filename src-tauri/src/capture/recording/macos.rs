@@ -65,12 +65,33 @@ pub fn list_cameras() -> Vec<super::MediaDevice> {
     helper_command().map_or_else(Vec::new, |helper| helper::list_devices(helper, "--list-cameras"))
 }
 
-pub fn start(selection: Selection, dest: &Path, options: RecordOptions) -> Result<Box<dyn Recorder>> {
+pub fn start(selection: Selection, dest: &Path, mut options: RecordOptions) -> Result<Box<dyn Recorder>> {
     if !macos_at_least(13, 0) {
         return Err(AppError::Validation("Screen recording needs macOS 13 or later.".into()));
     }
     let helper = helper_command().ok_or_else(|| AppError::Other("The screen-recording helper is missing from this build.".into()))?;
-    helper::start(helper, selection, dest, options)
+    // The helper encodes, so it gets the watermark as an atlas of every size
+    // (`capture::watermark::atlas`), read once at its start and removed as
+    // soon as it has answered. A write that fails records without one and
+    // says so, as an unknown plan would.
+    let atlas = options.watermark.then(|| watermark_atlas_path(dest));
+    if let Some(path) = &atlas {
+        match std::fs::write(path, crate::capture::watermark::atlas()) {
+            Ok(()) => options.watermark_atlas = Some(path.clone()),
+            Err(e) => tracing::warn!(error = %e, "the watermark could not be handed to the recording helper"),
+        }
+    }
+    let started = helper::start(helper, selection, dest, options);
+    if let Some(path) = &atlas {
+        let _ = std::fs::remove_file(path);
+    }
+    started
+}
+
+/// Where the watermark's atlas waits for the helper: hidden, beside the
+/// recording, in the capture's own private folder.
+fn watermark_atlas_path(dest: &Path) -> PathBuf {
+    dest.with_file_name(".hippius-watermark")
 }
 
 /// Where the helper may be, in the order to look. A shipped app has it in

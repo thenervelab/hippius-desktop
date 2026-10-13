@@ -20,6 +20,31 @@ describe("classifyCaptureRefusal", () => {
     });
   });
 
+  it("sends a refused recording on a used-up free plan to the limit dialog", () => {
+    expect(classifyCaptureRefusal(notReady("RECORDING_LIMIT_REACHED", "Reworded later"))).toEqual({
+      next: "recording-limit",
+    });
+  });
+
+  // Refused on the plan: Rust's words, with the way out the subkind names.
+  it("answers a plan refusal with Retry or Upgrade by its subkind", () => {
+    expect(classifyCaptureRefusal(notReady("CAPTURE_PLAN_UNAVAILABLE", "Couldn't check"))).toEqual({
+      next: "plan",
+      message: "Couldn't check",
+      action: "retry",
+    });
+    expect(classifyCaptureRefusal(notReady("RECORDING_COUNT_UNAVAILABLE", "Couldn't count"))).toEqual({
+      next: "plan",
+      message: "Couldn't count",
+      action: "retry",
+    });
+    expect(classifyCaptureRefusal(notReady("CAPTURE_NO_DRIVE_PLAN", "No Drive"))).toEqual({
+      next: "plan",
+      message: "No Drive",
+      action: "upgrade",
+    });
+  });
+
   it("shows anything else as Rust worded it", () => {
     expect(classifyCaptureRefusal({ kind: "Validation", message: "That window has closed." })).toEqual({
       next: "show-error",

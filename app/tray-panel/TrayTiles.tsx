@@ -30,7 +30,8 @@ import {
 import { TRAY_CAPTURE_DRIVE_EVENT, TRAY_CAPTURE_EVENT } from "@/app/lib/tray/trayWindowActions";
 import { annotateChosenImage } from "@/app/lib/tauri/captureEditor";
 import type { TrayCaptureView } from "./trayCaptureView";
-import { openMainFiles, uploadDroppedPaths } from "./trayMainWindow";
+import type { TrayShortcuts } from "./useTrayCaptureView";
+import { openMainUpload, uploadDroppedPaths } from "./trayMainWindow";
 
 export const ANNOTATE_IMAGE_LABEL = "Annotate an image…";
 export const UPLOAD_LABEL = "Upload";
@@ -40,7 +41,8 @@ export const UPLOAD_HINT = "or drop files";
  * The popover's three tiles under the header: Screenshot, Record and Upload,
  * the way CleanShot and Zight put their actions one click from the menu bar.
  *
- * Screenshot and Record start that kind on the mode used last; the small
+ * Screenshot and Record start that kind on the mode used last, each with
+ * its shortcut's keys underneath where Hippius holds it; the small
  * arrow in each tile's corner offers the Drive page's mode menu (area,
  * window, entire screen), and Screenshot's also "Annotate an image…" (any
  * picture, picked in the system's dialog, opened in the editor). Every
@@ -52,11 +54,13 @@ export const UPLOAD_HINT = "or drop files";
  * is never in the shot and a first capture still gets the drive picker or
  * the permission explainer, which are main-window dialogs.
  *
- * Upload opens the Drive page in the main window, like the empty state's
- * button. Files dropped anywhere on the popover go to the main window's
- * upload dialog (`uploadDroppedPaths`); the tile lights up while they hover.
+ * Upload brings the main window forward with its "Upload File" dialog open
+ * over the page it is on (`openMainUpload`), the dialog the Drive's Upload
+ * button opens. Files dropped anywhere on the popover go to that dialog
+ * too, already filled in (`uploadDroppedPaths`); the tile lights up while
+ * they hover.
  */
-export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; shortcut: string[] }) {
+export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; shortcut: TrayShortcuts }) {
   const dragging = useDropOnPanel();
 
   if (view.state === "loading") return <TrayTilesSkeleton />;
@@ -76,7 +80,7 @@ export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; s
         kind="recording"
         label={RECORD_LABEL}
         title={RECORD_TOOLTIP}
-        hint={null}
+        hint={shortcut.record.length > 0 ? shortcutText(shortcut.record) : null}
         icon={<span aria-hidden className="size-3 rounded-full bg-white" />}
         tone="bg-error-60"
         menu={<ModeItems kind="recording" modes={view.recordModes} />}
@@ -95,7 +99,7 @@ export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; s
         kind="screenshot"
         label={SCREENSHOT_LABEL}
         title="Take a screenshot"
-        hint={shortcut.length > 0 ? shortcutText(shortcut) : null}
+        hint={shortcut.screenshot.length > 0 ? shortcutText(shortcut.screenshot) : null}
         icon={<Camera aria-hidden className="size-[18px]" strokeWidth={2} />}
         tone="bg-primary-50"
         menu={
@@ -274,7 +278,7 @@ function UploadTile({ dragging, wide = false }: { dragging: boolean; wide?: bool
       type="button"
       aria-label={`${UPLOAD_LABEL}, ${UPLOAD_HINT}`}
       title="Upload files to Hippius"
-      onClick={() => void openMainFiles()}
+      onClick={() => void openMainUpload()}
       data-dragging={dragging || undefined}
       className={cn(
         TILE,
