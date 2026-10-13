@@ -446,6 +446,37 @@ mod tests {
         );
     }
 
+    /// hcfs's typed transport failure carries its cause chain. The user
+    /// still gets Rust's copy, and the cause does not reach the wire.
+    #[test]
+    fn typed_network_failure_shows_rust_copy_not_its_cause() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let cause = "error sending request: client error (Connect): tcp connect error: Connection refused";
+        let payload = FileFailureKindPayload::from(&K::Network { cause: cause.to_string() });
+
+        assert!(matches!(payload, FileFailureKindPayload::Network), "{payload:?}");
+        assert_eq!(payload.display_reason(), NETWORK_DISPLAY_REASON);
+        assert!(payload.is_transient());
+        let wire = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(wire, serde_json::json!({ "kind": "network" }), "the cause stays off the wire");
+    }
+
+    /// Since hcfs #608 a transport error drops the URL and appends its cause
+    /// chain. Wrapped in another variant's text (so without the leading
+    /// `Network error:`), it must still read as a network failure.
+    #[test]
+    fn url_less_transport_shapes_are_carved_out_of_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        for msg in [
+            "Upload failed: error sending request: client error (SendRequest): connection closed before message completed",
+            "Download failed: error sending request: operation timed out",
+            "Failed to read chunk: operation timed out",
+        ] {
+            let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+            assert!(matches!(payload, FileFailureKindPayload::Network), "{msg:?} → {payload:?}");
+        }
+    }
+
     #[test]
     fn bare_reqwest_url_display_is_carved_out_of_other() {
         use hcfs_client::engine::events::FileFailureKind as K;
@@ -1813,6 +1844,12 @@ fn is_session_limit_shaped(message: &str) -> bool {
 /// classify as [`FileFailureKindPayload::Network`] so the widget never
 /// renders the origin URL (report 2026-08-26).
 ///
+/// Since hcfs #608 a transport error drops the URL and appends its cause
+/// chain (`"error sending request: client error (Connect): …"`, `"… operation
+/// timed out"`), so a `Network` wrapped in another variant's text no longer
+/// carries `for url` or the `"Network error:"` prefix at the start: the
+/// bare `error sending request` and `timed out` are matched too.
+///
 /// The user-facing copy is [`NETWORK_DISPLAY_REASON`] ("Couldn't reach…"),
 /// so matching the upstream `"Network error:"` prefix cannot collide with it.
 fn is_network_shaped(message: &str) -> bool {
@@ -1824,7 +1861,8 @@ fn is_network_shaped(message: &str) -> bool {
         return true;
     }
     let lower = message.to_ascii_lowercase();
-    lower.contains("error sending request for url")
+    lower.contains("error sending request")
+        || lower.contains("timed out")
         || lower.contains("error trying to connect")
         || lower.contains("connection reset")
         || lower.contains("connection refused")
@@ -1998,7 +2036,13 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // and it drives the credits banner ("Top up") — wrong CTA for
             // plan/storage overage.
             K::QuotaDenied { .. } => Self::ServerError { status: 402 },
-            K::Network => Self::Network,
+            // The `cause` (hcfs's transport cause chain, no URL) is not put
+            // on the wire: the user gets Rust's own copy, and the cause is
+            // written to the per-file debug log by the failure callback's
+            // `?kind`. "Connection refused" or "timed out" would send the
+            // user to check a connection that may be fine (an origin reset
+            // reads the same).
+            K::Network { .. } => Self::Network,
             // The transfer succeeded and the ciphertext would not open. hcfs
             // gives it one free retry and then quarantines it, so the honest
             // copy says a person has to act — not "will retry".

@@ -342,7 +342,8 @@ fn is_offline_shaped(message: &str) -> bool {
     }
     lower.starts_with("network error:")
         || [
-            "error sending request for url",
+            // hcfs drops the URL since #608: `error sending request: <cause>`.
+            "error sending request",
             "error trying to connect",
             "connection refused",
             "connection reset",
@@ -717,6 +718,7 @@ mod tests {
     fn offline_and_a_full_plan_are_said_plainly() {
         for offline in [
             "error sending request for url (https://api.hippius.com/upload)",
+            "Upload failed: error sending request: client error (SendRequest): connection closed before message completed",
             "Network error: timed out",
             "dns error: failed to lookup address information",
             "Connection refused (os error 61)",
