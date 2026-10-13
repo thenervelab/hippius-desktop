@@ -71,6 +71,10 @@ pub struct ServerCapabilities {
     /// outside every drive is shared from Finder. Absent on older servers;
     /// the Finder path refuses with "isn't available yet" without it.
     pub upload_folder_shares: bool,
+    /// `PUT` / `DELETE /v1/shares/{token}/preview`: the picture a chat app
+    /// shows for a file link (`shares::preview`). Absent on older servers,
+    /// which then get no preview and no request.
+    pub share_preview: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -190,7 +194,7 @@ mod tests {
     #[test]
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true}"#,
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true}"#,
         )
         .expect("parse");
         assert!(caps.shares);
@@ -201,6 +205,7 @@ mod tests {
         assert!(caps.member_folder_shares);
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
+        assert!(caps.share_preview);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -216,6 +221,7 @@ mod tests {
                 "folder_shares",
                 "member_folder_shares",
                 "share_owner_wrap",
+                "share_preview",
                 "shares",
                 "upload_folder_shares"
             ]
@@ -231,6 +237,7 @@ mod tests {
         assert!(!old.member_folder_shares, "an older server never claims member folder shares");
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
+        assert!(!old.share_preview, "a server without the preview routes is never sent one");
     }
 
     /// Uploaded-copy folder links ship after browsable folder shares, so a
