@@ -130,4 +130,19 @@ describe("where the menu goes", () => {
     expect(capturesFolderTarget({ state: "needsSetup", suggested: location, waiting: 0 })).toEqual({ kind: "page" });
     expect(capturesFolderTarget(null)).toEqual({ kind: "page" });
   });
+
+  // Captures in a folder of the main drive: that folder, never the drive.
+  it("reveals the captures folder itself when it is inside a drive", () => {
+    const location = { path: "/Users/me/Hippius/hippius-captures", place: "Hippius › hippius-captures", permissionNote: null };
+    expect(
+      capturesFolderTarget({
+        state: "ready",
+        label: "Main",
+        name: "Hippius",
+        folder: "hippius-captures",
+        remote: false,
+        location,
+      }),
+    ).toEqual({ kind: "reveal", label: "Main", path: "/Users/me/Hippius/hippius-captures" });
+  });
 });

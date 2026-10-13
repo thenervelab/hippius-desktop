@@ -1291,13 +1291,25 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   forward + `capture_drive_setup_needed`, which `CaptureHost` turns into
   `CaptureDriveDialog`. The dialog only draws `capture_drive_status`
   (`ready` / `needsSetup` / `pending`), `capture_drive_location` (a picked
-  folder, checked) and calls `capture_drive_create`. The folder is
-  `Documents/Hippius Captures` (`suggested_dir`; the home folder when
-  Documents is inside a drive); a picked folder gets `Hippius Captures` made
-  inside it (`folder_for_choice`), so the user's own folder is never uploaded
-  whole. `check_location` refuses a folder inside or around another drive, a
-  member drive and `~/.hippius`, and takes an own drive already synced at
-  that exact folder (a setup cut short after the row was written).
+  folder, resolved and checked; the dialog shows the resolved path and sends
+  it back, so `folder_for_choice` must stay idempotent) and calls
+  `capture_drive_create`. The suggestion is `Documents/hippius-captures`
+  (`naming::CAPTURES_FOLDER_NAME`; `suggested_dir`, the home folder when
+  Documents is inside a drive). A picked folder is used as it is, except the
+  home folder, a disk root, Documents or a home standard folder
+  (`too_broad`) and the root of an own drive that is not a captures drive,
+  which get `hippius-captures` inside. A NEW drive is always labelled
+  `Hippius Captures` (`CAPTURES_DIR_NAME`) whatever its folder is called:
+  the web console and the extension find the captures drive by label, and
+  the drive key derives from it. `check_location` answers `Place::NewDrive`
+  or `Place::InDrive { label, folder }` (a folder in an own drive: captures
+  are filed there, `CaptureDestination.folder` non-empty, no new drive) and
+  refuses a member drive or a folder in one, a folder holding a drive and
+  `~/.hippius`. Such a folder is remembered in `capture_drive_folders_v1`
+  (`own_capture_folders`), never in the labels list, so the free plan's
+  count and the share dialog's capture default read only that folder of the
+  drive; the Captures page does not pin that drive, it names the folder and
+  opens it in Drive.
   `permission_note` warns before macOS's Documents/Desktop/Downloads prompt;
   `folder_refused_copy` explains a refusal. The drive is added through
   `add_local_sync_folder` (Sync a Folder's path) under `ENSURE_LOCK`; a
