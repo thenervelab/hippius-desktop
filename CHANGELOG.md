@@ -43,6 +43,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Your captures go in the folder you pick.** When you choose where screenshots and recordings are saved, Hippius uses that folder as it is instead of making a "Hippius Captures" folder inside it, and a folder inside your main drive works too: captures are then saved there, in that drive. The suggested folder is now called hippius-captures. If you pick your home folder, Documents, Desktop or the top of a drive, Hippius makes a hippius-captures folder inside it and shows you the exact folder before you confirm.
 - **Captures check your plan before they start.** The capture bar says "Checking your plan…" for a moment, and if your plan can't be checked (you're offline, say) it tells you and offers Retry instead of capturing. An account with no Drive storage is told straight away and offered a plan.
 - **On Linux, installing Hippius brings the video plugins every recording needs.** The .deb now installs GStreamer's base, good and bad plugins with Hippius, so screen recording works even when the package is installed on its own or without recommended packages.
 - **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.

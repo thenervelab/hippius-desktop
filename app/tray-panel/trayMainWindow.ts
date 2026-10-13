@@ -195,7 +195,11 @@ export async function openCapturesFolder() {
     const status = await invoke<CaptureDriveStatus>("capture_drive_status").catch(() => null);
     const target = capturesFolderTarget(status);
     if (target.kind === "reveal") {
-      await invoke("reveal_drive_in_finder", { label: target.label });
+      if (target.path) {
+        await invoke("reveal_path_in_file_manager", { path: target.path });
+      } else {
+        await invoke("reveal_drive_in_finder", { label: target.label });
+      }
       return;
     }
     await openMainPage("captures");
