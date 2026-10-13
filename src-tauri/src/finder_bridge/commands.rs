@@ -29,13 +29,20 @@ use tauri::ipc::Channel;
 /// A missing `request_id` (the app restarted, or the confirm arrived twice)
 /// surfaces as [`AppError::NotFound`] so the modal can tell the user to
 /// right-click again rather than showing an opaque failure.
+///
+/// `chat_preview` is the chooser's "Show a preview in chats" switch: for a
+/// file, a picture of it is uploaded for chat apps once the link exists
+/// (`shares::preview`), never for a password share.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // the chooser's choices plus the app handle the background preview needs
 pub async fn hcfs_finder_confirm_share(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     request_id: String,
     ttl: String,
     visibility: String,
     password: Option<String>,
+    chat_preview: Option<bool>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<crate::shares::commands::ShareLink> {
     #[cfg(any(unix, windows))]
@@ -48,6 +55,7 @@ pub async fn hcfs_finder_confirm_share(
         // Finder entry points cannot diverge on what they accept.
         let ttl = crate::shares::commands::parse_ttl(&ttl)?;
         let choice = crate::shares::commands::ShareChoice::parse(&visibility, password)?;
+        let send_preview = crate::shares::preview::allowed(&choice, chat_preview.unwrap_or(false));
         let pending = state
             .take_finder_share(&request_id)
             .ok_or_else(|| AppError::NotFound("This share request has expired. Right-click the file and choose Share with Hippius again.".into()))?;
@@ -75,11 +83,23 @@ pub async fn hcfs_finder_confirm_share(
             progress: Some(progress),
             cancel,
         };
-        crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, mint).await
+        let link = crate::finder_bridge::dispatch::mint_confirmed(&state, &pending.path, mint).await?;
+        // Files only: a folder link has no single picture. The clicked file
+        // stays where it is, so the preview reads it in place.
+        if send_preview
+            && tokio::fs::metadata(&pending.path).await.is_ok_and(|m| m.is_file())
+            && let (Ok(account_id), Some(file_name)) = (
+                state.current_account_id(),
+                pending.path.file_name().and_then(|n| n.to_str()).map(str::to_owned),
+            )
+        {
+            crate::shares::preview::spawn_upload(app, account_id, link.share_token.clone(), pending.path.clone(), file_name, false);
+        }
+        Ok(link)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (&state, request_id, ttl, visibility, password, on_progress);
+        let _ = (&app, &state, request_id, ttl, visibility, password, chat_preview, on_progress);
         // Unreachable from the UI (the FE only invokes this on macOS); a typed
         // Validation rather than the catch-all Other keeps it consistent with the
         // error-taxonomy migration (illu review L4).

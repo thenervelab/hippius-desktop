@@ -532,6 +532,8 @@ fn main() {
             crate::shares::commands::hcfs_create_folder_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
+            crate::shares::commands::hcfs_set_share_preview,
+            crate::shares::commands::hcfs_share_preview_default,
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_revoke_folder_share,

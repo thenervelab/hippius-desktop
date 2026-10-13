@@ -59,7 +59,10 @@ import {
   type ShareTtl,
   type ShareVisibility,
   generateSharePassword,
+  getSharePreviewDefault,
+  setSharePreview,
 } from "@/app/lib/tauri/shares";
+import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -89,7 +92,9 @@ type ModalState =
   // The link carries its own `password` when the share is protected — the
   // backend returns it exactly once, so the done view is the only place it can
   // ever be shown.
-  | { kind: "done"; link: ShareLink }
+  // `chatPreview`: a chat preview was asked for with the link, so the done
+  // view offers to turn it off again.
+  | { kind: "done"; link: ShareLink; chatPreview: boolean }
   | { kind: "error"; message: string };
 
 export default function ShareFileModal() {
@@ -138,6 +143,14 @@ export default function ShareFileModal() {
     file?.name ||
     finderName;
   const folderLabel = file?.label;
+  // What Rust decides the "Show a preview in chats" switch from: the file's
+  // own name (never the folder path shown above), its drive and whether it
+  // is a folder.
+  const previewSubject: PreviewSubject = {
+    folderLabel: folderLabel ?? null,
+    fileName: file ? file.actualFileName || file.name : finderName,
+    isFolder: target?.file.isFolder ?? (finderShare?.kind === "choosing" && finderShare.isFolder),
+  };
 
   // The Finder flow carries a freshly-stat'd size; the in-app flow already has
   // one on the listing row. Show whichever is available, so the confirmation
@@ -216,7 +229,7 @@ export default function ShareFileModal() {
               onProgress,
             )
           : await createShare(folderLabel, target.relativePath, choice, onProgress);
-      setState({ kind: "done", link });
+      setState({ kind: "done", link, chatPreview: choice.chatPreview === true });
     } catch (err) {
       if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
         setTarget(null);
@@ -251,7 +264,7 @@ export default function ShareFileModal() {
         });
         if (superseded()) return;
         runningFinderRef.current = null;
-        setState({ kind: "done", link: created });
+        setState({ kind: "done", link: created, chatPreview: choice.chatPreview === true });
       } catch (err) {
         if (superseded()) return;
         runningFinderRef.current = null;
@@ -382,7 +395,11 @@ export default function ShareFileModal() {
     >
       {state.kind === "choosing" && (
         <ChoosingBody
+          // A new session (another file, a new Finder click) starts the
+          // chooser afresh, its preview switch included.
+          key={sessionKey ?? "closed"}
           filename={filename}
+          previewSubject={previewSubject}
           folderKind={folderKind}
           sizeBytes={sourceSizeBytes}
           sizePending={sizePending}
@@ -408,6 +425,7 @@ export default function ShareFileModal() {
         <DoneBody
           link={state.link}
           password={state.link.password}
+          chatPreview={state.chatPreview}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -450,6 +468,48 @@ function folderKindOf(
   return finderShare.isFolderCopy ? "copy" : "live";
 }
 
+/** What the preview switch is decided from (see `getSharePreviewDefault`). */
+interface PreviewSubject {
+  folderLabel: string | null;
+  fileName: string;
+  isFolder: boolean;
+}
+
+/**
+ * "Show a preview in chats": with it on, chat apps show a picture of the
+ * file when its link is pasted, instead of a generic Hippius card. The
+ * picture and the name are readable by the server, which the line under
+ * the switch says.
+ */
+function ChatPreviewSwitch({
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-col gap-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+          Show a preview in chats
+        </span>
+        <SettingsToggle
+          ariaLabel="Show a preview in chats"
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+        />
+      </div>
+      <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+        The preview picture and file name aren&apos;t encrypted.
+      </p>
+    </div>
+  );
+}
+
 /** Expiry choices offered in the chooser, in the order they are shown. */
 const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
   { label: "24 hours", value: "24h" },
@@ -474,6 +534,7 @@ const PASSWORD_MIN_LEN = 8;
  */
 function ChoosingBody({
   filename,
+  previewSubject,
   folderKind,
   sizeBytes,
   sizePending,
@@ -483,6 +544,7 @@ function ChoosingBody({
   onCancel,
 }: {
   filename: string;
+  previewSubject: PreviewSubject;
   /** The folder share's kind, or `null` for a file. */
   folderKind: FolderKind | null;
   /** Source size, when known. `null` renders nothing rather than "0 B". */
@@ -506,6 +568,27 @@ function ChoosingBody({
   // can still overwrite it. Empty until then, so we never generate one for a
   // share that stays public.
   const [password, setPassword] = useState("");
+  // Whether the preview switch is shown, and where it stands. Rust decides
+  // both (on for a capture when Settings says so); until it answers the
+  // switch is hidden and off, so nothing is sent by a quick confirm.
+  const [previewOffered, setPreviewOffered] = useState(false);
+  const [chatPreview, setChatPreview] = useState(false);
+  const { folderLabel: previewLabel, fileName: previewName, isFolder: previewIsFolder } = previewSubject;
+  useEffect(() => {
+    let alive = true;
+    getSharePreviewDefault(previewLabel, previewName, previewIsFolder)
+      .then((d) => {
+        if (!alive || !d) return;
+        setPreviewOffered(d.offered);
+        setChatPreview(d.on);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [previewLabel, previewName, previewIsFolder]);
+  // A password link never gets a preview: the switch is hidden and off.
+  const previewShown = previewOffered && visibility === "public";
 
   const onVisibilityChange = (next: ShareVisibility) => {
     setVisibility(next);
@@ -585,6 +668,10 @@ function ChoosingBody({
           />
         </div>
 
+        {previewShown && (
+          <ChatPreviewSwitch checked={chatPreview} onChange={setChatPreview} />
+        )}
+
         <p
           className="mt-3 break-all text-sm text-grey-20 dark:text-grey-dark-800"
           title={filename}
@@ -642,6 +729,7 @@ function ChoosingBody({
               // the public one anyway, but not sending it keeps the intent
               // unambiguous at the boundary.
               password: visibility === "private" ? password : undefined,
+              chatPreview: previewShown && chatPreview,
             })
           }
           className={cn(
@@ -907,6 +995,7 @@ function ErrorBody({
 function DoneBody({
   link,
   password,
+  chatPreview,
   onCopy,
   onOpen,
   onClose,
@@ -914,6 +1003,8 @@ function DoneBody({
 }: {
   link: ShareLink;
   password?: string;
+  /** A chat preview was asked for with this link: offer to turn it off. */
+  chatPreview: boolean;
   onCopy: () => void | Promise<void>;
   onOpen: () => void | Promise<void>;
   onClose: () => void;
@@ -921,6 +1012,23 @@ function DoneBody({
 }) {
   const [copied, setCopied] = useState(false);
   const [copiedPw, setCopiedPw] = useState(false);
+  const [previewOn, setPreviewOn] = useState(chatPreview);
+  const [previewSaving, setPreviewSaving] = useState(false);
+
+  // Off removes the preview from the server; on makes it again from the
+  // file. Shown as changed at once, put back if Rust refuses.
+  const changePreview = async (next: boolean) => {
+    setPreviewOn(next);
+    setPreviewSaving(true);
+    try {
+      await setSharePreview(link.shareToken, next);
+    } catch (err) {
+      setPreviewOn(!next);
+      toast.error(errorMessage(err));
+    } finally {
+      setPreviewSaving(false);
+    }
+  };
 
   const handleCopyPassword = async () => {
     if (!password || copiedPw) return;
@@ -1004,6 +1112,16 @@ function DoneBody({
           )}
         </button>
       </div>
+
+      {chatPreview && !password && (
+        <div className="-mt-3 mb-6">
+          <ChatPreviewSwitch
+            checked={previewOn}
+            disabled={previewSaving}
+            onChange={(next) => void changePreview(next)}
+          />
+        </div>
+      )}
 
       {password && (
         <div className="mb-6">

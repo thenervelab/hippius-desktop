@@ -93,6 +93,13 @@ pub struct CaptureOptions {
     /// capture is on screen ready to look at or paste. Only when a link was
     /// made and copied; a capture filed without one opens nothing.
     pub open_link: bool,
+    /// Upload a picture of each capture with its link, so a chat app the
+    /// link is pasted into shows the screenshot, or the recording's first
+    /// frame with a play button, instead of a generic card
+    /// (`shares::preview`). Also where the share dialog's "Show a preview in
+    /// chats" switch starts for a capture. The picture and the file name are
+    /// not encrypted, which is why it can be turned off.
+    pub chat_preview: bool,
     /// Recording countdown: 0, 3 or 5 seconds.
     pub record_countdown_secs: u8,
 }
@@ -113,6 +120,7 @@ impl Default for CaptureOptions {
             last_mode: CaptureMode::Area,
             copy_link: true,
             open_link: true,
+            chat_preview: true,
             record_countdown_secs: RECORDING_COUNTDOWN_SECS,
         }
     }
@@ -718,7 +726,7 @@ mod tests {
                 "screen": true, "camera": false, "cameraDevice": null,
                 "cameraSize": "small", "showClicks": false, "systemAudio": false,
                 "lastKind": "screenshot", "lastMode": "area",
-                "copyLink": true, "openLink": true, "recordCountdownSecs": 3
+                "copyLink": true, "openLink": true, "chatPreview": true, "recordCountdownSecs": 3
             })
         );
         let partial: CaptureOptions = serde_json::from_value(serde_json::json!({ "timerSecs": 5 })).unwrap();
@@ -727,6 +735,7 @@ mod tests {
         // A row saved before these existed keeps copying links and counting 3.
         assert!(partial.copy_link);
         assert!(partial.open_link, "a row saved before the switch opens links");
+        assert!(partial.chat_preview, "a row saved before the switch shows previews in chats");
         assert_eq!(partial.record_countdown_secs, RECORDING_COUNTDOWN_SECS);
         // A row saved before the switch existed records no system audio.
         assert!(!partial.system_audio);
@@ -756,6 +765,7 @@ mod tests {
             last_mode: CaptureMode::Window,
             copy_link: false,
             open_link: false,
+            chat_preview: false,
             record_countdown_secs: 5,
         };
         save_options(&pool, chosen.clone()).await.unwrap();

@@ -28,6 +28,14 @@ import {
 // `invoke` is the only side effect the modal performs; mocking it
 // gives us full control over which terminal state we land in.
 const invokeMock = vi.fn();
+// The chat preview's two commands answer through their own mocks, so the
+// share mint stays the first call `invokeMock` sees in every test.
+const previewDefaultMock = vi.fn();
+const setPreviewMock = vi.fn();
+const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
+  hcfs_share_preview_default: previewDefaultMock,
+  hcfs_set_share_preview: setPreviewMock,
+};
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
 // `vi.mock` is hoisted above top-level declarations — referencing an
@@ -36,7 +44,8 @@ const invokeMock = vi.fn();
 // lets a test drive a progress update on the instance captured from
 // `invokeMock`.
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+  invoke: (...args: unknown[]) =>
+    (PREVIEW_COMMANDS[args[0] as string] ?? invokeMock)(...args),
   Channel: class {
     onmessage: ((message: unknown) => void) | null = null;
   },
@@ -190,6 +199,9 @@ describe("ShareFileModal", () => {
 
   beforeEach(() => {
     invokeMock.mockReset();
+    // Most files here are documents: no switch, unless a test says otherwise.
+    previewDefaultMock.mockReset().mockResolvedValue({ offered: false, on: false });
+    setPreviewMock.mockReset().mockResolvedValue(undefined);
     installClipboard();
   });
 
@@ -940,5 +952,150 @@ describe("ShareFileModal", () => {
         screen.getByText(/only the owner of a shared drive can share its folders/i),
       ).toBeInTheDocument();
     });
+  });
+});
+
+describe("ShareFileModal chat previews", () => {
+  const SCREENSHOT = {
+    name: "Screenshot 2026-09-22 at 14.03.11.png",
+    actualFileName: "Screenshot 2026-09-22 at 14.03.11.png",
+    label: "Hippius Captures",
+  };
+  const LINK = {
+    shareToken: "tok-shot",
+    shareUrl: "https://console.hippius.com/share/tok-shot#k=KEY",
+    expiresAt: null,
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    previewDefaultMock.mockReset();
+    setPreviewMock.mockReset().mockResolvedValue(undefined);
+    installClipboard();
+  });
+
+  it("starts on for a capture, asks Rust with the file's own name, and sends the choice", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, SCREENSHOT));
+
+    const toggle = await screen.findByRole("switch", { name: "Show a preview in chats" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText("The preview picture and file name aren't encrypted.")).toBeInTheDocument();
+    expect(previewDefaultMock).toHaveBeenCalledWith("hcfs_share_preview_default", {
+      folderLabel: "Hippius Captures",
+      fileName: "Screenshot 2026-09-22 at 14.03.11.png",
+      isFolder: false,
+    });
+
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.objectContaining({ visibility: "public", chatPreview: true }),
+    );
+  });
+
+  // Settings > Screenshots & Recording has it off: Rust says so, and the
+  // switch for a capture starts off.
+  it("starts off when Settings has it off, and then sends no preview", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: false });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, SCREENSHOT));
+
+    const toggle = await screen.findByRole("switch", { name: "Show a preview in chats" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.objectContaining({ chatPreview: false }),
+    );
+    // Nothing was asked for, so the done view has nothing to turn off.
+    expect(screen.queryByRole("switch", { name: "Show a preview in chats" })).toBeNull();
+  });
+
+  it("can be turned on for a picture that starts off", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: false });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, { name: "holiday.jpg", actualFileName: "holiday.jpg", label: "Drive" }));
+
+    fireEvent.click(await screen.findByRole("switch", { name: "Show a preview in chats" }));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith("hcfs_create_share", expect.objectContaining({ chatPreview: true }));
+  });
+
+  it("is hidden and off for a password link", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: true });
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "hcfs_generate_share_password" ? Promise.resolve("generated-pass-123") : Promise.resolve({ ...LINK, password: "generated-pass-123" }),
+    );
+    render(withProvider(<ShareFileModal />, SCREENSHOT));
+
+    await screen.findByRole("switch", { name: "Show a preview in chats" });
+    fireEvent.click(screen.getByRole("button", { name: "Password protected" }));
+    await waitFor(() => expect(screen.queryByRole("switch", { name: "Show a preview in chats" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("button", { name: /create share link/i })).toBeEnabled());
+
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.objectContaining({ visibility: "private", chatPreview: false }),
+    );
+    expect(screen.queryByRole("switch", { name: "Show a preview in chats" })).toBeNull();
+  });
+
+  it("is not offered for a file Rust cannot preview, nor for a folder", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: false, on: false });
+    render(withProvider(<ShareFileModal />, { name: "notes.pdf", actualFileName: "notes.pdf", label: "Drive" }));
+    await waitFor(() => expect(previewDefaultMock).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: "Show a preview in chats" })).toBeNull();
+  });
+
+  it("turns the preview off on the finished link, and back if Rust refuses", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, SCREENSHOT));
+    await screen.findByRole("switch", { name: "Show a preview in chats" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+
+    const toggle = screen.getByRole("switch", { name: "Show a preview in chats" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(setPreviewMock).toHaveBeenCalledWith("hcfs_set_share_preview", { shareToken: "tok-shot", enabled: false }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Show a preview in chats" })).toHaveAttribute("aria-checked", "false"),
+    );
+
+    setPreviewMock.mockRejectedValueOnce({ kind: "Validation", message: "A preview can only be made when the file is on this computer." });
+    fireEvent.click(screen.getByRole("switch", { name: "Show a preview in chats" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("A preview can only be made when the file is on this computer."),
+    );
+    expect(screen.getByRole("switch", { name: "Show a preview in chats" })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("sends the Finder chooser's choice with the confirm", async () => {
+    previewDefaultMock.mockResolvedValue({ offered: true, on: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withFinderState(<ShareFileModal />, { ...CHOOSING, name: "Recording 2026-09-22 at 09.00.05.mp4" }));
+
+    expect(await screen.findByRole("switch", { name: "Show a preview in chats" })).toHaveAttribute("aria-checked", "true");
+    expect(previewDefaultMock).toHaveBeenCalledWith("hcfs_share_preview_default", {
+      folderLabel: null,
+      fileName: "Recording 2026-09-22 at 09.00.05.mp4",
+      isFolder: false,
+    });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-shot#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({ requestId: "req-1", chatPreview: true }),
+    );
   });
 });
