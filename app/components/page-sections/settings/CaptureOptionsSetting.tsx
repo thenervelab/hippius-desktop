@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ExternalLink, Link2, Timer, Volume2 } from "lucide-react";
+import { ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -11,15 +11,18 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { SettingsToggle } from "./SettingsToggle";
 import { SettingIcon } from "./SettingIcon";
 
-type Choices = Pick<CaptureOptions, "copyLink" | "openLink" | "recordCountdownSecs" | "systemAudio">;
+type Choices = Pick<
+  CaptureOptions,
+  "copyLink" | "openLink" | "chatPreview" | "recordCountdownSecs" | "systemAudio"
+>;
 
 const COUNTDOWN_OPTIONS = RECORD_COUNTDOWN_OPTIONS.map((t) => ({ value: String(t.secs), label: t.label }));
 
 /**
  * The capture bar's own options that carry over from one capture to the
  * next, offered here as well: copying a share link after a capture,
- * opening it in the browser, the recording countdown and the computer's
- * sound. Rust keeps them (`capture_get_options` / `capture_set_options`,
+ * opening it in the browser, showing a preview in chats, the recording
+ * countdown and the computer's sound. Rust keeps them (`capture_get_options` / `capture_set_options`,
  * the same device-wide options the bar's Options menu saves), and snaps
  * every value to what it allows; this only reads and writes them.
  *
@@ -104,6 +107,22 @@ export default function CaptureOptionsSetting({
           />
         </OptionRow>
       )}
+
+      {/* Always shown: besides the links made after a capture, it is where
+          the share dialog's preview switch starts for a capture. */}
+      <OptionRow
+        rowClassName={rowClassName}
+        layout={layout}
+        icon={<ImageIcon className="size-[18px]" strokeWidth={2} />}
+        title="Show a preview in chats"
+        description="When you paste a capture's link into a chat, it shows the screenshot or the recording's first frame. The preview picture and file name aren't encrypted."
+      >
+        <SettingsToggle
+          ariaLabel="Show a preview in chats"
+          checked={options.chatPreview}
+          onCheckedChange={(chatPreview) => void change({ chatPreview })}
+        />
+      </OptionRow>
 
       {recording && recordCountdown && (
         <OptionRow

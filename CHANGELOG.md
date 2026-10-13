@@ -15,6 +15,28 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-10-13
+
+Share links now show a real preview when you paste them into a chat, and
+screen recording on Linux installs everything it needs.
+
+### Added
+
+- **Share links show a preview in chats.** Paste a screenshot's link into
+  Discord, Slack, WhatsApp or another chat app and it shows the screenshot
+  itself. A recording's link shows a frame from the video with a play button
+  and its length. It is on for screenshots and recordings, and you can turn it
+  on for other pictures and videos when you share them. The preview picture
+  and file name aren't encrypted, so links with a password never get one.
+  Turn previews off for captures in Settings, under Screenshots & Recording,
+  or in the capture bar's Options menu.
+
+### Changed
+
+- **On Linux, installing Hippius brings the video plugins every recording
+  needs.** Screen recording now works even when Hippius is installed on its
+  own or without recommended packages.
+
 ## [0.6.9] - 2026-10-13
 
 Screenshots and screen recording are here for everyone, on Mac, Windows and

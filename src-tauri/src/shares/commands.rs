@@ -564,14 +564,22 @@ pub(crate) fn share_progress_forwarder(channel: Channel<ShareProgress>) -> Share
 /// `on_progress` is a webview channel the FE opens with `new Channel()`;
 /// progress updates flow through it while the share runs so the modal
 /// can show a determinate bar.
+///
+/// `chat_preview` is the dialog's "Show a preview in chats" switch: once the
+/// link is minted, a picture of the file is uploaded for chat apps in the
+/// background (`shares::preview`). Never for a password share, whatever the
+/// switch says.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // the dialog's choices plus the app handle the background preview needs
 pub async fn hcfs_create_share(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     folder_label: String,
     relative_path: String,
     ttl: String,
     visibility: String,
     password: Option<String>,
+    chat_preview: Option<bool>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
@@ -580,6 +588,7 @@ pub async fn hcfs_create_share(
     // bad preset or a too-short password costs nothing.
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
+    let send_preview = super::preview::allowed(&choice, chat_preview.unwrap_or(false));
 
     // Capability gate. A single anonymous HTTP request; we accept the
     // round-trip so that an old server hides the feature instead of failing
@@ -589,7 +598,103 @@ pub async fn hcfs_create_share(
     require_shares_supported(&state, &account_id).await?;
 
     let progress = share_progress_forwarder(on_progress);
-    create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await
+    let link = create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await?;
+    if send_preview {
+        spawn_preview_for_synced(&app, &state, &account_id, &folder_label, &relative_path, &link.share_token).await;
+    }
+    Ok(link)
+}
+
+/// Start the chat preview of a synced file that was just shared. Resolved
+/// the same way the share resolved it; a file that can no longer be found
+/// simply gets no preview, the link being already made.
+async fn spawn_preview_for_synced(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    account_id: &str,
+    folder_label: &str,
+    relative_path: &str,
+    share_token: &str,
+) {
+    let resolved = async {
+        let sync_root = sync_root_for_label(state.pool()?, account_id, folder_label).await?;
+        resolve_inside_sync_root(&sync_root, relative_path).await
+    }
+    .await;
+    let Ok(path) = resolved else {
+        debug!("share preview skipped: the shared file could not be found again");
+        return;
+    };
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+        return;
+    };
+    super::preview::spawn_upload(app.clone(), account_id.to_owned(), share_token.to_owned(), path, file_name, false);
+}
+
+/// Turn an existing share's chat preview on or off (the share dialog's
+/// switch, after the link was made). Off is `DELETE /v1/shares/{token}/preview`.
+/// On makes the preview again from the file this device shared it from
+/// (`share_origin`), and is refused for a password share and for a file that
+/// is not on this computer.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] with the sentence to show when it cannot be
+/// turned on; the server's refusal when it cannot be turned off.
+#[tauri::command]
+pub async fn hcfs_set_share_preview(app: tauri::AppHandle, state: tauri::State<'_, AppState>, share_token: String, enabled: bool) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    if !enabled {
+        return super::preview::remove(&state, &account_id, &share_token).await;
+    }
+    let pool = state.pool()?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    if !matches!(keystore.get(&share_token), Ok(Some(ShareSecret::Public(_)))) {
+        return Err(AppError::Validation("Links with a password can't show a preview in chats.".into()));
+    }
+    let owner = account_key(&account_id);
+    let origin_row = origin::fetch_for_tokens(pool, &owner, &[share_token.as_str()])
+        .await?
+        .remove(share_token.as_str())
+        .ok_or_else(|| AppError::Validation(PREVIEW_NEEDS_LOCAL_FILE.into()))?;
+    let sync_root = sync_root_for_label(pool, &account_id, &origin_row.folder_label)
+        .await
+        .map_err(|_| AppError::Validation(PREVIEW_NEEDS_LOCAL_FILE.into()))?;
+    let path = resolve_inside_sync_root(&sync_root, &origin_row.relative_path)
+        .await
+        .map_err(|_| AppError::Validation(PREVIEW_NEEDS_LOCAL_FILE.into()))?;
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::Validation(PREVIEW_NEEDS_LOCAL_FILE.into()))?;
+    super::preview::spawn_upload(app, account_id, share_token, path, file_name, false);
+    Ok(())
+}
+
+const PREVIEW_NEEDS_LOCAL_FILE: &str = "A preview can only be made when the file is on this computer.";
+
+/// Where the share dialog's "Show a preview in chats" switch starts for a
+/// file: shown for a picture or video a preview can be made of, on for a
+/// screenshot or recording (by the drive it is in or its capture name) when
+/// Settings says so, off for everything else. Folders get none.
+#[tauri::command]
+pub async fn hcfs_share_preview_default(
+    state: tauri::State<'_, AppState>,
+    folder_label: Option<String>,
+    file_name: String,
+    is_folder: bool,
+) -> Result<super::preview::PreviewDefault> {
+    let pool = state.pool()?;
+    let in_captures_drive = match (folder_label, state.current_account_id()) {
+        (Some(label), Ok(account_id)) => crate::capture::destination::own_capture_labels(pool, &account_id)
+            .await
+            .is_ok_and(|labels| labels.contains(&label)),
+        _ => false,
+    };
+    let is_capture = in_captures_drive || super::preview::is_capture_name(&file_name);
+    let captures_default = crate::capture::bar::load_options(pool).await.map_or(true, |o| o.chat_preview);
+    Ok(super::preview::default_for(&file_name, is_folder, is_capture, captures_default))
 }
 
 /// Mint a share for a synced file with the same capability guard as
@@ -717,6 +822,7 @@ pub(crate) async fn create_remote_share_inner(
     ttl: ShareTtl,
     choice: ShareChoice,
     progress: Option<ShareProgressFn>,
+    preview: Option<PreviewAfterMint>,
 ) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
     // The exact gate runs in `mint_remote_share_at` once the copy is on disk
@@ -757,9 +863,23 @@ pub(crate) async fn create_remote_share_inner(
         progress,
     )
     .await;
-    // The temp copy is plaintext — remove it on success AND on every error.
-    let _ = tokio::fs::remove_file(&tmp).await;
+    // The temp copy is plaintext: remove it on success AND on every error.
+    // A chat preview made from it takes it over and removes it once read.
+    match (&minted, preview) {
+        (Ok(link), Some(PreviewAfterMint { app })) => {
+            super::preview::spawn_upload(app, account_id.to_owned(), link.share_token.clone(), tmp, filename, true);
+        }
+        _ => {
+            let _ = tokio::fs::remove_file(&tmp).await;
+        }
+    }
     minted
+}
+
+/// Asks a share for a chat preview once it is minted (see
+/// `shares::preview`). Carries the app handle the background upload runs on.
+pub(crate) struct PreviewAfterMint {
+    pub app: tauri::AppHandle,
 }
 
 /// Body of [`create_remote_share_inner`] between temp-path creation and
@@ -858,6 +978,7 @@ async fn mint_remote_share_at(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // one arg over hcfs_create_share: the file_id the remote listing carries
 pub async fn hcfs_create_remote_share(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     folder_label: String,
     relative_path: String,
@@ -865,13 +986,26 @@ pub async fn hcfs_create_remote_share(
     ttl: String,
     visibility: String,
     password: Option<String>,
+    chat_preview: Option<bool>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
+    let preview = super::preview::allowed(&choice, chat_preview.unwrap_or(false)).then_some(PreviewAfterMint { app });
     let progress = share_progress_forwarder(on_progress);
-    create_remote_share_inner(&state, &account_id, &folder_label, &relative_path, &file_id, ttl, choice, Some(progress)).await
+    create_remote_share_inner(
+        &state,
+        &account_id,
+        &folder_label,
+        &relative_path,
+        &file_id,
+        ttl,
+        choice,
+        Some(progress),
+        preview,
+    )
+    .await
 }
 
 // ─── Folder shares (browsable live links) ──────────────────────────────────

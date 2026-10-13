@@ -234,6 +234,28 @@ pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> st
     }
 }
 
+/// After a capture link made later (the card's "Create link", an edited
+/// screenshot's new link): send its chat preview when Settings has "Show a
+/// preview in chats" on, as a capture's first link does. In the background
+/// and best-effort; the link is already out.
+pub async fn spawn_preview_if_wanted(app: &tauri::AppHandle, state: &AppState, account_id: &str, source: &LinkSource, share_token: &str) {
+    let Ok(pool) = state.pool() else { return };
+    if !super::bar::load_options(pool).await.map_or(true, |o| o.chat_preview) {
+        return;
+    }
+    let path = match source {
+        LinkSource::External(path) => path.clone(),
+        LinkSource::Synced { label, rel_path } => match super::destination::own_local_path(pool, account_id, label).await {
+            Ok(Some(root)) => root.join(rel_path),
+            _ => return,
+        },
+    };
+    let Some(file_name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
+        return;
+    };
+    crate::shares::preview::spawn_upload(app.clone(), account_id.to_owned(), share_token.to_owned(), path, file_name, false);
+}
+
 /// How long to wait before making a capture's link again after failed
 /// attempt `attempt` (0 = the first), or `None` to give up. A request that
 /// did not get through (offline, a server that did not answer, a dropped

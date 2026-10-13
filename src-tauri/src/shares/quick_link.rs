@@ -146,6 +146,9 @@ async fn mint(state: &AppState, account_id: &str, folder_label: &str, relative_p
                 ShareTtl::Never,
                 ShareChoice::Public,
                 None,
+                // The tray's one-click copy sends no chat preview: there is no
+                // switch in front of it to say whether the user wants one.
+                None,
             )
             .await?
         }

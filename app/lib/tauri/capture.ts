@@ -80,6 +80,13 @@ export interface CaptureOptions {
   copyLink: boolean;
   /** Open that link in the browser too, as Zight does (default true). Only when a link was made. */
   openLink: boolean;
+  /**
+   * Upload a picture with each capture's link so chat apps show the
+   * screenshot, or the recording's first frame, instead of a generic card
+   * (default true). Also where the share dialog's preview switch starts for
+   * a capture.
+   */
+  chatPreview: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
   recordCountdownSecs: number;
 }
