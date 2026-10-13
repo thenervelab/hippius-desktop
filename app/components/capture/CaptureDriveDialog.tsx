@@ -21,6 +21,16 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 const TEXT = "text-sm text-grey-50 dark:text-grey-dark-600";
 const BUTTON = "h-[44px] min-w-[9rem] flex-1 rounded-[6px] text-sm font-medium";
 
+/**
+ * Whether Rust keeps captures in a folder inside the one the user chose (a
+ * folder too broad to upload whole, or a drive's root), so the dialog says
+ * so. Compares paths only; the choice itself is Rust's.
+ */
+export function madeInsideChoice(chosen: string, used: string): boolean {
+  const trim = (p: string) => p.replace(/[\\/]+$/, "");
+  return trim(used) !== trim(chosen);
+}
+
 /** The folder shown in the dialog: the one picked, else Rust's for the state. */
 export function shownLocation(
   status: CaptureDriveStatus | null,
@@ -34,9 +44,12 @@ export function shownLocation(
 }
 
 /**
- * Where screenshots and recordings are kept: a drive of their own, made of a
- * `Hippius Captures` folder (in Documents unless the user chooses another
- * place). Opens on its own when a capture is waiting for an answer (Rust's
+ * Where screenshots and recordings are kept: the folder the user chooses
+ * (`hippius-captures` in Documents unless they choose another place), backed
+ * up as a drive of its own, or filed in one of their drives when the folder
+ * is inside it. Rust resolves the picked folder (a folder too broad to upload
+ * whole gets a `hippius-captures` folder inside it) and this shows the
+ * result before the user confirms. Opens on its own when a capture is waiting for an answer (Rust's
  * `capture_drive_setup_needed`: the capture is safe on this computer
  * meanwhile, and stays there if the user says Not now), and from Settings,
  * the Captures page and the Capture menus to move it. Every decision (where,
@@ -47,12 +60,16 @@ export default function CaptureDriveDialog() {
   const open = dialog?.kind === "captureDrive";
   const [status, setStatus] = useState<CaptureDriveStatus | null>(null);
   const [picked, setPicked] = useState<CaptureDriveLocation | null>(null);
+  // The folder the user chose in the system picker, to say so when Rust
+  // keeps captures in a new folder inside it.
+  const [pickedFolder, setPickedFolder] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPicked(null);
+    setPickedFolder(null);
     setError(null);
     setStatus(null);
     getCaptureDriveStatus()
@@ -82,6 +99,7 @@ export default function CaptureDriveDialog() {
     if (typeof folder !== "string") return;
     try {
       setPicked(await getCaptureDriveLocation(folder));
+      setPickedFolder(folder);
     } catch (e) {
       // Rust's sentence: inside another drive, say.
       setError(errorMessage(e));
@@ -109,7 +127,9 @@ export default function CaptureDriveDialog() {
   };
 
   const title = ready ? "Move your captures folder" : "A folder for your captures";
-  const primary = ready ? "Use this folder" : status?.state === "pending" && !picked ? "Try again" : "Create folder";
+  const primary =
+    ready || picked ? "Use this folder" : status?.state === "pending" ? "Try again" : "Create folder";
+  const madeInside = Boolean(picked && pickedFolder && madeInsideChoice(pickedFolder, picked.path));
 
   return (
     <FramedDialog
@@ -124,13 +144,13 @@ export default function CaptureDriveDialog() {
       <div className="flex flex-col gap-5">
         {ready ? (
           <p className={TEXT}>
-            New screenshots and recordings go to a Hippius Captures folder in the place you choose. Captures you already
-            took stay where they are.
+            New screenshots and recordings are saved in the folder you choose. Captures you already took stay where
+            they are.
           </p>
         ) : (
           <p className={TEXT}>
-            Hippius keeps your screenshots and recordings in a folder of their own and backs it up as a drive, so each
-            capture gets a link you can share.
+            Hippius saves your screenshots and recordings in the folder below and backs them up, so each capture gets a
+            link you can share.
             {waiting > 0 && (
               <>
                 {" "}
@@ -173,6 +193,11 @@ export default function CaptureDriveDialog() {
               />
             )}
           </div>
+          {madeInside && (
+            <p data-testid="capture-drive-made-inside" className="text-xs text-grey-50 dark:text-grey-dark-600">
+              Hippius makes a new folder for your captures inside the one you chose.
+            </p>
+          )}
           <button
             type="button"
             onClick={() => void choose()}
