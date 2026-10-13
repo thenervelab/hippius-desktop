@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share links show a preview in chats.** Paste a screenshot's link into Discord, Slack or another chat app and it shows the screenshot itself; a recording's link shows its first frame with a play button and its length. It is on for screenshots and recordings and can be turned on for other pictures and videos in the share dialog. The preview picture and file name aren't encrypted, so links with a password never get one, and you can turn previews off for captures in Settings, Screenshots & Recording.
 - **Screenshots and screen recording are available to everyone on Mac, Windows and Linux.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
 - **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark.
 - **The free plan includes 25 screen recordings.** Every video in your captures drives counts, whatever it is called and whichever folder it is in, including ones made on the web or on another computer, and moving your captures folder does not start the count again. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.

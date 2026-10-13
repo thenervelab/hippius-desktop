@@ -1394,6 +1394,8 @@ async fn replace_link(
     match minted {
         Ok(link) => {
             let copied = super::commands::copy_link_to_clipboard(app, Some(&link.share_url));
+            // The old link's preview went with its revoke; the new one shows the edit.
+            super::deliver::spawn_preview_if_wanted(app, state, account_id, source, &link.share_token).await;
             (
                 LinkResult::Replaced { copied, old_revoked },
                 Some((link.share_url, link.share_token, copied)),
