@@ -1256,3 +1256,37 @@ fn a_throwaway_manager_writes_the_empty_remote_marker() {
 
     assert!(config_dir.path().join("confirm_empty_remote").is_file());
 }
+
+// =============================================================================
+// Error shapes the failure classifiers read
+// =============================================================================
+
+/// `sync/projection/events.rs` recognises a transport failure that reaches an
+/// `Other` message by `SyncError::Network`'s `Display` prefix.
+#[test]
+fn network_error_display_keeps_its_prefix() {
+    let text = hcfs_client::sync::SyncError::Network("error sending request: tcp connect error".into()).to_string();
+    assert!(text.starts_with("Network error:"), "{text}");
+}
+
+/// The payload mapping relies on hcfs typing these, not on their text: a
+/// transport failure is `Network` without a status, and a session-cap 429
+/// is `ServerError { 429 }` (the amber "will retry" copy).
+#[test]
+fn network_and_http_failures_classify_to_their_kinds() {
+    use hcfs_client::engine::events::FileFailureKind;
+    use hcfs_client::sync::SyncError;
+
+    let (kind, status) = FileFailureKind::classify(&SyncError::Network("connection refused".into()));
+    assert!(matches!(kind, FileFailureKind::Network { .. }), "{kind:?}");
+    assert_eq!(status, None);
+
+    let session_cap = SyncError::Http {
+        status: 429,
+        code: Some("session_limit".into()),
+        message: "Too many active upload sessions".into(),
+    };
+    let (kind, status) = FileFailureKind::classify(&session_cap);
+    assert_eq!(kind, FileFailureKind::ServerError { status: 429 });
+    assert_eq!(status, Some(429));
+}
