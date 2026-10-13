@@ -209,7 +209,13 @@ fn insufficient_balance_serialises_to_tagged_camel_case_json() {
 fn each_upstream_variant_translates_to_distinct_wire_shape() {
     let cases = [
         (FileFailureKind::ServerError { status: 500 }, "serverError", Some(("status", 500_i64))),
-        (FileFailureKind::Network, "network", None),
+        (
+            FileFailureKind::Network {
+                cause: "error sending request: operation timed out".into(),
+            },
+            "network",
+            None,
+        ),
     ];
     for (upstream, expected_kind, extra_field) in cases {
         let payload = FileFailureKindPayload::from(&upstream);
