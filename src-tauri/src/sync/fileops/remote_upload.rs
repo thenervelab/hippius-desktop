@@ -264,18 +264,6 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     })
 }
 
-/// Upload a ciphertext too large for one request, as a chunked session.
-///
-/// hcfs keeps a single-chunk ciphertext on `POST /upload` and requires a
-/// session above that; there is deliberately no fallback between them, so
-/// picking the wrong one is a hard failure rather than a slow success.
-/// The engine makes the same choice for a synced drive — this is that
-/// decision, for a drive with no local root.
-///
-/// Chunks go up one at a time. The engine uploads them concurrently under
-/// a global slot budget, which is worth having for a whole sync cycle;
-/// here a single user-initiated file does not justify carrying that
-/// machinery, and serial keeps in-flight bytes to one chunk.
 /// How many transport chunks a ciphertext of this size takes.
 ///
 /// A zero-length ciphertext still takes one: `div_ceil` gives 0, and a
@@ -299,6 +287,18 @@ fn upload_uses_session(chunk_count: u32) -> bool {
     chunk_count > 1
 }
 
+/// Upload a ciphertext too large for one request, as a chunked session.
+///
+/// hcfs keeps a single-chunk ciphertext on `POST /upload` and requires a
+/// session above that; there is deliberately no fallback between them, so
+/// picking the wrong one is a hard failure rather than a slow success.
+/// The engine makes the same choice for a synced drive — this is that
+/// decision, for a drive with no local root.
+///
+/// Chunks go up one at a time. The engine uploads them concurrently under
+/// a global slot budget, which is worth having for a whole sync cycle;
+/// here a single user-initiated file does not justify carrying that
+/// machinery, and serial keeps in-flight bytes to one chunk.
 async fn send_in_session<F>(
     client: &hcfs_client::client::HcfsClient,
     manifest: Manifest,
@@ -318,10 +318,13 @@ where
         chunk_size: UPLOAD_CHUNK_SIZE,
         ciphertext_size,
     };
-    let session = client
-        .create_upload_session(&request)
+    // Verified: the server resumes a live session for the same path, and one
+    // opened for an earlier encryption would finalize its own manifest over
+    // these chunks. hcfs replaces such a session once, or refuses.
+    let (session, _status) = client
+        .create_verified_upload_session(&request)
         .await
-        .map_err(|e| AppError::Hcfs(format!("Could not start the upload: {e}")))?;
+        .map_err(|e| upload_failure("start", &e))?;
 
     let mut file = std::io::BufReader::new(std::fs::File::open(ciphertext_path)?);
     let mut sent = 0u64;
@@ -333,7 +336,7 @@ where
         client
             .upload_chunk_with_retry(&session.session_id, index, bytes::Bytes::from(buf), CHUNK_UPLOAD_ATTEMPTS)
             .await
-            .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")))?;
+            .map_err(|e| upload_failure("chunk", &e))?;
 
         sent += remaining.min(UPLOAD_CHUNK_SIZE);
         if let Some(report) = progress {
@@ -344,15 +347,26 @@ where
     // Only finalize claims the upload succeeded; a session left unfinalized
     // is discarded server-side rather than becoming a partial file.
     //
-    // With the manifest, hcfs checks a resent finalize against the server's
-    // entry: a resend whose first copy committed gets 404 (or 409 while that
-    // copy is still committing), and is the success it was when the entry is
-    // this upload. The bare `finalize_session` would fail it.
+    // With the manifest, hcfs treats a resent finalize that gets 404 (or 409
+    // while an earlier copy is still committing) as success when the
+    // server's entry is this upload; the bare `finalize_session` would fail
+    // it. On that 409 it waits for the other copy for up to 30 s, with the
+    // row at 100%. A 409 conflict also deletes the session, so a retry does
+    // not resume it and conflict again.
     client
         .finalize_session_for_file(&session.session_id, &request.manifest)
         .await
-        .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}")))?;
+        .map_err(|e| upload_failure("finalize", &e))?;
     Ok(())
+}
+
+/// The error a person reads for a failed upload step: Rust's sentence for
+/// its failure kind, never hcfs's text (which carries transport causes and
+/// server slugs). The hcfs error goes to the debug log, tagged with `step`.
+fn upload_failure(step: &str, error: &hcfs_client::sync::SyncError) -> AppError {
+    tracing::debug!(step, error = %error, "remote upload step failed");
+    let (kind, _) = hcfs_client::engine::events::FileFailureKind::classify(error);
+    AppError::Hcfs(crate::sync::events::FileFailureKindPayload::from(&kind).display_reason())
 }
 
 /// Attempts per chunk before giving up, matching the engine's own retry
@@ -494,7 +508,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
             .upload(manifest, &ciphertext_path, progress)
             .await
             .map(|_| ())
-            .map_err(|e| AppError::Hcfs(format!("Upload failed: {e}"))),
+            .map_err(|e| upload_failure("upload", &e)),
     };
     cleanup(&ciphertext_path);
     match &outcome {
@@ -1041,16 +1055,33 @@ mod tests {
         assert!(transport_chunk_count(too_big).is_err());
     }
 
-    /// A server that takes the session and its chunk, answers the finalize
-    /// with 404 `session_not_found` (what a resent finalize gets once its
-    /// first copy committed), and lists `docs/big.bin` at the content and
-    /// revision sequence of [`committed_manifest`].
-    async fn serve_lost_finalize() -> String {
+    /// The mock server below: its address, and what it was sent.
+    struct LostFinalize {
+        base: String,
+        /// Finalize POSTs received.
+        finalizes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// Session status reads received (the session check before chunks).
+        statuses: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    /// A server that takes the session (its status matching
+    /// [`committed_manifest`]) and its chunk, answers the first finalize with
+    /// a proxy's HTML 502 (a copy that may have committed, which hcfs sends
+    /// again) and every later one with 404 `session_not_found`, and lists
+    /// `docs/big.bin` with salted hash `[listed_salt; 32]` at revision 0.
+    async fn serve_lost_finalize(listed_salt: u8) -> LostFinalize {
         use axum::http::StatusCode;
+        use axum::response::IntoResponse;
         use axum::routing::{get, post, put};
         use axum::{Json, Router};
         use serde_json::json;
+        use std::sync::atomic::Ordering;
 
+        let finalizes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&finalizes);
+        let statuses = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let read = std::sync::Arc::clone(&statuses);
         let router = Router::new()
             .route(
                 "/upload/session",
@@ -1059,17 +1090,40 @@ mod tests {
                     (StatusCode::CREATED, Json(created))
                 }),
             )
+            .route(
+                "/upload/session/s1/status",
+                get(move || {
+                    read.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        Json(json!({
+                        "session_id": "s1",
+                        "state": "uploading",
+                        "total_chunks": 1,
+                        "chunks_received": [],
+                        "expires_at": 9_999_999_999_i64,
+                        "ciphertext_hash": "aa",
+                        }))
+                    }
+                }),
+            )
             .route("/upload/session/s1/chunk/{index}", put(|| async { Json(json!({ "chunk_index": 0 })) }))
             .route(
                 "/upload/session/s1/finalize",
-                post(|| async {
-                    let gone = json!({ "error": "session_not_found", "message": "Upload session not found" });
-                    (StatusCode::NOT_FOUND, Json(gone))
+                post(move || {
+                    let first = seen.fetch_add(1, Ordering::SeqCst) == 0;
+                    async move {
+                        if first {
+                            let page = [(axum::http::header::CONTENT_TYPE, "text/html")];
+                            return (StatusCode::BAD_GATEWAY, page, "<html>502</html>").into_response();
+                        }
+                        let gone = json!({ "error": "session_not_found", "message": "Upload session not found" });
+                        (StatusCode::NOT_FOUND, Json(gone)).into_response()
+                    }
                 }),
             )
             .route(
                 "/browse/{ss58}/{folder_hash}",
-                get(|| async {
+                get(move || async move {
                     Json(json!({ "Success": {
                         "ss58_address": "5Owner",
                         "folder_hash": "0123456789abcdef",
@@ -1077,9 +1131,9 @@ mod tests {
                         "folders": [],
                         "files": [{
                             "path_hash": vec![7u8; 32],
-                            "salted_hash": vec![3u8; 32],
+                            "salted_hash": vec![listed_salt; 32],
                             "size_bytes": 5,
-                            "revision_seq": 4,
+                            "revision_seq": 0,
                             "revision_id": vec![5u8; 32],
                             "arion_hash": "blob-1",
                             "updated_at": 11,
@@ -1093,13 +1147,19 @@ mod tests {
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
-        tokio::spawn(async move {
+        let server = tokio::spawn(async move {
             axum::serve(listener, router).await.expect("serve");
         });
-        format!("http://{addr}")
+        LostFinalize {
+            base: format!("http://{addr}"),
+            finalizes,
+            statuses,
+            server,
+        }
     }
 
-    /// The manifest of the upload the mock server lists as committed.
+    /// The manifest `seal_and_describe` sends for a first upload of
+    /// `docs/big.bin` (revision 0, no base revision).
     fn committed_manifest() -> Manifest {
         Manifest {
             ss58_address: "5Owner".to_string(),
@@ -1108,27 +1168,53 @@ mod tests {
             size_bytes: 5,
             path_hash: [7u8; 32],
             salted_hash: [3u8; 32],
-            revision_seq: 4,
+            revision_seq: 0,
             relative_path: Some("docs/big.bin".to_string()),
             ..Default::default()
         }
     }
 
-    /// A finalize whose first copy committed is the success it was: the
-    /// session's manifest goes with it, so hcfs checks the server's entry
-    /// instead of failing the upload on the 404.
-    #[tokio::test]
-    async fn a_finalize_resent_after_its_own_commit_succeeds() {
-        let base = serve_lost_finalize().await;
+    /// Runs `send_in_session` for [`committed_manifest`] against `server`.
+    async fn send_one_chunk(server: &LostFinalize) -> Result<()> {
         let identity = DriveIdentity::own("5Owner", "0123456789abcdef");
-        let config = crate::sync::drive::config::build_hcfs_config(&base, "bearer", &identity);
+        let config = crate::sync::drive::config::build_hcfs_config(&server.base, "bearer", &identity);
         let client = hcfs_client::client::HcfsClient::new(config).expect("client");
         let dir = tempfile::tempdir().expect("temp dir");
         let ciphertext = dir.path().join("ciphertext");
         std::fs::write(&ciphertext, b"bytes").expect("write ciphertext");
+        send_in_session(&client, committed_manifest(), &ciphertext, 5, 1, None::<&fn(u64, u64)>).await
+    }
 
-        send_in_session(&client, committed_manifest(), &ciphertext, 5, 1, None::<&fn(u64, u64)>)
-            .await
-            .expect("the committed first copy is this upload");
+    /// A finalize resent after a proxy dropped the first copy, which had
+    /// committed, gets 404. The session's manifest goes with it, so hcfs
+    /// checks the server's entry, finds this upload, and the upload succeeds.
+    #[tokio::test]
+    async fn a_finalize_resent_after_its_own_commit_succeeds() {
+        let server = serve_lost_finalize(3).await;
+
+        send_one_chunk(&server).await.expect("the committed first copy is this upload");
+
+        assert_eq!(server.finalizes.load(std::sync::atomic::Ordering::SeqCst), 2, "the 502 copy was resent");
+        assert_eq!(
+            server.statuses.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the session was checked against this upload before any chunk"
+        );
+        server.server.abort();
+    }
+
+    /// The same 404 with another upload's content listed is still a failure,
+    /// and the person reads Rust's sentence, not hcfs's text.
+    #[tokio::test]
+    async fn a_finalize_404_for_another_entry_still_fails() {
+        let server = serve_lost_finalize(9).await;
+
+        let err = send_one_chunk(&server).await.expect_err("the listed entry is not this upload");
+
+        let AppError::Hcfs(message) = &err else {
+            panic!("expected AppError::Hcfs, got {err:?}");
+        };
+        assert_eq!(message, "Server error (404). Please try again.");
+        server.server.abort();
     }
 }
