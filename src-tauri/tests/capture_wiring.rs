@@ -520,6 +520,13 @@ fn the_captures_drive_is_asked_for_made_and_fed_through_the_usual_paths() {
     let add = fn_body(&setup, "async fn add_drive(");
     assert!(add.contains("add_local_sync_folder("), "the drive is added like Sync a Folder adds one");
     assert!(add.contains("check_location("), "never inside or around another drive");
+    // The web console and the extension find the captures drive by its
+    // label, so a new one is labelled like the default whatever its folder
+    // is called.
+    assert!(
+        add.contains("let base = CAPTURES_DIR_NAME.to_string();"),
+        "a new captures drive's label never follows its folder's name"
+    );
 }
 
 /// The camera is the one capture window that must be FILMED: a protected

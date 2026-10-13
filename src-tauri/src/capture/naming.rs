@@ -9,10 +9,19 @@ use super::session::CaptureKind;
 /// name, and stay there.
 pub const CAPTURES_FOLDER: &str = "Captures";
 
-/// The folder on disk the captures drive is made of, and so the drive's
-/// name wherever drives are listed: in Documents unless the user chooses
-/// another place, where it is made inside the folder they picked.
+/// The captures drive's LABEL: what a new captures drive is called on the
+/// server whatever its folder here is named. The web console and the browser
+/// extension find the captures drive by this label (`Hippius Captures`, or
+/// `Hippius Captures-N`), and a drive's key is derived from its label, so it
+/// never follows the folder's name. Folders made before
+/// [`CAPTURES_FOLDER_NAME`] carry this name on disk too.
 pub const CAPTURES_DIR_NAME: &str = "Hippius Captures";
+
+/// The folder on disk Hippius suggests for captures (in Documents), and the
+/// one it makes inside a folder too broad to upload whole (the home folder,
+/// Documents, a drive that is not a captures drive). A folder the user picks
+/// is used as it is, whatever its name.
+pub const CAPTURES_FOLDER_NAME: &str = "hippius-captures";
 
 /// What a card calls the captures drive before it exists.
 pub const DEFAULT_DRIVE_NAME: &str = CAPTURES_DIR_NAME;

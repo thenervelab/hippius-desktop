@@ -104,17 +104,21 @@ export function trayShortcutLabel(id: TrayMenuShortcut, isMac: boolean): string 
 }
 
 /**
- * "Open captures folder": the captures drive's folder on this computer when
- * it is synced here (revealed in Finder or Explorer), else the Captures page
+ * "Open captures folder": the captures folder on this computer when its
+ * drive is synced here (revealed in Finder or Explorer: the drive by its
+ * label, or by its path when captures go to a folder inside a drive), else
+ * the Captures page
  * in the main window, which shows a drive that is only on the server and
  * offers to set one up when there is none yet. Rust says which
  * (`capture_drive_status`).
  */
 export function capturesFolderTarget(
   status: CaptureDriveStatus | null,
-): { kind: "reveal"; label: string } | { kind: "page" } {
+): { kind: "reveal"; label: string; path?: string } | { kind: "page" } {
   if (status?.state === "ready" && status.location && !status.remote) {
-    return { kind: "reveal", label: status.label };
+    return status.folder
+      ? { kind: "reveal", label: status.label, path: status.location.path }
+      : { kind: "reveal", label: status.label };
   }
   return { kind: "page" };
 }

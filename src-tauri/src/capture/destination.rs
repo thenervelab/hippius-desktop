@@ -1,6 +1,7 @@
 //! Which drive and folder captures are filed in, remembered per account.
 //!
-//! Captures have a drive of their own (`capture::setup`): the user is asked
+//! Captures have a drive of their own (`capture::setup`), or a folder inside
+//! one of the user's own drives when they pick one there: the user is asked
 //! where on the first capture, and can move it in Settings. Stored in
 //! `user_preferences`, which is a single namespace across every account on
 //! the device, so the key carries the account: a drive label is only
@@ -34,6 +35,7 @@ pub struct CaptureDestination {
     pub folder_hash: Option<String>,
     /// The folder inside the drive, as a path from the drive's root; empty
     /// for the root itself, which is where the captures drive keeps them.
+    /// Set when the user picked a folder inside one of their own drives.
     #[serde(default)]
     pub folder: String,
 }
@@ -127,6 +129,17 @@ pub fn normalize_folder(raw: &str) -> Result<String> {
     Ok(parts.join("/"))
 }
 
+/// The folder on this computer for `folder` (as stored) in a drive synced at
+/// `root`: the root itself for an empty folder (no trailing separator, so a
+/// path shown to the user reads as before), else one component per name.
+#[must_use]
+pub fn local_dir(root: &std::path::Path, folder: &str) -> std::path::PathBuf {
+    folder
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .fold(root.to_path_buf(), |dir, part| dir.join(part))
+}
+
 const KEY_PREFIX: &str = "capture_destination_v2:";
 
 fn key_for(account_id: &str) -> String {
@@ -152,7 +165,11 @@ pub async fn save(pool: &SqlitePool, account_id: &str, destination: &CaptureDest
     let value = serde_json::to_string(&destination).map_err(|e| AppError::Other(format!("Could not store the capture drive: {e}")))?;
     crate::utils::preferences::save_user_preference_internal(pool, &key_for(account_id), &value).await?;
     if destination.owner_ss58.is_none() {
-        remember_label(pool, account_id, &destination.label).await?;
+        if destination.folder.is_empty() {
+            remember_label(pool, account_id, &destination.label).await?;
+        } else {
+            remember_folder(pool, account_id, &destination.label, &destination.folder).await?;
+        }
     }
     Ok(())
 }
@@ -167,10 +184,14 @@ fn labels_key_for(account_id: &str) -> String {
 /// current one included. Moving the captures folder makes a new drive
 /// ("Hippius Captures-2"), and the recordings in the old one still count
 /// towards the free plan's allowance (`recording_allowance`).
+///
+/// Only drives whose captures were at the ROOT (a captures drive): a folder
+/// the user picked inside another drive is in [`own_capture_folders`], so
+/// the rest of that drive never counts as captures.
 pub async fn own_capture_labels(pool: &SqlitePool, account_id: &str) -> Result<Vec<String>> {
     let raw = crate::utils::preferences::get_user_preference_internal(pool, &labels_key_for(account_id)).await?;
     let mut labels: Vec<String> = raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
-    if let Some(current) = load(pool, account_id).await?.filter(|d| d.owner_ss58.is_none())
+    if let Some(current) = load(pool, account_id).await?.filter(|d| d.owner_ss58.is_none() && d.folder.is_empty())
         && !labels.contains(&current.label)
     {
         labels.push(current.label);
@@ -189,9 +210,57 @@ async fn remember_label(pool: &SqlitePool, account_id: &str, label: &str) -> Res
     crate::utils::preferences::save_user_preference_internal(pool, &labels_key_for(account_id), &value).await
 }
 
+const FOLDERS_PREFIX: &str = "capture_drive_folders_v1:";
+
+fn folders_key_for(account_id: &str) -> String {
+    format!("{FOLDERS_PREFIX}{}", crate::auth::account_key::account_key(account_id))
+}
+
+/// A folder inside one of the account's own drives that captures were kept
+/// in (the user picked a folder in their main drive, say).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CaptureFolder {
+    pub label: String,
+    /// As stored by [`normalize_folder`]; never empty.
+    pub folder: String,
+}
+
+/// Every folder inside an own drive this account has kept captures in on
+/// this machine, the current one included. Only the files under these
+/// folders count towards the free plan's allowance, never the whole drive.
+pub async fn own_capture_folders(pool: &SqlitePool, account_id: &str) -> Result<Vec<CaptureFolder>> {
+    let raw = crate::utils::preferences::get_user_preference_internal(pool, &folders_key_for(account_id)).await?;
+    let mut folders: Vec<CaptureFolder> = raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    if let Some(current) = load(pool, account_id).await?.filter(|d| d.owner_ss58.is_none() && !d.folder.is_empty()) {
+        let current = CaptureFolder {
+            label: current.label,
+            folder: current.folder,
+        };
+        if !folders.contains(&current) {
+            folders.push(current);
+        }
+    }
+    Ok(folders)
+}
+
+async fn remember_folder(pool: &SqlitePool, account_id: &str, label: &str, folder: &str) -> Result<()> {
+    let raw = crate::utils::preferences::get_user_preference_internal(pool, &folders_key_for(account_id)).await?;
+    let mut folders: Vec<CaptureFolder> = raw.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    if folders.iter().any(|f| f.label == label && f.folder == folder) {
+        return Ok(());
+    }
+    folders.push(CaptureFolder {
+        label: label.to_string(),
+        folder: folder.to_string(),
+    });
+    let value = serde_json::to_string(&folders).map_err(|e| AppError::Other(format!("Could not store the capture folders: {e}")))?;
+    crate::utils::preferences::save_user_preference_internal(pool, &folders_key_for(account_id), &value).await
+}
+
 /// One of this account's drives synced on this machine, as a new captures
-/// folder is checked against: a captures drive is never made inside another
-/// drive, nor around one.
+/// folder is checked against: a new captures drive is never made inside
+/// another drive, nor around one (a folder inside an own drive files captures
+/// in that drive instead).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriveHere {
     pub label: String,
@@ -281,6 +350,14 @@ mod tests {
         // Blank is the drive's root, where the captures drive keeps them.
         assert_eq!(normalize_folder("").unwrap(), "");
         assert_eq!(normalize_folder(" / ").unwrap(), "");
+    }
+
+    #[test]
+    fn a_folder_in_a_drive_is_found_on_this_computer() {
+        let root = std::path::Path::new("/Users/a/Main");
+        assert_eq!(local_dir(root, ""), root);
+        assert_eq!(local_dir(root, "").to_string_lossy(), "/Users/a/Main", "no trailing separator");
+        assert_eq!(local_dir(root, "Shots/hippius-captures"), root.join("Shots").join("hippius-captures"));
     }
 
     /// The captures drive files them at its root: the path in the drive is
@@ -420,6 +497,31 @@ mod tests {
             vec!["Hippius Captures".to_string(), "Hippius Captures-2".to_string()]
         );
         assert!(own_capture_labels(&pool, "5Bob").await.unwrap().is_empty());
+    }
+
+    /// A folder picked inside another drive is remembered as that folder,
+    /// never as the whole drive: the rest of the drive is not captures (the
+    /// share dialog's capture default and the free plan's count read this).
+    #[tokio::test]
+    async fn a_folder_inside_a_drive_is_remembered_as_the_folder_only() {
+        let pool = pool().await;
+        let mut inside = own("Main");
+        inside.folder = "Shots/hippius-captures".into();
+        save(&pool, "5Alice", &inside).await.unwrap();
+        assert!(own_capture_labels(&pool, "5Alice").await.unwrap().is_empty(), "never the whole drive");
+        let expected = vec![CaptureFolder {
+            label: "Main".into(),
+            folder: "Shots/hippius-captures".into(),
+        }];
+        assert_eq!(own_capture_folders(&pool, "5Alice").await.unwrap(), expected);
+        // Moved on to a captures drive: the old folder still counts, the new
+        // drive counts whole.
+        save(&pool, "5Alice", &own("Hippius Captures")).await.unwrap();
+        save(&pool, "5Alice", &inside).await.unwrap();
+        save(&pool, "5Alice", &own("Hippius Captures")).await.unwrap();
+        assert_eq!(own_capture_folders(&pool, "5Alice").await.unwrap(), expected, "remembered once");
+        assert_eq!(own_capture_labels(&pool, "5Alice").await.unwrap(), vec!["Hippius Captures".to_string()]);
+        assert!(own_capture_folders(&pool, "5Bob").await.unwrap().is_empty(), "per account");
     }
 
     #[tokio::test]

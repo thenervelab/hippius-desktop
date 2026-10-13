@@ -102,7 +102,11 @@ export default function CaptureSettings() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {drive?.state === "ready" && drive.location && !drive.remote && (
-            <Button variant="defaultStable" size="sm" onClick={() => void revealCaptureFolder(drive.label)}>
+            <Button
+              variant="defaultStable"
+              size="sm"
+              onClick={() => void revealCaptureFolder(drive.label, drive.folder ? drive.location?.path : undefined)}
+            >
               {isMacPlatform() ? "Show in Finder" : "Show in folder"}
             </Button>
           )}
@@ -157,10 +161,18 @@ export default function CaptureSettings() {
   );
 }
 
-/** Opens the captures drive's folder in the file manager (Rust reveals it). */
-async function revealCaptureFolder(label: string): Promise<void> {
+/**
+ * Opens the captures folder in the file manager (Rust reveals it): the drive
+ * by its label, or the folder by its path when captures go to a folder
+ * inside a drive.
+ */
+async function revealCaptureFolder(label: string, path?: string): Promise<void> {
   try {
-    await invoke("reveal_drive_in_finder", { label });
+    if (path) {
+      await invoke("reveal_path_in_file_manager", { path });
+    } else {
+      await invoke("reveal_drive_in_finder", { label });
+    }
   } catch (e) {
     toast.error(errorMessage(e));
   }
@@ -168,8 +180,13 @@ async function revealCaptureFolder(label: string): Promise<void> {
 
 /** The Capture folder row's sentence for where the captures drive stands. */
 export function captureDriveLine(drive: CaptureDriveStatus | null): string {
-  if (!drive) return "Screenshots and recordings are kept in a Hippius Captures folder of their own.";
+  if (!drive) return "Screenshots and recordings are kept in a folder of their own.";
   if (drive.state === "ready") {
+    if (drive.folder) {
+      return drive.location
+        ? `Screenshots and recordings are saved in ${drive.location.place}, in your ${drive.name} drive.`
+        : `Screenshots and recordings are saved in ${drive.folder}, in your ${drive.name} drive.`;
+    }
     return drive.location
       ? `Screenshots and recordings are saved in ${drive.location.place} and backed up as a drive.`
       : `Screenshots and recordings are saved in your ${drive.name} drive.`;
