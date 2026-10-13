@@ -92,6 +92,30 @@ export const memberFolderSharesEnabledAtom = atom((get) => {
 });
 
 /**
+ * Whether the server has share link Insights (`share_insights`). `null`
+ * capabilities collapse to `false`: nothing about Insights shows until the
+ * server says it has them.
+ */
+export const shareInsightsEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_insights === true);
+
+/** Whether the server has comments on links (`share_comments`). */
+export const shareCommentsEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_comments === true);
+
+/** Whether the server sends emails about links (`share_notifications`). */
+export const shareNotificationsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_notifications === true,
+);
+
+/**
+ * The link whose Insights sheet is open, or `null`. Set by Shared Links, the
+ * Captures page and the capture card; read by `ShareInsightsSheet`, which is
+ * mounted once in the pages layout.
+ */
+export type InsightsSheetTarget = { shareToken: string; fileName: string };
+
+export const insightsSheetAtom = atom<InsightsSheetTarget | null>(null);
+
+/**
  * What `ShareFileModal` is currently sharing. `null` means closed.
  *
  * Storing the file (rather than just `(label, name)`) lets the modal render

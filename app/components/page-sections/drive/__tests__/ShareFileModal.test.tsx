@@ -32,9 +32,16 @@ const invokeMock = vi.fn();
 // share mint stays the first call `invokeMock` sees in every test.
 const previewDefaultMock = vi.fn();
 const setPreviewMock = vi.fn();
+// Likewise the Insights / Comments / Reactions switches: none offered unless
+// a test says so, which is what an older server answers.
+const NO_SWITCHES = { insights: false, comments: false, reactions: false };
+const linkDefaultMock = vi.fn().mockResolvedValue({ offered: NO_SWITCHES, on: NO_SWITCHES });
+const setLinkMock = vi.fn().mockResolvedValue(undefined);
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   hcfs_share_preview_default: previewDefaultMock,
   hcfs_set_share_preview: setPreviewMock,
+  share_link_settings_default: linkDefaultMock,
+  share_set_link_settings: setLinkMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
@@ -1096,6 +1103,115 @@ describe("ShareFileModal chat previews", () => {
     expect(invokeMock).toHaveBeenCalledWith(
       "hcfs_finder_confirm_share",
       expect.objectContaining({ requestId: "req-1", chatPreview: true }),
+    );
+  });
+});
+
+describe("ShareFileModal link switches", () => {
+  const RECORDING = {
+    name: "Recording 2026-09-22 at 09.00.05.mp4",
+    actualFileName: "Recording 2026-09-22 at 09.00.05.mp4",
+    label: "Hippius Captures",
+  };
+  const LINK = {
+    shareToken: "tok-rec",
+    shareUrl: "https://console.hippius.com/share/tok-rec#k=KEY",
+    expiresAt: null,
+  };
+  const ALL_ON = { insights: true, comments: true, reactions: true };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    previewDefaultMock.mockReset().mockResolvedValue({ offered: false, on: false });
+    linkDefaultMock.mockReset();
+    setLinkMock.mockReset().mockResolvedValue(undefined);
+    installClipboard();
+  });
+
+  it("starts where Rust says for a capture and sends the choice with the link", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+
+    const insights = await screen.findByRole("switch", { name: "Insights" });
+    expect(insights).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("switch", { name: "Reactions" })).toHaveAttribute("aria-checked", "true");
+    expect(linkDefaultMock).toHaveBeenCalledWith("share_link_settings_default", {
+      folderLabel: "Hippius Captures",
+      fileName: "Recording 2026-09-22 at 09.00.05.mp4",
+      isFolder: false,
+    });
+
+    // Turned off here, so sent off.
+    fireEvent.click(screen.getByRole("switch", { name: "Comments" }));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.objectContaining({ linkSettings: { insights: true, comments: false, reactions: true } }),
+    );
+  });
+
+  it("shows only the switches the server takes", async () => {
+    const insightsOnly = { insights: true, comments: false, reactions: false };
+    linkDefaultMock.mockResolvedValue({ offered: insightsOnly, on: NO_SWITCHES });
+    render(withProvider(<ShareFileModal />, { name: "notes.pdf", actualFileName: "notes.pdf", label: "Drive" }));
+
+    expect(await screen.findByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByRole("switch", { name: "Comments" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Reactions" })).toBeNull();
+  });
+
+  it("shows none and sends none on a server without them", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: NO_SWITCHES, on: NO_SWITCHES });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+
+    await waitFor(() => expect(linkDefaultMock).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: "Insights" })).toBeNull();
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith("hcfs_create_share", expect.objectContaining({ linkSettings: null }));
+    expect(screen.queryByRole("switch", { name: "Insights" })).toBeNull();
+  });
+
+  it("changes a switch on the finished link, and puts it back if the server refuses", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+
+    fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
+    await waitFor(() =>
+      expect(setLinkMock).toHaveBeenCalledWith("share_set_link_settings", {
+        shareToken: "tok-rec",
+        settings: { insights: true, comments: true, reactions: false },
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Reactions" })).toHaveAttribute("aria-checked", "false"),
+    );
+
+    setLinkMock.mockRejectedValueOnce({ kind: "Api", message: "The server said no." });
+    fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The server said no."));
+    expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("sends the Finder chooser's switches with the confirm", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withFinderState(<ShareFileModal />, { ...CHOOSING, name: "Recording 2026-09-22 at 09.00.05.mp4" }));
+
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_finder_confirm_share",
+      expect.objectContaining({ requestId: "req-1", linkSettings: ALL_ON }),
     );
   });
 });

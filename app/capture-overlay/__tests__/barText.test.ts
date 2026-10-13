@@ -31,6 +31,7 @@ const OPTIONS: CaptureOptions = {
   copyLink: true,
   openLink: true,
   chatPreview: true,
+  linkInsights: true,
   recordCountdownSecs: 3,
 };
 

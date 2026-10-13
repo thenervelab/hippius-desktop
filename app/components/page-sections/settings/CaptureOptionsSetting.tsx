@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
+import { BarChart3, ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
+import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -10,10 +11,11 @@ import { getCaptureOptions, setCaptureOptions, type CaptureOptions } from "@/app
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { SettingsToggle } from "./SettingsToggle";
 import { SettingIcon } from "./SettingIcon";
+import { shareInsightsEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 
 type Choices = Pick<
   CaptureOptions,
-  "copyLink" | "openLink" | "chatPreview" | "recordCountdownSecs" | "systemAudio"
+  "copyLink" | "openLink" | "chatPreview" | "linkInsights" | "recordCountdownSecs" | "systemAudio"
 >;
 
 const COUNTDOWN_OPTIONS = RECORD_COUNTDOWN_OPTIONS.map((t) => ({ value: String(t.secs), label: t.label }));
@@ -50,6 +52,9 @@ export default function CaptureOptionsSetting({
   systemAudio: boolean;
 }) {
   const [options, setOptions] = useState<Choices | null>(null);
+  // Shown once the server has link Insights; until then the choice would
+  // change nothing a user could see.
+  const insightsAvailable = useAtomValue(shareInsightsEnabledAtom);
 
   useEffect(() => {
     let alive = true;
@@ -123,6 +128,22 @@ export default function CaptureOptionsSetting({
           onCheckedChange={(chatPreview) => void change({ chatPreview })}
         />
       </OptionRow>
+
+      {insightsAvailable && (
+        <OptionRow
+          rowClassName={rowClassName}
+          layout={layout}
+          icon={<BarChart3 className="size-[18px]" strokeWidth={2} />}
+          title="Track views, comments and reactions"
+          description="Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. You can turn this off for any link."
+        >
+          <SettingsToggle
+            ariaLabel="Track views, comments and reactions"
+            checked={options.linkInsights}
+            onCheckedChange={(linkInsights) => void change({ linkInsights })}
+          />
+        </OptionRow>
+      )}
 
       {recording && recordCountdown && (
         <OptionRow

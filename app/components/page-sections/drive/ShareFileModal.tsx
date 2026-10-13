@@ -63,6 +63,13 @@ import {
   setSharePreview,
 } from "@/app/lib/tauri/shares";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
+import {
+  getLinkSettingsDefault,
+  setLinkSettings,
+  type LinkSettings,
+  type OfferedSwitches,
+} from "@/app/lib/tauri/shareInsights";
+import LinkEngagementSwitches from "./LinkEngagementSwitches";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -94,8 +101,19 @@ type ModalState =
   // ever be shown.
   // `chatPreview`: a chat preview was asked for with the link, so the done
   // view offers to turn it off again.
-  | { kind: "done"; link: ShareLink; chatPreview: boolean }
+  // `engagement`: the Insights / Comments / Reactions switches the link was
+  // made with, and which this server takes, so the done view can change them.
+  | { kind: "done"; link: ShareLink; chatPreview: boolean; engagement: Engagement | null }
   | { kind: "error"; message: string };
+
+/** A link's switches as chosen, and which of them this server takes. */
+type Engagement = { offered: OfferedSwitches; value: LinkSettings };
+
+/** The switches to carry into the done view, or `null` when none were shown. */
+function engagementOf(choice: ShareChoice, offered: OfferedSwitches | null): Engagement | null {
+  if (!offered || !choice.linkSettings) return null;
+  return { offered, value: choice.linkSettings };
+}
 
 export default function ShareFileModal() {
   const [target, setTarget] = useAtom(shareModalFileAtom);
@@ -122,6 +140,8 @@ export default function ShareFileModal() {
   // Remembered so "Try again" after a failure re-mints with the same choice
   // instead of silently falling back to a default the user never picked.
   const lastChoiceRef = useRef<ShareChoice | null>(null);
+  // Which switches that choice was made from, for the done view.
+  const lastOfferedRef = useRef<OfferedSwitches | null>(null);
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
@@ -196,9 +216,10 @@ export default function ShareFileModal() {
   }, [finderShare, setTarget, setFinderShare]);
 
   const startShare = useCallback(
-    async (choice: ShareChoice) => {
+    async (choice: ShareChoice, offered: OfferedSwitches | null) => {
     if (!target || !folderLabel) return;
     lastChoiceRef.current = choice;
+    lastOfferedRef.current = offered;
     setState({ kind: "running" });
     autoCopiedRef.current = false;
     try {
@@ -229,7 +250,12 @@ export default function ShareFileModal() {
               onProgress,
             )
           : await createShare(folderLabel, target.relativePath, choice, onProgress);
-      setState({ kind: "done", link, chatPreview: choice.chatPreview === true });
+      setState({
+        kind: "done",
+        link,
+        chatPreview: choice.chatPreview === true,
+        engagement: target.file.isFolder ? null : engagementOf(choice, offered),
+      });
     } catch (err) {
       if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
         setTarget(null);
@@ -246,7 +272,7 @@ export default function ShareFileModal() {
   // via `confirmFinderShare` (backend holds the resolved path — we send only the
   // id + choice), streaming progress into `running`, then land on `done`/`error`.
   const confirmFinder = useCallback(
-    async (choice: ShareChoice) => {
+    async (choice: ShareChoice, offered: OfferedSwitches | null) => {
       if (finderShare?.kind !== "choosing") return;
       const { id, name } = finderShare;
       lastChoiceRef.current = choice;
@@ -264,7 +290,12 @@ export default function ShareFileModal() {
         });
         if (superseded()) return;
         runningFinderRef.current = null;
-        setState({ kind: "done", link: created, chatPreview: choice.chatPreview === true });
+        setState({
+          kind: "done",
+          link: created,
+          chatPreview: choice.chatPreview === true,
+          engagement: engagementOf(choice, offered),
+        });
       } catch (err) {
         if (superseded()) return;
         runningFinderRef.current = null;
@@ -282,9 +313,9 @@ export default function ShareFileModal() {
   // One confirm handler for both entry points — the chooser does not care which
   // opened it, and routing here keeps the two flows from drifting apart.
   const onConfirmChoice = useCallback(
-    (choice: ShareChoice) => {
-      if (finderShare?.kind === "choosing") void confirmFinder(choice);
-      else void startShare(choice);
+    (choice: ShareChoice, offered: OfferedSwitches | null) => {
+      if (finderShare?.kind === "choosing") void confirmFinder(choice, offered);
+      else void startShare(choice, offered);
     },
     [finderShare, confirmFinder, startShare],
   );
@@ -294,7 +325,7 @@ export default function ShareFileModal() {
   // the in-app flow can retry.
   const onRetry = useCallback(() => {
     const choice = lastChoiceRef.current;
-    if (file && choice) void startShare(choice);
+    if (file && choice) void startShare(choice, lastOfferedRef.current);
   }, [file, startShare]);
 
   // Identity of the share session currently open — `null` while closed.
@@ -334,6 +365,7 @@ export default function ShareFileModal() {
     setState({ kind: "choosing" });
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;
+    lastOfferedRef.current = null;
   }, [sessionKey]);
 
   // Auto-copy once we reach `done`. The URL is still rendered in a
@@ -426,6 +458,7 @@ export default function ShareFileModal() {
           link={state.link}
           password={state.link.password}
           chatPreview={state.chatPreview}
+          engagement={state.engagement}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -558,7 +591,7 @@ function ChoosingBody({
   refusal: string | null;
   /** Seconds since last modification, when known. */
   modifiedSecsAgo: number | null;
-  onConfirm: (choice: ShareChoice) => void;
+  onConfirm: (choice: ShareChoice, offered: OfferedSwitches | null) => void;
   onCancel: () => void;
 }) {
   const [visibility, setVisibility] = useState<ShareVisibility>("public");
@@ -589,6 +622,30 @@ function ChoosingBody({
   }, [previewLabel, previewName, previewIsFolder]);
   // A password link never gets a preview: the switch is hidden and off.
   const previewShown = previewOffered && visibility === "public";
+  // Insights, Comments and Reactions: which this server takes and where they
+  // start (on for a capture when Settings says so), both from Rust. Hidden
+  // until it answers, so a quick confirm sends nothing.
+  const [offered, setOffered] = useState<OfferedSwitches | null>(null);
+  const [engagement, setEngagement] = useState<LinkSettings>({
+    insights: false,
+    comments: false,
+    reactions: false,
+  });
+  useEffect(() => {
+    let alive = true;
+    getLinkSettingsDefault(previewLabel, previewName, previewIsFolder)
+      .then((d) => {
+        if (!alive || !d) return;
+        setOffered(d.offered);
+        setEngagement(d.on);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [previewLabel, previewName, previewIsFolder]);
+  const switchesShown =
+    offered !== null && (offered.insights || offered.comments || offered.reactions);
 
   const onVisibilityChange = (next: ShareVisibility) => {
     setVisibility(next);
@@ -672,6 +729,10 @@ function ChoosingBody({
           <ChatPreviewSwitch checked={chatPreview} onChange={setChatPreview} />
         )}
 
+        {switchesShown && (
+          <LinkEngagementSwitches offered={offered} value={engagement} onChange={setEngagement} />
+        )}
+
         <p
           className="mt-3 break-all text-sm text-grey-20 dark:text-grey-dark-800"
           title={filename}
@@ -730,7 +791,8 @@ function ChoosingBody({
               // unambiguous at the boundary.
               password: visibility === "private" ? password : undefined,
               chatPreview: previewShown && chatPreview,
-            })
+              linkSettings: switchesShown ? engagement : undefined,
+            }, switchesShown ? offered : null)
           }
           className={cn(
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
@@ -996,6 +1058,7 @@ function DoneBody({
   link,
   password,
   chatPreview,
+  engagement,
   onCopy,
   onOpen,
   onClose,
@@ -1005,6 +1068,8 @@ function DoneBody({
   password?: string;
   /** A chat preview was asked for with this link: offer to turn it off. */
   chatPreview: boolean;
+  /** The link's switches, when the dialog showed them: they can be changed here. */
+  engagement: Engagement | null;
   onCopy: () => void | Promise<void>;
   onOpen: () => void | Promise<void>;
   onClose: () => void;
@@ -1014,6 +1079,23 @@ function DoneBody({
   const [copiedPw, setCopiedPw] = useState(false);
   const [previewOn, setPreviewOn] = useState(chatPreview);
   const [previewSaving, setPreviewSaving] = useState(false);
+  const [switches, setSwitches] = useState<LinkSettings | null>(engagement?.value ?? null);
+  const [switchesSaving, setSwitchesSaving] = useState(false);
+
+  // Shown as changed at once, put back if the server refuses.
+  const changeSwitches = async (next: LinkSettings) => {
+    const before = switches;
+    setSwitches(next);
+    setSwitchesSaving(true);
+    try {
+      await setLinkSettings(link.shareToken, next);
+    } catch (err) {
+      setSwitches(before);
+      toast.error(errorMessage(err));
+    } finally {
+      setSwitchesSaving(false);
+    }
+  };
 
   // Off removes the preview from the server; on makes it again from the
   // file. Shown as changed at once, put back if Rust refuses.
@@ -1119,6 +1201,17 @@ function DoneBody({
             checked={previewOn}
             disabled={previewSaving}
             onChange={(next) => void changePreview(next)}
+          />
+        </div>
+      )}
+
+      {engagement && switches && (
+        <div className="-mt-3 mb-6">
+          <LinkEngagementSwitches
+            offered={engagement.offered}
+            value={switches}
+            disabled={switchesSaving}
+            onChange={(next) => void changeSwitches(next)}
           />
         </div>
       )}

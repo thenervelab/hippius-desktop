@@ -87,6 +87,12 @@ export interface CaptureOptions {
    * a capture.
    */
   chatPreview: boolean;
+  /**
+   * "Track views, comments and reactions": a capture's link gets Insights,
+   * Comments and Reactions (where the server has them), and the share
+   * dialog's switches start on for a capture. On by default.
+   */
+  linkInsights: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
   recordCountdownSecs: number;
 }
@@ -626,6 +632,11 @@ export function revokeCapturePreviewLink(): Promise<void> {
 /** "Manage link": the main window opens Shared Links at this capture's link. */
 export function manageCapturePreviewLink(): Promise<void> {
   return invoke("capture_preview_manage_link");
+}
+
+/** The card's Insights: the main window opens this capture's link's Insights. */
+export function openCapturePreviewInsights(): Promise<void> {
+  return invoke("capture_preview_open_insights");
 }
 
 /** `capture_manage_link`: the share whose row Shared Links points out. */
