@@ -62,6 +62,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
 
+- **The menu bar window says it is Hippius.** The name now sits next to the logo at the top, in light and dark mode, so the window is easy to tell apart from other apps'.
+
+- **Record comes first.** Record now sits before Screenshot in the menu bar window, in the capture bar, among the shortcuts in Settings, and in the Record and Screenshot buttons on the Drive, Overview and Captures pages. Your keyboard shortcuts stay the same.
+
 - **The screenshot shortcut takes a screenshot in one step.** Press the
   capture shortcut (Cmd+Shift+2 on a Mac), drag over any part of the screen
   and let go: the screenshot is saved and its link copied straight away, with

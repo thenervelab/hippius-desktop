@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { CaptureOverlayContext } from "@/app/lib/tauri/capture";
 
@@ -300,6 +300,15 @@ describe("the capture bar's words", () => {
     expect(screen.queryByTestId("capture-free-plan")).toBeNull();
   });
 
+  // Record leads the bar, as in the tray and the toolbars: it is the
+  // capture people reach for most.
+  it("puts the Record modes before the Screenshot modes", async () => {
+    setup();
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture" });
+    const groups = within(toolbar).getAllByRole("radiogroup").map((g) => g.getAttribute("aria-label"));
+    expect(groups).toEqual(["Record", "Screenshot"]);
+  });
+
   it("shows Record disabled with Rust's reason when this build has no helper, and does not switch to it", async () => {
     tauri.onInvoke("capture_set_mode", () => null);
     setup({
@@ -311,6 +320,9 @@ describe("the capture bar's words", () => {
     const record = await screen.findByRole("radio", { name: "Record an area" });
     expect(record).toHaveAttribute("aria-disabled", "true");
     expect(record).toHaveAttribute("title", "Record an area: Screen recording isn't included in this build.");
+    // Disabled, the Record group keeps its first place, so the bar never rearranges.
+    const groups = within(screen.getByRole("toolbar", { name: "Capture" })).getAllByRole("radiogroup");
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["Record", "Screenshot"]);
     fireEvent.click(record);
     expect(screen.getByRole("status")).toHaveTextContent("Screen recording isn't included in this build.");
     expect(called("capture_set_mode")).toBe(false);
