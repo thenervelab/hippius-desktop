@@ -106,7 +106,8 @@ function order(mock: { mock: { calls: unknown[][]; invocationCallOrder: number[]
 const menuItems = () => screen.getAllByRole("menuitem").map((el) => el.textContent);
 
 describe("the popover's tiles", () => {
-  it("shows Screenshot, Record and Upload where capture works", async () => {
+  // Record leads: it is the capture people reach for most.
+  it("shows Record, Screenshot and Upload, in that order, where capture works", async () => {
     tauri.onInvoke("capture_support", () => support());
     render(<Tiles />);
     const group = await screen.findByRole("group", { name: "Capture and upload" });
@@ -114,8 +115,8 @@ describe("the popover's tiles", () => {
       .getAllByRole("button")
       .filter((b) => !b.getAttribute("aria-label")?.endsWith("options"));
     expect(tiles.map((b) => b.getAttribute("aria-label"))).toEqual([
-      "Screenshot",
       "Record",
+      "Screenshot",
       "Upload, or drop files",
     ]);
     expect(screen.getByRole("button", { name: "Screenshot options" })).toBeInTheDocument();
@@ -298,6 +299,11 @@ describe("the popover's tiles", () => {
     const record = await screen.findByRole("button", { name: "Record" });
     expect(record).toHaveAttribute("aria-disabled", "true");
     expect(record).toHaveAccessibleDescription(reason);
+    // Dimmed, it keeps Record's first place, so the tiles never swap.
+    const tiles = within(screen.getByRole("group", { name: "Capture and upload" }))
+      .getAllByRole("button")
+      .filter((b) => !b.getAttribute("aria-label")?.endsWith("options"));
+    expect(tiles.map((b) => b.getAttribute("aria-label"))).toEqual(["Record", "Screenshot", "Upload, or drop files"]);
     expect(screen.queryByRole("button", { name: "Record options" })).not.toBeInTheDocument();
     fireEvent.click(record);
     expect(tauri.event.emit).not.toHaveBeenCalled();

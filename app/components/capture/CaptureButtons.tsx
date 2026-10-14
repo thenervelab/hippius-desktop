@@ -145,9 +145,11 @@ export interface CaptureButtonsProps {
 }
 
 /**
- * Screenshot and Record, side by side, each opening its menu of modes. A
- * capture is filed in the capture drive the user chose, whatever drive is on
- * screen, so no surface gates these on the open drive's role.
+ * Record and Screenshot, side by side, each opening its menu of modes.
+ * Record leads because it is the capture people reach for most, as in the
+ * tray and the capture bar; a disabled Record keeps that place. A capture is
+ * filed in the capture drive the user chose, whatever drive is on screen, so
+ * no surface gates these on the open drive's role.
  *
  * Renders nothing unless the feature is on for this lane AND Rust says this
  * platform can capture. Record follows `useRecordAvailability`; the modes
@@ -261,15 +263,6 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
       aria-label="Screen capture"
       className={cn("flex shrink-0 items-center", size === "compact" ? "gap-1.5" : "gap-2", className)}
     >
-      <DropdownMenu>
-        {trigger(
-          SCREENSHOT_LABEL,
-          screenshotTooltip(shortcut, mac),
-          <Camera aria-hidden className={cn(icon, "shrink-0")} />,
-        )}
-        {systemPicker ? systemPickerMenu(SCREENSHOT_LABEL) : menu("screenshot", SCREENSHOT_LABEL)}
-      </DropdownMenu>
-
       {record.state === "available" && (
         <DropdownMenu>
           {trigger(RECORD_LABEL, RECORD_TOOLTIP, <RecordGlyph className={icon} />)}
@@ -292,6 +285,15 @@ export default function CaptureButtons({ size = "regular", labels = "auto", clas
           <ChevronDown aria-hidden className={chevron} />
         </Button>
       )}
+
+      <DropdownMenu>
+        {trigger(
+          SCREENSHOT_LABEL,
+          screenshotTooltip(shortcut, mac),
+          <Camera aria-hidden className={cn(icon, "shrink-0")} />,
+        )}
+        {systemPicker ? systemPickerMenu(SCREENSHOT_LABEL) : menu("screenshot", SCREENSHOT_LABEL)}
+      </DropdownMenu>
     </div>
   );
 }

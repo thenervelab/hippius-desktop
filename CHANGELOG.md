@@ -62,6 +62,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
 
+- **The menu bar window says it is Hippius.** The name now sits next to the logo at the top, in light and dark mode, so the window is easy to tell apart from other apps'.
+
+- **Record comes first.** Record now sits before Screenshot in the menu bar window, in the capture bar, among the shortcuts in Settings, and in the Record and Screenshot buttons on the Drive, Overview and Captures pages. Your keyboard shortcuts stay the same.
+
 - **The screenshot shortcut takes a screenshot in one step.** Press the
   capture shortcut (Cmd+Shift+2 on a Mac), drag over any part of the screen
   and let go: the screenshot is saved and its link copied straight away, with
@@ -178,6 +182,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The card after a screenshot or recording no longer starts its wait over.** Pointing at it still keeps it open, and when you move away it closes once the time it had left runs out, its bar carrying on from where it stopped. On Windows and Linux, moving through its buttons with the keyboard holds it the same way.
 - **Large uploads no longer show an error when the connection drops after Hippius has already saved the file.** This covers files you add to a folder you don't sync on this computer, and failed uploads there now say what went wrong in plain words.
 - **Recordings and screenshots are no longer lost when something goes wrong.** A recording that does not stop cleanly is kept and uploaded instead of thrown away. A capture that fails to upload after you closed its card, or that was still recording or uploading when Hippius quit, comes back with Retry on your next capture or the next time you open Hippius. If your Captures folder was moved or deleted, Hippius asks you to choose it again instead of making a new empty one, so earlier captures are never removed from your drive.
 - **Screen recording on Linux works again on Ubuntu and other GNOME desktops.** Recordings no longer stop the moment you press Record or fail when you stop them, the area you draw lines up with your screen on scaled displays, and the camera is not asked for again each time the bubble opens.
