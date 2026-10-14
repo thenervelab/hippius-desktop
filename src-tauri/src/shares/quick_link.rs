@@ -126,7 +126,8 @@ async fn existing_links(state: &AppState, account_id: &str, folder_label: &str, 
             ExistingLink {
                 created_at: s.created_at,
                 expires_at: s.expires_at,
-                url: secret.map(|secret| build_share_url_for(&console_base, &s.share_token, secret)),
+                // `Err` only for a folder-link secret, which no file token holds.
+                url: secret.and_then(|secret| build_share_url_for(&console_base, &s.share_token, secret).ok()),
                 is_private: secret.is_some_and(ShareSecret::is_private),
             }
         })

@@ -22,9 +22,13 @@ use crate::shares::capabilities::fetch_capabilities;
 use crate::shares::client::build_account_client;
 use crate::shares::history::{self, HistoryEntry};
 use crate::shares::origin;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
+use hcfs_client::client::folder_link::{FolderLinkMint, mint_folder_link};
 use hcfs_client::client::folder_share::{
-    FolderShareError, FolderShareListItem, FolderShareSource, build_folder_share_url_for, folder_share_token_hash,
+    FolderLinkFormat, FolderShareError, FolderShareFragment, FolderShareListItem, FolderShareSource, build_folder_share_url_for,
+    folder_share_token_hash, parse_folder_share_fragment,
 };
 use hcfs_client::client::share::{
     ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
@@ -1222,13 +1226,18 @@ pub(crate) fn member_access_for(
 ///
 /// hcfs-client's `create_folder_share` has no `owner_ss58`, so a member's
 /// mint is issued here with the same four metadata fields plus the owner.
-/// Key material never joins the body.
+/// No key the URL fragment carries ever joins the body: a link-secret mint
+/// adds only the sealed drive key and the fetch-key digest, which the server
+/// cannot open.
 pub(crate) struct MemberFolderShareRequest<'a> {
     pub folder_hash: &'a str,
     pub path_prefix: &'a str,
     pub display_name: &'a str,
     pub ttl: ShareTtl,
     pub owner_ss58: &'a str,
+    /// The link-secret material (thenervelab/hcfs#665), when the server
+    /// advertises `folder_share_link_envelopes`; `None` mints a legacy link.
+    pub link: Option<&'a FolderLinkMint>,
 }
 
 /// The server's answer to a member mint: the token (a capability, never
@@ -1236,6 +1245,27 @@ pub(crate) struct MemberFolderShareRequest<'a> {
 pub(crate) struct MemberFolderShareCreated {
     pub share_token: String,
     pub expires_at: Option<chrono::DateTime<Utc>>,
+    /// Whether the server stored a link envelope. A server that predates them
+    /// ignores the fields and answers `false` (or nothing), and a link-secret
+    /// URL over such a share opens nothing.
+    pub link_envelope_stored: bool,
+}
+
+/// The create body for [`http_create_member_folder_share`]: the metadata,
+/// the owner, and the link-secret pair when there is one.
+fn member_folder_share_body(req: &MemberFolderShareRequest<'_>) -> serde_json::Value {
+    let mut body = serde_json::json!({
+        "folder_hash": req.folder_hash,
+        "path_prefix": req.path_prefix,
+        "display_name": req.display_name,
+        "ttl": req.ttl,
+        "owner_ss58": req.owner_ss58,
+    });
+    if let Some(link) = req.link {
+        body["link_envelope"] = STANDARD.encode(&link.link_envelope).into();
+        body["link_fetch_digest"] = STANDARD.encode(link.link_fetch_digest).into();
+    }
+    body
 }
 
 pub(crate) async fn http_create_member_folder_share(
@@ -1247,13 +1277,7 @@ pub(crate) async fn http_create_member_folder_share(
     let resp = http
         .post(format!("{}/v1/folder-shares", base_url.trim_end_matches('/')))
         .header("Authorization", format!("Bearer {bearer}"))
-        .json(&serde_json::json!({
-            "folder_hash": req.folder_hash,
-            "path_prefix": req.path_prefix,
-            "display_name": req.display_name,
-            "ttl": req.ttl,
-            "owner_ss58": req.owner_ss58,
-        }))
+        .json(&member_folder_share_body(req))
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
@@ -1268,11 +1292,14 @@ pub(crate) async fn http_create_member_folder_share(
         share_token: String,
         #[serde(default)]
         expires_at: Option<chrono::DateTime<Utc>>,
+        #[serde(default)]
+        link_envelope: bool,
     }
     let created: Created = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("member folder-share response did not parse: {e}")))?;
     Ok(MemberFolderShareCreated {
         share_token: created.share_token,
         expires_at: created.expires_at,
+        link_envelope_stored: created.link_envelope,
     })
 }
 
@@ -1323,13 +1350,22 @@ async fn create_member_folder_share(
     let file_key =
         zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?);
 
-    // Wrap BEFORE minting, as hcfs-client does: a wrap failure must not leave
-    // a live share whose only plaintext token was in the 201 body.
-    let secret = match choice.password() {
-        Some(password) => {
+    // Build the secret BEFORE minting, as hcfs-client does: a failure must not
+    // leave a live share whose only plaintext token was in the 201 body. A
+    // link-secret link (thenervelab/hcfs#665) only when the server advertises
+    // it, which it does once the console can open one; until then the
+    // fragment stays the drive key, as for the owner's own mints.
+    let link = if caps.folder_share_link_envelopes {
+        Some(mint_folder_link(&file_key, choice.password()).map_err(|e| AppError::Validation(e.to_string()))?)
+    } else {
+        None
+    };
+    let secret = match (&link, choice.password()) {
+        (Some(link), _) => link.secret.clone(),
+        (None, Some(password)) => {
             ShareSecret::Private(hcfs_client::client::share::wrap_share_key(password, &file_key).map_err(|e| AppError::Validation(e.to_string()))?)
         }
-        None => ShareSecret::Public(*file_key),
+        (None, None) => ShareSecret::Public(*file_key),
     };
 
     let created = http_create_member_folder_share(
@@ -1342,24 +1378,26 @@ async fn create_member_folder_share(
             display_name: folder_share_display_name(folder_label, path_prefix),
             ttl,
             owner_ss58: &identity.wire_ss58,
+            link: link.as_ref(),
         },
     )
     .await?;
+
+    // A server that dropped the envelope would leave a `#s=` link that opens
+    // nothing, and the only copy of its token is this response.
+    if link.is_some() && !created.link_envelope_stored {
+        warn!("member folder-share mint stored no link envelope; revoking the new share");
+        revoke_member_mint(state, &ctx, &created.share_token).await;
+        return Err(AppError::Hcfs(
+            "the server did not keep the folder link's key, so the link was turned off".into(),
+        ));
+    }
 
     let keystore = SqliteShareKeystore::new(pool.clone());
     if let Err(e) = keystore.put(&created.share_token, &secret) {
         warn!(error = ?e, "member folder-share keystore put failed; revoking the new share");
         // Compensate: a share whose token exists nowhere else is unrevokable.
-        let _ = state
-            .api_client
-            .delete(format!(
-                "{}/v1/folder-shares/{}",
-                ctx.base_url().trim_end_matches('/'),
-                created.share_token
-            ))
-            .header("Authorization", format!("Bearer {}", ctx.bearer()))
-            .send()
-            .await;
+        revoke_member_mint(state, &ctx, &created.share_token).await;
         return Err(AppError::Other(format!("could not store the share link: {e}")));
     }
 
@@ -1376,6 +1414,21 @@ async fn create_member_folder_share(
         expires_at: created.expires_at.map(|e| e.to_rfc3339()),
         password: choice.into_password(),
     })
+}
+
+/// Best-effort revoke of a member mint this device cannot keep, so no live
+/// link survives whose token exists nowhere else. A failure is logged: the
+/// caller is already returning the error that explains the mint.
+async fn revoke_member_mint(state: &AppState, ctx: &crate::shared_drives::commands::ApiCtx, share_token: &str) {
+    let result = state
+        .api_client
+        .delete(format!("{}/v1/folder-shares/{share_token}", ctx.base_url().trim_end_matches('/')))
+        .header("Authorization", format!("Bearer {}", ctx.bearer()))
+        .send()
+        .await;
+    if let Err(e) = result {
+        warn!(error = %e.without_url(), "revoking an unusable member folder share failed");
+    }
 }
 
 /// Mint a live, browsable share link for a folder inside a synced drive.
@@ -1440,6 +1493,38 @@ impl From<FolderShareSource> for FolderShareOrigin {
     }
 }
 
+/// What a folder link's URL fragment carries, as the shares page reads it.
+///
+/// Desktop-owned rather than hcfs-client's [`FolderLinkFormat`] (which may
+/// grow), so the FE reads a key Rust chose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FolderLinkKind {
+    /// `#s=` / `#sp=`: a per-link secret; the server keeps the drive key
+    /// sealed under it (thenervelab/hcfs#665).
+    LinkSecret,
+    /// `#k=` / `#p=`: the drive key itself, or wrapped under the password.
+    /// Everyone who ever held the link holds the key to the whole drive.
+    Legacy,
+    /// An uploaded copy, under a key of its own that opens nothing else.
+    OwnKey,
+    /// A server that predates the field, or a value this build does not know.
+    Unknown,
+}
+
+impl From<FolderLinkFormat> for FolderLinkKind {
+    fn from(format: FolderLinkFormat) -> Self {
+        match format {
+            FolderLinkFormat::Envelope => Self::LinkSecret,
+            FolderLinkFormat::Legacy => Self::Legacy,
+            FolderLinkFormat::OwnKey => Self::OwnKey,
+            // `FolderLinkFormat` is non-exhaustive, and its own `Unknown`
+            // means the server did not say.
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// One row of the owner's folder-share listing, resolved against this
 /// device's keystore. Mirrors the server's listing fields (camelCased,
 /// timestamps as RFC 3339 strings) plus the local resolution.
@@ -1489,6 +1574,66 @@ pub struct FolderShareSummary {
     /// folder badge; an uploaded copy's empty `folder_hash` must never be
     /// read as "the whole drive".
     pub source: FolderShareOrigin,
+    /// What the link's fragment carries.
+    pub link_format: FolderLinkKind,
+    /// Whether this device can replace the link with one that keeps the
+    /// drive key off the URL ([`reshare_folder_link_inner`]). Decided in
+    /// Rust by [`reshare_offered`].
+    pub reshare_offered: bool,
+}
+
+/// Whether a listing row may be reshared from this device: a live legacy
+/// link onto a drive folder, on a server that serves link envelopes, minted
+/// here (`minted_here`: this device holds its secret and its origin row, so
+/// it knows the folder and whether the link had a password).
+///
+/// A legacy link on a server without envelopes is not offered: resharing
+/// would mint another legacy link.
+pub(crate) fn reshare_offered(row: &FolderShareListItem, envelopes: bool, minted_here: bool, now: chrono::DateTime<Utc>) -> bool {
+    let live = row.revoked_at.is_none() && row.expires_at.is_none_or(|expires_at| expires_at > now);
+    envelopes && minted_here && live && row.source == FolderShareSource::Drive && row.link_format == FolderLinkFormat::Legacy
+}
+
+/// The expiry preset for a reshared link: the shortest preset that still
+/// covers the old link's remaining lifetime, so a reshare never ends sooner
+/// than the link it replaces. Anything past 30 days keeps 30, the longest
+/// dated preset, rather than turning into a link that never expires.
+pub(crate) fn reshare_ttl(expires_at: Option<chrono::DateTime<Utc>>, now: chrono::DateTime<Utc>) -> ShareTtl {
+    let Some(expires_at) = expires_at else {
+        return ShareTtl::Never;
+    };
+    let remaining = expires_at - now;
+    if remaining <= chrono::Duration::hours(24) {
+        ShareTtl::Hours24
+    } else if remaining <= chrono::Duration::days(7) {
+        ShareTtl::Days7
+    } else {
+        ShareTtl::Days30
+    }
+}
+
+/// The path a mint takes for a stored `path_prefix`: the prefix as the
+/// SERVER stores it is rooted at a folder grant's folder for a grant label
+/// (`rooted_path`), and the mint roots it again, so the grant's own path is
+/// taken off here.
+///
+/// # Errors
+///
+/// [`AppError::Validation`] when the prefix is not inside the label's root,
+/// which a row this device recorded never is.
+pub(crate) fn mint_path_for_prefix(folder_label: &str, path_prefix: &str) -> Result<String> {
+    let root = crate::sync::identity::rooted_path(folder_label, "");
+    if root.is_empty() {
+        return Ok(path_prefix.to_string());
+    }
+    if path_prefix == root {
+        return Ok(String::new());
+    }
+    path_prefix
+        .strip_prefix(&root)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map(str::to_string)
+        .ok_or_else(|| AppError::Validation("This link's folder is no longer inside the shared folder it came from.".into()))
 }
 
 /// Index the keystore's stored tokens by their blake3 hex — the join key
@@ -1512,11 +1657,15 @@ fn resolve_folder_share_rows(
     rows: Vec<FolderShareListItem>,
     secrets_by_hash: &HashMap<String, (String, ShareSecret)>,
     console_base: &str,
+    reshare: &ReshareContext,
 ) -> Vec<FolderShareSummary> {
     rows.into_iter()
         .map(|row| {
             let resolved = secrets_by_hash.get(&row.token_hash);
+            let minted_here = resolved.is_some_and(|(token, _)| reshare.origins.contains(token));
             FolderShareSummary {
+                link_format: row.link_format.into(),
+                reshare_offered: reshare_offered(&row, reshare.envelopes, minted_here, reshare.now),
                 resolvable: resolved.is_some(),
                 share_token: resolved.map(|(token, _)| token.clone()),
                 share_url: resolved.map(|(token, secret)| build_folder_share_url_for(console_base, token, secret)),
@@ -1572,7 +1721,167 @@ pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Res
     let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
     let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
     super::owner_wrap::sync_folder_wraps(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
-    Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url()))
+    let reshare = reshare_context(state, account_id, &rows, &secrets_by_hash).await;
+    Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url(), &reshare))
+}
+
+/// What [`reshare_offered`] needs beyond the row itself.
+struct ReshareContext {
+    /// The server advertises `folder_share_link_envelopes`.
+    envelopes: bool,
+    /// Tokens of legacy rows this device holds an origin row for.
+    origins: std::collections::HashSet<String>,
+    now: chrono::DateTime<Utc>,
+}
+
+/// Look up what the reshare offer needs, only when a listed row is a legacy
+/// drive link this device can resolve: otherwise no request and no read.
+/// A failed capabilities read offers nothing, the safe direction.
+async fn reshare_context(
+    state: &AppState,
+    account_id: &str,
+    rows: &[FolderShareListItem],
+    secrets_by_hash: &HashMap<String, (String, ShareSecret)>,
+) -> ReshareContext {
+    let now = Utc::now();
+    let candidates: Vec<&str> = rows
+        .iter()
+        .filter(|row| row.link_format == FolderLinkFormat::Legacy && row.source == FolderShareSource::Drive)
+        .filter_map(|row| secrets_by_hash.get(&row.token_hash).map(|(token, _)| token.as_str()))
+        .collect();
+    let mut context = ReshareContext {
+        envelopes: false,
+        origins: std::collections::HashSet::new(),
+        now,
+    };
+    if candidates.is_empty() {
+        return context;
+    }
+    context.envelopes = fetch_capabilities(state, account_id)
+        .await
+        .is_ok_and(|caps| caps.folder_share_link_envelopes);
+    if !context.envelopes {
+        return context;
+    }
+    let Ok(pool) = state.pool() else {
+        return context;
+    };
+    let owner = account_key(account_id);
+    for token in candidates {
+        if matches!(origin::folder_origin(pool, &owner, token).await, Ok(Some(_))) {
+            context.origins.insert(token.to_string());
+        }
+    }
+    context
+}
+
+/// A reshared link and whether the link it replaces was turned off.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReshareOutcome {
+    /// The new link. Carries the generated password when the old link had one.
+    pub link: ShareLink,
+    /// `false` when the old link could not be revoked and still works; the FE
+    /// says so, and the old row stays in the listing to revoke by hand.
+    pub old_link_revoked: bool,
+}
+
+/// What [`reshare_folder_link_inner`] says when this device did not mint the
+/// link, so it knows neither the folder nor whether the link had a password.
+pub const RESHARE_ELSEWHERE: &str =
+    "This link was made on another device. Share the folder again from there, or from its folder here, and revoke this link.";
+
+/// Replace a legacy folder link (its fragment is the drive key) with one that
+/// keeps the drive key off the URL (thenervelab/hcfs#665), then revoke the
+/// old link.
+///
+/// The new link shares the same folder, keeps a password if the old one had
+/// one (a newly generated password, since none is ever stored), and lasts at
+/// least as long as the old one had left ([`reshare_ttl`]). It is minted
+/// through [`create_folder_share_inner`], so every gate, the member path and
+/// the owner wrap apply exactly as for a new share.
+#[tauri::command]
+pub async fn hcfs_reshare_folder_link(state: tauri::State<'_, AppState>, share_token: String) -> Result<ReshareOutcome> {
+    let account_id = state.current_account_id()?;
+    reshare_folder_link_inner(&state, &account_id, &share_token).await
+}
+
+/// Inner of [`hcfs_reshare_folder_link`], taking `&AppState` so the
+/// mock-server suite can drive it.
+pub async fn reshare_folder_link_inner(state: &AppState, account_id: &str, share_token: &str) -> Result<ReshareOutcome> {
+    let pool = state.pool()?;
+    let owner = account_key(account_id);
+    let (folder_label, path_prefix) = origin::folder_origin(pool, &owner, share_token)
+        .await?
+        .ok_or_else(|| AppError::Validation(RESHARE_ELSEWHERE.into()))?;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    let secret = keystore
+        .get(share_token)
+        .map_err(|e| AppError::Hcfs(format!("keystore lookup: {e}")))?
+        .ok_or_else(|| AppError::Validation(RESHARE_ELSEWHERE.into()))?;
+
+    let caps = fetch_capabilities(state, account_id).await?;
+    let client = build_account_client(pool, account_id).await?;
+    let token_hash = folder_share_token_hash(share_token);
+    let row = client
+        .list_folder_shares()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?
+        .into_iter()
+        .find(|row| row.token_hash == token_hash)
+        .ok_or_else(|| AppError::Validation("This link no longer exists.".into()))?;
+    let now = Utc::now();
+    if !reshare_offered(&row, caps.folder_share_link_envelopes, true, now) {
+        return Err(AppError::Validation(
+            "This link cannot be replaced: it is already protected, or it no longer works.".into(),
+        ));
+    }
+
+    let choice = if secret.is_private() {
+        ShareChoice::Private {
+            password: generate_share_password(),
+        }
+    } else {
+        ShareChoice::Public
+    };
+    let relative_path = mint_path_for_prefix(&folder_label, &path_prefix)?;
+    let link = create_folder_share_inner(state, account_id, &folder_label, &relative_path, reshare_ttl(row.expires_at, now), choice).await?;
+
+    // The capability was read before the mint; if the server stopped
+    // advertising envelopes in between, the mint came out legacy too, and
+    // replacing one drive-key link with another would only cost the user
+    // their old URL. Take the new link back and leave the old one alone.
+    if !is_link_secret_url(&link.share_url) {
+        warn!("reshare: the new folder link came out legacy; revoking it and keeping the old link");
+        if let Err(e) = revoke_folder_share_inner(state, account_id, &link.share_token).await {
+            warn!(error = %e, "reshare: revoking the legacy replacement failed");
+        }
+        return Err(AppError::Validation(
+            "Hippius can't make the safer kind of link right now, so your old link was left as it was. Try again later.".into(),
+        ));
+    }
+
+    // The new link exists, so a failed revoke is reported, not returned as an
+    // error: an error here would lose the new link's generated password.
+    let old_link_revoked = match revoke_folder_share_inner(state, account_id, share_token).await {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "reshare: revoking the replaced folder link failed");
+            false
+        }
+    };
+    // The revoke above returns the folder's Finder badge to "not shared",
+    // but the new link shares that same folder.
+    crate::finder_bridge::badges::push_from_state(state, &folder_label, &path_prefix, BadgeState::Shared);
+    Ok(ReshareOutcome { link, old_link_revoked })
+}
+
+/// Whether a minted folder link is a link-secret one (`#s=` / `#sp=`).
+fn is_link_secret_url(share_url: &str) -> bool {
+    share_url
+        .split_once('#')
+        .and_then(|(_, fragment)| parse_folder_share_fragment(fragment).ok())
+        .is_some_and(|fragment| matches!(fragment, FolderShareFragment::LinkSecret(_) | FolderShareFragment::LinkSecretWrapped(_)))
 }
 
 /// Revoke a folder share by its plaintext token (from a resolvable
@@ -1923,7 +2232,9 @@ pub async fn hcfs_list_shares(state: tauri::State<'_, AppState>) -> Result<Vec<S
             // a password-protected share persists only its wrapped blob, so
             // the only URL derivable from it is the `#p=` one.
             let secret = key_map.get(&s.share_token);
-            let share_url = secret.map(|secret| build_share_url_for(&console_base, &s.share_token, secret));
+            // A folder-link secret under a file token has no file-share URL
+            // (`WrongShareKind`); the row then reads as "key not on this device".
+            let share_url = secret.and_then(|secret| build_share_url_for(&console_base, &s.share_token, secret).ok());
             let is_private = secret.is_some_and(ShareSecret::is_private);
             let (folder_label, relative_path) = origin_map
                 .get(&s.share_token)
@@ -2562,9 +2873,22 @@ mod tests {
             // A drive folder link: these resolution tests predate uploaded
             // copies, whose rows the listing labels `Upload`.
             source: FolderShareSource::Drive,
+            // A pre-#665 drive link: the format every row had before
+            // link-secret links, and the one a reshare replaces.
+            link_format: FolderLinkFormat::Legacy,
             created_at: Utc::now(),
             expires_at: None,
             revoked_at: None,
+        }
+    }
+
+    /// A reshare context that offers nothing: the resolution tests below do
+    /// not exercise the offer.
+    fn no_reshare() -> ReshareContext {
+        ReshareContext {
+            envelopes: false,
+            origins: std::collections::HashSet::new(),
+            now: Utc::now(),
         }
     }
 
@@ -2588,6 +2912,8 @@ mod tests {
             share_url: Some("https://x.io/share/folder/tok#k=AA".to_string()),
             is_private: Some(false),
             source: FolderShareOrigin::Drive,
+            link_format: FolderLinkKind::Legacy,
+            reshare_offered: false,
         };
         let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -2604,6 +2930,8 @@ mod tests {
             "shareUrl",
             "isPrivate",
             "source",
+            "linkFormat",
+            "reshareOffered",
         ]
         .into_iter()
         .map(String::from)
@@ -2619,7 +2947,12 @@ mod tests {
         let mut upload = mk_folder_row(&"cd".repeat(32), "");
         upload.source = FolderShareSource::Upload;
         upload.folder_hash = String::new();
-        let rows = resolve_folder_share_rows(vec![mk_folder_row(&"ab".repeat(32), "photos"), upload], &HashMap::new(), "https://x.io");
+        let rows = resolve_folder_share_rows(
+            vec![mk_folder_row(&"ab".repeat(32), "photos"), upload],
+            &HashMap::new(),
+            "https://x.io",
+            &no_reshare(),
+        );
 
         let json = serde_json::to_value(&rows).expect("serialize");
         assert_eq!(json[0]["source"], "drive");
@@ -2655,7 +2988,7 @@ mod tests {
             mk_folder_row(&folder_share_token_hash("tok-priv"), ""),
             mk_folder_row(&folder_share_token_hash("minted-on-another-device"), "docs"),
         ];
-        let out = resolve_folder_share_rows(rows, &secrets, "https://console.example.com");
+        let out = resolve_folder_share_rows(rows, &secrets, "https://console.example.com", &no_reshare());
         assert_eq!(out.len(), 3);
 
         let public = &out[0];
@@ -2686,6 +3019,135 @@ mod tests {
         assert_eq!(foreign.path_prefix, "docs");
     }
 
+    /// Rust picks the format key the shares page reads; hcfs-client's own
+    /// `Unknown` (a server without the field) stays unknown, never legacy.
+    #[test]
+    fn link_formats_reach_the_fe_as_desktop_keys() {
+        for (format, wire) in [
+            (FolderLinkFormat::Envelope, "linkSecret"),
+            (FolderLinkFormat::Legacy, "legacy"),
+            (FolderLinkFormat::OwnKey, "ownKey"),
+            (FolderLinkFormat::Unknown, "unknown"),
+        ] {
+            let kind = FolderLinkKind::from(format);
+            assert_eq!(serde_json::to_value(kind).expect("serialize"), wire, "{format:?}");
+        }
+    }
+
+    /// A link-secret row rebuilds its `#s=` / `#sp=` link from the stored
+    /// secret and never a `#k=` / `#p=` one, which would put the link secret
+    /// where a recipient expects the drive key.
+    #[test]
+    fn a_link_secret_row_rebuilds_its_link_secret_url() {
+        let secrets: HashMap<String, (String, ShareSecret)> = [
+            (
+                folder_share_token_hash("tok-s"),
+                ("tok-s".to_string(), ShareSecret::FolderLink([3u8; 32])),
+            ),
+            (
+                folder_share_token_hash("tok-sp"),
+                ("tok-sp".to_string(), ShareSecret::FolderLinkPrivate(vec![4u8; 89])),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let mut public = mk_folder_row(&folder_share_token_hash("tok-s"), "photos");
+        public.link_format = FolderLinkFormat::Envelope;
+        let mut private = mk_folder_row(&folder_share_token_hash("tok-sp"), "photos");
+        private.link_format = FolderLinkFormat::Envelope;
+
+        let out = resolve_folder_share_rows(vec![public, private], &secrets, "https://x.io", &no_reshare());
+        let public_url = out[0].share_url.as_deref().expect("public url");
+        assert!(public_url.contains("#s=") && !public_url.contains("#k="), "{public_url}");
+        let private_url = out[1].share_url.as_deref().expect("private url");
+        assert!(private_url.contains("#sp=") && !private_url.contains("#p="), "{private_url}");
+        assert_eq!(out[1].is_private, Some(true));
+        assert_eq!(out[0].link_format, FolderLinkKind::LinkSecret);
+    }
+
+    #[test]
+    fn only_a_link_secret_url_counts_as_a_safer_link() {
+        use hcfs_client::client::folder_share::{build_folder_link_url, build_folder_link_url_private, build_folder_share_url};
+        assert!(is_link_secret_url(&build_folder_link_url("https://x.io", "t", &[1u8; 32])));
+        assert!(is_link_secret_url(&build_folder_link_url_private("https://x.io", "t", &[1u8; 89])));
+        assert!(!is_link_secret_url(&build_folder_share_url("https://x.io", "t", &[1u8; 32])));
+        assert!(!is_link_secret_url("https://x.io/share/folder/t"));
+    }
+
+    /// The reshare offer: only a live legacy drive link, minted here, on a
+    /// server that serves link envelopes. Each condition alone withholds it.
+    #[test]
+    fn reshare_is_offered_only_for_a_live_legacy_drive_link_minted_here() {
+        let now = Utc::now();
+        let row = mk_folder_row(&"ab".repeat(32), "photos");
+        assert!(reshare_offered(&row, true, true, now));
+
+        assert!(
+            !reshare_offered(&row, false, true, now),
+            "a server without envelopes would mint another legacy link"
+        );
+        assert!(!reshare_offered(&row, true, false, now), "a link minted elsewhere names no folder here");
+
+        let mut revoked = row.clone();
+        revoked.revoked_at = Some(now);
+        assert!(!reshare_offered(&revoked, true, true, now));
+
+        let mut expired = row.clone();
+        expired.expires_at = Some(now - chrono::Duration::seconds(1));
+        assert!(!reshare_offered(&expired, true, true, now));
+        let mut dated = row.clone();
+        dated.expires_at = Some(now + chrono::Duration::hours(1));
+        assert!(reshare_offered(&dated, true, true, now), "a dated live link is offered");
+
+        for format in [FolderLinkFormat::Envelope, FolderLinkFormat::OwnKey, FolderLinkFormat::Unknown] {
+            let mut other = row.clone();
+            other.link_format = format;
+            assert!(!reshare_offered(&other, true, true, now), "{format:?}");
+        }
+
+        let mut upload = row;
+        upload.source = FolderShareSource::Upload;
+        assert!(!reshare_offered(&upload, true, true, now), "an uploaded copy never carried the drive key");
+    }
+
+    /// A reshare never ends sooner than the link it replaces, and never
+    /// turns a dated link into one that never expires.
+    #[test]
+    fn reshare_ttl_covers_what_the_old_link_had_left() {
+        let now = Utc::now();
+        let at = |d: chrono::Duration| Some(now + d);
+        assert_eq!(reshare_ttl(None, now), ShareTtl::Never);
+        assert_eq!(reshare_ttl(at(chrono::Duration::hours(3)), now), ShareTtl::Hours24);
+        assert_eq!(reshare_ttl(at(chrono::Duration::hours(24)), now), ShareTtl::Hours24);
+        assert_eq!(reshare_ttl(at(chrono::Duration::hours(25)), now), ShareTtl::Days7);
+        assert_eq!(reshare_ttl(at(chrono::Duration::days(7)), now), ShareTtl::Days7);
+        assert_eq!(reshare_ttl(at(chrono::Duration::days(8)), now), ShareTtl::Days30);
+        assert_eq!(reshare_ttl(at(chrono::Duration::days(90)), now), ShareTtl::Days30);
+    }
+
+    /// An own drive's stored prefix is minted as is; a folder-grant label's
+    /// stored prefix carries the grant's root, which the mint adds back.
+    #[test]
+    fn a_stored_prefix_maps_back_to_the_path_the_mint_takes() {
+        assert_eq!(mint_path_for_prefix("photo-drive", "a/b").expect("own"), "a/b");
+        assert_eq!(mint_path_for_prefix("photo-drive", "").expect("own root"), "");
+
+        // `grant:<owner>~<hash>~<hex of the granted folder>`, rooted at `team/docs`.
+        let grant = format!("grant:5Owner~abcdef0123456789~{}", hex::encode("team/docs"));
+        assert_eq!(mint_path_for_prefix(&grant, "team/docs").expect("grant root"), "");
+        assert_eq!(mint_path_for_prefix(&grant, "team/docs/q3").expect("inside grant"), "q3");
+        assert_eq!(
+            crate::sync::identity::rooted_path(&grant, &mint_path_for_prefix(&grant, "team/docs/q3").expect("inside")),
+            "team/docs/q3",
+            "the mint roots the path back to the stored prefix"
+        );
+        assert!(
+            mint_path_for_prefix(&grant, "team/docsx").is_err(),
+            "a sibling that shares a prefix is not inside"
+        );
+        assert!(mint_path_for_prefix(&grant, "other").is_err());
+    }
+
     /// Dead rows pass through with their timestamps intact — the listing
     /// retains revoked/expired rows until the server reaper sweeps them,
     /// and the FE renders the dead state from `revokedAt`/`expiresAt`.
@@ -2695,7 +3157,7 @@ mod tests {
         let mut row = mk_folder_row(&folder_share_token_hash("tok"), "photos");
         row.expires_at = Some(now);
         row.revoked_at = Some(now);
-        let out = resolve_folder_share_rows(vec![row], &HashMap::new(), "https://x.io");
+        let out = resolve_folder_share_rows(vec![row], &HashMap::new(), "https://x.io", &no_reshare());
         assert_eq!(out[0].expires_at.as_deref(), Some(now.to_rfc3339().as_str()));
         assert_eq!(out[0].revoked_at.as_deref(), Some(now.to_rfc3339().as_str()));
     }
@@ -2769,8 +3231,14 @@ mod tests {
     #[test]
     fn access_comes_from_the_membership_first_then_a_covering_grant() {
         let resp = memberships(serde_json::json!({
-            "memberships": [{"owner_ss58":"5O","folder_hash":"h1","role":"writer","grant_blob":"","display_label":"d","created_at":"t","frozen":true}],
-            "folder_grants": [{"owner_ss58":"5O","folder_hash":"h2","display_label":"d","path_prefix":"Clients/ACME","role":"writer","grant_blob":"","created_at":"t"}]
+            "memberships": [{
+                "owner_ss58": "5O", "folder_hash": "h1", "role": "writer", "grant_blob": "",
+                "display_label": "d", "created_at": "t", "frozen": true
+            }],
+            "folder_grants": [{
+                "owner_ss58": "5O", "folder_hash": "h2", "display_label": "d", "path_prefix": "Clients/ACME",
+                "role": "writer", "grant_blob": "", "created_at": "t"
+            }]
         }));
         assert_eq!(member_access_for(&resp, "5O", "h1", "any"), Some(("writer".into(), true)));
         assert_eq!(member_access_for(&resp, "5O", "h2", "Clients/ACME/x"), Some(("writer".into(), false)));
