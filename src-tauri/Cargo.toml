@@ -255,16 +255,16 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # check for a resend that gets 409 `invalid_state` (`remote_upload.rs` now
 # finalizes with `finalize_session_for_file` and the session's manifest).
 #
-# This PR then moves it to hcfs `integration/661-667` (4b331f2f), a TEMPORARY
-# branch: #667's head with #661 merged in, nothing else; its hcfs-client and
-# hcfs-shared differ from 1f77b39b only by #667's changes. Repin to the hcfs main merge commit
-# once #661 and #667 have both merged. #667 adds: an upload conflict that
-# names no current revision (the file was moved by a folder rename or
-# deleted) is left for the next sync instead of resent with the zero base,
-# which the server now refuses with 409 `target_gone`
-# (`tests/upload_conflict_gone_file.rs`). Its other client change,
-# `register_missing_paths` on `rename_remote_folder`, does not reach the
-# desktop: no desktop path calls `POST /rename_folder`.
+# Then at hcfs `integration/661-667` (4b331f2f), a TEMPORARY branch: #667's
+# head with #661 merged in, nothing else. Its hcfs-client and hcfs-shared
+# differ from 1f77b39b only by #667's changes. Repin to the hcfs main merge
+# commit once #667 has merged. #667 adds: an upload conflict that names no
+# current revision (the file was moved by a folder rename or deleted while
+# its upload session opened) is skipped without asking and the zero id never
+# becomes a base. The server now refuses a zero base where no row is stored
+# with 409 `target_gone` (`tests/upload_conflict_gone_file.rs`). Its other
+# client change, `register_missing_paths` on `rename_remote_folder`, does not
+# reach the desktop: no desktop path calls `POST /rename_folder`.
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.

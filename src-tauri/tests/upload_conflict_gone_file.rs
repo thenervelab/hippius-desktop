@@ -1,19 +1,22 @@
-//! An edit to a file that was moved or deleted on the server while it was
-//! being uploaded waits for the next sync. "Keep my version" does not put
-//! it back at the old path.
+//! An upload conflict that names no current revision (all zeros) is never
+//! answered: not by "keep my version" and not by the automatic skip.
 //!
-//! When an upload loses that race, hcfs-server answers with a conflict that
-//! names no current revision (all zeros). Before hcfs#667, the desktop's
-//! reviewed sync passed the user's "keep_local" to hcfs-client, and
-//! hcfs-client resent the file with the zero revision as its base. The
-//! server took that as a new file, so a file that had just moved with a
-//! renamed folder came back at its old path. The server now refuses that
-//! resend (`409 target_gone`), and hcfs-client no longer sends it: it
-//! leaves the conflict for the next sync without asking. These tests run
-//! the pinned hcfs code through the desktop's reviewed entry point
-//! (`DriveManager::sync_with_resolutions`, which `sync_with_conflict_resolutions`
-//! calls) against a stand-in server, so an hcfs bump that brings the resend
-//! back fails here.
+//! hcfs-server sends that conflict when the file an upload session would
+//! overwrite was moved (a folder rename) or deleted while the session was
+//! being opened. Before hcfs#667, hcfs-client took the zero id as a real
+//! revision. "keep_local" resent the file with it as the base, which the
+//! server took as a new file at the old path. Skip saved it as the file's
+//! base, so every later cycle sent it. The server now refuses a zero base
+//! where no row is stored (`409 target_gone`), and hcfs-client leaves such a
+//! conflict for the next sync and keeps the last synced base.
+//!
+//! These tests run the pinned hcfs code through
+//! `DriveManager::sync_with_resolutions` (the call the desktop's reviewed
+//! sync makes; an empty map is the automatic skip) against a stand-in
+//! server, so an hcfs bump that brings either behaviour back fails here. The
+//! stand-in answers `POST /upload` with the conflict, which the real server
+//! sends only from `POST /upload/session`; hcfs-client turns both into the
+//! same conflict, so the code under test is the same.
 
 use axum::Router;
 use axum::extract::State;
@@ -22,7 +25,6 @@ use axum::routing::{get, post};
 use hcfs_client::client::HcfsClientConfig;
 use hcfs_client::engine::manager::DriveManager;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// A fixed mnemonic, so the drive is created without generating one.
@@ -40,8 +42,8 @@ const STORED_REVISION: [u8; 32] = [42; 32];
 struct Server {
     /// The `get_state` rows served.
     listing: Arc<Mutex<Vec<serde_json::Value>>>,
-    /// Upload requests received, accepted or not.
-    uploads: Arc<AtomicUsize>,
+    /// The body of every upload request received, accepted or not.
+    uploads: Arc<Mutex<Vec<Vec<u8>>>>,
     /// The `current_revision_id` of the 409 every upload gets once set;
     /// `None` accepts uploads.
     conflict_revision: Arc<Mutex<Option<[u8; 32]>>>,
@@ -49,7 +51,16 @@ struct Server {
 
 impl Server {
     fn uploads(&self) -> usize {
-        self.uploads.load(Ordering::SeqCst)
+        self.uploads.lock().expect("uploads lock").len()
+    }
+
+    /// Whether the last upload's manifest carried `revision` as its base.
+    fn last_upload_based_on(&self, revision: [u8; 32]) -> bool {
+        let uploads = self.uploads.lock().expect("uploads lock");
+        let last = uploads.last().expect("an upload was sent");
+        let digits: Vec<String> = revision.iter().map(u8::to_string).collect();
+        let needle = format!("\"base_revision_id\":[{}]", digits.join(","));
+        String::from_utf8_lossy(last).contains(&needle)
     }
 
     fn serve(&self, rows: Vec<serde_json::Value>) {
@@ -58,6 +69,10 @@ impl Server {
 
     fn conflict_with(&self, revision: [u8; 32]) {
         *self.conflict_revision.lock().expect("conflict lock") = Some(revision);
+    }
+
+    fn accept_uploads(&self) {
+        *self.conflict_revision.lock().expect("conflict lock") = None;
     }
 }
 
@@ -79,8 +94,8 @@ async fn get_state(State(server): State<Server>) -> axum::Json<serde_json::Value
 }
 
 /// Accept an upload, or answer the configured conflict.
-async fn upload(State(server): State<Server>, _body: axum::body::Bytes) -> (StatusCode, axum::Json<serde_json::Value>) {
-    server.uploads.fetch_add(1, Ordering::SeqCst);
+async fn upload(State(server): State<Server>, body: axum::body::Bytes) -> (StatusCode, axum::Json<serde_json::Value>) {
+    server.uploads.lock().expect("uploads lock").push(body.to_vec());
     let conflict = *server.conflict_revision.lock().expect("conflict lock");
     if let Some(revision) = conflict {
         return (
@@ -187,9 +202,43 @@ async fn keep_local_does_not_resend_a_file_the_server_no_longer_has() {
         "one upload, refused; keeping the local copy must not resend it with the zero revision"
     );
     assert_eq!(outcome.files_uploaded, 0, "{outcome:?}");
+    assert_eq!(outcome.conflicts_skipped, 1, "{outcome:?}");
     let state = manager.load_sync_state().await.expect("state");
     let synced = state.synced.files.values().next().expect("baseline kept");
     assert_eq!(synced.revision_id, STORED_REVISION, "the zero revision never becomes the base");
+}
+
+/// With no answer for the file (the automatic skip the engine uses), the
+/// conflict is skipped and the next upload of the file is based on the
+/// revision last synced, never on the zero id. Before hcfs#667 the skip
+/// saved the zero id as the base, so every later cycle sent it, and the
+/// server now refuses that base for good (`409 target_gone`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_skipped_gone_conflict_keeps_the_synced_base_for_the_next_upload() {
+    let root = tempfile::tempdir().expect("root");
+    let config_dir = tempfile::tempdir().expect("config");
+    let server = Server::default();
+    let (mut manager, _) = drive_with_one_synced_file(root.path(), config_dir.path(), &server).await;
+
+    std::fs::write(root.path().join("a.txt"), "edited while the folder moved").expect("edit file");
+    server.conflict_with([0; 32]);
+    let skipped = manager.sync_with_resolutions(HashMap::new()).await.expect("the cycle completes");
+    assert_eq!(skipped.conflicts_skipped, 1, "{skipped:?}");
+    assert!(
+        server.last_upload_based_on(STORED_REVISION),
+        "the refused upload was based on the synced revision"
+    );
+
+    server.accept_uploads();
+    let before = server.uploads();
+    manager.sync_with_resolutions(HashMap::new()).await.expect("the next cycle uploads");
+
+    assert_eq!(server.uploads() - before, 1, "the edit is uploaded on the next cycle");
+    assert!(
+        server.last_upload_based_on(STORED_REVISION),
+        "the next upload is based on the synced revision"
+    );
+    assert!(!server.last_upload_based_on([0; 32]), "the next upload is never based on the zero id");
 }
 
 /// The same answer to an ordinary conflict, where the server names the
