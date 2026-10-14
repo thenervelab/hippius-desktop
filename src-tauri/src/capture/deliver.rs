@@ -331,10 +331,11 @@ pub fn sync_failure_copy(error: Option<&str>) -> (String, FailureReason) {
     }
 }
 
-/// A transport failure: no route, no DNS, nothing answering. The same shapes
-/// the sync widget reads as a network failure, plus the OS's own "network is
-/// unreachable" / "no route" codes (51 and 65 on macOS, 101 and 113 on Linux,
-/// 10051 and 10065 on Windows).
+/// A transport failure: no route, no DNS, nothing answering. The request-send
+/// and connect shapes the sync widget also reads as a network failure, plus
+/// the OS's own "network is unreachable" / "no route" codes (51 and 65 on
+/// macOS, 101 and 113 on Linux, 10051 and 10065 on Windows). Not the widget's
+/// broken-off download body: a capture card only uploads.
 fn is_offline_shaped(message: &str) -> bool {
     let lower = message.trim().to_ascii_lowercase();
     if lower.is_empty() {
@@ -343,6 +344,8 @@ fn is_offline_shaped(message: &str) -> bool {
     lower.starts_with("network error:")
         || [
             "error sending request for url",
+            // hcfs drops the URL since #608: `error sending request: <cause>`.
+            "error sending request:",
             "error trying to connect",
             "connection refused",
             "connection reset",
@@ -717,6 +720,7 @@ mod tests {
     fn offline_and_a_full_plan_are_said_plainly() {
         for offline in [
             "error sending request for url (https://api.hippius.com/upload)",
+            "Upload failed: error sending request: client error (Connect): tcp connect error: Host is down (os error 64)",
             "Network error: timed out",
             "dns error: failed to lookup address information",
             "Connection refused (os error 61)",
