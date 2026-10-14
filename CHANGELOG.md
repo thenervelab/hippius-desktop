@@ -178,6 +178,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The card after a screenshot or recording no longer starts its wait over.** Pointing at it still keeps it open, and when you move away it closes once the time it had left runs out, its bar carrying on from where it stopped. Moving through its buttons with the keyboard holds it the same way.
 - **Large uploads no longer show an error when the connection drops after Hippius has already saved the file.** This covers files you add to a folder you don't sync on this computer, and failed uploads there now say what went wrong in plain words.
 - **Recordings and screenshots are no longer lost when something goes wrong.** A recording that does not stop cleanly is kept and uploaded instead of thrown away. A capture that fails to upload after you closed its card, or that was still recording or uploading when Hippius quit, comes back with Retry on your next capture or the next time you open Hippius. If your Captures folder was moved or deleted, Hippius asks you to choose it again instead of making a new empty one, so earlier captures are never removed from your drive.
 - **Screen recording on Linux works again on Ubuntu and other GNOME desktops.** Recordings no longer stop the moment you press Record or fail when you stop them, the area you draw lines up with your screen on scaled displays, and the camera is not asked for again each time the bubble opens.

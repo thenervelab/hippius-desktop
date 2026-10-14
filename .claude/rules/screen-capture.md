@@ -750,8 +750,13 @@ prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
 full display, or it sits under the Dock), `focused(false)` + content-protected except on macOS (`own_windows`) +
 `accept_first_mouse(true)` (never key, so without it every button needed two
-clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
-stays mounted and pauses, or the card changes height under the pointer).
+clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered or while
+keyboard focus (`:focus-visible`, in a focused window) is in it. **A hold is a
+pause, never a restart**: letting go runs on with the time left
+(`autoHide.ts`, pure, pinned by `autoHide.test.ts` and `previewPage.test.tsx`).
+The timer bar stays mounted and pauses (or the card changes height under the
+pointer), and each pause redraws it at the countdown's own offset (a negative
+`animation-delay`), so the bar and the timer cannot drift apart.
 It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
