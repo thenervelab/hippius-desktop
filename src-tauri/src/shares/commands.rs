@@ -3231,8 +3231,14 @@ mod tests {
     #[test]
     fn access_comes_from_the_membership_first_then_a_covering_grant() {
         let resp = memberships(serde_json::json!({
-            "memberships": [{"owner_ss58":"5O","folder_hash":"h1","role":"writer","grant_blob":"","display_label":"d","created_at":"t","frozen":true}],
-            "folder_grants": [{"owner_ss58":"5O","folder_hash":"h2","display_label":"d","path_prefix":"Clients/ACME","role":"writer","grant_blob":"","created_at":"t"}]
+            "memberships": [{
+                "owner_ss58": "5O", "folder_hash": "h1", "role": "writer", "grant_blob": "",
+                "display_label": "d", "created_at": "t", "frozen": true
+            }],
+            "folder_grants": [{
+                "owner_ss58": "5O", "folder_hash": "h2", "display_label": "d", "path_prefix": "Clients/ACME",
+                "role": "writer", "grant_blob": "", "created_at": "t"
+            }]
         }));
         assert_eq!(member_access_for(&resp, "5O", "h1", "any"), Some(("writer".into(), true)));
         assert_eq!(member_access_for(&resp, "5O", "h2", "Clients/ACME/x"), Some(("writer".into(), false)));

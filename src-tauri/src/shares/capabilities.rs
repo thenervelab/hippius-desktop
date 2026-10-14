@@ -199,9 +199,11 @@ mod tests {
 
     #[test]
     fn full_capabilities_shape_round_trips() {
-        let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true,"folder_share_link_envelopes":true}"#,
-        )
+        let caps: ServerCapabilities = serde_json::from_str(concat!(
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
+            r#""folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"#,
+            r#""share_preview":true,"folder_share_link_envelopes":true}"#,
+        ))
         .expect("parse");
         assert!(caps.shares);
         assert!(caps.folder_shares);
