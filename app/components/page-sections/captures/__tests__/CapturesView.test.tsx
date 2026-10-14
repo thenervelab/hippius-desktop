@@ -52,6 +52,9 @@ vi.mock("@/app/components/page-sections/drive/DriveContainer", async () => {
   };
 });
 
+const nav = vi.hoisted(() => ({ push: vi.fn() }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: nav.push, replace: vi.fn() }) }));
+
 import CapturesView from "../CapturesView";
 import { captureDialogAtom } from "@/app/lib/capture/captureFlow";
 import type { CaptureDriveStatus } from "@/app/lib/tauri/capture";
@@ -106,6 +109,28 @@ describe("the Captures page", () => {
     // Screenshot and Record live in the drive's own toolbar, as on every
     // drive, so the page header does not repeat them.
     expect(within(screen.getByTestId("page-header")).queryByTestId("capture-buttons")).toBeNull();
+  });
+
+  // Captures kept in a folder of the user's main drive: the page never
+  // shows that whole drive; it says where they are and opens the folder.
+  it("points to a captures folder inside another drive instead of showing the whole drive", async () => {
+    nav.push.mockReset();
+    tauri.onInvoke("capture_drive_status", () => ({
+      state: "ready",
+      label: "Main",
+      name: "Hippius",
+      folder: "hippius-captures",
+      remote: false,
+      location: { path: "/Users/a/Hippius/hippius-captures", place: "Hippius › hippius-captures", permissionNote: null },
+    }));
+    renderView();
+    const note = await screen.findByTestId("captures-in-folder");
+    expect(note).toHaveTextContent("Your captures are saved in Hippius › hippius-captures, in your Hippius drive.");
+    expect(screen.queryByTestId("drive")).toBeNull();
+    // Screenshot and Record stay in the header, as before a drive exists.
+    expect(within(screen.getByTestId("page-header")).getByTestId("capture-buttons")).toBeInTheDocument();
+    fireEvent.click(within(note).getByRole("button", { name: "Open folder" }));
+    expect(nav.push).toHaveBeenCalledWith("/files?openLabel=Main&openSubfolder=hippius-captures");
   });
 
   it("browses a captures drive that is not synced here from the server", async () => {

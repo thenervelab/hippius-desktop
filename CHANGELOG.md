@@ -15,6 +15,23 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-10-13
+
+Choosing where your screenshots and recordings are saved now does what you
+expect.
+
+### Changed
+
+- **Your captures go in the folder you pick.** Hippius uses the folder you
+  choose as it is, instead of making a "Hippius Captures" folder inside it.
+- **A folder inside your main drive works.** Pick a folder in your synced
+  drive and your captures are saved there, in that drive.
+- **A simpler default name.** The suggested folder is now called
+  hippius-captures, in Documents.
+- **No surprises with big folders.** If you pick your home folder, Documents,
+  Desktop, Downloads or the top of a drive, Hippius makes a hippius-captures
+  folder inside it and shows you the exact folder before you confirm.
+
 ## [0.6.10] - 2026-10-13
 
 Share links now show a real preview when you paste them into a chat, and

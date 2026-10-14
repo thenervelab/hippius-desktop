@@ -168,6 +168,23 @@ describe("the capture folder row", () => {
     );
   });
 
+  // Captures in a folder of the main drive: that folder is named and opened,
+  // never the whole drive.
+  it("names and opens a captures folder inside a drive", async () => {
+    const location = { path: "/Users/a/Hippius/hippius-captures", place: "Hippius › hippius-captures", permissionNote: null };
+    setup(null, null, { ...READY, label: "Main", name: "Hippius", folder: "hippius-captures", location });
+    tauri.onInvoke("reveal_path_in_file_manager", () => null);
+    const line = await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });
+    await waitFor(() =>
+      expect(line).toHaveTextContent("saved in Hippius › hippius-captures, in your Hippius drive."),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Show in Finder" }));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("reveal_path_in_file_manager", { path: location.path }),
+    );
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("reveal_drive_in_finder", expect.anything());
+  });
+
   it("offers no folder to open for a captures drive that is only on the server", async () => {
     setup(null, null, { ...READY, remote: true, location: null });
     await screen.findByTestId("capture-destination-line", {}, { timeout: 5000 });

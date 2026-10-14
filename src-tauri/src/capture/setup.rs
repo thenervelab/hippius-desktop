@@ -1,9 +1,20 @@
 //! Captures get a drive of their own.
 //!
-//! The first screenshot or recording asks where it goes: `Hippius Captures`
-//! in Documents unless the user picks another place (a folder they pick gets
-//! `Hippius Captures` made inside it, so their own folder is never uploaded
-//! whole). Hippius never files captures in the user's other drives.
+//! The first screenshot or recording asks where it goes: `hippius-captures`
+//! in Documents unless the user picks another place. A folder they pick is
+//! used as it is ([`folder_for_choice`]), except one too broad to upload
+//! whole (the home folder, a disk's root, Documents, Desktop and the like),
+//! which gets `hippius-captures` made inside it. The dialog shows the folder
+//! that will be used before the user confirms.
+//!
+//! A free folder becomes a new drive, always labelled `Hippius Captures`
+//! (`naming::CAPTURES_DIR_NAME`) whatever the folder is called, since the
+//! web console and the browser extension find the captures drive by that
+//! label. A folder inside one of the user's own drives (their main drive,
+//! say) is used where it is: captures are filed in that drive, in that
+//! folder ([`Place::InDrive`]), and no new drive is made. Picking the root of
+//! an own drive that is not a captures drive files them in a
+//! `hippius-captures` folder of it, never loose at its root.
 //!
 //! While nobody has answered, the capture waits in Hippius's own folder
 //! (`~/.hippius/capture-waiting/<account>`) and the main window shows the
@@ -27,7 +38,7 @@ use tauri::{Emitter, Manager};
 use tokio::sync::Mutex;
 
 use super::destination::{self, CaptureDestination, DriveHere};
-use super::naming::CAPTURES_DIR_NAME;
+use super::naming::{CAPTURES_DIR_NAME, CAPTURES_FOLDER_NAME};
 use super::preview::FailureReason;
 use crate::app_state::AppState;
 use crate::error::{AppError, NotReadyKind, Result};
@@ -153,18 +164,33 @@ enum Added {
     Blocked(SetupBlocked),
 }
 
-/// Make `dir` this account's captures drive: an own drive already synced at
-/// `dir` is taken as it is (a drive whose first setup was cut short), else
-/// the folder is made and added like Sync a Folder adds one.
+/// Make `dir` where this account's captures go: inside an own drive (its
+/// root included, a drive whose first setup was cut short) captures are
+/// filed in that drive at that folder, else the folder is made and added
+/// like Sync a Folder adds one.
 async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, dir: &Path) -> Result<Added> {
     let pool = state.pool()?;
     let home = home_dir()?;
     let drives = destination::drives_here(pool, account_id).await?;
-    if let Some(label) = check_location(dir, &home, &drives)? {
-        let chosen = CaptureDestination::own(&label, &drive_name(dir, &label));
+    if let Place::InDrive { label, folder } = check_location(dir, &home, &drives)? {
+        let root = drives
+            .iter()
+            .find(|d| d.label == label)
+            .map_or_else(|| dir.to_path_buf(), |d| d.path.clone());
+        let chosen = CaptureDestination {
+            folder: folder.clone(),
+            ..CaptureDestination::own(&label, &drive_name(&root, &label))
+        };
         destination::save(pool, account_id, &chosen).await?;
         clear_pending(pool, account_id).await?;
-        tracing::info!(label = %label, "captures drive: an existing drive at the chosen folder");
+        // Made now, so the folder is there to open before the first capture
+        // lands in it. Delivery makes it too, so a failure here costs nothing.
+        if !folder.is_empty()
+            && let Err(e) = tokio::fs::create_dir_all(dir).await
+        {
+            tracing::warn!(error = %e, "captures folder inside a drive not made yet; delivery makes it");
+        }
+        tracing::info!(label = %label, in_folder = !folder.is_empty(), "captures go to an existing drive");
         return Ok(Added::Ready(chosen));
     }
     if let Err(e) = tokio::fs::create_dir_all(dir).await {
@@ -182,9 +208,9 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
         }
     }
     let path = dir.to_string_lossy().into_owned();
-    let base = dir
-        .file_name()
-        .map_or_else(|| CAPTURES_DIR_NAME.to_string(), |n| n.to_string_lossy().into_owned());
+    // The label is the captures drive's whatever the folder is called: the
+    // web console and the extension find the captures drive by it.
+    let base = CAPTURES_DIR_NAME.to_string();
     match crate::sync::lifecycle::add_local_sync_folder(app.clone(), account_id.to_string(), path, base, None).await {
         Ok(label) => {
             let chosen = CaptureDestination::own(&label, &drive_name(dir, &label));
@@ -241,77 +267,147 @@ pub fn waiting_dir(home: &Path, account_id: &str) -> PathBuf {
 }
 
 /// Where the captures drive goes unless the user picks another place:
-/// `Hippius Captures` in `documents` (the system's Documents folder, wherever
+/// `hippius-captures` in `documents` (the system's Documents folder, wherever
 /// it really is, e.g. moved by Windows), or in the home folder when
-/// Documents is itself inside one of their drives.
+/// Documents is itself inside one of their drives (the suggestion is always
+/// a drive of its own).
 #[must_use]
 pub fn suggested_dir(home: &Path, documents: &Path, drives: &[DriveHere]) -> PathBuf {
-    let documents = documents.join(CAPTURES_DIR_NAME);
-    if check_location(&documents, home, drives).is_ok() {
+    let own_drive = |dir: &Path| match check_location(dir, home, drives) {
+        Ok(Place::NewDrive) => true,
+        // An own drive already synced exactly there (a setup cut short).
+        Ok(Place::InDrive { folder, .. }) => folder.is_empty(),
+        Err(_) => false,
+    };
+    let documents = documents.join(CAPTURES_FOLDER_NAME);
+    if own_drive(&documents) {
         return documents;
     }
-    let in_home = home.join(CAPTURES_DIR_NAME);
-    if check_location(&in_home, home, drives).is_ok() {
+    let in_home = home.join(CAPTURES_FOLDER_NAME);
+    if own_drive(&in_home) {
         return in_home;
     }
     documents
 }
 
-/// The folder the captures drive is made of when the user picks `picked`:
-/// `Hippius Captures` inside it, or `picked` itself when that already is a
-/// `Hippius Captures` folder (one from before, picked to go back to it).
+/// The home folder's own folders, each too broad to upload whole as the
+/// captures folder (macOS, Windows and Linux names).
+const STANDARD_FOLDERS: [&str; 9] = [
+    "Documents",
+    "Desktop",
+    "Downloads",
+    "Pictures",
+    "Movies",
+    "Music",
+    "Videos",
+    "Public",
+    "Library",
+];
+
+/// Whether `dir` is a folder that must never become the captures folder
+/// whole: the home folder, a disk's root, the system's Documents folder or
+/// one of the home folder's standard folders.
+fn too_broad(dir: &Path, home: &Path, documents: &Path) -> bool {
+    dir == home
+        || dir == documents
+        || dir.parent().is_none()
+        || (dir.parent() == Some(home)
+            && dir
+                .file_name()
+                .is_some_and(|n| STANDARD_FOLDERS.iter().any(|s| n.to_string_lossy().eq_ignore_ascii_case(s))))
+}
+
+/// Whether the own drive `d` is a captures drive: labelled like one, kept
+/// captures before (`known`), or a folder named like one.
+fn is_captures_drive(d: &DriveHere, known: &[String]) -> bool {
+    super::recording_allowance::is_default_captures_label(&d.label)
+        || known.iter().any(|k| k == &d.label)
+        || d.path.file_name().is_some_and(|n| n == CAPTURES_DIR_NAME || n == CAPTURES_FOLDER_NAME)
+}
+
+/// The folder captures go to when the user picks `picked`: the folder
+/// itself, or `hippius-captures` inside it when it is too broad to upload
+/// whole ([`too_broad`]) or is the root of one of their own drives that is
+/// not a captures drive (captures are filed in a folder of it, never loose
+/// at its root). `known` are the labels this account kept captures in
+/// (`destination::own_capture_labels`). Applying it to its own answer gives
+/// the same folder, which is what lets the dialog send back the path it
+/// showed.
 ///
 /// # Errors
 ///
 /// [`AppError::Validation`] for a path that is not absolute.
-pub fn folder_for_choice(picked: &Path) -> Result<PathBuf> {
+pub fn folder_for_choice(picked: &Path, home: &Path, documents: &Path, drives: &[DriveHere], known: &[String]) -> Result<PathBuf> {
     if !picked.is_absolute() {
         return Err(AppError::Validation("Choose a folder on this computer.".into()));
     }
-    if picked.file_name().is_some_and(|n| n == CAPTURES_DIR_NAME) {
-        return Ok(picked.to_path_buf());
-    }
-    Ok(picked.join(CAPTURES_DIR_NAME))
+    let own_drive_root = drives.iter().find(|d| !d.member && d.path == picked);
+    let inside = match own_drive_root {
+        Some(d) => !is_captures_drive(d, known),
+        None => too_broad(picked, home, documents),
+    };
+    Ok(if inside {
+        picked.join(CAPTURES_FOLDER_NAME)
+    } else {
+        picked.to_path_buf()
+    })
 }
 
-/// Whether `dir` can be the captures drive: `Some(label)` when an own drive
-/// is already synced exactly there (it becomes the captures drive), `None`
-/// when it is free.
+/// Where captures go for a folder ([`check_location`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    /// A folder outside every drive: a new captures drive is made of it.
+    NewDrive,
+    /// A folder in one of the account's own drives: captures are filed in
+    /// that drive at `folder` (a path from its root; empty for the root
+    /// itself, a drive already synced exactly there).
+    InDrive { label: String, folder: String },
+}
+
+/// Where captures go if they are kept in `dir`.
 ///
 /// # Errors
 ///
 /// [`AppError::Validation`], with the sentence the dialog shows, for a
-/// folder inside another drive or holding one (two drives never share
-/// files), a drive shared with this account, or Hippius's own folder.
-pub fn check_location(dir: &Path, home: &Path, drives: &[DriveHere]) -> Result<Option<String>> {
+/// folder in a drive shared with this account, a folder holding a drive (two
+/// drives never share files), Hippius's own folder, or a folder inside a
+/// drive whose name the drive cannot hold.
+pub fn check_location(dir: &Path, home: &Path, drives: &[DriveHere]) -> Result<Place> {
     if dir.starts_with(home.join(".hippius")) {
         return Err(AppError::Validation(
             "That folder is where Hippius keeps its own files. Choose another place.".into(),
         ));
     }
-    if let Some(same) = drives.iter().find(|d| d.path == dir) {
-        if same.member {
+    // The drive `dir` is in (drives never nest, so there is at most one).
+    let drives = drives.iter().filter(|d| !d.path.as_os_str().is_empty());
+    if let Some(d) = drives.clone().find(|d| dir.starts_with(&d.path)) {
+        if d.member {
             return Err(AppError::Validation(format!(
-                "That folder is a drive shared with you, “{}”. Choose another place.",
-                drive_name(&same.path, &same.label)
+                "That folder is in a drive shared with you, “{}”. Choose another place.",
+                drive_name(&d.path, &d.label)
             )));
         }
-        return Ok(Some(same.label.clone()));
+        let rel = dir
+            .strip_prefix(&d.path)
+            .map(|rest| {
+                rest.components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .unwrap_or_default();
+        return Ok(Place::InDrive {
+            label: d.label.clone(),
+            folder: destination::normalize_folder(&rel)?,
+        });
     }
-    for d in drives {
-        let name = drive_name(&d.path, &d.label);
-        if dir.starts_with(&d.path) {
-            return Err(AppError::Validation(format!(
-                "That place is inside your drive “{name}”. Choose a place outside your drives, so captures get a drive of their own."
-            )));
-        }
-        if d.path.starts_with(dir) {
-            return Err(AppError::Validation(format!(
-                "That folder holds your drive “{name}”. Choose another place."
-            )));
-        }
+    if let Some(d) = drives.clone().find(|d| d.path.starts_with(dir)) {
+        return Err(AppError::Validation(format!(
+            "That folder holds your drive “{}”. Choose another place.",
+            drive_name(&d.path, &d.label)
+        )));
     }
-    Ok(None)
+    Ok(Place::NewDrive)
 }
 
 /// macOS asks before an app may use Documents, Desktop or Downloads. The
@@ -508,9 +604,12 @@ pub enum CaptureDriveStatus {
     Ready {
         label: String,
         name: String,
+        /// The folder in the drive captures go to, as a path from its root;
+        /// empty for the root (a captures drive of its own).
+        folder: String,
         /// Not synced on this computer: browsed from the server.
         remote: bool,
-        /// Its folder here, when it is synced here.
+        /// Their folder here, when the drive is synced here.
         location: Option<Location>,
     },
     /// No folder chosen yet: the Captures page and Settings offer to set it
@@ -534,9 +633,10 @@ async fn status_for(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Capture
         let here = drives.iter().find(|h| h.label == d.label && !h.member);
         return Ok(CaptureDriveStatus::Ready {
             remote: here.is_none(),
-            location: here.map(|h| location(&h.path, &home)),
+            location: here.map(|h| location(&destination::local_dir(&h.path, &d.folder), &home)),
             label: d.label,
             name: d.display_name,
+            folder: d.folder,
         });
     }
     if let Some(p) = load_pending(pool, account_id).await? {
@@ -576,9 +676,11 @@ pub async fn capture_drive_status(state: tauri::State<'_, AppState>) -> Result<C
 #[tauri::command]
 pub async fn capture_drive_location(state: tauri::State<'_, AppState>, folder: String) -> Result<Location> {
     let account_id = state.current_account_id()?;
+    let pool = state.pool()?;
     let home = home_dir()?;
-    let dir = folder_for_choice(Path::new(&folder))?;
-    let drives = destination::drives_here(state.pool()?, &account_id).await?;
+    let drives = destination::drives_here(pool, &account_id).await?;
+    let known = destination::own_capture_labels(pool, &account_id).await?;
+    let dir = folder_for_choice(Path::new(&folder), &home, &documents_dir(&home), &drives, &known)?;
     check_location(&dir, &home, &drives)?;
     Ok(location(&dir, &home))
 }
@@ -602,11 +704,16 @@ pub async fn capture_drive_create(state: tauri::State<'_, AppState>, app: tauri:
         let _one_at_a_time = ENSURE_LOCK.lock().await;
         let drives = destination::drives_here(pool, &account_id).await?;
         let dir = match folder {
-            Some(f) => folder_for_choice(Path::new(&f))?,
+            Some(f) => {
+                let known = destination::own_capture_labels(pool, &account_id).await?;
+                folder_for_choice(Path::new(&f), &home, &documents_dir(&home), &drives, &known)?
+            }
             None => suggested_dir(&home, &documents_dir(&home), &drives),
         };
         let already = match destination::load(pool, &account_id).await? {
-            Some(current) => drives.iter().any(|d| d.label == current.label && d.path == dir),
+            Some(current) => drives
+                .iter()
+                .any(|d| d.label == current.label && !d.member && destination::local_dir(&d.path, &current.folder) == dir),
             None => false,
         };
         if !already {
@@ -663,66 +770,167 @@ mod tests {
     #[test]
     fn the_suggested_place_is_hippius_captures_in_documents() {
         let docs = home().join("Documents");
-        assert_eq!(suggested_dir(&home(), &docs, &[]), home().join("Documents/Hippius Captures"));
+        assert_eq!(suggested_dir(&home(), &docs, &[]), home().join("Documents/hippius-captures"));
         // Another drive elsewhere changes nothing.
         let work = [drive("Work", "/Users/a/Work", false)];
-        assert_eq!(suggested_dir(&home(), &docs, &work), home().join("Documents/Hippius Captures"));
+        assert_eq!(suggested_dir(&home(), &docs, &work), home().join("Documents/hippius-captures"));
         // Documents moved elsewhere by the system: there.
         let moved = PathBuf::from("/Users/a/OneDrive/Documents");
-        assert_eq!(suggested_dir(&home(), &moved, &[]), moved.join("Hippius Captures"));
+        assert_eq!(suggested_dir(&home(), &moved, &[]), moved.join("hippius-captures"));
     }
 
-    /// Documents synced as a drive of its own: the captures drive cannot go
-    /// inside it, so it goes in the home folder.
+    /// Documents synced as a drive of its own: the suggestion is always a
+    /// drive of its own, so it goes in the home folder.
     #[test]
     fn documents_inside_a_drive_moves_the_suggestion_to_the_home_folder() {
         let docs = [drive("Docs", "/Users/a/Documents", false)];
-        assert_eq!(suggested_dir(&home(), &home().join("Documents"), &docs), home().join("Hippius Captures"));
+        assert_eq!(suggested_dir(&home(), &home().join("Documents"), &docs), home().join("hippius-captures"));
     }
 
-    /// A folder the user picks gets Hippius Captures made inside it, so their
-    /// own folder is never uploaded whole; picking a Hippius Captures folder
-    /// uses it.
-    #[test]
-    fn a_picked_folder_gets_hippius_captures_inside_it() {
-        // A path is only absolute from a drive letter on Windows.
-        let root = PathBuf::from(if cfg!(windows) { r"C:\" } else { "/" });
-        assert_eq!(
-            folder_for_choice(&root.join("Users/a/Pictures")).unwrap(),
-            root.join("Users/a/Pictures/Hippius Captures")
-        );
-        assert_eq!(
-            folder_for_choice(&root.join("Volumes/Ext/Hippius Captures")).unwrap(),
-            root.join("Volumes/Ext/Hippius Captures")
-        );
-        assert!(matches!(folder_for_choice(Path::new("Pictures")), Err(AppError::Validation(_))));
+    /// An absolute path on every platform (from a drive letter on Windows),
+    /// since a picked folder must be absolute.
+    fn abs(p: &str) -> PathBuf {
+        PathBuf::from(if cfg!(windows) { format!("C:{p}") } else { p.to_string() })
     }
 
+    fn abs_drive(label: &str, path: &str, member: bool) -> DriveHere {
+        DriveHere {
+            path: abs(path),
+            ..drive(label, path, member)
+        }
+    }
+
+    fn choice(picked: &str, drives: &[DriveHere], known: &[String]) -> PathBuf {
+        folder_for_choice(&abs(picked), &abs(HOME), &abs("/Users/a/Documents"), drives, known).unwrap()
+    }
+
+    /// The folder the user picks is the one used, whatever it is called.
     #[test]
-    fn a_captures_drive_is_never_inside_or_around_another_drive() {
+    fn a_picked_folder_is_used_as_it_is() {
+        assert_eq!(choice("/Users/a/hipp.captures", &[], &[]), abs("/Users/a/hipp.captures"));
+        assert_eq!(choice("/Users/a/Pictures/Screens", &[], &[]), abs("/Users/a/Pictures/Screens"));
+        assert_eq!(choice("/Volumes/Ext/Shots", &[], &[]), abs("/Volumes/Ext/Shots"));
+        // A captures folder from before, picked to go back to it.
+        assert_eq!(
+            choice("/Users/a/Documents/Hippius Captures", &[], &[]),
+            abs("/Users/a/Documents/Hippius Captures")
+        );
+        assert!(matches!(
+            folder_for_choice(Path::new("Pictures"), &abs(HOME), &abs("/Users/a/Documents"), &[], &[]),
+            Err(AppError::Validation(_))
+        ));
+    }
+
+    /// The home folder, a disk's root and the home folder's own folders are
+    /// never uploaded whole: captures go in a folder made inside them.
+    #[test]
+    fn a_folder_too_broad_to_upload_gets_hippius_captures_inside_it() {
+        for picked in [
+            "/Users/a",
+            "/Users/a/Documents",
+            "/Users/a/Desktop",
+            "/Users/a/Downloads",
+            "/Users/a/Pictures",
+            "/Users/a/Movies",
+            "/Users/a/Music",
+            "/Users/a/Videos",
+            "/Users/a/Public",
+            "/Users/a/Library",
+            "/Users/a/documents",
+            "/",
+        ] {
+            assert_eq!(choice(picked, &[], &[]), abs(picked).join("hippius-captures"), "{picked}");
+        }
+        // The system's Documents, wherever it really is.
+        let moved = abs("/Users/a/OneDrive/Documents");
+        assert_eq!(
+            folder_for_choice(&moved, &abs(HOME), &moved, &[], &[]).unwrap(),
+            moved.join("hippius-captures")
+        );
+    }
+
+    /// The root of an own drive that is not a captures drive files captures
+    /// in a folder of it, never loose at its root; a captures drive's root
+    /// is used as it is.
+    #[test]
+    fn a_drive_root_gets_a_captures_folder_unless_it_is_a_captures_drive() {
         let drives = [
-            drive("Work", "/Users/a/Work", false),
+            abs_drive("Main", "/Users/a/Hippius", false),
+            abs_drive("Hippius Captures", "/Users/a/Documents/Shots", false),
+            abs_drive("Old", "/Users/a/Old", false),
+            abs_drive("Team", "/Users/a/Team", true),
+        ];
+        assert_eq!(choice("/Users/a/Hippius", &drives, &[]), abs("/Users/a/Hippius/hippius-captures"));
+        assert_eq!(choice("/Users/a/Documents/Shots", &drives, &[]), abs("/Users/a/Documents/Shots"));
+        // A drive this account kept captures in before.
+        assert_eq!(choice("/Users/a/Old", &drives, &["Old".into()]), abs("/Users/a/Old"));
+        // A folder inside a drive is used as it is.
+        assert_eq!(choice("/Users/a/Hippius/Screens", &drives, &[]), abs("/Users/a/Hippius/Screens"));
+        // A drive shared with the account is left for the check to refuse.
+        assert_eq!(choice("/Users/a/Team", &drives, &[]), abs("/Users/a/Team"));
+    }
+
+    /// The dialog sends back the folder it showed: resolving it again gives
+    /// the same folder, never a folder inside it.
+    #[test]
+    fn resolving_a_resolved_folder_changes_nothing() {
+        let drives = [abs_drive("Main", "/Users/a/Hippius", false)];
+        for picked in [
+            "/Users/a",
+            "/Users/a/Documents",
+            "/Users/a/Hippius",
+            "/Users/a/Shots",
+            "/Users/a/Hippius/x",
+        ] {
+            let once = choice(picked, &drives, &[]);
+            let again = folder_for_choice(&once, &abs(HOME), &abs("/Users/a/Documents"), &drives, &[]).unwrap();
+            assert_eq!(once, again, "{picked}");
+        }
+    }
+
+    #[test]
+    fn where_captures_go_for_each_kind_of_folder() {
+        let drives = [
+            drive("Main", "/Users/a/Hippius", false),
             drive("Team", "/Users/a/Team", true),
             drive("Hippius Captures", "/Users/a/Documents/Hippius Captures", false),
         ];
-        // Free.
+        let place = |dir: &str| check_location(Path::new(dir), &home(), &drives);
+        // Free: a new drive.
+        assert_eq!(place("/Users/a/Pictures/hippius-captures").unwrap(), Place::NewDrive);
+        // An own drive already there: taken as it is.
         assert_eq!(
-            check_location(Path::new("/Users/a/Pictures/Hippius Captures"), &home(), &drives).unwrap(),
-            None
+            place("/Users/a/Documents/Hippius Captures").unwrap(),
+            Place::InDrive {
+                label: "Hippius Captures".into(),
+                folder: String::new()
+            }
         );
-        // Its own drive already there: taken as it is.
+        // Inside an own drive (the main drive, say): filed there.
         assert_eq!(
-            check_location(Path::new("/Users/a/Documents/Hippius Captures"), &home(), &drives).unwrap(),
-            Some("Hippius Captures".into())
+            place("/Users/a/Hippius/hippius-captures").unwrap(),
+            Place::InDrive {
+                label: "Main".into(),
+                folder: "hippius-captures".into()
+            }
         );
-        let refused = |dir: &str| match check_location(Path::new(dir), &home(), &drives) {
+        assert_eq!(
+            place("/Users/a/Hippius/Work/Screens").unwrap(),
+            Place::InDrive {
+                label: "Main".into(),
+                folder: "Work/Screens".into()
+            }
+        );
+        let refused = |dir: &str| match place(dir) {
             Err(AppError::Validation(m)) => m,
             other => panic!("{dir}: {other:?}"),
         };
-        assert!(refused("/Users/a/Work/Hippius Captures").contains("inside your drive “Work”"));
         assert!(refused("/Users/a").contains("holds your drive"));
         assert!(refused("/Users/a/Team").contains("shared with you"));
-        assert!(refused("/Users/a/.hippius/Hippius Captures").contains("its own files"));
+        assert!(refused("/Users/a/Team/Shots").contains("shared with you"));
+        assert!(refused("/Users/a/.hippius/hippius-captures").contains("its own files"));
+        // A hidden folder in a drive would never sync.
+        assert!(refused("/Users/a/Hippius/.private").contains("dot"));
     }
 
     #[test]
@@ -869,8 +1077,8 @@ mod tests {
             panic!("nothing chosen yet");
         };
         let documents = documents_dir(&home);
-        assert_eq!(suggested.path, documents.join("Hippius Captures").to_string_lossy());
-        assert_eq!(suggested.place, place_name(&documents.join("Hippius Captures"), &home));
+        assert_eq!(suggested.path, documents.join("hippius-captures").to_string_lossy());
+        assert_eq!(suggested.place, place_name(&documents.join("hippius-captures"), &home));
 
         let dir = home.join("Elsewhere/Hippius Captures");
         save_pending(&pool, "5Status", &dir, SetupBlocked::StorageFull).await.unwrap();
@@ -896,5 +1104,17 @@ mod tests {
         assert_eq!(label, "Hippius Captures");
         assert!(!remote, "a paused drive is still browsed here");
         assert_eq!(location.unwrap().place, "Elsewhere › Hippius Captures");
+
+        // Moved into a folder of that drive: the folder is what is shown.
+        let inside = CaptureDestination {
+            folder: "Shots/hippius-captures".into(),
+            ..CaptureDestination::own("Hippius Captures", "Hippius Captures")
+        };
+        destination::save(&pool, "5Status", &inside).await.unwrap();
+        let CaptureDriveStatus::Ready { folder, location, .. } = status_for(&pool, "5Status").await.unwrap() else {
+            panic!("the drive exists");
+        };
+        assert_eq!(folder, "Shots/hippius-captures");
+        assert_eq!(location.unwrap().place, "Elsewhere › Hippius Captures › Shots › hippius-captures");
     }
 }

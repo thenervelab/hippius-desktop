@@ -19,6 +19,10 @@
 //! the web console, another computer or an older build counts, and one
 //! deleted anywhere stops counting.
 //!
+//! Captures filed in a folder of another drive (the user picked a folder in
+//! their main drive, `destination::own_capture_folders`) count only the
+//! videos under that folder, never the rest of that drive.
+//!
 //! A recording is ANY video file ([`is_video_name`]: `.mp4`, `.webm`,
 //! `.mov`), whatever its name and in any folder of the drive, so renaming a
 //! recording does not free a slot. Every other file, screenshots included,
@@ -119,6 +123,37 @@ pub fn captures_drives<'a>(known: &[String], on_server: impl IntoIterator<Item =
     labels.sort();
     labels.dedup();
     labels
+}
+
+/// The folders inside other drives captures were filed in, among the drives
+/// the server holds (`on_server`), leaving out any drive already counted
+/// whole (`whole`, from [`captures_drives`]). Sorted, each once.
+#[must_use]
+pub fn captures_folders<'a>(
+    whole: &[String],
+    folders: &[super::destination::CaptureFolder],
+    on_server: impl IntoIterator<Item = &'a str>,
+) -> Vec<super::destination::CaptureFolder> {
+    let on_server: HashSet<&str> = on_server.into_iter().collect();
+    let mut kept: Vec<super::destination::CaptureFolder> = folders
+        .iter()
+        .filter(|f| on_server.contains(f.label.as_str()) && !whole.contains(&f.label))
+        .cloned()
+        .collect();
+    kept.sort_by(|a, b| (&a.label, &a.folder).cmp(&(&b.label, &b.folder)));
+    kept.dedup();
+    kept
+}
+
+/// The recordings under `folder` of drive `label`'s server listing only
+/// (a captures folder inside another drive), keyed like [`recording_paths`].
+#[must_use]
+pub fn recording_paths_in(label: &str, folder: &str, files: &[RemoteFileInfo]) -> HashSet<String> {
+    files
+        .iter()
+        .filter(|f| is_video_name(&f.name) && crate::sync::recent_uploads::in_capture_folder(&f.path, folder))
+        .map(|f| counted_path(label, &f.path))
+        .collect()
 }
 
 /// The recordings in drive `label`'s server listing, by drive and path, so
@@ -244,17 +279,28 @@ fn account_key(account_id: &str) -> String {
     crate::auth::account_key::account_key(account_id)
 }
 
-/// The account's own captures drives on the server ([`captures_drives`]).
-async fn captures_labels(state: &AppState, account_id: &str) -> Result<Vec<String>> {
+/// The account's own captures drives on the server ([`captures_drives`]),
+/// and the captures folders inside its other drives ([`captures_folders`]).
+async fn captures_labels(state: &AppState, account_id: &str) -> Result<(Vec<String>, Vec<super::destination::CaptureFolder>)> {
     let pool = state.pool()?;
     let known = super::destination::own_capture_labels(pool, account_id).await?;
+    let folders = super::destination::own_capture_folders(pool, account_id).await?;
     let on_server = crate::sync::folders::list_remote_folders_internal(pool, account_id).await?;
-    Ok(captures_drives(&known, on_server.iter().map(|f| f.label.as_str())))
+    let whole = captures_drives(&known, on_server.iter().map(|f| f.label.as_str()));
+    let folders = captures_folders(&whole, &folders, on_server.iter().map(|f| f.label.as_str()));
+    Ok((whole, folders))
 }
 
-/// The recordings in every listed captures drive, or the first failure.
+/// The recordings in every listed captures drive and captures folder, or
+/// the first failure. Returns every drive read, for [`invalidate_label`].
 async fn list_recordings(state: &AppState, account_id: &str) -> Result<(Vec<String>, HashSet<String>)> {
-    let labels = captures_labels(state, account_id).await?;
+    let (whole, folders) = captures_labels(state, account_id).await?;
+    let mut labels = whole.clone();
+    for f in &folders {
+        if !labels.contains(&f.label) {
+            labels.push(f.label.clone());
+        }
+    }
     let listings = futures_util::future::join_all(
         labels
             .iter()
@@ -263,7 +309,14 @@ async fn list_recordings(state: &AppState, account_id: &str) -> Result<(Vec<Stri
     .await;
     let mut recordings = HashSet::new();
     for (label, listing) in labels.iter().zip(listings) {
-        recordings.extend(recording_paths(label, &listing?));
+        let listing = listing?;
+        if whole.contains(label) {
+            recordings.extend(recording_paths(label, &listing));
+        } else {
+            for f in folders.iter().filter(|f| &f.label == label) {
+                recordings.extend(recording_paths_in(label, &f.folder, &listing));
+            }
+        }
     }
     Ok((labels, recordings))
 }
@@ -299,12 +352,19 @@ pub async fn note_delivered(state: &AppState, account_id: &str, destination: &su
         return;
     };
     let known = super::destination::own_capture_labels(pool, account_id).await.unwrap_or_default();
-    if is_default_captures_label(&destination.label) || known.contains(&destination.label) {
-        state.capture.recording_counts.note_delivered(
-            &account_key(account_id),
-            &counted_path(&destination.label, &destination.rel_path(file_name)),
-            Instant::now(),
-        );
+    let rel_path = destination.rel_path(file_name);
+    let in_folder = || async {
+        super::destination::own_capture_folders(pool, account_id)
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.label == destination.label && crate::sync::recent_uploads::in_capture_folder(&rel_path, &f.folder))
+    };
+    if is_default_captures_label(&destination.label) || known.contains(&destination.label) || in_folder().await {
+        state
+            .capture
+            .recording_counts
+            .note_delivered(&account_key(account_id), &counted_path(&destination.label, &rel_path), Instant::now());
     }
 }
 
@@ -528,6 +588,37 @@ mod tests {
             "a remembered drive the server no longer holds is not listed"
         );
         assert!(captures_drives(&known, ["Work"]).is_empty());
+    }
+
+    /// Captures filed in a folder of the main drive count only the videos
+    /// under that folder, never the rest of the drive; a drive already
+    /// counted whole is not counted again by folder.
+    #[test]
+    fn a_captures_folder_inside_another_drive_counts_only_that_folder() {
+        use super::super::destination::CaptureFolder;
+        let files = listed(&[
+            "hippius-captures/Recording 2026-09-22 at 09.00.05.mp4",
+            "hippius-captures/Old/clip.mov",
+            "hippius-captures/Screenshot 2026-09-22 at 09.00.05.png",
+            "Holiday/beach.mp4",
+            "hippius-captures 2/talk.mp4",
+            "family.mp4",
+        ]);
+        let only = recording_paths_in("Main", "hippius-captures", &files);
+        assert_eq!(only.len(), 2, "{only:?}");
+        assert!(only.contains("Main/hippius-captures/Old/clip.mov"));
+
+        let folder = |label: &str, folder: &str| CaptureFolder {
+            label: label.into(),
+            folder: folder.into(),
+        };
+        let remembered = [folder("Main", "hippius-captures"), folder("Gone", "x"), folder("Hippius Captures", "sub")];
+        let whole = vec!["Hippius Captures".to_string()];
+        assert_eq!(
+            captures_folders(&whole, &remembered, ["Main", "Hippius Captures"]),
+            vec![folder("Main", "hippius-captures")],
+            "a drive the server no longer holds, or one counted whole, is left out"
+        );
     }
 
     fn captures() -> Vec<String> {
