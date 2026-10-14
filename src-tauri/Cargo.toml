@@ -267,14 +267,26 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # `register_missing_paths` on `rename_remote_folder`, does not reach the
 # desktop: no desktop path calls `POST /rename_folder`.
 #
+# Now at 41b064d5 on hcfs `pin/desktop-687-main-667`: hcfs main 3854bb9e
+# (the merge of #683) with #667's head dbd6725f merged in, because #667 is
+# still open and this pin already depends on it (dropping it fails
+# `tests/upload_conflict_gone_file.rs`). Repin to the hcfs main merge commit
+# once #667 merges. #683 (thenervelab/hcfs#665) adds link-secret folder links: when the server advertises
+# `folder_share_link_envelopes`, `create_folder_share` mints `#s=` / `#sp=`
+# links whose fragment is a per-link secret, not the drive key, and the
+# server keeps the drive key sealed under it. `ShareSecret` gains
+# `FolderLink` / `FolderLinkPrivate` (keystore kinds and owner-wrap flag
+# 0x04 here), `build_share_url_for` returns a `Result`, and
+# `FolderShareListItem` gains `link_format`.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "63fae87adee8f16f9deec315c6e857cee89a794c" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "41b064d58b7d18a67d7faf755b26b94148ab5edd" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "63fae87adee8f16f9deec315c6e857cee89a794c" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "41b064d58b7d18a67d7faf755b26b94148ab5edd" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

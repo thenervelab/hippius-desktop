@@ -50,7 +50,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,10 +68,10 @@ use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::finder_bridge::dispatch::{FinderMint, mint_confirmed};
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
-    FolderShareOrigin, ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_by_hash_inner,
-    revoke_folder_share_inner, update_folder_share_expiry_inner,
+    FolderLinkKind, FolderShareOrigin, RESHARE_ELSEWHERE, ShareChoice, create_folder_share_inner, list_folder_shares_inner,
+    reshare_folder_link_inner, revoke_folder_share_by_hash_inner, revoke_folder_share_inner, update_folder_share_expiry_inner,
 };
-use tauri_project_lib::shares::origin::folder_origin;
+use tauri_project_lib::shares::origin::{folder_origin, record_folder};
 use tauri_project_lib::shares::outside_folder::{
     CANCELLED_BUT_LINK_LIVE, OutsideFolderShare, SHARE_CANCELLED, UPLOAD_FOLDER_SHARES_UNAVAILABLE, share_outside_folder,
 };
@@ -154,6 +154,9 @@ struct MockOptions {
     /// Fired when `GET /v1/capabilities` is served: the modal's Cancel
     /// arriving while a share is still preparing.
     cancel_on_capabilities: Option<CancellationToken>,
+    /// Answer `link_envelope: false` even when the create body carried one:
+    /// a server that dropped the envelope (hcfs #665).
+    drop_envelope: bool,
 }
 
 impl Default for MockOptions {
@@ -170,6 +173,7 @@ impl Default for MockOptions {
             patch_expires_at: json!(null),
             memberships: json!({ "memberships": [] }),
             cancel_on_capabilities: None,
+            drop_envelope: false,
         }
     }
 }
@@ -202,6 +206,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let patch_expires = opts.patch_expires_at.clone();
     let memberships_body = opts.memberships.clone();
     let caps_cancel = opts.cancel_on_capabilities.clone();
+    let drop_envelope = opts.drop_envelope;
 
     Router::new()
         .route(
@@ -229,11 +234,16 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
                 if let Some(resp) = bearer_rejection(&headers) {
                     return resp;
                 }
+                // Like hcfs-server: `link_envelope` says whether the pair in
+                // the body was stored.
+                let stored = body.get("link_envelope").is_some() && !drop_envelope;
                 create_recorder.lock().unwrap().push(body);
                 match create_reply {
-                    CreateReply::Created { share_token, expires_at } => {
-                        (StatusCode::CREATED, Json(json!({ "share_token": share_token, "expires_at": expires_at }))).into_response()
-                    }
+                    CreateReply::Created { share_token, expires_at } => (
+                        StatusCode::CREATED,
+                        Json(json!({ "share_token": share_token, "expires_at": expires_at, "link_envelope": stored })),
+                    )
+                        .into_response(),
                     CreateReply::FolderNotFound => (
                         StatusCode::NOT_FOUND,
                         Json(json!({
@@ -353,22 +363,12 @@ async fn make_pool(dir: &std::path::Path) -> sqlx::SqlitePool {
     .await
     .expect("objectstore_auth_scoped schema");
 
-    sqlx::query(
-        "CREATE TABLE share_keystore (
-            share_token TEXT PRIMARY KEY,
-            secret_kind TEXT NOT NULL DEFAULT 'public'
-                        CHECK (secret_kind IN ('public', 'private')),
-            share_key BLOB NOT NULL,
-            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            CHECK (
-                (secret_kind = 'public'  AND length(share_key) = 32)
-             OR (secret_kind = 'private' AND length(share_key) > 32)
-            )
-        )",
-    )
-    .execute(&pool)
-    .await
-    .expect("share_keystore schema");
+    // The production DDL itself, not a copy: a copy kept the pre-link-secret
+    // CHECK and refused every `folder_link` row.
+    sqlx::query(&tauri_project_lib::utils::schema::share_keystore_ddl("share_keystore"))
+        .execute(&pool)
+        .await
+        .expect("share_keystore schema");
 
     // The Finder folder badge's source; same shape as `utils/schema.rs`.
     sqlx::query(
@@ -2426,4 +2426,363 @@ async fn an_upload_row_with_null_drive_identity_still_parses() {
     assert_eq!(wire[0]["source"], "uploadedCopy");
     assert_eq!((&wire[0]["folderHash"], &wire[0]["pathPrefix"]), (&json!(""), &json!("")));
     assert_eq!(wire[1]["source"], "drive", "a row without source is a drive link");
+}
+
+// ── Link-secret folder links (hcfs #665) ──────────────────────────────────
+
+fn envelope_caps() -> serde_json::Value {
+    json!({ "shares": true, "folder_shares": true, "member_folder_shares": true, "folder_share_link_envelopes": true })
+}
+
+/// The link secret a `#s=` URL carries.
+fn link_secret_of(url: &str) -> [u8; 32] {
+    let (_, encoded) = url.split_once("#s=").expect("a #s= link");
+    URL_SAFE_NO_PAD
+        .decode(encoded)
+        .expect("base64url link secret")
+        .try_into()
+        .expect("a 32-byte link secret")
+}
+
+/// The pair a link-secret create body carries, decoded: the envelope is the
+/// size the server's CHECK takes, and opens under `link_secret` to `file_key`.
+fn assert_body_seals(body: &serde_json::Value, link_secret: &[u8; 32], file_key: &[u8; 32]) {
+    let envelope = STANDARD
+        .decode(body["link_envelope"].as_str().expect("link_envelope"))
+        .expect("standard base64 envelope");
+    let digest = STANDARD
+        .decode(body["link_fetch_digest"].as_str().expect("link_fetch_digest"))
+        .expect("standard base64 digest");
+    assert_eq!(envelope.len(), hcfs_shared::shares::FOLDER_LINK_ENVELOPE_LEN);
+    assert_eq!(digest.len(), hcfs_shared::shares::FOLDER_LINK_FETCH_DIGEST_LEN);
+    let opened = hcfs_client::client::folder_link::open_folder_link_envelope(link_secret, &envelope).expect("the envelope opens");
+    assert_eq!(&*opened, file_key, "the envelope seals the drive key");
+}
+
+/// Once the server serves link envelopes, the owner's mint keeps the drive
+/// key off the URL: a `#s=` link secret, the drive key sealed in the body,
+/// and the secret kept as `FolderLink`, never `Public`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_secret_mint_keeps_the_drive_key_off_the_url() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5LinkSecretMintAcct";
+    let label = "secret-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            create: CreateReply::Created {
+                share_token: "tok_s",
+                expires_at: None,
+            },
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_own_drive(&pool, account, label).await;
+    write_master_seal(account);
+    let state = make_state(pool.clone(), account);
+
+    let link = create_folder_share_inner(&state, account, label, "photos", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect("mint");
+
+    let key = expected_file_key(label);
+    assert!(!link.share_url.contains("#k="), "{}", link.share_url);
+    assert!(
+        !link.share_url.contains(&URL_SAFE_NO_PAD.encode(key)),
+        "the drive key must not be in the URL"
+    );
+    let link_secret = link_secret_of(&link.share_url);
+    assert_ne!(link_secret, key);
+
+    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_body_seals(&body, &link_secret, &key);
+
+    let keystore = SqliteShareKeystore::new(pool);
+    assert_eq!(keystore.get("tok_s").expect("get"), Some(ShareSecret::FolderLink(link_secret)));
+}
+
+/// An Editor's mint in somebody else's drive builds the same kind of link:
+/// the owner named, the drive's own key (from the owner's seal) sealed in
+/// the body, and a `#s=` URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_editor_mints_a_link_secret_link_in_someone_elses_drive() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5EditorLinkSecretAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            memberships: membership("writer", false),
+            create: CreateReply::Created {
+                share_token: "tok_member_s",
+                expires_at: None,
+            },
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    write_member_seal(account, label);
+    let state = make_state(pool.clone(), account);
+
+    let link = create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days30, ShareChoice::Public)
+        .await
+        .expect("an Editor may share");
+
+    let phrase: bip39::Mnemonic = MEMBER_FOLDER_PHRASE.parse().expect("phrase");
+    let seed = phrase.to_seed("");
+    let drive_key: [u8; 32] = seed[..32].try_into().expect("32 bytes");
+    let link_secret = link_secret_of(&link.share_url);
+
+    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_eq!(body["owner_ss58"], OWNER_SS58);
+    assert_eq!(body["folder_hash"], WIRE_HASH);
+    assert_body_seals(&body, &link_secret, &drive_key);
+
+    let keystore = SqliteShareKeystore::new(pool);
+    assert_eq!(keystore.get("tok_member_s").expect("get"), Some(ShareSecret::FolderLink(link_secret)));
+}
+
+/// A server that drops the envelope would leave a `#s=` link that opens
+/// nothing, whose only token is in the response: the member mint revokes it
+/// and keeps nothing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_member_mint_whose_envelope_was_dropped_is_revoked() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5DroppedEnvelopeAcct";
+    let label = "joined-drive";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            memberships: membership("writer", false),
+            create: CreateReply::Created {
+                share_token: "tok_dropped",
+                expires_at: None,
+            },
+            drop_envelope: true,
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_member_drive(&pool, account, label).await;
+    write_member_seal(account, label);
+    let state = make_state(pool.clone(), account);
+
+    let err = create_folder_share_inner(&state, account, label, "docs", ShareTtl::Days7, ShareChoice::Public)
+        .await
+        .expect_err("a dropped envelope must fail the mint");
+    assert!(matches!(err, AppError::Hcfs(ref m) if m.contains("turned off")), "{err:?}");
+    assert_eq!(*recorded.revoked_tokens.lock().unwrap(), vec!["tok_dropped".to_string()]);
+    let keystore = SqliteShareKeystore::new(pool);
+    assert_eq!(keystore.get("tok_dropped").expect("get"), None);
+}
+
+/// A listing row the shares page can reshare: legacy, live, on a drive, and
+/// minted here. A legacy row from another device and a link-secret row are
+/// not offered, and each row says what its fragment carries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_listing_offers_a_reshare_only_for_a_legacy_link_minted_here() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ReshareListAcct";
+    let label = "reshare-drive";
+    let fh = hcfs_client::drive::keys::folder_hash(label);
+
+    let row = |token_hash: String, format: &str| {
+        json!({
+            "token_hash": token_hash, "folder_hash": fh, "path_prefix": "photos", "display_name": "photos",
+            "created_at": "2026-10-01T00:00:00+00:00", "expires_at": null, "revoked_at": null,
+            "source": "drive", "link_format": format,
+        })
+    };
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            list: json!([
+                row(folder_share_token_hash("tok_legacy"), "legacy"),
+                row("ee".repeat(32), "legacy"),
+                row(folder_share_token_hash("tok_new"), "envelope"),
+            ]),
+            ..MockOptions::default()
+        },
+        Recorded::default(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_own_drive(&pool, account, label).await;
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    keystore.put("tok_legacy", &ShareSecret::Public([1u8; 32])).expect("put");
+    keystore.put("tok_new", &ShareSecret::FolderLink([2u8; 32])).expect("put");
+    record_folder(&pool, "tok_legacy", &account_key(account), label, "photos")
+        .await
+        .expect("origin");
+    record_folder(&pool, "tok_new", &account_key(account), label, "photos")
+        .await
+        .expect("origin");
+    let state = make_state(pool, account);
+
+    let rows = list_folder_shares_inner(&state, account).await.expect("list");
+    let offers: Vec<(FolderLinkKind, bool)> = rows.iter().map(|r| (r.link_format, r.reshare_offered)).collect();
+    assert_eq!(
+        offers,
+        vec![
+            (FolderLinkKind::Legacy, true),
+            (FolderLinkKind::Legacy, false),
+            (FolderLinkKind::LinkSecret, false),
+        ]
+    );
+    assert!(rows[2].share_url.as_deref().is_some_and(|u| u.contains("#s=")), "{:?}", rows[2].share_url);
+}
+
+/// Reshare replaces a legacy link with a link-secret one for the same folder,
+/// lasting as long, and revokes the old link.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_legacy_link_reshares_as_a_link_secret_link_and_the_old_one_is_revoked() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ReshareAcct";
+    let label = "reshare-drive";
+    let fh = hcfs_client::drive::keys::folder_hash(label);
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            create: CreateReply::Created {
+                share_token: "tok_reshared",
+                expires_at: None,
+            },
+            list: json!([{
+                "token_hash": folder_share_token_hash("tok_old"), "folder_hash": fh, "path_prefix": "photos/2026",
+                "display_name": "2026", "created_at": "2026-10-01T00:00:00+00:00", "expires_at": null,
+                "revoked_at": null, "source": "drive", "link_format": "legacy",
+            }]),
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_own_drive(&pool, account, label).await;
+    write_master_seal(account);
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    keystore.put("tok_old", &ShareSecret::Public(expected_file_key(label))).expect("put");
+    record_folder(&pool, "tok_old", &account_key(account), label, "photos/2026")
+        .await
+        .expect("origin");
+    let state = make_state(pool.clone(), account);
+
+    let outcome = reshare_folder_link_inner(&state, account, "tok_old").await.expect("reshare");
+
+    assert!(outcome.old_link_revoked);
+    assert_eq!(*recorded.revoked_tokens.lock().unwrap(), vec!["tok_old".to_string()]);
+    assert_eq!(outcome.link.share_token, "tok_reshared");
+    assert_eq!(outcome.link.password, None, "a public link reshares public");
+    let link_secret = link_secret_of(&outcome.link.share_url);
+
+    let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_eq!(body["path_prefix"], "photos/2026", "the same folder");
+    assert_eq!(body["ttl"], "never", "a link that never expired keeps never expiring");
+    assert_body_seals(&body, &link_secret, &expected_file_key(label));
+    assert_eq!(keystore.get("tok_old").expect("get"), None, "the old secret is forgotten with the revoke");
+}
+
+/// A password link reshares with a new password (none is ever stored), which
+/// the outcome carries: the one time the app can show it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_password_link_reshares_with_a_new_password() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ResharePrivateAcct";
+    let label = "reshare-drive";
+    let fh = hcfs_client::drive::keys::folder_hash(label);
+
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            create: CreateReply::Created {
+                share_token: "tok_reshared_p",
+                expires_at: None,
+            },
+            list: json!([{
+                "token_hash": folder_share_token_hash("tok_old_p"), "folder_hash": fh, "path_prefix": "",
+                "display_name": label, "created_at": "2026-10-01T00:00:00+00:00", "expires_at": null,
+                "revoked_at": null, "source": "drive", "link_format": "legacy",
+            }]),
+            ..MockOptions::default()
+        },
+        Recorded::default(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_own_drive(&pool, account, label).await;
+    write_master_seal(account);
+    let blob = hcfs_client::client::share::wrap_share_key("old password!", &expected_file_key(label)).expect("wrap");
+    SqliteShareKeystore::new(pool.clone())
+        .put("tok_old_p", &ShareSecret::Private(blob))
+        .expect("put");
+    record_folder(&pool, "tok_old_p", &account_key(account), label, "").await.expect("origin");
+    let state = make_state(pool, account);
+
+    let outcome = reshare_folder_link_inner(&state, account, "tok_old_p").await.expect("reshare");
+    let password = outcome.link.password.as_deref().expect("a new password");
+    let (_, encoded) = outcome.link.share_url.split_once("#sp=").expect("a #sp= link");
+    let blob = URL_SAFE_NO_PAD.decode(encoded).expect("base64url");
+    let link_secret = hcfs_client::client::share::unwrap_share_key(password, &blob).expect("the new password opens it");
+    assert_ne!(
+        link_secret,
+        expected_file_key(label),
+        "the password guards the link secret, not the drive key"
+    );
+}
+
+/// A link this device did not mint names no folder here: the reshare is
+/// refused in words, before any mint.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_link_minted_elsewhere_is_not_reshared() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ReshareElsewhereAcct";
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    let state = make_state(pool, account);
+
+    let err = reshare_folder_link_inner(&state, account, "tok_foreign")
+        .await
+        .expect_err("no origin row");
+    assert!(matches!(err, AppError::Validation(ref m) if m == RESHARE_ELSEWHERE), "{err:?}");
+    assert!(recorded.create_bodies.lock().unwrap().is_empty());
+    assert!(recorded.revoked_tokens.lock().unwrap().is_empty());
 }
