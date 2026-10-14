@@ -157,6 +157,9 @@ struct MockOptions {
     /// Answer `link_envelope: false` even when the create body carried one:
     /// a server that dropped the envelope (hcfs #665).
     drop_envelope: bool,
+    /// Served for every `GET /v1/capabilities` after the first: a server
+    /// whose capabilities changed between two reads.
+    later_capabilities: Option<serde_json::Value>,
 }
 
 impl Default for MockOptions {
@@ -174,6 +177,7 @@ impl Default for MockOptions {
             memberships: json!({ "memberships": [] }),
             cancel_on_capabilities: None,
             drop_envelope: false,
+            later_capabilities: None,
         }
     }
 }
@@ -207,6 +211,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let memberships_body = opts.memberships.clone();
     let caps_cancel = opts.cancel_on_capabilities.clone();
     let drop_envelope = opts.drop_envelope;
+    let later_caps = opts.later_capabilities.clone();
 
     Router::new()
         .route(
@@ -221,11 +226,18 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
         .route(
             "/v1/capabilities",
             get(move || async move {
-                *caps_hits.lock().unwrap() += 1;
+                let hits = {
+                    let mut hits = caps_hits.lock().unwrap();
+                    *hits += 1;
+                    *hits
+                };
                 if let Some(cancel) = &caps_cancel {
                     cancel.cancel();
                 }
-                Json(caps_body).into_response()
+                match (&later_caps, hits) {
+                    (Some(later), 2..) => Json(later.clone()).into_response(),
+                    _ => Json(caps_body).into_response(),
+                }
             }),
         )
         .route(
@@ -2785,4 +2797,57 @@ async fn a_link_minted_elsewhere_is_not_reshared() {
     assert!(matches!(err, AppError::Validation(ref m) if m == RESHARE_ELSEWHERE), "{err:?}");
     assert!(recorded.create_bodies.lock().unwrap().is_empty());
     assert!(recorded.revoked_tokens.lock().unwrap().is_empty());
+}
+
+/// A server that stops serving envelopes between the reshare's check and its
+/// mint makes another legacy link. That one is taken back and the old link
+/// left alone: swapping one drive-key link for another only costs the URL.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reshare_that_mints_another_legacy_link_keeps_the_old_one() {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let account = "5ReshareFlipAcct";
+    let label = "reshare-drive";
+    let fh = hcfs_client::drive::keys::folder_hash(label);
+
+    let recorded = Recorded::default();
+    let base = serve(share_router(
+        MockOptions {
+            capabilities: envelope_caps(),
+            later_capabilities: Some(json!({ "shares": true, "folder_shares": true })),
+            create: CreateReply::Created {
+                share_token: "tok_still_legacy",
+                expires_at: None,
+            },
+            list: json!([{
+                "token_hash": folder_share_token_hash("tok_old_f"), "folder_hash": fh, "path_prefix": "photos",
+                "display_name": "photos", "created_at": "2026-10-01T00:00:00+00:00", "expires_at": null,
+                "revoked_at": null, "source": "drive", "link_format": "legacy",
+            }]),
+            ..MockOptions::default()
+        },
+        recorded.clone(),
+    ))
+    .await;
+    seed_account(&pool, account, &base).await;
+    seed_own_drive(&pool, account, label).await;
+    write_master_seal(account);
+    let keystore = SqliteShareKeystore::new(pool.clone());
+    keystore.put("tok_old_f", &ShareSecret::Public(expected_file_key(label))).expect("put");
+    record_folder(&pool, "tok_old_f", &account_key(account), label, "photos")
+        .await
+        .expect("origin");
+    let state = make_state(pool, account);
+
+    let err = reshare_folder_link_inner(&state, account, "tok_old_f")
+        .await
+        .expect_err("a legacy replacement is refused");
+    assert!(matches!(err, AppError::Validation(ref m) if m.contains("safer kind of link")), "{err:?}");
+    assert_eq!(
+        *recorded.revoked_tokens.lock().unwrap(),
+        vec!["tok_still_legacy".to_string()],
+        "the legacy replacement is taken back; the old link is not touched"
+    );
+    assert!(keystore.get("tok_old_f").expect("get").is_some(), "the old link's secret stays");
 }

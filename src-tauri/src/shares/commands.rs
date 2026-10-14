@@ -27,7 +27,8 @@ use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use hcfs_client::client::folder_link::{FolderLinkMint, mint_folder_link};
 use hcfs_client::client::folder_share::{
-    FolderLinkFormat, FolderShareError, FolderShareListItem, FolderShareSource, build_folder_share_url_for, folder_share_token_hash,
+    FolderLinkFormat, FolderShareError, FolderShareFragment, FolderShareListItem, FolderShareSource, build_folder_share_url_for,
+    folder_share_token_hash, parse_folder_share_fragment,
 };
 use hcfs_client::client::share::{
     ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
@@ -1846,6 +1847,20 @@ pub async fn reshare_folder_link_inner(state: &AppState, account_id: &str, share
     let relative_path = mint_path_for_prefix(&folder_label, &path_prefix)?;
     let link = create_folder_share_inner(state, account_id, &folder_label, &relative_path, reshare_ttl(row.expires_at, now), choice).await?;
 
+    // The capability was read before the mint; if the server stopped
+    // advertising envelopes in between, the mint came out legacy too, and
+    // replacing one drive-key link with another would only cost the user
+    // their old URL. Take the new link back and leave the old one alone.
+    if !is_link_secret_url(&link.share_url) {
+        warn!("reshare: the new folder link came out legacy; revoking it and keeping the old link");
+        if let Err(e) = revoke_folder_share_inner(state, account_id, &link.share_token).await {
+            warn!(error = %e, "reshare: revoking the legacy replacement failed");
+        }
+        return Err(AppError::Validation(
+            "Hippius can't make the safer kind of link right now, so your old link was left as it was. Try again later.".into(),
+        ));
+    }
+
     // The new link exists, so a failed revoke is reported, not returned as an
     // error: an error here would lose the new link's generated password.
     let old_link_revoked = match revoke_folder_share_inner(state, account_id, share_token).await {
@@ -1855,7 +1870,18 @@ pub async fn reshare_folder_link_inner(state: &AppState, account_id: &str, share
             false
         }
     };
+    // The revoke above returns the folder's Finder badge to "not shared",
+    // but the new link shares that same folder.
+    crate::finder_bridge::badges::push_from_state(state, &folder_label, &path_prefix, BadgeState::Shared);
     Ok(ReshareOutcome { link, old_link_revoked })
+}
+
+/// Whether a minted folder link is a link-secret one (`#s=` / `#sp=`).
+fn is_link_secret_url(share_url: &str) -> bool {
+    share_url
+        .split_once('#')
+        .and_then(|(_, fragment)| parse_folder_share_fragment(fragment).ok())
+        .is_some_and(|fragment| matches!(fragment, FolderShareFragment::LinkSecret(_) | FolderShareFragment::LinkSecretWrapped(_)))
 }
 
 /// Revoke a folder share by its plaintext token (from a resolvable
@@ -3037,6 +3063,15 @@ mod tests {
         assert!(private_url.contains("#sp=") && !private_url.contains("#p="), "{private_url}");
         assert_eq!(out[1].is_private, Some(true));
         assert_eq!(out[0].link_format, FolderLinkKind::LinkSecret);
+    }
+
+    #[test]
+    fn only_a_link_secret_url_counts_as_a_safer_link() {
+        use hcfs_client::client::folder_share::{build_folder_link_url, build_folder_link_url_private, build_folder_share_url};
+        assert!(is_link_secret_url(&build_folder_link_url("https://x.io", "t", &[1u8; 32])));
+        assert!(is_link_secret_url(&build_folder_link_url_private("https://x.io", "t", &[1u8; 89])));
+        assert!(!is_link_secret_url(&build_folder_share_url("https://x.io", "t", &[1u8; 32])));
+        assert!(!is_link_secret_url("https://x.io/share/folder/t"));
     }
 
     /// The reshare offer: only a live legacy drive link, minted here, on a
