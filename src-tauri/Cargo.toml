@@ -242,8 +242,8 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # whole cycle with `SyncError::RootNotMounted` when a mounted drive folder is
 # gone. The desktop must answer a hold, or such deletes never propagate.
 #
-# Now at the head of thenervelab/hcfs#661, NOT yet a main commit: repin to
-# #661's merge commit on hcfs main before this lands. It brings everything
+# Now at hcfs main 1f77b39b, the merge commit of thenervelab/hcfs#661
+# (hcfs-client and hcfs-shared identical to #661's head). It brings everything
 # merged since 1f8dc76, including typed HTTP errors (#608: `SyncError::Http`,
 # URL-free `SyncError::Network` with the transport's cause chain, metadata
 # retries) and #637 (upload errors typed as `Http`, and a finalize 404 after
@@ -257,12 +257,12 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9f5faca6f0c79752fdad5ed450ff30fa556327e1" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f77b39bf8552370195fc73ee2f889b82b4e176c" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9f5faca6f0c79752fdad5ed450ff30fa556327e1" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "1f77b39bf8552370195fc73ee2f889b82b4e176c" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
