@@ -86,7 +86,7 @@ export default function CapturesView() {
         subtitle={SUBTITLE}
         hideStats
         className="!shadow-none"
-        // In the drive, Screenshot and Record sit in its own toolbar, as on
+        // In the drive, Record and Screenshot sit in its own toolbar, as on
         // every drive; before it exists they are here and in the card.
         actions={route ? null : <CaptureButtons />}
       />
@@ -196,10 +196,10 @@ export function CapturesEmptyState({ place, onSetUp }: { place?: string; onSetUp
       <h2 className="mt-4 text-base font-medium text-grey-10 dark:text-white">No captures yet</h2>
       <p className="mt-1 max-w-md text-sm text-grey-50 dark:text-grey-dark-600">
         {onSetUp
-          ? `Take a screenshot or record your screen. The first time, Hippius makes a folder for your captures${
+          ? `Record your screen or take a screenshot. The first time, Hippius makes a folder for your captures${
               place ? ` (${place})` : ""
             }, backs it up as a drive of its own, and copies a link you can paste anywhere.`
-          : "Take a screenshot or record your screen. It lands here and a link you can paste anywhere is copied."}
+          : "Record your screen or take a screenshot. It lands here and a link you can paste anywhere is copied."}
       </p>
       <div className="mt-5 flex flex-wrap justify-center gap-2">
         <CaptureButtons />

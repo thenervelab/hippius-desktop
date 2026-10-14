@@ -157,7 +157,7 @@ export default function TrayPanelPage() {
           chatUnread={chatUnread}
           showCapturesFolder={hasCapturesTab}
         />
-        {/* Screenshot / Record / Upload, above the search field. Only Upload
+        {/* Record / Screenshot / Upload, above the search field. Only Upload
             where capture is off or unsupported (see TrayTiles). */}
         <TrayTiles view={captureView} shortcut={shortcut} />
         <SearchBar />
@@ -191,7 +191,7 @@ export default function TrayPanelPage() {
             tab === "captures" ? (
               <EmptyCard
                 title="No captures yet"
-                body="Take a screenshot or record your screen. It shows up here with its link ready to copy."
+                body="Record your screen or take a screenshot. It shows up here with its link ready to copy."
               />
             ) : (
               <EmptyCard
