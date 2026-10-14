@@ -63,7 +63,14 @@ import MySharesPage from "../page";
 
 function renderPage() {
   const store = createStore();
-  store.set(serverCapabilitiesAtom, { shares: true, folder_shares: true, folder_share_link_envelopes: true });
+  store.set(serverCapabilitiesAtom, {
+    shares: true,
+    folder_shares: true,
+    folder_share_revoke_by_hash: false,
+    share_owner_wrap: false,
+    folder_grants: false,
+    folder_share_link_envelopes: true,
+  });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <Provider store={store}>

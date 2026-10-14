@@ -195,6 +195,28 @@ fn bearer_rejection(headers: &HeaderMap) -> Option<axum::response::Response> {
     }
 }
 
+/// `GET /v1/capabilities`: counts the hit, fires the cancel hook, and serves
+/// `later` from the second read on when it is set.
+fn capabilities_reply(
+    hits: &Mutex<u32>,
+    first: serde_json::Value,
+    later: Option<serde_json::Value>,
+    cancel: Option<&CancellationToken>,
+) -> axum::response::Response {
+    let hit = {
+        let mut hits = hits.lock().unwrap();
+        *hits += 1;
+        *hits
+    };
+    if let Some(cancel) = cancel {
+        cancel.cancel();
+    }
+    match later {
+        Some(later) if hit >= 2 => Json(later).into_response(),
+        _ => Json(first).into_response(),
+    }
+}
+
 /// The folder-share routes, mimicking hcfs-server's response shapes.
 fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let caps_hits = recorded.capability_hits.clone();
@@ -225,20 +247,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
         )
         .route(
             "/v1/capabilities",
-            get(move || async move {
-                let hits = {
-                    let mut hits = caps_hits.lock().unwrap();
-                    *hits += 1;
-                    *hits
-                };
-                if let Some(cancel) = &caps_cancel {
-                    cancel.cancel();
-                }
-                match (&later_caps, hits) {
-                    (Some(later), 2..) => Json(later.clone()).into_response(),
-                    _ => Json(caps_body).into_response(),
-                }
-            }),
+            get(move || async move { capabilities_reply(&caps_hits, caps_body, later_caps, caps_cancel.as_ref()) }),
         )
         .route(
             "/v1/folder-shares",
