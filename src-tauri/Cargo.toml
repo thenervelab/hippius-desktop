@@ -242,8 +242,8 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # whole cycle with `SyncError::RootNotMounted` when a mounted drive folder is
 # gone. The desktop must answer a hold, or such deletes never propagate.
 #
-# Now at the head of thenervelab/hcfs#661, NOT yet a main commit: repin to
-# #661's merge commit on hcfs main before this lands. It brings everything
+# Now at hcfs main 1f77b39b, the merge commit of thenervelab/hcfs#661
+# (hcfs-client and hcfs-shared identical to #661's head). It brings everything
 # merged since 1f8dc76, including typed HTTP errors (#608: `SyncError::Http`,
 # URL-free `SyncError::Network` with the transport's cause chain, metadata
 # retries) and #637 (upload errors typed as `Http`, and a finalize 404 after
@@ -255,8 +255,9 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # check for a resend that gets 409 `invalid_state` (`remote_upload.rs` now
 # finalizes with `finalize_session_for_file` and the session's manifest).
 #
-# Now at hcfs `integration/661-667` (4b331f2f), a TEMPORARY branch: #667's
-# head with #661 merged in, nothing else. Repin to the hcfs main merge commit
+# This PR then moves it to hcfs `integration/661-667` (4b331f2f), a TEMPORARY
+# branch: #667's head with #661 merged in, nothing else; its hcfs-client and
+# hcfs-shared differ from 1f77b39b only by #667's changes. Repin to the hcfs main merge commit
 # once #661 and #667 have both merged. #667 adds: an upload conflict that
 # names no current revision (the file was moved by a folder rename or
 # deleted) is left for the next sync instead of resent with the zero base,
