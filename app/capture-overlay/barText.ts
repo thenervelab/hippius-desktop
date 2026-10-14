@@ -31,12 +31,14 @@ export interface OfferedModes {
 const EVERY_MODE: OfferedModes = { screenshot: BAR_ORDER, recording: BAR_ORDER };
 
 /**
- * The bar's two groups. The recording group works where recording works;
- * where it could with another build, a newer OS or a missing package it is
- * shown disabled with `recordingNote` (`disabledRecordingNote`), so the
- * reason is visible; elsewhere it is left out. Only the modes Rust offers
- * for each kind (`modes`) are drawn, in the bar's order, and a group left
- * with none is dropped.
+ * The bar's two groups, Record then Screenshot: Record leads because it is
+ * the capture people reach for most, as in the tray and the toolbars. The
+ * recording group works where recording works; where it could with another
+ * build, a newer OS or a missing package it is shown disabled with
+ * `recordingNote` (`disabledRecordingNote`), in the same first place, so the
+ * reason is visible and nothing moves; elsewhere it is left out. Only the
+ * modes Rust offers for each kind (`modes`) are drawn, in the bar's order,
+ * and a group left with none is dropped.
  */
 export function barGroups(
   recordingAvailable: boolean,
@@ -45,9 +47,10 @@ export function barGroups(
 ): BarMode[][] {
   const shots = SHOTS.filter((m) => modes.screenshot.includes(m.mode));
   const recordings = RECORDINGS.filter((m) => modes.recording.includes(m.mode));
-  const groups: BarMode[][] = [shots];
+  const groups: BarMode[][] = [];
   if (recordingAvailable) groups.push(recordings);
   else if (recordingNote) groups.push(recordings.map((m) => ({ ...m, unavailable: recordingNote })));
+  groups.push(shots);
   return groups.filter((group) => group.length > 0);
 }
 

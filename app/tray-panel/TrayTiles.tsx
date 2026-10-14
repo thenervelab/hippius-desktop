@@ -38,10 +38,13 @@ export const UPLOAD_LABEL = "Upload";
 export const UPLOAD_HINT = "or drop files";
 
 /**
- * The popover's three tiles under the header: Screenshot, Record and Upload,
+ * The popover's three tiles under the header: Record, Screenshot and Upload,
  * the way CleanShot and Zight put their actions one click from the menu bar.
+ * Record leads because it is the capture people reach for most; it keeps its
+ * place when this computer cannot record, dimmed with the reason, so the
+ * tiles never swap places between machines.
  *
- * Screenshot and Record start that kind on the mode used last, each with
+ * Record and Screenshot start that kind on the mode used last, each with
  * its shortcut's keys underneath where Hippius holds it; the small
  * arrow in each tile's corner offers the Drive page's mode menu (area,
  * window, entire screen), and Screenshot's also "Annotate an image…" (any
@@ -95,6 +98,7 @@ export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; s
       aria-label="Capture and upload"
       className={cn("grid gap-2 px-5 pt-4", recordTile ? "grid-cols-3" : "grid-cols-2")}
     >
+      {recordTile}
       <CaptureTile
         kind="screenshot"
         label={SCREENSHOT_LABEL}
@@ -123,7 +127,6 @@ export default function TrayTiles({ view, shortcut }: { view: TrayCaptureView; s
           </>
         }
       />
-      {recordTile}
       <UploadTile dragging={dragging} />
     </div>
   );

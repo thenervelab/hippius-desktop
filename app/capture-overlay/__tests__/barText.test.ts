@@ -37,7 +37,7 @@ const OPTIONS: CaptureOptions = {
 describe("the capture bar", () => {
   it("offers screenshots everywhere and recordings only where they work", () => {
     expect(barGroups(false)).toHaveLength(1);
-    const [shots, recordings] = barGroups(true);
+    const [recordings, shots] = barGroups(true);
     expect(shots.map((m) => m.mode)).toEqual(["screen", "window", "area"]);
     expect(recordings.every((m) => m.kind === "recording")).toBe(true);
     // One vocabulary with the Drive Capture menu: area, window, entire screen.
@@ -49,18 +49,27 @@ describe("the capture bar", () => {
   // feature vanished with no word why.
   it("shows the Record modes disabled, with the reason, on a Mac that cannot record in this build", () => {
     const note = "Screen recording isn't included in this build.";
-    const [shots, recordings] = barGroups(false, note);
+    const [recordings, shots] = barGroups(false, note);
     expect(shots.every((m) => m.unavailable === undefined)).toBe(true);
     expect(recordings.map((m) => m.label)).toEqual(["Record entire screen", "Record a window", "Record an area"]);
     expect(recordings.every((m) => m.unavailable === note)).toBe(true);
     expect(barGroups(false, null)).toHaveLength(1);
-    expect(barGroups(true, note)[1].every((m) => m.unavailable === undefined)).toBe(true);
+    expect(barGroups(true, note)[0].every((m) => m.unavailable === undefined)).toBe(true);
+  });
+
+  // Record is the capture people reach for most, so its group leads, and a
+  // disabled one keeps that place: the bar never rearranges between machines.
+  it("puts the Record group before the Screenshot group, available or disabled", () => {
+    const kinds = (groups: ReturnType<typeof barGroups>) => groups.map((group) => group[0].kind);
+    expect(kinds(barGroups(true))).toEqual(["recording", "screenshot"]);
+    expect(kinds(barGroups(false, "Screen recording isn't included in this build."))).toEqual(["recording", "screenshot"]);
+    expect(kinds(barGroups(false, null))).toEqual(["screenshot"]);
   });
 
   // Rust says which modes each kind may offer (a Wayland recording has no
   // area in v1); the bar draws only those, in its own order.
   it("draws only the modes Rust offers, and drops a group left with none", () => {
-    const [shots, recordings] = barGroups(true, null, {
+    const [recordings, shots] = barGroups(true, null, {
       screenshot: ["area", "screen", "window"],
       recording: ["window", "screen"],
     });
@@ -70,7 +79,7 @@ describe("the capture bar", () => {
     expect(onlyShots).toHaveLength(1);
     expect(onlyShots[0].map((m) => m.label)).toEqual(["Capture an area"]);
     const disabled = barGroups(false, "Screen recording needs video codecs.", { screenshot: ["area"], recording: ["screen"] });
-    expect(disabled[1].map((m) => [m.mode, m.unavailable])).toEqual([["screen", "Screen recording needs video codecs."]]);
+    expect(disabled[0].map((m) => [m.mode, m.unavailable])).toEqual([["screen", "Screen recording needs video codecs."]]);
   });
 
   it("names the Choose button for what it lists", () => {

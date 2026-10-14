@@ -1336,7 +1336,7 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `basePath` for folder links and navigation, `pinned` opens it straight in
   and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
   page's `emptyState` at the pinned root), keyed on the drive. Before it
-  exists: an empty state with Screenshot / Record and "Set up the folder
+  exists: an empty state with Record / Screenshot and "Set up the folder
   now", plus Rust's pending sentence or the waiting count.
 
 ## Screen Recording permission (macOS)
@@ -1630,7 +1630,11 @@ argument, dialog source, new-capture branch before any write).
 ## Where Capture is offered
 
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
-**Screenshot** and **Record**, each a normal toolbar button with a chevron
+**Record** and **Screenshot**, Record first everywhere they sit together
+(here, the tray's tiles, the capture bar's groups via `barGroups`, the
+empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+its place), each a normal
+toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
 ("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
 each `startCapture(kind, mode)` (the screenshot "Capture an area" item
@@ -1663,8 +1667,8 @@ capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
 before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
-captures folder row (with "Show in Finder" / "Show in folder" through
+side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
+size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
 `reveal_drive_in_finder` only for a drive synced here), the options as a grid
 of cards (`layout="cards"`, `@container` columns so they follow the tab's
 width), then `EditedImageSetting`; each setting's icon sits in a
