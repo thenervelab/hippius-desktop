@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.12-beta.1"
+version = "0.6.12-beta.2"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -255,10 +255,7 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # check for a resend that gets 409 `invalid_state` (`remote_upload.rs` now
 # finalizes with `finalize_session_for_file` and the session's manifest).
 #
-# Then at hcfs #667's head 63fae87a (`fix/rename-folder-limits` with hcfs
-# main merged in, which contains #661's merge commit 1f77b39b). Its
-# hcfs-client and hcfs-shared differ from 1f77b39b only by #667's changes.
-# Repin to the hcfs main merge commit once #667 has merged. #667 adds: an
+# Then #667 (merged in d830cdde below). #667 adds: an
 # upload conflict that names no current revision (the file was moved by a
 # folder rename or deleted while its upload session opened) is skipped
 # without asking and the zero id never becomes a base. The server now
@@ -267,14 +264,23 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # `register_missing_paths` on `rename_remote_folder`, does not reach the
 # desktop: no desktop path calls `POST /rename_folder`.
 #
+# Now at hcfs main d830cdde, the merge commit of #667, which also carries
+# #683 and #689. #683 (thenervelab/hcfs#665) adds link-secret folder links: when the server advertises
+# `folder_share_link_envelopes`, `create_folder_share` mints `#s=` / `#sp=`
+# links whose fragment is a per-link secret, not the drive key, and the
+# server keeps the drive key sealed under it. `ShareSecret` gains
+# `FolderLink` / `FolderLinkPrivate` (keystore kinds and owner-wrap flag
+# 0x04 here), `build_share_url_for` returns a `Result`, and
+# `FolderShareListItem` gains `link_format`.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "63fae87adee8f16f9deec315c6e857cee89a794c" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d830cdde6dea7d921d423e626954149620b67ef7" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "63fae87adee8f16f9deec315c6e857cee89a794c" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d830cdde6dea7d921d423e626954149620b67ef7" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

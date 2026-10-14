@@ -18,9 +18,11 @@
 //! goldens deliberately and document the migration.
 
 use base64::Engine;
+use hcfs_client::client::folder_link::{FolderLinkMint, mint_folder_link, open_folder_link_envelope};
 use hcfs_client::client::folder_share::{
-    CreatedFolderShare, FolderShareError, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, UploadFolderEntry,
-    UploadFolderShareOptions, build_folder_share_url, build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash,
+    CreatedFolderShare, FolderLinkFormat, FolderShareError, FolderShareFragment, FolderShareListItem, FolderShareOptions, FolderShareSource,
+    ShareTtl, UploadFolderEntry, UploadFolderShareOptions, build_folder_link_url, build_folder_link_url_private, build_folder_share_url,
+    build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash, parse_folder_share_fragment,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
 use hcfs_client::crypto::{decrypt_small, encrypt_small};
@@ -796,6 +798,92 @@ fn a_private_folder_share_secret_can_never_produce_a_key_url() {
     );
 }
 
+// ── Link-secret folder links (hcfs #665) ───────────────────────────────────
+//
+// A folder link minted once the server advertises
+// `folder_share_link_envelopes` carries a per-link secret (`#s=`, or `#sp=`
+// under a password) and the server keeps the drive key sealed under it. The
+// console recipient page parses exactly these shapes.
+
+/// Exact link-secret URL vectors, the twins of
+/// `folder_share_url_builders_are_pinned`.
+#[test]
+fn folder_link_url_builders_are_pinned() {
+    let public = build_folder_link_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(
+        public,
+        format!("https://x.io/share/folder/tok#s={}", "A".repeat(43)),
+        "link-secret URL drifted"
+    );
+    let private = build_folder_link_url_private("https://x.io/", "tok", &[1, 2, 3]);
+    assert_eq!(private, "https://x.io/share/folder/tok#sp=AQID", "password link-secret URL drifted");
+}
+
+/// A link secret can only ever rebuild its `#s=` / `#sp=` link. A `#k=` /
+/// `#p=` URL built from it would hand a recipient the link secret as if it
+/// were the drive key: a link that opens nothing.
+#[test]
+fn a_link_secret_folder_share_secret_never_produces_a_key_url() {
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLink([7u8; 32]));
+    assert_eq!(url, build_folder_link_url("https://console.example.com", "tok", &[7u8; 32]));
+    assert!(!url.contains("#k="), "{url}");
+
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLinkPrivate(blob));
+    assert!(url.contains("#sp=") && !url.contains("#p="), "{url}");
+}
+
+/// The fragment parser reads back every form the builders write, which is
+/// what the Copy link on the shares page and every other device rely on.
+#[test]
+fn every_folder_link_fragment_parses_back() {
+    let fragment = |url: &str| url.split_once('#').expect("fragment").1.to_string();
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_share_url("https://x.io", "t", &[1u8; 32]))).expect("k"),
+        FolderShareFragment::LegacyKey([1u8; 32])
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_share_url_private("https://x.io", "t", &blob))).expect("p"),
+        FolderShareFragment::LegacyWrapped(blob.clone())
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_link_url("https://x.io", "t", &[2u8; 32]))).expect("s"),
+        FolderShareFragment::LinkSecret([2u8; 32])
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_link_url_private("https://x.io", "t", &blob))).expect("sp"),
+        FolderShareFragment::LinkSecretWrapped(blob)
+    );
+}
+
+/// The member mint builds its link with `mint_folder_link`: the envelope
+/// opens to the drive key under the link secret the keystore keeps, and the
+/// envelope and digest are the sizes the server stores.
+#[test]
+fn a_minted_folder_link_opens_to_the_drive_key() {
+    let file_key = [9u8; 32];
+    let FolderLinkMint {
+        secret,
+        link_envelope,
+        link_fetch_digest,
+    } = mint_folder_link(&file_key, None).expect("mint");
+    let ShareSecret::FolderLink(link_secret) = secret else {
+        panic!("a passwordless mint keeps a public link secret, got {secret:?}");
+    };
+    assert_ne!(link_secret, file_key, "the link secret is never the drive key");
+    assert_eq!(link_envelope.len(), hcfs_shared::shares::FOLDER_LINK_ENVELOPE_LEN);
+    assert_eq!(link_fetch_digest.len(), hcfs_shared::shares::FOLDER_LINK_FETCH_DIGEST_LEN);
+    assert_eq!(*open_folder_link_envelope(&link_secret, &link_envelope).expect("open"), file_key);
+
+    let private = mint_folder_link(&file_key, Some("correct horse battery staple")).expect("mint private");
+    assert!(matches!(private.secret, ShareSecret::FolderLinkPrivate(_)), "{:?}", private.secret);
+
+    // The recipient-side open the shares page does not use, referenced so a
+    // signature change fails here.
+    let _ = hcfs_client::client::HcfsClient::open_folder_link;
+}
+
 /// Compile-time pin of the folder-share structs and owner operations the
 /// mint/list/revoke/expiry IPCs consume, mirroring
 /// `shared_drive_client_surface_is_reachable`: the exhaustive struct
@@ -825,6 +913,7 @@ fn folder_share_client_surface_is_reachable() {
         expires_at: None,
         revoked_at: Some(created_at),
         source: FolderShareSource::Drive,
+        link_format: FolderLinkFormat::Legacy,
     };
     assert_eq!(item.path_prefix, "", "whole-drive share is the empty prefix");
 

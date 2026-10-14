@@ -985,69 +985,72 @@ async fn ensure_user_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx
 /// key would otherwise surface as an opaque AEAD failure several layers up the
 /// stack — see `crate::shares::keystore`.
 async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS share_keystore (
-            share_token TEXT PRIMARY KEY,
-            secret_kind TEXT NOT NULL DEFAULT 'public'
-                        CHECK (secret_kind IN ('public', 'private')),
-            share_key BLOB NOT NULL,
-            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            -- A public row holds a raw 32-byte share key; a private row holds
-            -- the password-wrapped blob, which is strictly longer. Checking
-            -- `> 32` rather than the exact 89-byte framing keeps the constraint
-            -- from breaking if hcfs-client ever versions the wrap format.
-            CHECK (
-                (secret_kind = 'public'  AND length(share_key) = 32)
-             OR (secret_kind = 'private' AND length(share_key) > 32)
-            )
-        )",
-    )
+    sqlx::query(&share_keystore_ddl("share_keystore")).execute(&mut *conn).await?;
+
+    // SQLite cannot alter a CHECK in place, so a table created under an
+    // older constraint is rebuilt and copied. Two older shapes exist:
+    //
+    // - Pre-`secret_kind`: `share_key BLOB CHECK (length = 32)`, which cannot
+    //   hold a wrapped blob. Every row is copied as 'public'. Shares that
+    //   were made private under the old Finder flow are indistinguishable
+    //   here (that flow stored the raw key either way), so those rows keep
+    //   offering a password-free link until they age out; every share
+    //   minted then had a fixed 24-hour TTL, so that is bounded and short.
+    //   Dropping them would break Copy for legitimately public shares.
+    // - `secret_kind` limited to 'public' / 'private', from before link-secret
+    //   folder links (thenervelab/hcfs#665). Rows keep their kind; the
+    //   rebuild only widens the CHECK so the two folder-link kinds fit.
+    let columns = table_columns(&mut *conn, "share_keystore").await?;
+    let kind_select = if columns.iter().any(|c| c == "secret_kind") {
+        let ddl: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'share_keystore'")
+            .fetch_one(&mut *conn)
+            .await?;
+        if ddl.contains("'folder_link'") {
+            return Ok(());
+        }
+        "secret_kind"
+    } else {
+        "'public'"
+    };
+
+    sqlx::query(&share_keystore_ddl("share_keystore_rebuild")).execute(&mut *conn).await?;
+    sqlx::query(&format!(
+        "INSERT INTO share_keystore_rebuild (share_token, secret_kind, share_key, created_at) \
+         SELECT share_token, {kind_select}, share_key, created_at FROM share_keystore"
+    ))
     .execute(&mut *conn)
     .await?;
-
-    // Pre-`secret_kind` installs have `share_key BLOB CHECK (length = 32)`,
-    // which cannot hold a wrapped blob and whose CHECK SQLite cannot drop in
-    // place. Rebuild-and-copy is the only way to change it.
-    //
-    // Every surviving row is copied as 'public'. Shares that were made private
-    // under the old Finder flow are indistinguishable here — nothing recorded
-    // which ones they were, because that flow stored the raw key either way
-    // (the defect this feature fixes). Those rows therefore keep offering a
-    // password-free link until they age out. That is bounded and short: every
-    // share minted before this release had a fixed 24-hour TTL, so the
-    // exposure self-heals within a day of upgrading. Dropping the rows instead
-    // would break Copy for legitimately public shares, which is the larger
-    // harm for the same window.
-    let columns = table_columns(&mut *conn, "share_keystore").await?;
-    if !columns.iter().any(|c| c == "secret_kind") {
-        sqlx::query(
-            "CREATE TABLE share_keystore_rebuild (
-                share_token TEXT PRIMARY KEY,
-                secret_kind TEXT NOT NULL DEFAULT 'public'
-                            CHECK (secret_kind IN ('public', 'private')),
-                share_key BLOB NOT NULL,
-                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-                CHECK (
-                    (secret_kind = 'public'  AND length(share_key) = 32)
-                 OR (secret_kind = 'private' AND length(share_key) > 32)
-                )
-            )",
-        )
+    sqlx::query("DROP TABLE share_keystore").execute(&mut *conn).await?;
+    sqlx::query("ALTER TABLE share_keystore_rebuild RENAME TO share_keystore")
         .execute(&mut *conn)
         .await?;
-        sqlx::query(
-            "INSERT INTO share_keystore_rebuild (share_token, secret_kind, share_key, created_at) \
-             SELECT share_token, 'public', share_key, created_at FROM share_keystore",
-        )
-        .execute(&mut *conn)
-        .await?;
-        sqlx::query("DROP TABLE share_keystore").execute(&mut *conn).await?;
-        sqlx::query("ALTER TABLE share_keystore_rebuild RENAME TO share_keystore")
-            .execute(&mut *conn)
-            .await?;
-    }
 
     Ok(())
+}
+
+/// `share_keystore`'s DDL under `name`, shared by the create and the rebuild so
+/// the two can never disagree on the CHECK.
+///
+/// A 32-byte row is a raw file-share key (`public`) or a folder link secret
+/// (`folder_link`); a password row (`private`, `folder_link_private`) holds the
+/// wrapped blob, which is strictly longer. Checking `> 32` rather than the exact
+/// 89-byte framing keeps the constraint from breaking if hcfs-client ever
+/// versions the wrap format. `ensure_share_keystore` detects an older CHECK by
+/// looking for `'folder_link'` in the stored DDL.
+pub fn share_keystore_ddl(name: &str) -> String {
+    format!(
+        "CREATE TABLE IF NOT EXISTS {name} (
+            share_token TEXT PRIMARY KEY,
+            secret_kind TEXT NOT NULL DEFAULT 'public'
+                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private')),
+            share_key BLOB NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            CHECK (
+                (secret_kind IN ('public', 'folder_link') AND length(share_key) = 32)
+             OR (secret_kind IN ('private', 'folder_link_private') AND length(share_key) > 32)
+            )
+        )"
+    )
 }
 
 /// `share_origin` — sidecar of `share_keystore` recording which local file each
