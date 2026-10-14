@@ -41,6 +41,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **A capture that could not upload is offered again after a restart.** Its card comes back when you open Hippius, with Retry (or Upgrade when your storage is full), instead of the capture sitting forgotten on your computer.
 - **Capture shortcuts set in your desktop's own keyboard settings work when Hippius is closed.** Hippius starts and opens the screenshot or recording as soon as you are signed in. On Linux.
 
+### Security
+
+- **New folder links no longer contain the key to your whole drive.** Once Hippius turns this on, a folder link holds a key of its own, so a link that was forwarded or leaked stops working for good when you revoke it, unless someone had already opened it. Older folder links are marked "Old link" in Shared Links, and Reshare swaps one for a new link to the same folder (with a new password if it had one) and turns the old one off.
+
 ### Changed
 
 - **Your captures go in the folder you pick.** When you choose where screenshots and recordings are saved, Hippius uses that folder as it is instead of making a "Hippius Captures" folder inside it, and a folder inside your main drive works too: captures are then saved there, in that drive. The suggested folder is now called hippius-captures. If you pick your home folder, Documents, Desktop or the top of a drive, Hippius makes a hippius-captures folder inside it and shows you the exact folder before you confirm.
