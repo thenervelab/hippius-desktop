@@ -1632,7 +1632,8 @@ argument, dialog source, new-capture branch before any write).
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
 **Record** and **Screenshot**, Record first everywhere they sit together
 (here, the tray's tiles, the capture bar's groups via `barGroups`, the
-empty states' wording; a disabled Record keeps its place), each a normal
+empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+its place), each a normal
 toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
 ("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
@@ -1666,8 +1667,8 @@ capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
 before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
-captures folder row (with "Show in Finder" / "Show in folder" through
+side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
+size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
 `reveal_drive_in_finder` only for a drive synced here), the options as a grid
 of cards (`layout="cards"`, `@container` columns so they follow the tab's
 width), then `EditedImageSetting`; each setting's icon sits in a

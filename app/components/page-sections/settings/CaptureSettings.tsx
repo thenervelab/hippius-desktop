@@ -38,8 +38,9 @@ const CARD = `flex h-full flex-col gap-3 p-4 ${SURFACE}`;
 
 /**
  * Settings › Screenshots & Recording: every capture setting in one tab. In
- * order: the screenshot shortcut, the recording shortcut (where this
- * computer records), where captures are kept (asked on the first capture,
+ * order: the recording shortcut (where this computer records), then the
+ * screenshot shortcut, as Record leads wherever the two sit together, then
+ * where captures are kept (asked on the first capture,
  * moved here), what the screenshot editor's Save does, and the capture
  * bar's options that carry over from one capture to the next (copy a link,
  * open it, the recording countdown, system audio). Rust validates,
@@ -82,10 +83,10 @@ export default function CaptureSettings() {
   return (
     <div className="@container flex flex-col gap-3">
       <div className="grid gap-3 @xl:grid-cols-2">
-        <CaptureShortcutSetting kind="screenshot" support={surfaces?.shortcut ?? null} rowClassName={TILE} layout="tile" />
         {recordingWorks && (
           <CaptureShortcutSetting kind="record" support={surfaces?.recordShortcut ?? null} rowClassName={TILE} layout="tile" />
         )}
+        <CaptureShortcutSetting kind="screenshot" support={surfaces?.shortcut ?? null} rowClassName={TILE} layout="tile" />
       </div>
 
       <div className={ROW}>
