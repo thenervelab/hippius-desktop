@@ -17,8 +17,20 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [0.6.12] - 2026-10-14
 
-Large uploads cope better with a dropped connection, and the card after a
-screenshot or recording no longer starts its wait over.
+Record now comes before Screenshot wherever the two sit together, and the
+menu bar window shows the Hippius name. Large uploads also cope better with a
+dropped connection, and the card after a screenshot or recording no longer
+starts its wait over.
+
+### Changed
+
+- **Record comes first.** Record now sits before Screenshot in the menu bar
+  window, in the capture bar, among the shortcuts in Settings, and in the
+  Record and Screenshot buttons on the Drive, Overview and Captures pages.
+  Your keyboard shortcuts stay the same.
+- **The menu bar window says it is Hippius.** The name now sits next to the
+  logo at the top, in light and dark mode, so the window is easy to tell apart
+  from other apps'.
 
 ### Fixed
 
@@ -29,6 +41,10 @@ screenshot or recording no longer starts its wait over.
 - **Failed uploads say what went wrong in plain words.** An upload to a folder
   you don't sync on this computer that does fail now shows Hippius's own
   message, such as "Couldn't reach the server", instead of a technical error.
+- **A rare repeating sync error is gone.** If a large file was uploading while
+  a folder rename or delete on another device moved it, Hippius could resend it
+  to the old folder or fail on that file at every later sync. It now skips that
+  one upload and carries on.
 - **The card after a screenshot or recording picks up where it left off.**
   Point at it and it stays open; move away and it closes once the time it had
   left runs out, its bar carrying on from the same point, instead of starting
