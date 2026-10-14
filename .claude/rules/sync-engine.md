@@ -233,6 +233,8 @@ FE: `useStagedChanges.syncWithResolutions` returns `{ok: true} | {ok: false, mes
 
 Note the `skip` resolution verb **defers** a conflict (the engine re-detects it next cycle and the banner returns) — the dialog labels it "Skip for now" and warns explicitly when *every* conflict is set to skip, since that satisfies the "resolve all N conflicts" gate while resolving none.
 
+**An upload conflict that names no current revision (all zeros) is never resolved, whatever the answer.** The server sends it when the file was moved (a folder rename) or deleted while the upload was opening. hcfs-client (hcfs#667) leaves it for the next sync without asking, because resending it with the zero base (the old `keep_local`) put a moved file back at its old path, and the server now refuses that resend with `409 target_gone`. Pinned through `sync_with_resolutions` by `tests/upload_conflict_gone_file.rs`.
+
 ## Migration
 
 **Folder picker**: `MigrationPromptDialog` includes a folder picker pre-populated with the default migration path from `get_default_migration_path` — `compute_default_sync_path`, which is `dirs::home_dir().join("Hippius-Migration-<date>")`. That is the **home root, not `~/Documents`**, and the placement is load-bearing: it sits outside every TCC-protected folder, so a new install triggers no macOS access prompt (see `macos-packaging.md`). The chosen path is stored in `migrationCheckAtom.syncPath` and passed to `complete_migration_transition` as `custom_sync_path`, falling back to the auto-generated default.

@@ -255,14 +255,24 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # check for a resend that gets 409 `invalid_state` (`remote_upload.rs` now
 # finalizes with `finalize_session_for_file` and the session's manifest).
 #
+# Now at hcfs `integration/661-667` (4b331f2f), a TEMPORARY branch: #667's
+# head with #661 merged in, nothing else. Repin to the hcfs main merge commit
+# once #661 and #667 have both merged. #667 adds: an upload conflict that
+# names no current revision (the file was moved by a folder rename or
+# deleted) is left for the next sync instead of resent with the zero base,
+# which the server now refuses with 409 `target_gone`
+# (`tests/upload_conflict_gone_file.rs`). Its other client change,
+# `register_missing_paths` on `rename_remote_folder`, does not reach the
+# desktop: no desktop path calls `POST /rename_folder`.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9f5faca6f0c79752fdad5ed450ff30fa556327e1" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4b331f2f693d8681008d473f6da7e92cc812ce26" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "9f5faca6f0c79752fdad5ed450ff30fa556327e1" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "4b331f2f693d8681008d473f6da7e92cc812ce26" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
