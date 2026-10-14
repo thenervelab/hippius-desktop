@@ -679,9 +679,10 @@ async fn password_mint_yields_a_p_url_and_a_private_secret() {
 
 /// The security gate the wiring pin could only string-match: minting on a
 /// MEMBER drive on a server without `member_folder_shares` refuses with the
-/// distinct "newer server" Validation and the mint route stays uncalled. (The capability probe runs before identity
-/// resolution, so `/v1/capabilities` may be hit — the pinned behavior is
-/// that no POST fires and nothing lands in the keystore.)
+/// distinct "newer server" Validation and the mint route stays uncalled.
+/// (The capability probe runs before identity resolution, so
+/// `/v1/capabilities` may be hit — the pinned behavior is that no POST
+/// fires and nothing lands in the keystore.)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn member_drive_mint_refuses_before_any_mint_request() {
     let _home = &*TEST_HOME;

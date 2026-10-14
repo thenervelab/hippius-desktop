@@ -371,6 +371,9 @@ async fn a_folder_renamed_in_an_unsynced_drive_takes_its_contents_with_it() {
         paths.contains(&"Trip Photos/leaf.bin"),
         "the sibling folder was renamed too; listing = {paths:?}"
     );
+    // Three uploads, three rows. The checks above cannot see a rename that
+    // left a duplicate row under the new name.
+    assert_eq!(paths.len(), 3, "the rename changed the file count; listing = {paths:?}");
 
     // The symptom this test exists for: `/browse` UNIONs the file
     // aggregate with the `folder_entries` rows, and `/rename_files` cannot

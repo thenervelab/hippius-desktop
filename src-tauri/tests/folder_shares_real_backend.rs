@@ -804,7 +804,7 @@ async fn capture_copy(http: &reqwest::Client, env: &LiveEnv, state: &AppState, t
 /// captured first, then revoked, then asserted, so a red run leaves no
 /// live link behind.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server with upload_folder_shares"]
+#[ignore = "live-lane: needs the three HCFS_DESKTOP_E2E_* vars and a running hcfs-server with upload_folder_shares"]
 async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green
