@@ -47,6 +47,7 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import {
   listFolderShares,
   listShares,
+  reshareFolderLink,
   revokeFolderShare,
   revokeFolderShareByHash,
   revokeShare,
@@ -54,6 +55,7 @@ import {
   updateFolderShareExpiryByHash,
   updateShareExpiry,
   type FolderShareSummary,
+  type ReshareOutcome,
   type ShareSummary,
   type ShareTtl,
 } from "@/app/lib/tauri/shares";
@@ -85,6 +87,8 @@ import {
   activeShareRowId,
   folderShareRowPlan,
   mergeActiveShareRows,
+  OLD_LINK_BADGE,
+  OLD_LINK_TOOLTIP,
   pickHistoryRowDisplay,
   type ActiveShareRow,
 } from "./shareRowDisplay";
@@ -141,6 +145,7 @@ function MySharesContent() {
   const [revokeBusy, setRevokeBusy] = React.useState(false);
   const [busyToken, setBusyToken] = React.useState<string | null>(null);
   const [clearAllOpen, setClearAllOpen] = React.useState(false);
+  const [reshared, setReshared] = React.useState<ReshareOutcome | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
@@ -260,6 +265,23 @@ function MySharesContent() {
     }
   };
 
+  // Replace a link that carries the drive key with one that does not. Rust
+  // mints the new link and revokes the old one; the outcome is shown once,
+  // since a new password is never stored.
+  const onReshareFolder = async (tokenHash: string) => {
+    const folderRow = folderData?.find((r) => r.tokenHash === tokenHash);
+    if (!folderRow?.shareToken) return;
+    setBusyToken(tokenHash);
+    try {
+      setReshared(await reshareFolderLink(folderRow.shareToken));
+      queryClient.invalidateQueries({ queryKey: [FOLDER_SHARES_QUERY_KEY, polkadotAddress] });
+    } catch (err) {
+      toast.error(`Could not reshare the link: ${errorMessage(err)}`);
+    } finally {
+      setBusyToken(null);
+    }
+  };
+
   const onCopy = async (url: string | null) => {
     if (!url) {
       toast.error("This share's key is not on this device — copy it from the device that created it.");
@@ -327,6 +349,7 @@ function MySharesContent() {
                   }
                   onChangeExpiry={onChangeExpiry}
                   onChangeFolderExpiry={onChangeFolderExpiry}
+                  onReshareFolder={onReshareFolder}
                   busyToken={busyToken}
                   highlightedRowIds={highlightedRowIds}
                 />
@@ -418,6 +441,8 @@ function MySharesContent() {
             Cancel
           </Button>
         </FramedDialog>
+
+        <ReshareDoneDialog outcome={reshared} onClose={() => setReshared(null)} onCopy={onCopy} />
 
         {/* Clear history confirmation */}
         <FramedDialog
@@ -518,6 +543,7 @@ interface ActiveSharesTableProps {
   onRevoke: (kind: "file" | "folder", token: string) => void;
   onChangeExpiry: (token: string, ttl: ShareTtl) => void;
   onChangeFolderExpiry: (token: string, ttl: ShareTtl) => void;
+  onReshareFolder: (tokenHash: string) => void;
   busyToken: string | null;
   /** Row ids from the drive's link badge. The first one on screen is
    *  pointed out once, so the file's link is found without hunting. */
@@ -536,6 +562,7 @@ function ActiveSharesTable({
   onRevoke,
   onChangeExpiry,
   onChangeFolderExpiry,
+  onReshareFolder,
   busyToken,
   highlightedRowIds,
 }: ActiveSharesTableProps) {
@@ -701,6 +728,7 @@ function ActiveSharesTable({
               onCopy={onCopy}
               onRevoke={(tokenHash) => onRevoke("folder", tokenHash)}
               onChangeExpiry={onChangeFolderExpiry}
+              onReshare={onReshareFolder}
               canActByHash={revokeByHashEnabled}
               isBusy={original.folder.tokenHash === busyToken}
             />
@@ -708,7 +736,7 @@ function ActiveSharesTable({
         },
       }),
     ],
-    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, busyToken, revokeByHashEnabled],
+    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, onReshareFolder, busyToken, revokeByHashEnabled],
   );
 
   const table = useReactTable({
@@ -801,6 +829,7 @@ function ActiveNameCell({ row }: { row: ShareSummary }) {
  * dead state itself lives in the Expires column.
  */
 function FolderNameCell({ row }: { row: FolderShareSummary }) {
+  const { canReshare } = folderShareRowPlan(row);
   return (
     <div className="flex items-center gap-2 min-w-0 max-w-[260px]">
       <FolderIcon className="size-3.5 shrink-0 text-primary-50" />
@@ -808,6 +837,13 @@ function FolderNameCell({ row }: { row: FolderShareSummary }) {
         <MiddleTruncatedName
           name={row.displayName}
           textClassName="text-xs font-medium text-grey-20 dark:text-grey-dark-200"
+          suffix={
+            canReshare ? (
+              <span className="ml-1.5" title={OLD_LINK_TOOLTIP}>
+                <Badge tone="muted">{OLD_LINK_BADGE}</Badge>
+              </span>
+            ) : undefined
+          }
         />
         <FolderShareScope row={row} />
       </div>
@@ -893,11 +929,14 @@ function FolderActionsCell({
   onCopy,
   onRevoke,
   onChangeExpiry,
+  onReshare,
   isBusy,
   canActByHash,
 }: {
   row: FolderShareSummary;
   onCopy: (url: string | null) => void;
+  /** Replace a link that carries the drive key; offered per `canReshare`. */
+  onReshare: (tokenHash: string) => void;
   /** Keyed by `tokenHash`, which every row has — `shareToken` is null for a
    *  row this device did not mint, and those are now actionable too. */
   onRevoke: (tokenHash: string) => void;
@@ -929,6 +968,16 @@ function FolderActionsCell({
           : undefined
         : plan.copyTooltip,
     },
+    ...(plan.canReshare
+      ? [
+          {
+            icon: <RefreshCcw className="size-4" />,
+            itemTitle: "Reshare with a safer link",
+            onItemClick: () => onReshare(row.tokenHash),
+            tooltip: OLD_LINK_TOOLTIP,
+          },
+        ]
+      : []),
     ...EXPIRY_ACTIONS.map(({ label, ttl }) => ({
       icon: <RefreshCcw className="size-4" />,
       itemTitle: label,
@@ -950,6 +999,82 @@ function FolderActionsCell({
     },
   ];
   return <RowActionMenu items={items} />;
+}
+
+/**
+ * The link a reshare made, shown once: a new password is never stored, so
+ * this is the only time the app can show it. Says whether the old link still
+ * works, since Rust reports a revoke that failed rather than losing the new
+ * link to an error.
+ */
+function ReshareDoneDialog({
+  outcome,
+  onClose,
+  onCopy,
+}: {
+  outcome: ReshareOutcome | null;
+  onClose: () => void;
+  onCopy: (url: string | null) => void;
+}) {
+  const link = outcome?.link;
+  return (
+    <FramedDialog
+      open={outcome !== null}
+      onClose={onClose}
+      title="New link ready"
+      icon={<Check className="size-[18px] text-white" strokeWidth={2.5} />}
+      borderClassName="bg-primary-50"
+      iconBgClassName="bg-primary-50"
+      maxWidth="max-w-[585px]"
+      cardClassName="bg-white dark:bg-[#161616]"
+      contentClassName="sm:w-[405px]"
+    >
+      <p className="mb-4 text-center text-sm text-grey-20 dark:text-grey-dark-700 font-geist">
+        {outcome?.oldLinkRevoked
+          ? "The old link no longer works. Send this one instead: it opens only this folder's files."
+          : "The old link could not be turned off and still works. Revoke it from this page, then send this one."}
+      </p>
+      <input
+        readOnly
+        aria-label="New link"
+        value={link?.shareUrl ?? ""}
+        onFocus={(e) => e.currentTarget.select()}
+        className="mb-3 w-full rounded-[8px] border border-grey-80 bg-white p-3 font-mono text-xs dark:border-[#494949] dark:bg-[#1f1f1f]"
+      />
+      {link?.password && (
+        <>
+          <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">Password</p>
+          <input
+            readOnly
+            aria-label="New password"
+            value={link.password}
+            onFocus={(e) => e.currentTarget.select()}
+            className="mb-1.5 w-full rounded-[8px] border border-grey-80 bg-white p-3 font-mono text-xs dark:border-[#494949] dark:bg-[#1f1f1f]"
+          />
+          <p className="mb-3 text-xs text-grey-50 dark:text-grey-dark-600">
+            This link has a new password. Send it separately: it can&apos;t be shown again.
+          </p>
+        </>
+      )}
+      <Button
+        variant="primary"
+        size="auto"
+        onClick={() => onCopy(link?.shareUrl ?? null)}
+        className="h-[52px] w-full text-white"
+      >
+        <CopyIcon className="mr-2 size-4" />
+        Copy link
+      </Button>
+      <Button
+        variant="defaultStable"
+        size="auto"
+        onClick={onClose}
+        className="mt-3 h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]"
+      >
+        Done
+      </Button>
+    </FramedDialog>
+  );
 }
 
 /* -------------------------------------------------------------------------- */
