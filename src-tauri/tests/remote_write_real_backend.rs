@@ -349,23 +349,26 @@ async fn a_folder_renamed_in_an_unsynced_drive_takes_its_contents_with_it() {
     let after = tauri_project_lib::sync::remote::list_remote_folder_files_inner(&state, &env.ss58, &label)
         .await
         .expect("list after the folder rename");
-    let paths: Vec<&str> = after.iter().map(|f| f.name.as_str()).collect();
+    // Every check below reads `path`, the drive-relative path. `name` is
+    // only the basename ("leaf.bin"), so a folder prefix can never match it
+    // and checks written against it pass or fail regardless of the rename.
+    let paths: Vec<&str> = after.iter().map(|f| f.path.as_str()).collect();
 
     // The whole point: the CONTENTS moved. A rename that only touched the
     // folder's own row leaves these under `Trip/`.
     for expected in ["Holiday/leaf.bin", "Holiday/nested/leaf.bin"] {
         assert!(
-            after.iter().any(|f| f.name.ends_with(expected) || f.name == expected),
+            paths.contains(&expected),
             "{expected} is missing after the rename — the contents did not move; listing = {paths:?}"
         );
     }
     assert!(
-        !after.iter().any(|f| f.name.starts_with("Trip/")),
+        !paths.iter().any(|p| p.starts_with("Trip/")),
         "files are still under the old folder name — the rename copied instead of moving; listing = {paths:?}"
     );
     // The lookalike sibling must be untouched.
     assert!(
-        after.iter().any(|f| f.name.starts_with("Trip Photos/")),
+        paths.contains(&"Trip Photos/leaf.bin"),
         "the sibling folder was renamed too; listing = {paths:?}"
     );
 
