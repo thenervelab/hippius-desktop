@@ -26,8 +26,8 @@ vi.mock("@/components/ui/page-header", () => ({
 vi.mock("@/app/components/capture/CaptureButtons", () => ({
   default: () => (
     <span data-testid="capture-buttons">
-      <button type="button">Screenshot</button>
       <button type="button">Record</button>
+      <button type="button">Screenshot</button>
     </span>
   ),
 }));
@@ -106,7 +106,7 @@ describe("the Captures page", () => {
     expect(drive).toHaveAttribute("data-label", "Hippius Captures");
     expect(drive).toHaveAttribute("data-remote", "false");
     expect(within(drive).getByTestId("captures-empty")).toBeInTheDocument();
-    // Screenshot and Record live in the drive's own toolbar, as on every
+    // Record and Screenshot live in the drive's own toolbar, as on every
     // drive, so the page header does not repeat them.
     expect(within(screen.getByTestId("page-header")).queryByTestId("capture-buttons")).toBeNull();
   });
@@ -127,7 +127,7 @@ describe("the Captures page", () => {
     const note = await screen.findByTestId("captures-in-folder");
     expect(note).toHaveTextContent("Your captures are saved in Hippius › hippius-captures, in your Hippius drive.");
     expect(screen.queryByTestId("drive")).toBeNull();
-    // Screenshot and Record stay in the header, as before a drive exists.
+    // Record and Screenshot stay in the header, as before a drive exists.
     expect(within(screen.getByTestId("page-header")).getByTestId("capture-buttons")).toBeInTheDocument();
     fireEvent.click(within(note).getByRole("button", { name: "Open folder" }));
     expect(nav.push).toHaveBeenCalledWith("/files?openLabel=Main&openSubfolder=hippius-captures");
@@ -144,6 +144,8 @@ describe("the Captures page", () => {
     const store = renderView();
     const empty = await screen.findByTestId("captures-empty");
     expect(empty).toHaveTextContent("No captures yet");
+    // Recording leads the invitation, as Record leads the buttons.
+    expect(empty).toHaveTextContent("Record your screen or take a screenshot.");
     expect(empty).toHaveTextContent("Documents › Hippius Captures");
     expect(within(empty).getByTestId("capture-buttons")).toBeInTheDocument();
     expect(screen.queryByTestId("drive")).toBeNull();

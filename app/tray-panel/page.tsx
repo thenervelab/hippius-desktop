@@ -27,7 +27,7 @@ import {
 } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { groupUploadFeed } from "@/app/lib/upload-feed/groupUploadFeed";
 import Button from "@/app/components/ui/button";
-import HippiusLogo from "@/app/components/ui/icons/HippiusLogo";
+import HippiusBrandMark from "@/app/components/ui/HippiusBrandMark";
 import Search from "@/app/components/ui/icons/Search";
 import Command from "@/app/components/ui/icons/Command";
 import ArrowRight from "@/app/components/ui/icons/ArrowRight";
@@ -157,7 +157,7 @@ export default function TrayPanelPage() {
           chatUnread={chatUnread}
           showCapturesFolder={hasCapturesTab}
         />
-        {/* Screenshot / Record / Upload, above the search field. Only Upload
+        {/* Record / Screenshot / Upload, above the search field. Only Upload
             where capture is off or unsupported (see TrayTiles). */}
         <TrayTiles view={captureView} shortcut={shortcut} />
         <SearchBar />
@@ -191,7 +191,7 @@ export default function TrayPanelPage() {
             tab === "captures" ? (
               <EmptyCard
                 title="No captures yet"
-                body="Take a screenshot or record your screen. It shows up here with its link ready to copy."
+                body="Record your screen or take a screenshot. It shows up here with its link ready to copy."
               />
             ) : (
               <EmptyCard
@@ -247,8 +247,8 @@ export default function TrayPanelPage() {
   );
 }
 
-/** Top bar: brand mark (left) and a single pill holding the balance + a divider +
- *  the notification bell (right) — matching the Figma header. The bell mirrors
+/** Top bar: brand mark and name (left) and a single pill holding the balance + a divider +
+ *  the notification bell (right), matching the Figma header. The bell mirrors
  *  the top-bar bell: it shows the live unread count and, on click, focuses the
  *  main window and opens its existing notifications dropdown. While chat has
  *  unread DMs/mentions (the dock-badge number), a chat button with that count
@@ -273,15 +273,23 @@ function Header({
   showCapturesFolder: boolean;
 }) {
   return (
-    <header className="flex items-center justify-between px-5 pt-5">
-      {/* The Hippius mark shown directly (its own blue + white outline), with
-          no blue badge box behind it — a cleaner, simpler header that lets the
-          logo read as the brand rather than a solid blue tile. */}
-      <HippiusLogo className="h-11 w-11" />
+    <header className="flex items-center justify-between gap-3 px-5 pt-5">
+      {/* The Hippius mark with the app's name beside it, so the popover says
+          which app it is: the main window's own lockup (`HippiusBrandMark`),
+          at the popover's larger logo size. The mark keeps its own blue and
+          white outline, with no badge box behind it. Only the name may give
+          way (`min-w-0`, `truncate`); the pill never shrinks, so the balance
+          and the menu stay in view whatever the balance's length. */}
+      <div className="flex min-w-0 items-center gap-2.5">
+        <HippiusBrandMark
+          logoClassName="size-11 shrink-0"
+          textClassName="min-w-0 truncate text-[20px] leading-6 dark:text-primary-brand-dark"
+        />
+      </div>
 
       {/* Explicit rgba fill, not the `bg-black/[0.06]` opacity-modifier, which
           rendered no box in light mode (same issue fixed on the footer). */}
-      <div className="flex items-center gap-3 rounded-xl bg-[rgba(0,0,0,0.06)] py-1.5 pl-4 pr-2 dark:bg-[rgba(255,255,255,0.06)]">
+      <div className="flex shrink-0 items-center gap-3 rounded-xl bg-[rgba(0,0,0,0.06)] py-1.5 pl-4 pr-2 dark:bg-[rgba(255,255,255,0.06)]">
         <div className="flex flex-col text-left">
           <span className="font-mono text-[10px] font-medium leading-[18px] tracking-[-0.2px] text-[#1F51BE] dark:text-primary-brand-dark">
             Balance
