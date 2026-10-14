@@ -18,7 +18,11 @@
   animation: capture-card-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-/* The time left before a finished card slides away; restarted on leave. */
+/*
+ * The time left before a finished card slides away. Paused while the card is
+ * held and run on from the same point after; the page sets the duration, the
+ * delay (negative: how far it had run) and the play state.
+ */
 @keyframes capture-card-timer {
   from {
     transform: scaleX(1);

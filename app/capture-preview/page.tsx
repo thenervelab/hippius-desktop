@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle,
@@ -42,9 +42,24 @@ import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
 import { AUTO_HIDE_MS, cardView, destinationText, wantsProgress } from "./previewCard";
+import { barOffsetMs, nextCountdown, timeLeft, type Countdown } from "./autoHide";
 
 /** How long "Copied" shows before the button reads "Copy link" again. */
 const COPIED_MS = 1500;
+
+/**
+ * Focus the keyboard put there, the kind that draws the focus ring. A
+ * button's focus after a click does not hold the card, or it would stay up
+ * until the window lost focus. A WebView that cannot read the selector
+ * holds on any focus, so the keyboard is never raced.
+ */
+function isKeyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
 
 // Every label stays on one line (`whitespace-nowrap`): the card is 316 pt
 // wide, and "Show in folder" once broke in two beside three other buttons.
@@ -87,8 +102,10 @@ export default function CapturePreviewPage() {
   const [syncFiles, setSyncFiles] = useState<FileProgress[]>([]);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
-  // Bumped each time the pointer leaves, so the timer bar starts over.
-  const [timerRun, setTimerRun] = useState(0);
+  // Keyboard focus in the card holds it the way the pointer does.
+  const [keyboardIn, setKeyboardIn] = useState(false);
+  // The settled card's countdown before it slides away (`autoHide.ts`).
+  const [countdown, setCountdown] = useState<Countdown | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const menuButton = useRef<HTMLButtonElement | null>(null);
@@ -178,12 +195,14 @@ export default function CapturePreviewPage() {
   const done = view?.done ?? false;
   const settled = view?.settled ?? false;
 
-  // Once in the drive with its link settled, the card slides away on its own,
-  // unless the pointer is on it. Not before the link: it would go before it
-  // could say the link was copied.
+  // Once in the drive with its link settled, the card slides away on its own
+  // after AUTO_HIDE_MS. Not before the link: it would go before it could say
+  // the link was copied. The pointer on it, or keyboard focus in it, holds
+  // the countdown, and letting go runs it on with the time it had left
+  // (`autoHide.ts`): leaving never starts the wait over.
   // macOS sends no hover to the card's window (it is never key), so while
-  // the timer runs, ask Rust where the pointer is and hold the card the same
-  // way. Leaving starts the timer over, as the pointer events do.
+  // the card is settled, ask Rust where the pointer is and hold the card the
+  // same way.
   const cardBox = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (!settled) return;
@@ -198,7 +217,6 @@ export default function CapturePreviewPage() {
           if (now === inside) return;
           inside = now;
           setHovered(now);
-          if (!now) setTimerRun((n) => n + 1);
         })
         .catch(() => undefined);
     }, POINTER_POLL_MS);
@@ -208,11 +226,33 @@ export default function CapturePreviewPage() {
     };
   }, [settled]);
 
+  // Focus and blur keep `keyboardIn` up to date, but a focused button that
+  // goes away (a More item closing its menu) takes the focus with it and no
+  // blur reaches React, so it is read again after every render too. Only
+  // while the card's window has focus: switching to another app lets go,
+  // though the button stays the page's active element.
+  const readKeyboard = useCallback(() => {
+    const el = document.activeElement;
+    setKeyboardIn(document.hasFocus() && !!el && !!cardBox.current?.contains(el) && isKeyboardFocus(el));
+  }, []);
+  useLayoutEffect(readKeyboard);
+
+  const held = hovered || keyboardIn;
+  const countingFor = settled && card ? card.id : null;
+  // Before paint, so the timer bar is never drawn a frame behind the hold.
+  useLayoutEffect(() => {
+    setCountdown((previous) => nextCountdown(previous, countingFor, held, AUTO_HIDE_MS, performance.now()));
+  }, [countingFor, held]);
+
   useEffect(() => {
-    if (!settled || hovered) return;
-    const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
+    if (!countdown || countdown.runningSince === null) return;
+    const id = countdown.cardId;
+    const t = window.setTimeout(
+      () => void dismissCapturePreview(id).catch(() => undefined),
+      timeLeft(countdown, performance.now()),
+    );
     return () => window.clearTimeout(t);
-  }, [settled, hovered, dismiss, timerRun]);
+  }, [countdown]);
 
   if (!card || !view) return null;
   const { percent, failed, waiting } = view;
@@ -259,11 +299,12 @@ export default function CapturePreviewPage() {
         // on some WebViews, and the hold must work there as well.
         onPointerEnter={() => setHovered(true)}
         onMouseEnter={() => setHovered(true)}
-        onPointerLeave={() => {
-          setHovered(false);
-          setTimerRun((n) => n + 1);
-        }}
+        onPointerLeave={() => setHovered(false)}
         onMouseLeave={() => setHovered(false)}
+        onFocus={readKeyboard}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setKeyboardIn(false);
+        }}
       >
         <div className="mb-1.5 flex h-7 items-center gap-2 pl-0.5">
           <p className="min-w-0 flex-1 truncate text-[13px] font-semibold" title={card.fileName}>
@@ -361,14 +402,22 @@ export default function CapturePreviewPage() {
             </div>
           )}
           {settled && (
-            // Stays put while hovered, paused, so the card does not change
-            // height under the pointer; leaving starts it over.
+            // Stays put while held, paused, so the card does not change
+            // height under the pointer, and runs on from there when let go.
+            // Each pause draws it afresh where the countdown stopped (a
+            // negative delay), so the bar and the timer cannot drift apart.
             <div className="h-0.5 overflow-hidden rounded-full bg-white/10" aria-hidden data-testid="auto-hide-timer">
-              <div
-                key={timerRun}
-                className="capture-card-timer h-full bg-white/35"
-                style={{ animationDuration: `${AUTO_HIDE_MS}ms`, animationPlayState: hovered ? "paused" : "running" }}
-              />
+              {countdown && (
+                <div
+                  key={`${countdown.cardId}:${countdown.leftMs}`}
+                  className="capture-card-timer h-full bg-white/35"
+                  style={{
+                    animationDuration: `${countdown.totalMs}ms`,
+                    animationDelay: `${-barOffsetMs(countdown)}ms`,
+                    animationPlayState: countdown.runningSince === null ? "paused" : "running",
+                  }}
+                />
+              )}
             </div>
           )}
           {failure && (
