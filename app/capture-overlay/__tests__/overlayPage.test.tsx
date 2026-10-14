@@ -35,6 +35,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
     copyLink: true,
     openLink: true,
     chatPreview: true,
+    linkInsights: true,
     recordCountdownSecs: 3,
   },
   countdownSecs: 0,

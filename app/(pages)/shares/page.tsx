@@ -12,8 +12,9 @@ import {
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import { useAtomValue } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import {
+  BarChart3,
   Check,
   Copy as CopyIcon,
   Folder as FolderIcon,
@@ -67,6 +68,8 @@ import {
   type ShareHistoryEntry,
 } from "@/app/lib/tauri/shareHistory";
 import {
+  insightsSheetAtom,
+  shareInsightsEnabledAtom,
   folderShareFeatureEnabledAtom,
   folderShareRevokeByHashEnabledAtom,
   shareFeatureEnabledAtom,
@@ -841,6 +844,9 @@ function ActiveActionsCell({
   onChangeExpiry: (token: string, ttl: ShareTtl) => void;
   isBusy: boolean;
 }) {
+  // Insights for a file link, once the server has them.
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
+  const openInsights = useSetAtom(insightsSheetAtom);
   if (isBusy) {
     return (
       <div className="flex justify-center items-center h-8">
@@ -850,6 +856,15 @@ function ActiveActionsCell({
   }
 
   const items: ActionItem[] = [
+    ...(insightsEnabled
+      ? [
+          {
+            icon: <BarChart3 className="size-4" />,
+            itemTitle: "Insights",
+            onItemClick: () => openInsights({ shareToken: row.shareToken, fileName: row.filename }),
+          },
+        ]
+      : []),
     {
       icon: <CopyIcon className="size-4" />,
       itemTitle: "Copy link",

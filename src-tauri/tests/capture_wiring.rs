@@ -942,6 +942,7 @@ fn the_card_and_session_commands_are_registered() {
         "capture_preview_mint_link",
         "capture_preview_revoke_link",
         "capture_preview_manage_link",
+        "capture_preview_open_insights",
         "capture_preview_reveal",
         "capture_preview_discard",
         "capture_preview_upgrade",
@@ -2969,6 +2970,55 @@ fn a_captures_chat_preview_follows_the_settings_default() {
     let cleanup = fn_body(&src, "fn spawn_preview_then_cleanup(");
     assert!(cleanup.contains("tauri::async_runtime::spawn("), "sent in the background");
     assert!(cleanup.contains("preview::send_rendered("), "a failed upload is only logged");
+}
+
+/// Every capture link (the instant shortcut's and the automatic ones, and a
+/// link made later from the card or the editor) gets its Insights, Comments
+/// and Reactions from Settings' "Track views, comments and reactions", sent
+/// in the background so it can never fail or slow the link.
+#[test]
+fn a_captures_link_settings_follow_the_settings_default() {
+    let src = read("src/capture/commands.rs");
+    let body = fn_body(&src, "async fn deliver_and_announce(");
+    assert!(body.contains("o.link_insights"), "the stored default is read");
+    let made = body.find("Delivered::from_parts(").expect("the link is made");
+    let applied = body
+        .find("insights::spawn_apply(app, &account_id, token, crate::shares::insights::for_capture(link_insights))")
+        .expect("the default is applied to the new link");
+    assert!(made < applied);
+    let later = fn_body(&src, "pub async fn capture_preview_mint_link(");
+    assert!(later.contains("deliver::spawn_link_settings("), "the card's Create link follows it too");
+    let editor = read("src/capture/editor.rs");
+    assert!(
+        editor.contains("deliver::spawn_link_settings("),
+        "an edited screenshot's new link follows it too"
+    );
+    let deliver = read("src/capture/deliver.rs");
+    assert!(fn_body(&deliver, "pub async fn spawn_link_settings(").contains("insights::captures_default(state)"));
+    let insights = read("src/shares/insights.rs");
+    assert!(
+        fn_body(&insights, "pub(crate) fn spawn_apply(").contains("tauri::async_runtime::spawn("),
+        "sent in the background"
+    );
+    assert!(
+        fn_body(&insights, "pub(crate) async fn apply_after_mint(").contains("OfferedSwitches::from_caps(&caps)"),
+        "only what the server advertises is sent"
+    );
+}
+
+/// The share dialog's and the Finder chooser's switches reach the new link.
+#[test]
+fn the_share_dialogs_switches_are_sent_after_the_mint() {
+    let shares = read("src/shares/commands.rs");
+    for name in ["pub async fn hcfs_create_share(", "pub async fn hcfs_create_remote_share("] {
+        let body = fn_body(&shares, name);
+        let mint = body.find("share_inner(").expect("the link is made");
+        let apply = body.find("insights::spawn_apply(").unwrap_or_else(|| panic!("{name} sends the switches"));
+        assert!(mint < apply, "{name}: after the mint");
+    }
+    let finder = read("src/finder_bridge/commands.rs");
+    let confirm = fn_body(&finder, "pub async fn hcfs_finder_confirm_share(");
+    assert!(confirm.contains("insights::spawn_apply("));
 }
 
 /// The dialog and Finder mints never send a preview for a password link:

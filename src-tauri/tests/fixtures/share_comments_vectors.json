@@ -1,0 +1,30 @@
+{
+  "scheme": "HKDF-SHA256(ikm=share key, salt=empty, info='hippius-share-comments-v1', L=32) -> AES-256-GCM, 12-byte nonce, 128-bit tag appended to ciphertext",
+  "share_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "share_key_b64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "token": "sx5QIbv8AjPlxin1kZs0jw",
+  "comment_key_hex": "bc6c6ddbd2cf2e668b7363c825f18aac130bdd2a9b76c1e531d81d35b924248a",
+  "vectors": [
+    {
+      "kind": "comment",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:comment",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"text\":\"Looks great at 1:23!\",\"name\":\"Ahmad\"}",
+      "ciphertext_b64": "vm37sBJMsORN1C4nl2iM8q3WWm40e5/GDM0LA/bs/+puAC2M9B8B6g67JlYOuI7VjR0gNSLX0ycYwilx2A8="
+    },
+    {
+      "kind": "comment-anonymous",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:comment",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"text\":\"Nice\",\"name\":null}",
+      "ciphertext_b64": "vm37sBJMsORN1igrmTmAt7HSVn82IIWTUZtEJXGMS32oB7heevGREPyKSA=="
+    },
+    {
+      "kind": "viewer-name",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:viewer-name",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"name\":\"Ahmad\"}",
+      "ciphertext_b64": "vm3htAddsORN2SklnX+O6Bxf4dXj2QevbVAeBeRoQRA="
+    }
+  ]
+}

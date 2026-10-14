@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
+import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 
 const tauri = await vi.hoisted(async () => {
   const { makeTauriMock } = await import("@/app/lib/test-utils/tauriMock");
@@ -43,6 +45,7 @@ const OPTIONS: CaptureOptions = {
   copyLink: true,
   openLink: true,
   chatPreview: true,
+  linkInsights: true,
   recordCountdownSecs: 3,
 };
 
@@ -64,7 +67,11 @@ type Kind = "screenshot" | "record";
 let shortcuts: Record<Kind, string | null>;
 let stored: CaptureOptions;
 
-function setup({ recording = true, surfaces = MAC }: { recording?: boolean; surfaces?: CaptureSurfaces } = {}) {
+function setup({
+  recording = true,
+  surfaces = MAC,
+  insights = false,
+}: { recording?: boolean; surfaces?: CaptureSurfaces; insights?: boolean } = {}) {
   tauri.onInvoke("capture_get_shortcut", (args) => {
     const kind: Kind = (args as { kind?: Kind } | undefined)?.kind ?? "screenshot";
     return {
@@ -89,6 +96,7 @@ function setup({ recording = true, surfaces = MAC }: { recording?: boolean; surf
   store.set(captureRecordingAtom, recording);
   store.set(captureRecordingNoteAtom, null);
   store.set(captureSurfacesAtom, surfaces);
+  store.set(serverCapabilitiesAtom, { shares: true, share_insights: insights } as ServerCapabilities);
   return render(
     <Provider store={store}>
       <CaptureSettings />
@@ -219,6 +227,25 @@ describe("the capture bar's options, here as well", () => {
     expect(screen.getByRole("switch", { name: "Show a preview in chats" })).toHaveAttribute("aria-checked", "false");
     fireEvent.click(screen.getByRole("switch", { name: "Show a preview in chats" }));
     await waitFor(() => expect(stored.chatPreview).toBe(true));
+  });
+
+  it("turns tracking views, comments and reactions off for captures, once the server has insights", async () => {
+    setup({ insights: true });
+    const track = await screen.findByRole("switch", { name: "Track views, comments and reactions" });
+    expect(track).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(track);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: { ...OPTIONS, linkInsights: false },
+      }),
+    );
+    await waitFor(() => expect(stored.linkInsights).toBe(false));
+  });
+
+  it("does not offer tracking on a server without insights", async () => {
+    setup({ insights: false });
+    await screen.findByRole("switch", { name: "Show a preview in chats" });
+    expect(screen.queryByRole("switch", { name: "Track views, comments and reactions" })).toBeNull();
   });
 
   // It is also where the share dialog's switch starts for a capture, so it
