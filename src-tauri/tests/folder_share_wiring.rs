@@ -253,3 +253,19 @@ fn every_outside_folder_walk_stops_when_dropped() {
     let funnel = include_str!("../src/shares/outside_folder.rs");
     assert!(fn_body(funnel, "async fn scan_off_main_thread").contains("scan_until_dropped("));
 }
+
+/// A reshare revokes the replaced link, and that revoke returns the folder's
+/// Finder badge to "not shared". The new link shares the same folder, so the
+/// reshare must push the badge back to shared after the revoke.
+#[test]
+fn a_reshare_puts_the_folder_badge_back_after_revoking_the_old_link() {
+    let source = include_str!("../src/shares/commands.rs");
+    let body = fn_body(source, "pub async fn reshare_folder_link_inner");
+    let revoke = body
+        .find("revoke_folder_share_inner(state, account_id, share_token)")
+        .expect("the reshare revokes the old link");
+    let badge = body
+        .find("push_from_state(state, &folder_label, &path_prefix, BadgeState::Shared)")
+        .expect("the reshare re-pushes the shared badge");
+    assert!(badge > revoke, "the shared badge must be pushed after the revoke that clears it");
+}
