@@ -34,6 +34,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
     lastMode: "area",
     copyLink: true,
     openLink: true,
+    chatPreview: true,
     recordCountdownSecs: 3,
   },
   countdownSecs: 0,
@@ -588,6 +589,20 @@ describe("the Options menu", () => {
     );
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: "Copy a share link after capture" }));
     await waitFor(() => expect(screen.queryByRole("menuitemcheckbox", { name: "Open the link in your browser" })).toBeNull());
+  });
+
+  it("turns showing a preview in chats on and off, the same choice as Settings", async () => {
+    tauri.onInvoke("capture_set_options", (args) => saved((args as { options: CaptureOverlayContext["options"] }).options, 0));
+    setup();
+    fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
+    const preview = await screen.findByRole("menuitemcheckbox", { name: "Show a preview in chats" });
+    expect(preview).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(preview);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: expect.objectContaining({ chatPreview: false }),
+      }),
+    );
   });
 
   it("turns copying a share link after capture on and off", async () => {

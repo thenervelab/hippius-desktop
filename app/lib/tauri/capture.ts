@@ -80,6 +80,13 @@ export interface CaptureOptions {
   copyLink: boolean;
   /** Open that link in the browser too, as Zight does (default true). Only when a link was made. */
   openLink: boolean;
+  /**
+   * Upload a picture with each capture's link so chat apps show the
+   * screenshot, or the recording's first frame, instead of a generic card
+   * (default true). Also where the share dialog's preview switch starts for
+   * a capture.
+   */
+  chatPreview: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
   recordCountdownSecs: number;
 }
@@ -434,10 +441,10 @@ export interface CaptureDestination {
   folder?: string;
 }
 
-/** A folder the captures drive is, or would be, made of. Mirrors Rust's `setup::Location`. */
+/** The folder captures are, or would be, saved in. Mirrors Rust's `setup::Location`. */
 export interface CaptureDriveLocation {
   path: string;
-  /** "Documents › Hippius Captures", or the whole path outside the home folder. */
+  /** "Documents › hippius-captures", or the whole path outside the home folder. */
   place: string;
   /** What macOS will ask first, in Rust's words; absent when it will not ask. */
   permissionNote?: string | null;
@@ -445,7 +452,19 @@ export interface CaptureDriveLocation {
 
 /** Where the account's captures drive stands. Mirrors Rust's `CaptureDriveStatus`. */
 export type CaptureDriveStatus =
-  | { state: "ready"; label: string; name: string; remote: boolean; location?: CaptureDriveLocation | null }
+  | {
+      state: "ready";
+      label: string;
+      name: string;
+      /**
+       * The folder in the drive captures go to, from its root: empty for a
+       * captures drive of their own, set when the user picked a folder inside
+       * one of their drives (their main drive, say).
+       */
+      folder?: string;
+      remote: boolean;
+      location?: CaptureDriveLocation | null;
+    }
   /** Nothing chosen yet; `waiting` captures are kept on this computer until then. */
   | { state: "needsSetup"; suggested: CaptureDriveLocation; waiting: number }
   /** A folder was chosen but its drive could not be added yet; `message` is Rust's. */

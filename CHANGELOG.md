@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Share links show a preview in chats.** Paste a screenshot's link into Discord, Slack or another chat app and it shows the screenshot itself; a recording's link shows its first frame with a play button and its length. It is on for screenshots and recordings and can be turned on for other pictures and videos in the share dialog. The preview picture and file name aren't encrypted, so links with a password never get one, and you can turn previews off for captures in Settings, Screenshots & Recording.
 - **Screenshots and screen recording are available to everyone on Mac, Windows and Linux.** Capture an area, a window or your whole screen, and it lands in your drive with a share link ready to paste.
 - **Free plan screenshots and recordings carry a small Hippius watermark.** It sits in the bottom-right corner and stays on the file when you share or download it. Paid plans have no watermark.
 - **The free plan includes 25 screen recordings.** Every video in your captures drives counts, whatever it is called and whichever folder it is in, including ones made on the web or on another computer, and moving your captures folder does not start the count again. Once you have 25, Hippius tells you before you start recording, so nothing you record is held back; upgrade, or delete an older recording to make room. Screenshots and sharing stay unlimited.
@@ -42,6 +43,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Your captures go in the folder you pick.** When you choose where screenshots and recordings are saved, Hippius uses that folder as it is instead of making a "Hippius Captures" folder inside it, and a folder inside your main drive works too: captures are then saved there, in that drive. The suggested folder is now called hippius-captures. If you pick your home folder, Documents, Desktop or the top of a drive, Hippius makes a hippius-captures folder inside it and shows you the exact folder before you confirm.
 - **Captures check your plan before they start.** The capture bar says "Checking your plan…" for a moment, and if your plan can't be checked (you're offline, say) it tells you and offers Retry instead of capturing. An account with no Drive storage is told straight away and offered a plan.
 - **On Linux, installing Hippius brings the video plugins every recording needs.** The .deb now installs GStreamer's base, good and bad plugins with Hippius, so screen recording works even when the package is installed on its own or without recommended packages.
 - **Screen readers read what a dialog says when it opens,** not only its title, in confirmation dialogs and the screenshot editor's save dialog.

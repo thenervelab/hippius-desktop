@@ -4042,13 +4042,16 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             },
         };
         sent_to = Some(destination.clone());
-        let (mint_link, open_link) = bar::load_options(pool).await.map_or((true, true), |o| (o.copy_link, o.open_link));
+        let (mint_link, open_link, chat_preview) = bar::load_options(pool)
+            .await
+            .map_or((true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview));
         let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
             destination,
             mint_link,
             open_link,
+            chat_preview,
             placed,
         })
     }
@@ -4068,12 +4071,20 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             destination,
             mint_link,
             open_link,
+            chat_preview,
             placed,
         }) => {
             announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
             // A recording counts toward the free plan's limit from now on,
             // before the server lists it (`recording_allowance`).
             super::recording_allowance::note_delivered(&state, &account_id, &destination, &placed.file_name).await;
+            // The chat preview (Settings, "Show a preview in chats") is read
+            // from the placed file while the link is minted, so it costs the
+            // link no time. A capture's link is always public, so the
+            // password rule cannot refuse it here.
+            let preview = (mint_link && chat_preview).then(|| {
+                crate::shares::preview::render_in_background(app.clone(), account_id.clone(), placed.placed.clone(), placed.file_name.clone())
+            });
             let minted = if mint_link {
                 super::deliver::link_for(&state, &account_id, &destination, &placed).await
             } else {
@@ -4089,12 +4100,11 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             // direct upload still needs it to make a link later.
             let editable = card_id.is_some() && super::editor::EditableFormat::from_name(&delivered.file_name).is_some();
             let keep = super::deliver::keep_temp_after_upload(delivered.via_sync, delivered.share_url.is_some(), editable);
-            if !keep {
-                // Only ever the capture's own temp folder: a capture sent
-                // from the folder it was kept in on this computer is in the
-                // user's drive folder, which holds their other captures.
-                remove_temp_dir(path);
-            }
+            // Only ever the capture's own temp folder: a capture sent from
+            // the folder it was kept in on this computer is in the user's
+            // drive folder, which holds their other captures.
+            let temp = (!keep).then(|| path.to_path_buf());
+            spawn_preview_then_cleanup(app, &account_id, delivered.share_token.clone(), &delivered.file_name, preview, temp);
             let _ = app.emit(DELIVERED_EVENT, &delivered);
             let shown = card_id.is_some_and(|id| announce_link(app, &state.capture, id, &delivered, copied, keep));
             if !shown {
@@ -4104,6 +4114,35 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
         }
         Err(e) => announce_failed(app, path, card_id, &e, marked, sent_to),
     }
+}
+
+/// After a capture's link is out: send its chat preview, if one was being
+/// read (`preview`), and remove its temp copy (`temp`), in the background.
+/// The copy goes only once the preview has finished reading it, and a
+/// preview that fails or is not taken by the server changes nothing else:
+/// the link is already copied.
+fn spawn_preview_then_cleanup(
+    app: &AppHandle,
+    account_id: &str,
+    share_token: Option<String>,
+    file_name: &str,
+    preview: Option<tauri::async_runtime::JoinHandle<Option<Vec<u8>>>>,
+    temp: Option<PathBuf>,
+) {
+    let (app, account_id, file_name) = (app.clone(), account_id.to_string(), file_name.to_string());
+    tauri::async_runtime::spawn(async move {
+        let rendered = match preview {
+            Some(read) => read.await.ok().flatten(),
+            None => None,
+        };
+        if let Some(temp) = temp {
+            remove_temp_dir(&temp);
+        }
+        if let Some(token) = share_token {
+            let state = app.state::<AppState>();
+            crate::shares::preview::send_rendered(&state, &account_id, &token, rendered, &file_name).await;
+        }
+    });
 }
 
 /// A capture that could not be delivered: its card says why (when one is
@@ -4223,6 +4262,8 @@ enum Delivery {
         destination: CaptureDestination,
         mint_link: bool,
         open_link: bool,
+        /// Send a chat preview with the link (`CaptureOptions::chat_preview`).
+        chat_preview: bool,
         placed: super::deliver::Placed,
     },
     /// No captures drive yet: keep it on this computer.
@@ -5377,6 +5418,7 @@ pub async fn capture_preview_mint_link(state: tauri::State<'_, AppState>, app: A
     match super::deliver::mint(&state, &account_id, &source).await {
         Ok(link) => {
             let copied = app.clipboard().write_text(link.share_url.clone()).is_ok();
+            super::deliver::spawn_preview_if_wanted(&app, &state, &account_id, &source, &link.share_token).await;
             update_card(&app, &state.capture, card.id, |c| {
                 c.share_url = Some(link.share_url);
                 c.share_token = Some(link.share_token);

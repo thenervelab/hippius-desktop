@@ -42,6 +42,7 @@ const OPTIONS: CaptureOptions = {
   lastMode: "area",
   copyLink: true,
   openLink: true,
+  chatPreview: true,
   recordCountdownSecs: 3,
 };
 
@@ -201,6 +202,31 @@ describe("the capture bar's options, here as well", () => {
     );
     // Opening the link means nothing without one.
     await waitFor(() => expect(screen.queryByRole("switch", { name: "Open the link in your browser" })).toBeNull());
+  });
+
+  it("turns showing a preview in chats off and on, saved with the rest of the options", async () => {
+    setup();
+    const preview = await screen.findByRole("switch", { name: "Show a preview in chats" });
+    expect(preview).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(/The preview picture and file name aren't encrypted\./)).toBeInTheDocument();
+    fireEvent.click(preview);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: { ...OPTIONS, chatPreview: false },
+      }),
+    );
+    await waitFor(() => expect(stored.chatPreview).toBe(false));
+    expect(screen.getByRole("switch", { name: "Show a preview in chats" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(screen.getByRole("switch", { name: "Show a preview in chats" }));
+    await waitFor(() => expect(stored.chatPreview).toBe(true));
+  });
+
+  // It is also where the share dialog's switch starts for a capture, so it
+  // stays offered when links are not copied after a capture.
+  it("keeps the chat preview choice when links are not copied", async () => {
+    stored = { ...OPTIONS, copyLink: false };
+    setup();
+    expect(await screen.findByRole("switch", { name: "Show a preview in chats" })).toBeInTheDocument();
   });
 
   it("sets the recording countdown and system audio where this computer records", async () => {

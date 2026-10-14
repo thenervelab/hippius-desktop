@@ -30,6 +30,7 @@ const OPTIONS: CaptureOptions = {
   lastMode: "screen",
   copyLink: true,
   openLink: true,
+  chatPreview: true,
   recordCountdownSecs: 3,
 };
 

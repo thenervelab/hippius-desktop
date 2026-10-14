@@ -284,6 +284,14 @@ function OptionsMenu({
           Open the link in your browser
         </MenuRow>
       )}
+      {/* The same stored choice as Settings' "Show a preview in chats". */}
+      <MenuRow
+        role="menuitemcheckbox"
+        checked={options.chatPreview}
+        onSelect={() => onOptions({ ...options, chatPreview: !options.chatPreview })}
+      >
+        Show a preview in chats
+      </MenuRow>
     </div>
   );
 }

@@ -56,6 +56,8 @@ export interface ServerCapabilities {
    * matches the wire.
    */
   upload_folder_shares?: boolean;
+  /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
+  share_preview?: boolean;
 }
 
 /**
@@ -93,6 +95,46 @@ export interface ShareChoice {
   ttl: ShareTtl;
   visibility: ShareVisibility;
   password?: string;
+  /**
+   * "Show a preview in chats": after the link is made, Rust uploads a picture
+   * of the file so chat apps show it instead of a generic card. Rust ignores
+   * it for a password share and for folders.
+   */
+  chatPreview?: boolean;
+}
+
+/** Where the "Show a preview in chats" switch starts. Mirrors Rust's `PreviewDefault`. */
+export interface SharePreviewDefault {
+  /** A preview can be made for this file, so the switch is shown. */
+  offered: boolean;
+  /** The switch starts on (a screenshot or recording, with Settings on). */
+  on: boolean;
+}
+
+/**
+ * Rust decides whether a file gets the switch and where it starts: on for
+ * screenshots and recordings when Settings says so, off for other pictures
+ * and videos, not offered for other files or folders.
+ */
+export async function getSharePreviewDefault(
+  folderLabel: string | null,
+  fileName: string,
+  isFolder: boolean,
+): Promise<SharePreviewDefault> {
+  return invoke<SharePreviewDefault>("hcfs_share_preview_default", {
+    folderLabel,
+    fileName,
+    isFolder,
+  });
+}
+
+/**
+ * Turn an existing share's chat preview off (removes it from the server) or
+ * back on (Rust makes it again from the file on this computer). Rejects
+ * with a sentence to show when it cannot be turned on.
+ */
+export async function setSharePreview(shareToken: string, enabled: boolean): Promise<void> {
+  await invoke<void>("hcfs_set_share_preview", { shareToken, enabled });
 }
 
 /**
@@ -253,6 +295,7 @@ export async function createShare(
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
+    chatPreview: choice.chatPreview ?? false,
     onProgress: onProgressChannel,
   });
 }
@@ -281,6 +324,7 @@ export async function createRemoteShare(
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
+    chatPreview: choice.chatPreview ?? false,
     onProgress: onProgressChannel,
   });
 }
@@ -479,6 +523,7 @@ export async function confirmFinderShare(
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
+    chatPreview: choice.chatPreview ?? false,
     onProgress: onProgressChannel,
   });
 }
