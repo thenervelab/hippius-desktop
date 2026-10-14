@@ -155,6 +155,24 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(1);
   });
 
+  // Pointed at while it uploads: the countdown starts held when the link
+  // settles, and the whole time is still there once the pointer leaves.
+  it("starts held when the pointer is already on it as it settles", async () => {
+    await setup(card({ state: "uploading" }));
+    fireEvent.pointerEnter(screen.getByTestId("capture-card"));
+    await act(() => tauri.emitEvent("capture_preview_changed", card({ state: "uploaded", linkCopied: true })));
+    const bar = screen.getByTestId("auto-hide-timer").firstElementChild as HTMLElement;
+    expect(bar.style.animationPlayState).toBe("paused");
+    expect(bar.style.animationDelay).toBe("0ms");
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    fireEvent.pointerLeave(screen.getByTestId("capture-card"));
+    await advance(AUTO_HIDE_MS - 100);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
   it("adds several holds up to the whole time", async () => {
     await setup(card({ state: "uploaded", linkCopied: true }));
     const node = screen.getByTestId("capture-card");
