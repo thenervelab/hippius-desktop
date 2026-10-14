@@ -32,9 +32,12 @@
 //! hermetically by the in-module unit tests + proptests in
 //! `sync::migrate::folder_entries_reconcile`. The reconcile's network edge
 //! (register/unregister) is driven here transitively: the combined
-//! `run_folder_entity_sync_for_drive` (which the C1 test calls) reconciles
-//! FIRST, so the `unregister_folder_entries` HTTP round-trip runs for real and
-//! the post-reconcile server state is then asserted via `list_folder_entries`.
+//! `run_folder_entity_sync_for_drive` (which the C1 test and the empty-drive
+//! hold test call) reconciles FIRST, so the `unregister_folder_entries` HTTP
+//! round-trip runs for real and the post-reconcile server state is then
+//! asserted via `list_folder_entries`. The hold test also pins #531's
+//! empty-walk guard: deleting the last folder of an otherwise empty drive
+//! waits until the drive folder has a visible entry again.
 //! So the reconcile's logic is unit-pinned and its network edge is
 //! real-server-pinned through the combined runner; nothing about it is mocked.
 //!
@@ -645,7 +648,34 @@ async fn deleting_last_folder_of_empty_drive_is_held() {
         );
     }
 
-    // Cleanup: the hold left Last on the server, so drop it here.
+    // Lift: a user file makes the drive folder visibly non-empty, so the next
+    // cycle applies the held delete. This also proves the hold above came from
+    // the empty-walk guard and not from another closed gate (an unreadable
+    // mass-delete record or an unresolvable config dir would hold here too).
+    std::fs::write(root.join("keep.txt"), b"user data").expect("write keep.txt");
+    let lifted = run_folder_entity_sync_for_drive(&state, &ss58, LABEL)
+        .await
+        .expect("combined sync after the lift must not hard-error");
+    assert_eq!(
+        lifted,
+        FolderEntitySyncOutcome::Ran {
+            reconcile: ReconcileOutcome::Reconciled {
+                registered: 0,
+                unregistered: 1
+            },
+            materialize: MaterializeOutcome::NoChanges,
+        },
+        "once the drive is visibly non-empty the held delete applies"
+    );
+    let listed = client.list_folder_entries(&ss58, &fhash).await.expect("list after lift");
+    assert!(
+        !listed.contains(&"Last".to_string()),
+        "the lifted delete must unregister Last from the server, got {listed:?}"
+    );
+    assert!(cached_dirs(&pool, &ss58).await.is_empty(), "the lifted delete drops the cache row");
+
+    // Cleanup: a no-op when the lift passed; drops Last if an assertion above
+    // failed after the hold left it on the server.
     let _ = client.unregister_folder_entries(&ss58, &fhash, &["Last".to_string()]).await;
     let _ = clear_api_token(&pool, &ss58).await;
 }
