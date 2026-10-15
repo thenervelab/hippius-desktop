@@ -27,6 +27,21 @@ export interface TipText {
 const TIP_ID = "capture-bar-tip";
 
 /**
+ * Focus opens the tooltip only when it came from the keyboard. The bar's
+ * window taking the keyboard (when it opens, or back from a click on another
+ * display) focuses again whatever button had focus, and a tooltip shown there
+ * with nobody pointing at it looked like a glitch. `:focus-visible` is the
+ * WebView's own "focus from the keyboard"; one without it shows the tooltip.
+ */
+function focusFromKeyboard(el: HTMLElement): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Rendered into `document.body`: the overlay's bar column is placed with a
  * transform and its glass with a backdrop blur, and either would make a
  * `fixed` tooltip inside it relative to the bar instead of the window. In
@@ -51,7 +66,9 @@ export function useBarTooltip() {
       onMouseEnter: (e: React.MouseEvent<HTMLElement>) => show(key, e.currentTarget),
       onPointerLeave: () => hide(key),
       onMouseLeave: () => hide(key),
-      onFocus: (e: React.FocusEvent<HTMLElement>) => show(key, e.currentTarget),
+      onFocus: (e: React.FocusEvent<HTMLElement>) => {
+        if (focusFromKeyboard(e.currentTarget)) show(key, e.currentTarget);
+      },
       onBlur: () => hide(key),
       "aria-describedby": shown?.key === key ? TIP_ID : undefined,
     };
