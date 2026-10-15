@@ -1220,6 +1220,19 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
   window, system font). Text on the glass is never below white/60; every
   `animate-*` carries `motion-reduce:animate-none`.
+- **No native `title` in the capture bar.** macOS draws a system tooltip in
+  a window of its own, below the overlay's screen saver level, so it showed
+  behind the toolbar and only after the system's delay. The bar's buttons
+  take `useBarTooltip`'s handlers (`BarTooltip.tsx`): one glass tooltip,
+  shown at once on hover (pointer AND mouse events) and keyboard focus,
+  portalled to `body` (the column's transform and the glass's backdrop
+  blur would trap a `fixed` child), placed by the pure
+  `tooltipPlacement.ts` (above, below only without room, clamped inside the
+  window). The name stays the button's `aria-label`; an unavailable mode's
+  reason is the tooltip's second line. Keep the module's lowercase name
+  distinct from `BarTooltip.tsx`: `barTooltip.ts` resolved as the component
+  on a case-insensitive disk. Pinned by `overlayPage.test.tsx` and
+  `tooltipPlacement.test.ts`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
   `capture-camera.json`, `capture-bubble-controls.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
