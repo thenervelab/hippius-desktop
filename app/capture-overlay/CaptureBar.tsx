@@ -41,6 +41,7 @@ import {
 } from "./barText";
 import { stepIndex } from "./keyNav";
 import MicMeter from "./MicMeter";
+import { useBarTooltip } from "./BarTooltip";
 
 /**
  * The capture bar: the macOS ⌘⇧5-style toolbar at the bottom of the display
@@ -68,11 +69,13 @@ function ModeGroup({
   label,
   isActive,
   onPick,
+  tipProps,
 }: {
   entries: BarMode[];
   label: string;
   isActive: (entry: BarMode) => boolean;
   onPick: (entry: BarMode) => void;
+  tipProps: ReturnType<typeof useBarTooltip>["tipProps"];
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const active = entries.findIndex(isActive);
@@ -108,7 +111,8 @@ function ModeGroup({
             // so its tooltip would never say why. A click puts the reason on
             // the hint line, which is a live region.
             aria-disabled={entry.unavailable ? true : undefined}
-            title={entry.unavailable ? `${entry.label}: ${entry.unavailable}` : entry.label}
+            // The bar's own tooltip, never a native `title` (BarTooltip.tsx).
+            {...tipProps(`${entry.kind}-${entry.mode}`, { label: entry.label, detail: entry.unavailable ?? undefined })}
             tabIndex={i === tabStop ? 0 : -1}
             onClick={() => onPick(entry)}
             className={`relative grid h-9 w-10 place-items-center rounded-[8px] transition-colors ${GLASS_FOCUS} ${
@@ -723,6 +727,7 @@ export default function CaptureBar(props: Props) {
   // In the panel the bar's empty parts move the window, as its title bar would.
   const dragRegion = layout === "panel" ? { "data-tauri-drag-region": true } : {};
   const [menu, setMenu] = useState<OpenMenu | null>(null);
+  const { tipProps, tooltip } = useBarTooltip();
   const freePlan = useFreePlanNotice();
   // Rust's plan read for this capture: until it says ready, nothing can be
   // captured, and a refusal says why with its way out.
@@ -826,6 +831,8 @@ export default function CaptureBar(props: Props) {
     props.onMode(entry.kind, entry.mode);
   };
 
+  const confirmTip = tipProps("confirm", { label: confirmLabel(kind), detail: `Press ${props.enterKey ?? "Return"}` });
+
   return (
     <div
       data-capture-bar
@@ -864,7 +871,7 @@ export default function CaptureBar(props: Props) {
         <button
           type="button"
           aria-label="Close"
-          title="Close (Esc)"
+          {...tipProps("close", { label: "Close", detail: "Press Esc" })}
           onClick={props.onCancel}
           className={`grid size-7 place-items-center rounded-full ${GLASS_BUTTON}`}
         >
@@ -878,6 +885,7 @@ export default function CaptureBar(props: Props) {
               label={group[0].kind === "recording" ? "Record" : "Screenshot"}
               isActive={isActive}
               onPick={pickMode}
+              tipProps={tipProps}
             />
           </div>
         ))}
@@ -886,7 +894,7 @@ export default function CaptureBar(props: Props) {
           <button
             type="button"
             aria-haspopup="dialog"
-            title="Pick a window or screen from a list"
+            {...tipProps("choose", { label: "Pick a window or screen from a list" })}
             onClick={() => {
               setMenu(null);
               props.onChoose(shareTabFor(mode));
@@ -928,8 +936,10 @@ export default function CaptureBar(props: Props) {
           type="button"
           onClick={props.onConfirm}
           disabled={!planReady}
-          aria-describedby={planReady ? undefined : "capture-plan-status"}
-          title={`${confirmLabel(kind)} (${props.enterKey ?? "Return"})`}
+          {...confirmTip}
+          // While the plan is unknown the button is disabled (no hover), and
+          // the line under the bar says why.
+          aria-describedby={planReady ? confirmTip["aria-describedby"] : "capture-plan-status"}
           className={`ml-1 h-9 rounded-[9px] px-4 text-[13px] shadow-[0_1px_0_rgba(255,255,255,0.15)_inset] ${GLASS_PRIMARY}`}
         >
           {confirmLabel(kind)}
@@ -976,6 +986,7 @@ export default function CaptureBar(props: Props) {
           {freePlanBarLine(freePlan, props.recordingAvailable)}
         </p>
       )}
+      {tooltip}
     </div>
   );
 }
