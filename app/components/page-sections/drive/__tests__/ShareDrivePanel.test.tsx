@@ -127,6 +127,7 @@ const replaceFoldersMock = vi.fn();
 const leaveMock = vi.fn();
 const leaveByIdentityMock = vi.fn();
 const nudgeMock = vi.fn();
+const replaceInviteMock = vi.fn();
 vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/app/lib/tauri/sharedDrives")>();
   return {
@@ -135,6 +136,7 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
     changeDriveMemberRole: (...a: unknown[]) => changeRoleMock(...a),
     removeDriveMember: (...a: unknown[]) => removeMock(...a),
     revokeDriveInvite: (...a: unknown[]) => revokeMock(...a),
+    replaceDriveInvite: (...a: unknown[]) => replaceInviteMock(...a),
     approveEmailInvite: (...a: unknown[]) => approveMock(...a),
     replaceFolderGrants: (...a: unknown[]) => replaceFoldersMock(...a),
     leaveSharedDrive: (...a: unknown[]) => leaveMock(...a),
@@ -1324,5 +1326,60 @@ describe("one dialog at a time", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Leave drive" })).toHaveFocus());
     expect(leaveMock).not.toHaveBeenCalled();
     expect(leaveByIdentityMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("old invite links (hcfs #686)", () => {
+  const replaced = (oldInviteRevoked: boolean) => ({
+    link: {
+      inviteUrl: "https://console.hippius.com/invite/tok_new#i=SECRET",
+      inviteId: "l2",
+      role: "writer",
+      expiresInSecs: 5 * DAY,
+      maxUses: 38,
+    },
+    oldInviteRevoked,
+  });
+
+  beforeEach(() => {
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
+  });
+
+  it("marks a replaceable link and replaces it, copying the new link", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ links: [link({ replaceable: true })] }));
+    replaceInviteMock.mockResolvedValue(replaced(true));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getByText("Old invite link")).toBeInTheDocument();
+
+    fireEvent.click(links.getByRole("button", { name: "Replace with a safer link" }));
+    await waitFor(() => expect(replaceInviteMock).toHaveBeenCalledWith("team-docs", "l1", undefined));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith("Made a safer link and copied it. The old link no longer works."),
+    );
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith("https://console.hippius.com/invite/tok_new#i=SECRET");
+    expect(listAccessPanelMock.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("says so when the old link could not be turned off", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ links: [link({ replaceable: true })] }));
+    replaceInviteMock.mockResolvedValue(replaced(false));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    fireEvent.click(links.getByRole("button", { name: "Replace with a safer link" }));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Made a safer link and copied it. The old link could not be turned off, so revoke it from the list.",
+      ),
+    );
+  });
+
+  it("offers neither the badge nor Replace on a link Rust did not mark", async () => {
+    listAccessPanelMock.mockResolvedValue(panel({ links: [link()] }));
+    renderPanel();
+    const links = within(await waitFor(() => group(/^Links/)));
+    expect(links.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+    expect(links.queryByText("Old invite link")).toBeNull();
+    expect(links.queryByRole("button", { name: "Replace with a safer link" })).toBeNull();
   });
 });
