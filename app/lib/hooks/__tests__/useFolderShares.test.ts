@@ -31,6 +31,8 @@ const row = (over: Partial<FolderShareSummary> = {}): FolderShareSummary => ({
   shareUrl: "https://console.hippius.com/shared-folder/tok-1#k=K",
   isPrivate: false,
   source: "drive",
+  linkFormat: "legacy",
+  reshareOffered: false,
   ...over,
 });
 

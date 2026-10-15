@@ -39,11 +39,12 @@
 //!
 //! # What it does NOT drive (and why that's honest)
 //!
-//! The member-drive refusal here is client-side: the funnel refuses after
-//! the live capability probe but before any mint request, so one bearer
-//! suffices. A server-side member topology (a second account actually
-//! joined to the drive) adds nothing to that gate — the mint never leaves
-//! the process — and is covered behaviorally by `shares_server_mock.rs`.
+//! The member-drive scenario covers only the refusal: the funnel reads the
+//! live capability document and memberships listing, finds no membership
+//! for the seeded foreign drive, and refuses before any mint request, so
+//! one bearer suffices. A successful member mint needs a second account
+//! actually joined to the drive as an Editor or Manager, which this
+//! single-bearer suite does not set up.
 //!
 //! # How to run
 //!
@@ -713,17 +714,24 @@ async fn password_mint_wraps_the_drive_key_and_wrong_password_fails() {
     let _ = client.unregister_folder(&env.ss58, &fh).await;
 }
 
-// ── Scenario 3: member refusal against the live capability document ────────
+// ── Scenario 3: a member mint the live memberships listing refuses ─────────
 
-/// A member-drive mint refuses at the owner-only gate AFTER the live
-/// capability probe: the real server's `/v1/capabilities` advertises
-/// `folder_shares`, so the refusal provably comes from the member gate,
-/// not a capability miss — and no mint request ever leaves the process
-/// (nothing lands server-side, so there is nothing to clean up). The
-/// probe-ordering and request-count pins live in `shares_server_mock.rs`.
+/// A mint in a drive this account does not own refuses when the live
+/// memberships listing has no membership for it.
+///
+/// Since desktop #491 (hcfs #458) an Editor or Manager may share a folder
+/// from someone else's drive, so a member row no longer hits an owner-only
+/// gate: it goes to `create_member_folder_share`, which reads the live
+/// `/v1/capabilities` and, when the server advertises
+/// `member_folder_shares`, the live memberships listing. The seeded row
+/// names a foreign owner this account was never added to, so the listing
+/// has no entry and the refusal is "no longer a member". That exact message
+/// proves both live reads ran: a server without `member_folder_shares`
+/// refuses with "needs a newer server" instead. No mint request is sent and
+/// nothing is persisted, so there is nothing to clean up.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server"]
-async fn member_drive_mint_refuses_against_the_live_capability_doc() {
+async fn member_drive_mint_without_a_live_membership_refuses() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green
     };
@@ -737,13 +745,16 @@ async fn member_drive_mint_refuses_against_the_live_capability_doc() {
     let state = make_state(pool.clone(), &env.ss58);
 
     // Hours24 like the other mints. This call is expected to refuse and so
-    // creates nothing, but if the owner-only rule ever regressed it WOULD
-    // mint — and this test has no revoke to clean up after it.
+    // creates nothing, but if the membership check ever regressed it WOULD
+    // try to mint, and this test has no revoke to clean up after it.
     let err = create_folder_share_inner(&state, &env.ss58, &label, "docs", ShareTtl::Hours24, ShareChoice::Public)
         .await
-        .expect_err("a member mint must refuse");
+        .expect_err("a mint in a drive with no live membership must refuse");
     match err {
-        AppError::Validation(msg) => assert!(msg.contains("Only the owner"), "the owner-only rule must be named: {msg}"),
+        AppError::Validation(msg) => assert_eq!(
+            msg, "You are no longer a member of this drive.",
+            "the refusal must come from the live memberships listing"
+        ),
         other => panic!("expected Validation, got {other:?}"),
     }
 
@@ -793,7 +804,7 @@ async fn capture_copy(http: &reqwest::Client, env: &LiveEnv, state: &AppState, t
 /// captured first, then revoked, then asserted, so a red run leaves no
 /// live link behind.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server with upload_folder_shares"]
+#[ignore = "live-lane: needs the three HCFS_DESKTOP_E2E_* vars and a running hcfs-server with upload_folder_shares"]
 async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green

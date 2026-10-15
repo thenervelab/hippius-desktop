@@ -75,6 +75,12 @@ pub struct ServerCapabilities {
     /// shows for a file link (`shares::preview`). Absent on older servers,
     /// which then get no preview and no request.
     pub share_preview: bool,
+    /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
+    /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
+    /// drive key sealed under it. Advertised only once the console can open
+    /// such links (`HCFS_FEATURE_FOLDER_LINK_ENVELOPES`), so until then every
+    /// mint, the member one included, stays on `#k=` / `#p=`.
+    pub folder_share_link_envelopes: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -193,9 +199,11 @@ mod tests {
 
     #[test]
     fn full_capabilities_shape_round_trips() {
-        let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true}"#,
-        )
+        let caps: ServerCapabilities = serde_json::from_str(concat!(
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
+            r#""folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"#,
+            r#""share_preview":true,"folder_share_link_envelopes":true}"#,
+        ))
         .expect("parse");
         assert!(caps.shares);
         assert!(caps.folder_shares);
@@ -206,6 +214,7 @@ mod tests {
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
         assert!(caps.share_preview);
+        assert!(caps.folder_share_link_envelopes);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -217,6 +226,7 @@ mod tests {
             [
                 "folder_grant_writes",
                 "folder_grants",
+                "folder_share_link_envelopes",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
                 "member_folder_shares",
@@ -238,6 +248,10 @@ mod tests {
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
         assert!(!old.share_preview, "a server without the preview routes is never sent one");
+        assert!(
+            !old.folder_share_link_envelopes,
+            "a server without link envelopes keeps every folder mint on #k= / #p="
+        );
     }
 
     /// Uploaded-copy folder links ship after browsable folder shares, so a

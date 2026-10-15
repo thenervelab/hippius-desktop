@@ -15,12 +15,22 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
-## [0.6.12] - 2026-10-14
+## [0.6.12] - 2026-10-15
 
-Record now comes before Screenshot wherever the two sit together, and the
-menu bar window shows the Hippius name. Large uploads also cope better with a
-dropped connection, and the card after a screenshot or recording no longer
-starts its wait over.
+New folder links no longer carry the key to your whole drive, and older ones
+can be swapped for a new link from Shared Links. Record now comes before
+Screenshot wherever the two sit together, and the menu bar window shows the
+Hippius name. Large uploads also cope better with a dropped connection, and the
+card after a screenshot or recording no longer starts its wait over.
+
+### Security
+
+- **New folder links no longer contain the key to your whole drive.** Once
+  Hippius turns this on, a folder link holds a key of its own, so a link that
+  was forwarded or leaked stops working for good when you revoke it, unless
+  someone had already opened it. Older folder links are marked "Old link" in
+  Shared Links, and Reshare swaps one for a new link to the same folder (with
+  a new password if it had one) and turns the old one off.
 
 ### Changed
 
