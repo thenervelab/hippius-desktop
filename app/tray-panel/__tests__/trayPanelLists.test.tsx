@@ -177,6 +177,8 @@ describe("the Captures | All files tabs", () => {
     data.captures = [];
     render(<TrayPanelPage />);
     expect(screen.getByText("No captures yet")).toBeInTheDocument();
+    // Recording leads the invitation, as the Record tile leads the tiles.
+    expect(screen.getByText(/^Record your screen or take a screenshot\./)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Upload a File/ })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "All files" }));
     expect(screen.getByText("No files yet")).toBeInTheDocument();

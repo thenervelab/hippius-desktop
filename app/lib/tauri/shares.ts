@@ -58,6 +58,16 @@ export interface ServerCapabilities {
   upload_folder_shares?: boolean;
   /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
   share_preview?: boolean;
+  /**
+   * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
+   * listed so the type matches the wire.
+   */
+  folder_share_link_envelopes?: boolean;
+  /**
+   * Link-secret drive invites (`#i=`, hcfs#686). Read by Rust only; listed
+   * so the type matches the wire.
+   */
+  drive_invite_link_envelopes?: boolean;
 }
 
 /**
@@ -393,10 +403,10 @@ export interface FolderShareSummary {
   /** Plaintext token, present only for resolvable rows. */
   shareToken: string | null;
   /**
-   * Recipient URL, or `null` for a foreign row. Carries `#k=` for a public
-   * share and `#p=` for a password-protected one — the backend derives it
-   * from the stored secret's kind, so this can never be a password-free link
-   * to a protected share.
+   * Recipient URL, or `null` for a foreign row. A legacy link carries `#k=`
+   * (public) or `#p=` (password); a link-secret link carries `#s=` or `#sp=`.
+   * The backend derives it from the stored secret's kind, so this can never
+   * be a password-free link to a protected share.
    */
   shareUrl: string | null;
   /**
@@ -413,6 +423,43 @@ export interface FolderShareSummary {
    * follow later changes to the folder.
    */
   source: FolderShareOrigin;
+  /** What the link's fragment carries; see {@link FolderLinkKind}. */
+  linkFormat: FolderLinkKind;
+  /**
+   * Whether this device can replace the link with one that keeps the drive
+   * key off the URL ({@link reshareFolderLink}). Decided in Rust: a live
+   * legacy drive link, minted on this device, on a server that serves link
+   * envelopes.
+   */
+  reshareOffered: boolean;
+}
+
+/**
+ * What a folder link's fragment carries.
+ *
+ * - `linkSecret`: a per-link secret; the server keeps the drive key sealed.
+ * - `legacy`: the drive key itself (or under the password), so everyone who
+ *   ever held the link holds the key to the whole drive.
+ * - `ownKey`: an uploaded copy under a key of its own.
+ * - `unknown`: a server that does not say.
+ */
+export type FolderLinkKind = "linkSecret" | "legacy" | "ownKey" | "unknown";
+
+/** Returned by {@link reshareFolderLink}. */
+export interface ReshareOutcome {
+  /** The new link; carries a new password when the old link had one. */
+  link: ShareLink;
+  /** `false` when the old link could not be revoked and still works. */
+  oldLinkRevoked: boolean;
+}
+
+/**
+ * Replace a legacy folder link with one that keeps the drive key off the URL,
+ * then revoke the old one. The new link shares the same folder for at least
+ * as long; a password link gets a new password, shown once in the outcome.
+ */
+export async function reshareFolderLink(shareToken: string): Promise<ReshareOutcome> {
+  return invoke<ReshareOutcome>("hcfs_reshare_folder_link", { shareToken });
 }
 
 /**

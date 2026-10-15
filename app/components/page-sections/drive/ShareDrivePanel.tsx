@@ -74,9 +74,11 @@ import {
   leaveSharedDriveByIdentity,
   nudgeInviteAutoSeal,
   removeDriveMember,
+  replaceDriveInvite,
   replaceFolderGrants,
   revokeDriveInvite,
   type AccessPanel,
+  type InviteReplaceOutcome,
   type AccessPanelHolder,
   type DriveMembershipInfo,
 } from "@/app/lib/tauri/sharedDrives";
@@ -136,6 +138,24 @@ import {
 
 /** Wider than File Details' 305: this panel holds lists, not labels. */
 const PANEL_WIDTH_PX = 360;
+
+/**
+ * Copy a replaced invite's new link and say what happened. The old link is
+ * still live when Rust could not revoke it, and the user has to know that
+ * to turn it off by hand. A refused clipboard leaves the link on the row.
+ */
+export async function replacedInviteMessage(outcome: InviteReplaceOutcome): Promise<string> {
+  let copied = true;
+  try {
+    await navigator.clipboard.writeText(outcome.link.inviteUrl);
+  } catch {
+    copied = false;
+  }
+  const made = copied ? "Made a safer link and copied it." : "Made a safer link; copy it from the list.";
+  return outcome.oldInviteRevoked
+    ? `${made} The old link no longer works.`
+    : `${made} The old link could not be turned off, so revoke it from the list.`;
+}
 
 export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
@@ -354,6 +374,11 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         void run(ss58, who, "saving", () => changeDriveMemberRole(target.label, ss58, role, driveTarget)),
       remove: (ss58, who) => void run(ss58, who, "removing", () => removeDriveMember(target.label, ss58, driveTarget)),
       revoke: (id, who) => void run(id, who, "revoking", () => revokeDriveInvite(target.label, id, driveTarget)),
+      replace: (id, who) =>
+        void run(id, who, "saving", async () => {
+          const outcome = await replaceDriveInvite(target.label, id, driveTarget);
+          toast.success(await replacedInviteMessage(outcome));
+        }),
       cancel: (id, who) => void run(id, who, "removing", () => revokeDriveInvite(target.label, id, driveTarget)),
       approve: (id, who) => void run(id, who, "saving", () => approveEmailInvite(target.label, id, driveTarget)),
       // Throws on refusal: the Change folders view shows why and stays. A plan

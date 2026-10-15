@@ -15,6 +15,63 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.12] - 2026-10-15
+
+New folder and invite links no longer carry the key to your drive, and older
+ones can be swapped for a new link from Shared Links or Manage access. Record
+now comes before Screenshot wherever the two sit together, and the menu bar
+window shows the Hippius name. Large uploads also cope better with a dropped connection, and the
+card after a screenshot or recording no longer starts its wait over.
+
+### Security
+
+- **New folder links no longer contain the key to your whole drive.** A
+  folder link holds a key of its own, so a link that was forwarded or leaked
+  stops working for good when you revoke it, unless someone had already opened
+  it. Older folder links are marked "Old link" in Shared Links, and Reshare
+  swaps one for a new link to the same folder (with a new password if it had
+  one) and turns the old one off.
+- **New invite links no longer contain the key to your drive.** A drive or
+  folder invite link holds a key of its own, and Hippius hands over the drive's
+  key only to someone signed in who can still join, so a leaked invite link is
+  useless once it is revoked, expired or used up. Older invite links are marked
+  "Old link" in Manage access, and Replace swaps one for a new link with the
+  same access and turns the old one off.
+
+### Changed
+
+- **Record comes first.** Record now sits before Screenshot in the menu bar
+  window, in the capture bar, among the shortcuts in Settings, and in the
+  Record and Screenshot buttons on the Drive, Overview and Captures pages.
+  Your keyboard shortcuts stay the same.
+- **The menu bar window says it is Hippius.** The name now sits next to the
+  logo at the top, in light and dark mode, so the window is easy to tell apart
+  from other apps'.
+
+### Fixed
+
+- **No false error after a dropped connection.** When you add a large file to
+  a folder you don't sync on this computer and the connection drops after
+  Hippius has already saved it, the upload now finishes as a success instead
+  of showing an error.
+- **Failed uploads say what went wrong in plain words.** An upload to a folder
+  you don't sync on this computer that does fail now shows Hippius's own
+  message, such as "Couldn't reach the server", instead of a technical error.
+- **A rare repeating sync error is gone.** If a large file was uploading while
+  a folder rename or delete on another device moved it, Hippius could resend it
+  to the old folder or fail on that file at every later sync. It now skips that
+  one upload and carries on.
+- **The card after a screenshot or recording picks up where it left off.**
+  Point at it and it stays open; move away and it closes once the time it had
+  left runs out, its bar carrying on from the same point, instead of starting
+  the wait over. On Windows and Linux, moving through its buttons with the
+  keyboard holds it the same way.
+- **The capture bar's tooltips are easy to read.** Pointing at a button in the
+  capture bar, such as Record entire screen, now shows its name straight away
+  in a label above the bar, instead of a system tooltip that came late and sat
+  behind the bar. Moving through the bar with the keyboard shows the same
+  labels, and a choice you can't use says why.
+
 ## [0.6.11] - 2026-10-13
 
 Choosing where your screenshots and recordings are saved now does what you

@@ -66,6 +66,20 @@ fn map_db<E: std::fmt::Display>(e: E) -> ShareError {
 const KIND_PUBLIC: &str = "public";
 /// Column value for a password-protected row.
 const KIND_PRIVATE: &str = "private";
+/// Column value for a link-secret folder link (`#s=`): the 32-byte link
+/// secret. Its own kind, never `public`, so a link secret can never be read
+/// back as a drive key and rebuilt into a `#k=` URL that opens nothing.
+const KIND_FOLDER_LINK: &str = "folder_link";
+/// Column value for a password-protected link-secret folder link (`#sp=`):
+/// the link secret wrapped under the password.
+const KIND_FOLDER_LINK_PRIVATE: &str = "folder_link_private";
+
+/// The 32-byte payload of a `public` or `folder_link` row.
+fn key_bytes(kind: &str, bytes: &[u8]) -> Result<[u8; 32], ShareError> {
+    bytes
+        .try_into()
+        .map_err(|_| ShareError::Keystore(format!("share_keystore {kind} row has invalid key length {}", bytes.len())))
+}
 
 /// Rebuild a [`ShareSecret`] from a stored `(secret_kind, share_key)` pair.
 ///
@@ -81,14 +95,11 @@ fn decode_secret(kind: &str, bytes: Vec<u8>) -> Result<ShareSecret, ShareError> 
             // we control), so a `Zeroizing` wrapper here would close the
             // smallest possible window and give a false sense of secrecy.
             // Treat the encrypted DB itself as the trust boundary.
-            let len = bytes.len();
-            let arr: [u8; 32] = bytes
-                .as_slice()
-                .try_into()
-                .map_err(|_| ShareError::Keystore(format!("share_keystore public row has invalid key length {len}")))?;
-            Ok(ShareSecret::Public(arr))
+            Ok(ShareSecret::Public(key_bytes(kind, &bytes)?))
         }
         KIND_PRIVATE => Ok(ShareSecret::Private(bytes)),
+        KIND_FOLDER_LINK => Ok(ShareSecret::FolderLink(key_bytes(kind, &bytes)?)),
+        KIND_FOLDER_LINK_PRIVATE => Ok(ShareSecret::FolderLinkPrivate(bytes)),
         other => Err(ShareError::Keystore(format!("share_keystore row has unknown secret_kind {other:?}"))),
     }
 }
@@ -104,6 +115,8 @@ impl ShareKeystore for SqliteShareKeystore {
         let (kind, bytes): (&str, Vec<u8>) = match secret {
             ShareSecret::Public(key) => (KIND_PUBLIC, key.to_vec()),
             ShareSecret::Private(blob) => (KIND_PRIVATE, blob.clone()),
+            ShareSecret::FolderLink(secret) => (KIND_FOLDER_LINK, secret.to_vec()),
+            ShareSecret::FolderLinkPrivate(blob) => (KIND_FOLDER_LINK_PRIVATE, blob.clone()),
         };
         run_sync(async move {
             sqlx::query(
@@ -459,5 +472,90 @@ mod tests {
         // old CHECK would have rejected.
         ks.put("new-private", &ShareSecret::Private(vec![7u8; 89]))
             .expect("private put must work after migration");
+    }
+
+    /// A link-secret folder link keeps its own kind, so it can never be read
+    /// back as `Public` and rebuilt into a `#k=` link carrying the secret.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn folder_link_secrets_round_trip_and_keep_their_kind() {
+        let (_dir, pool) = fresh_pool().await;
+        let ks = SqliteShareKeystore::new(pool);
+        let public = ShareSecret::FolderLink([4u8; 32]);
+        let private = ShareSecret::FolderLinkPrivate(vec![5u8; 89]);
+        ks.put("s", &public).expect("put folder link");
+        ks.put("sp", &private).expect("put private folder link");
+
+        assert_eq!(ks.get("s").expect("get"), Some(public.clone()));
+        assert_eq!(ks.get("sp").expect("get"), Some(private.clone()));
+        let many = ks.get_many(&["s", "sp"]).expect("get_many");
+        assert_eq!(many.get("s"), Some(&public));
+        assert_eq!(many.get("sp"), Some(&private));
+
+        // Same bytes under the legacy kind would be a different secret.
+        ks.put("s", &ShareSecret::Public([4u8; 32])).expect("put public");
+        assert_eq!(ks.get("s").expect("get"), Some(ShareSecret::Public([4u8; 32])));
+    }
+
+    #[test]
+    fn decode_secret_reads_each_folder_link_kind() {
+        assert_eq!(
+            decode_secret("folder_link", vec![1u8; 32]).expect("32"),
+            ShareSecret::FolderLink([1u8; 32])
+        );
+        assert_eq!(
+            decode_secret("folder_link_private", vec![1u8; 89]).expect("89"),
+            ShareSecret::FolderLinkPrivate(vec![1u8; 89])
+        );
+        assert!(decode_secret("folder_link", vec![1u8; 31]).is_err(), "a link secret is exactly 32 bytes");
+    }
+
+    /// Upgrading an install whose CHECK names only `public` / `private` must
+    /// keep every row and its kind, and then take the folder-link kinds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_install_from_before_link_secrets_keeps_its_rows() {
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("pre-link-secret.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+
+        // The table exactly as the previous release created it.
+        sqlx::query(
+            "CREATE TABLE share_keystore (
+                share_token TEXT PRIMARY KEY,
+                secret_kind TEXT NOT NULL DEFAULT 'public'
+                            CHECK (secret_kind IN ('public', 'private')),
+                share_key BLOB NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                CHECK (
+                    (secret_kind = 'public'  AND length(share_key) = 32)
+                 OR (secret_kind = 'private' AND length(share_key) > 32)
+                )
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("previous table");
+        let old = SqliteShareKeystore::new(pool.clone());
+        old.put("pub", &ShareSecret::Public([6u8; 32])).expect("seed public");
+        old.put("priv", &ShareSecret::Private(vec![7u8; 89])).expect("seed private");
+        assert!(
+            old.put("link", &ShareSecret::FolderLink([8u8; 32])).is_err(),
+            "the previous CHECK refuses a folder link: the reason for the rebuild"
+        );
+
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("migrate");
+        // A second start finds the new CHECK and leaves the table alone.
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("migrate again");
+
+        let ks = SqliteShareKeystore::new(pool);
+        assert_eq!(ks.get("pub").expect("get"), Some(ShareSecret::Public([6u8; 32])));
+        assert_eq!(ks.get("priv").expect("get"), Some(ShareSecret::Private(vec![7u8; 89])));
+        ks.put("link", &ShareSecret::FolderLink([8u8; 32]))
+            .expect("folder link after the rebuild");
+        ks.put("link-p", &ShareSecret::FolderLinkPrivate(vec![9u8; 89]))
+            .expect("private folder link after the rebuild");
+        assert_eq!(ks.get("link").expect("get"), Some(ShareSecret::FolderLink([8u8; 32])));
     }
 }

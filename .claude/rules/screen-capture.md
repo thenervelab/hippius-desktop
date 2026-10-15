@@ -750,8 +750,13 @@ prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
 full display, or it sits under the Dock), `focused(false)` + content-protected except on macOS (`own_windows`) +
 `accept_first_mouse(true)` (never key, so without it every button needed two
-clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
-stays mounted and pauses, or the card changes height under the pointer).
+clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered or while
+keyboard focus (`:focus-visible`, in a focused window) is in it. **A hold is a
+pause, never a restart**: letting go runs on with the time left
+(`autoHide.ts`, pure, pinned by `autoHide.test.ts` and `previewPage.test.tsx`).
+The timer bar stays mounted and pauses (or the card changes height under the
+pointer), and each pause redraws it at the countdown's own offset (a negative
+`animation-delay`), so the bar and the timer cannot drift apart.
 It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
@@ -1215,6 +1220,19 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
   window, system font). Text on the glass is never below white/60; every
   `animate-*` carries `motion-reduce:animate-none`.
+- **No native `title` in the capture bar.** macOS draws a system tooltip in
+  a window of its own, below the overlay's screen saver level, so it showed
+  behind the toolbar and only after the system's delay. The bar's buttons
+  take `useBarTooltip`'s handlers (`BarTooltip.tsx`): one glass tooltip,
+  shown at once on hover (pointer AND mouse events) and keyboard focus,
+  portalled to `body` (the column's transform and the glass's backdrop
+  blur would trap a `fixed` child), placed by the pure
+  `tooltipPlacement.ts` (above, below only without room, clamped inside the
+  window). The name stays the button's `aria-label`; an unavailable mode's
+  reason is the tooltip's second line. Keep the module's lowercase name
+  distinct from `BarTooltip.tsx`: `barTooltip.ts` resolved as the component
+  on a case-insensitive disk. Pinned by `overlayPage.test.tsx` and
+  `tooltipPlacement.test.ts`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
   `capture-camera.json`, `capture-bubble-controls.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
@@ -1331,7 +1349,7 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `basePath` for folder links and navigation, `pinned` opens it straight in
   and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
   page's `emptyState` at the pinned root), keyed on the drive. Before it
-  exists: an empty state with Screenshot / Record and "Set up the folder
+  exists: an empty state with Record / Screenshot and "Set up the folder
   now", plus Rust's pending sentence or the waiting count.
 
 ## Screen Recording permission (macOS)
@@ -1625,7 +1643,11 @@ argument, dialog source, new-capture branch before any write).
 ## Where Capture is offered
 
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
-**Screenshot** and **Record**, each a normal toolbar button with a chevron
+**Record** and **Screenshot**, Record first everywhere they sit together
+(here, the tray's tiles, the capture bar's groups via `barGroups`, the
+empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+its place), each a normal
+toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
 ("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
 each `startCapture(kind, mode)` (the screenshot "Capture an area" item
@@ -1658,8 +1680,8 @@ capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
 before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
-captures folder row (with "Show in Finder" / "Show in folder" through
+side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
+size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
 `reveal_drive_in_finder` only for a drive synced here), the options as a grid
 of cards (`layout="cards"`, `@container` columns so they follow the tab's
 width), then `EditedImageSetting`; each setting's icon sits in a

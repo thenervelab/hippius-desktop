@@ -58,6 +58,8 @@ export type RowActions = {
   changeRole: (ss58: string, who: string, role: DriveRole) => void;
   remove: (ss58: string, who: string) => void;
   revoke: (inviteId: string, who: string) => void;
+  /** Swap an old `#k=` link for a `#i=` one (hcfs#686), then revoke the old. */
+  replace: (inviteId: string, who: string) => void;
   cancel: (inviteId: string, who: string) => void;
   approve: (inviteId: string, who: string) => void;
   changeFolders: (ss58: string, folders: string[], role?: FolderRole) => Promise<void>;
@@ -194,6 +196,7 @@ export function LinkItem({ link, ctx }: { link: AccessPanelLink; ctx: RowContext
         unlocking={ctx.unlocking}
         onUnlock={ctx.onUnlock}
         onRevoke={() => ctx.actions.revoke(link.inviteId, "this link")}
+        onReplace={() => ctx.actions.replace(link.inviteId, "this link")}
       />
       <RowRefusal id={link.inviteId} rowError={ctx.rowError} />
     </>

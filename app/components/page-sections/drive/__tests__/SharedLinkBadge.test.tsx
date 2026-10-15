@@ -37,6 +37,8 @@ const LIVE_FOLDER_ROW = {
   shareUrl: "https://x#k=y",
   isPrivate: false,
   source: "drive",
+  linkFormat: "legacy",
+  reshareOffered: false,
 };
 
 describe("SharedLinkBadge", () => {

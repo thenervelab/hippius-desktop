@@ -32,9 +32,12 @@
 //! hermetically by the in-module unit tests + proptests in
 //! `sync::migrate::folder_entries_reconcile`. The reconcile's network edge
 //! (register/unregister) is driven here transitively: the combined
-//! `run_folder_entity_sync_for_drive` (which the C1 test calls) reconciles
-//! FIRST, so the `unregister_folder_entries` HTTP round-trip runs for real and
-//! the post-reconcile server state is then asserted via `list_folder_entries`.
+//! `run_folder_entity_sync_for_drive` (which the C1 test and the empty-drive
+//! hold test call) reconciles FIRST, so the `unregister_folder_entries` HTTP
+//! round-trip runs for real and the post-reconcile server state is then
+//! asserted via `list_folder_entries`. The hold test also pins #531's
+//! empty-walk guard: deleting the last folder of an otherwise empty drive
+//! waits until the drive folder has a visible entry again.
 //! So the reconcile's logic is unit-pinned and its network edge is
 //! real-server-pinned through the combined runner; nothing about it is mocked.
 //!
@@ -79,6 +82,7 @@ use tauri_project_lib::sync::folder_entries_backfill::{FolderEntriesBackfillOutc
 use tauri_project_lib::sync::folder_entries_materialize::{
     FolderEntitySyncOutcome, MaterializeOutcome, materialize_folder_entries_for_drive, run_folder_entity_sync_for_drive,
 };
+use tauri_project_lib::sync::folder_entries_reconcile::ReconcileOutcome;
 use tauri_project_lib::utils::schema::ensure_table_schema;
 
 /// Server URL env var. Unset → the test skips cleanly (default hermetic run).
@@ -502,6 +506,13 @@ async fn locally_deleted_empty_folder_not_resurrected() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let root = tmp.path().to_path_buf();
     std::fs::create_dir(root.join("Doomed")).expect("mkdir Doomed");
+    // A user file in the drive root keeps the drive visibly non-empty once
+    // Doomed is gone. Without it the post-delete drive folder is empty with
+    // folders still cached, which `guard_empty_walk` deliberately holds (an
+    // unmounted disk looks the same); that shape is pinned separately by
+    // `deleting_last_folder_of_empty_drive_is_held`. The file is local only:
+    // folder-entity sync never uploads it.
+    std::fs::write(root.join("keep.txt"), b"user data").expect("write keep.txt");
     let root_str = root.to_str().expect("utf-8 path");
 
     let pool = live_pool().await;
@@ -559,5 +570,112 @@ async fn locally_deleted_empty_folder_not_resurrected() {
     );
     assert!(!root.join("Doomed").exists(), "Doomed stays deleted across a second cycle");
 
+    let _ = clear_api_token(&pool, &ss58).await;
+}
+
+/// The other side of [`locally_deleted_empty_folder_not_resurrected`]:
+/// deleting the LAST folder of an otherwise empty drive is held, end to end.
+///
+/// After the delete the drive folder has no visible entries and its folders
+/// are still cached: the same shape as an unmounted disk or an evicted cloud
+/// folder. `guard_empty_walk` (desktop #531) closes the gate for that shape,
+/// so the combined sync neither unregisters the folder from the server (which
+/// would remove it on every other device) nor recreates it on this disk. The
+/// cost, accepted on purpose, is that this one delete waits until something
+/// is in the drive again.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_ADMIN_BEARER and a running hcfs-server"]
+async fn deleting_last_folder_of_empty_drive_is_held() {
+    let Some((server_url, bearer)) = live_env() else {
+        return; // hermetic default stays green
+    };
+
+    let ss58 = unique_ss58();
+    let fhash = hcfs_client::drive::keys::folder_hash(LABEL);
+
+    // Arrange: a drive whose only entry is the empty `Last/` dir, registered on
+    // the server and cached locally by the real backfill.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let root = tmp.path().to_path_buf();
+    std::fs::create_dir(root.join("Last")).expect("mkdir Last");
+    let root_str = root.to_str().expect("utf-8 path");
+
+    let pool = live_pool().await;
+    seed_drive(&pool, &ss58, root_str, &server_url, &bearer).await;
+    let state = AppState::new();
+    state.set_pool(pool.clone());
+
+    let backfill = run_folder_entries_backfill_for_drive(&state, &ss58, LABEL)
+        .await
+        .expect("backfill must not hard-error");
+    assert_eq!(
+        backfill,
+        FolderEntriesBackfillOutcome::Completed { total_dirs: 1 },
+        "backfill registers + caches Last"
+    );
+
+    // Act: delete the drive's only folder, leaving the drive folder empty.
+    std::fs::remove_dir(root.join("Last")).expect("local delete of Last");
+
+    // Two cycles: the hold is a steady state, not a one-cycle delay.
+    let client = live_client(&server_url, &bearer, &ss58);
+    for cycle in 1..=2 {
+        let outcome = run_folder_entity_sync_for_drive(&state, &ss58, LABEL)
+            .await
+            .expect("combined sync must not hard-error");
+        assert_eq!(
+            outcome,
+            FolderEntitySyncOutcome::Ran {
+                reconcile: ReconcileOutcome::NoChanges,
+                materialize: MaterializeOutcome::NoChanges,
+            },
+            "cycle {cycle}: both halves run but the empty-walk hold keeps them from acting"
+        );
+
+        let listed = client.list_folder_entries(&ss58, &fhash).await.expect("list after sync");
+        assert!(
+            listed.contains(&"Last".to_string()),
+            "cycle {cycle}: the held delete must leave Last registered on the server, got {listed:?}"
+        );
+        assert!(
+            !root.join("Last").exists(),
+            "cycle {cycle}: the held folder must NOT be recreated on disk"
+        );
+        assert_eq!(
+            cached_dirs(&pool, &ss58).await,
+            vec!["Last".to_string()],
+            "cycle {cycle}: the cache row stays, so the delete still applies once the hold lifts"
+        );
+    }
+
+    // Lift: a user file makes the drive folder visibly non-empty, so the next
+    // cycle applies the held delete. This also proves the hold above came from
+    // the empty-walk guard and not from another closed gate (an unreadable
+    // mass-delete record or an unresolvable config dir would hold here too).
+    std::fs::write(root.join("keep.txt"), b"user data").expect("write keep.txt");
+    let lifted = run_folder_entity_sync_for_drive(&state, &ss58, LABEL)
+        .await
+        .expect("combined sync after the lift must not hard-error");
+    assert_eq!(
+        lifted,
+        FolderEntitySyncOutcome::Ran {
+            reconcile: ReconcileOutcome::Reconciled {
+                registered: 0,
+                unregistered: 1
+            },
+            materialize: MaterializeOutcome::NoChanges,
+        },
+        "once the drive is visibly non-empty the held delete applies"
+    );
+    let listed = client.list_folder_entries(&ss58, &fhash).await.expect("list after lift");
+    assert!(
+        !listed.contains(&"Last".to_string()),
+        "the lifted delete must unregister Last from the server, got {listed:?}"
+    );
+    assert!(cached_dirs(&pool, &ss58).await.is_empty(), "the lifted delete drops the cache row");
+
+    // Cleanup: a no-op when the lift passed; drops Last if an assertion above
+    // failed after the hold left it on the server.
+    let _ = client.unregister_folder_entries(&ss58, &fhash, &["Last".to_string()]).await;
     let _ = clear_api_token(&pool, &ss58).await;
 }
