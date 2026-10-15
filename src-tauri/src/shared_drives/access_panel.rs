@@ -156,6 +156,11 @@ pub struct AccessPanelLink {
     /// A sealed copy exists: the row has a link field, filled from
     /// `invite_url` or drawn locked.
     pub link_available: bool,
+    /// An old `#k=` link (its fragment is the key itself) that Replace can
+    /// swap for a `#i=` one (thenervelab/hcfs#686). The row shows the "Old
+    /// invite link" badge and the Replace action on exactly this.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub replaceable: bool,
 }
 
 /// Where a folder-scoped row belongs. A drive panel shows every row; a folder
@@ -236,6 +241,7 @@ fn panel_link(invite: DriveInviteInfo, account_id: &str, now: DateTime<Utc>) -> 
         expires_in_secs: if active && !never_expires { left.map(|s| s.max(0)) } else { None },
         // A dead link's field would offer to copy something that no longer works.
         link_available: active && invite.link_available,
+        replaceable: active && invite.replaceable,
         invite_url: if active { invite.invite_url } else { None },
         invite_id: invite.invite_id,
         role: drive_role_from_wire(&invite.role),
@@ -593,6 +599,32 @@ mod tests {
         assert!(panel.inactive_links.iter().all(|l| !l.link_available && l.invite_url.is_none()));
         let pending: Vec<&str> = panel.pending_invites.iter().map(|p| p.invite.invite_id.as_str()).collect();
         assert_eq!(pending, ["mail"], "an emailed invite is pending, never a link");
+    }
+
+    /// The "Old invite link" badge and Replace (hcfs #686) ride on a working
+    /// link only: an ended link has nothing left to replace.
+    #[test]
+    fn only_a_working_link_offers_replace() {
+        let replaceable = |id: &str, extra: serde_json::Value| {
+            let mut row = invite(id, extra);
+            row.replaceable = true;
+            row
+        };
+        let invites = vec![
+            replaceable("live", serde_json::json!({})),
+            replaceable("revoked", serde_json::json!({"revoked": true, "valid": false})),
+            invite("protected", serde_json::json!({})),
+        ];
+        let panel = fold_access_panel("5Me", "5Owner", None, listing(), invites, false, now());
+        let offered: Vec<&str> = panel.links.iter().filter(|l| l.replaceable).map(|l| l.invite_id.as_str()).collect();
+        assert_eq!(offered, ["live"]);
+        assert!(panel.inactive_links.iter().all(|l| !l.replaceable));
+
+        let live = panel.links.iter().find(|l| l.invite_id == "live").expect("live");
+        assert_eq!(serde_json::to_value(live).expect("serialize")["replaceable"], true);
+        let protected = panel.links.iter().find(|l| l.invite_id == "protected").expect("protected");
+        let json = serde_json::to_value(protected).expect("serialize");
+        assert!(!json.as_object().expect("object").contains_key("replaceable"), "false stays off the wire");
     }
 
     /// The panel draws the first few rows of each group, so each group comes

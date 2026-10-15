@@ -28,8 +28,8 @@ use tokio::net::TcpListener;
 
 use tauri_project_lib::error::{AppError, NotReadyKind};
 use tauri_project_lib::shared_drives::commands::{
-    MemberDriveInstall, MintInvite, http_change_member_role, http_create_invite, http_list_invites, http_list_memberships, http_remove_member,
-    http_revoke_invite, install_member_drive,
+    InviteLinkFinish, InviteLinkKey, MemberDriveInstall, MintInvite, MintedInvite, finish_invite_link, http_change_member_role, http_create_invite,
+    http_list_invites, http_list_memberships, http_remove_member, http_revoke_invite, install_member_drive,
 };
 use tauri_project_lib::shared_drives::grant;
 use tauri_project_lib::shared_drives::invite_token::invite_id_for_token;
@@ -786,4 +786,249 @@ fn mint_args(folder_hash: &str) -> MintInvite<'_> {
         owner: None,
         path_prefix: None,
     }
+}
+// ── Link-secret invites (thenervelab/hcfs#686) ─────────────────────────────
+
+const CONSOLE: &str = "https://console.hippius.com";
+
+/// Every link-envelope PUT and invite DELETE the mock sees, in order:
+/// `(call, path invite id, raw query, body)`.
+type InviteLinkCalls = Arc<Mutex<Vec<(&'static str, String, Option<String>, Option<serde_json::Value>)>>>;
+
+/// The two routes `finish_invite_link` may call. The PUT answers with
+/// `put_status` and, on success, `{"stored": stored}`.
+fn invite_link_router(calls: InviteLinkCalls, put_status: StatusCode, stored: bool) -> Router {
+    let (put, revoke) = (calls.clone(), calls);
+    Router::new()
+        .route(
+            "/v1/drives/{hash}/invites/{id}/link-envelope",
+            axum::routing::put(
+                move |headers: HeaderMap,
+                      Path((_hash, id)): Path<(String, String)>,
+                      RawQuery(query): RawQuery,
+                      Json(body): Json<serde_json::Value>| async move {
+                    if let Some(resp) = bearer_rejection(&headers) {
+                        return resp;
+                    }
+                    put.lock().unwrap().push(("put", id, query, Some(body)));
+                    if put_status.is_success() {
+                        Json(serde_json::json!({ "stored": stored })).into_response()
+                    } else {
+                        (put_status, Json(serde_json::json!({"error": "boom", "message": "no"}))).into_response()
+                    }
+                },
+            ),
+        )
+        .route(
+            "/v1/drives/{hash}/invites/{id}",
+            delete(move |Path((_hash, id)): Path<(String, String)>, RawQuery(query): RawQuery| async move {
+                revoke.lock().unwrap().push(("revoke", id, query, None));
+                StatusCode::NO_CONTENT
+            }),
+        )
+}
+
+fn minted(token: &str) -> MintedInvite {
+    MintedInvite {
+        token: token.to_string(),
+        invite_id: invite_id_for_token(token),
+    }
+}
+
+fn finish_at<'a>(base: &'a str, owner: Option<&'a str>) -> InviteLinkFinish<'a> {
+    InviteLinkFinish {
+        base_url: base,
+        bearer: BEARER,
+        folder_hash: WIRE_HASH,
+        owner,
+        console_base: CONSOLE,
+    }
+}
+
+fn decode_b64(value: &serde_json::Value) -> Vec<u8> {
+    base64::engine::general_purpose::STANDARD
+        .decode(value.as_str().expect("a base64 string"))
+        .expect("standard base64")
+}
+
+/// A whole-drive invite with the entropy in hand becomes a `#i=` link: the
+/// envelope a manager PUTs for the owner opens, under the link secret the
+/// URL carries, to the drive entropy, and the URL holds no key.
+#[tokio::test]
+async fn a_link_secret_invite_stores_its_envelope_and_links_with_the_secret() {
+    let calls = InviteLinkCalls::default();
+    let base = serve(invite_link_router(calls.clone(), StatusCode::OK, true)).await;
+    let entropy = owner_folder_entropy();
+    let invite = minted("tok_mock_1");
+
+    let url = finish_invite_link(
+        &reqwest::Client::new(),
+        finish_at(&base, Some(OWNER_SS58)),
+        &invite,
+        InviteLinkKey {
+            fragment_key: &entropy,
+            entropy: Some(&entropy),
+            folder: false,
+        },
+    )
+    .await
+    .expect("a link-secret invite");
+
+    let secret =
+        hcfs_client::client::invite_link::derive_invite_link_secret(&entropy, &hcfs_client::client::invite_link::invite_id_for_token("tok_mock_1"));
+    assert_eq!(
+        url,
+        hcfs_client::client::invite_link::build_invite_link_url(CONSOLE, "tok_mock_1", &secret)
+    );
+    assert!(!url.contains("#k="));
+    assert!(!url.contains(&base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(entropy)));
+
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 1, "one PUT and no revoke: {calls:?}");
+    let (call, id, query, body) = &calls[0];
+    assert_eq!(*call, "put");
+    assert_eq!(id, &invite.invite_id, "the PUT addresses the minted invite");
+    assert_eq!(
+        query.as_deref(),
+        Some(format!("owner={OWNER_SS58}").as_str()),
+        "a manager names the owner"
+    );
+    let body = body.as_ref().expect("body");
+    let opened = hcfs_client::client::invite_link::open_invite_link_envelope(
+        &secret,
+        &decode_b64(&body["link_envelope"]),
+        hcfs_shared::shares::InviteLinkKind::Drive,
+    )
+    .expect("the stored envelope opens under the link secret");
+    assert_eq!(*opened, entropy);
+    assert_eq!(
+        decode_b64(&body["link_fetch_digest"]),
+        hcfs_client::client::invite_link::fetch_digest_for_invite_secret(&secret).to_vec()
+    );
+}
+
+/// A folder invite's envelope seals the folder's file key, never the drive
+/// entropy the secret derives from.
+#[tokio::test]
+async fn a_folder_invite_envelope_seals_the_file_key() {
+    let calls = InviteLinkCalls::default();
+    let base = serve(invite_link_router(calls.clone(), StatusCode::OK, true)).await;
+    let entropy = owner_folder_entropy();
+    let file_key = [0x5au8; 32];
+    let invite = minted("tok_folder");
+
+    finish_invite_link(
+        &reqwest::Client::new(),
+        finish_at(&base, None),
+        &invite,
+        InviteLinkKey {
+            fragment_key: &file_key,
+            entropy: Some(&entropy),
+            folder: true,
+        },
+    )
+    .await
+    .expect("a folder link-secret invite");
+
+    let secret =
+        hcfs_client::client::invite_link::derive_invite_link_secret(&entropy, &hcfs_client::client::invite_link::invite_id_for_token("tok_folder"));
+    let calls = calls.lock().unwrap();
+    let (_, _, query, body) = &calls[0];
+    assert_eq!(query, &None, "an owner's PUT names nobody");
+    let envelope = decode_b64(&body.as_ref().expect("body")["link_envelope"]);
+    let opened = hcfs_client::client::invite_link::open_invite_link_envelope(&secret, &envelope, hcfs_shared::shares::InviteLinkKind::Folder)
+        .expect("opens as a folder key");
+    assert_eq!(*opened, file_key);
+    assert!(
+        hcfs_client::client::invite_link::open_invite_link_envelope(&secret, &envelope, hcfs_shared::shares::InviteLinkKind::Drive).is_err(),
+        "a folder envelope never opens as drive entropy"
+    );
+}
+
+/// An envelope the server did not store means a `#i=` link that never
+/// opens; the invite is revoked rather than handed out as `#k=`.
+#[tokio::test]
+async fn a_failed_envelope_store_revokes_the_invite() {
+    for (status, stored) in [(StatusCode::INTERNAL_SERVER_ERROR, true), (StatusCode::OK, false)] {
+        let calls = InviteLinkCalls::default();
+        let base = serve(invite_link_router(calls.clone(), status, stored)).await;
+        let entropy = owner_folder_entropy();
+        let invite = minted("tok_fail");
+
+        let result = finish_invite_link(
+            &reqwest::Client::new(),
+            finish_at(&base, Some(OWNER_SS58)),
+            &invite,
+            InviteLinkKey {
+                fragment_key: &entropy,
+                entropy: Some(&entropy),
+                folder: false,
+            },
+        )
+        .await;
+        assert!(result.is_err(), "{status} stored={stored} must fail the mint");
+
+        let calls = calls.lock().unwrap();
+        let revoked: Vec<_> = calls.iter().filter(|(call, ..)| *call == "revoke").collect();
+        assert_eq!(revoked.len(), 1, "{status} stored={stored}: {calls:?}");
+        assert_eq!(revoked[0].1, invite.invite_id);
+        assert_eq!(revoked[0].2.as_deref(), Some(format!("owner={OWNER_SS58}").as_str()));
+    }
+}
+
+/// A server whose invite id is not blake3(token) names a row this token
+/// does not admit to: nothing is stored under it, and the invite is revoked.
+#[tokio::test]
+async fn a_mismatched_invite_id_stores_nothing() {
+    let calls = InviteLinkCalls::default();
+    let base = serve(invite_link_router(calls.clone(), StatusCode::OK, true)).await;
+    let entropy = owner_folder_entropy();
+    let invite = MintedInvite {
+        token: "tok_mock_1".into(),
+        invite_id: "0".repeat(64),
+    };
+
+    let result = finish_invite_link(
+        &reqwest::Client::new(),
+        finish_at(&base, None),
+        &invite,
+        InviteLinkKey {
+            fragment_key: &entropy,
+            entropy: Some(&entropy),
+            folder: false,
+        },
+    )
+    .await;
+    assert!(result.is_err());
+    let calls = calls.lock().unwrap();
+    assert!(calls.iter().all(|(call, ..)| *call != "put"), "no envelope under someone else's id");
+    assert!(calls.iter().any(|(call, ..)| *call == "revoke"));
+}
+
+/// Without the entropy (the server is not minting link-secret invites, or a
+/// folder grant holder) the link stays `#k=` and nothing is sent.
+#[tokio::test]
+async fn without_the_entropy_the_link_stays_legacy() {
+    let calls = InviteLinkCalls::default();
+    let base = serve(invite_link_router(calls.clone(), StatusCode::OK, true)).await;
+    let file_key = [0x5au8; 32];
+
+    let url = finish_invite_link(
+        &reqwest::Client::new(),
+        finish_at(&base, None),
+        &minted("tok_legacy"),
+        InviteLinkKey {
+            fragment_key: &file_key,
+            entropy: None,
+            folder: true,
+        },
+    )
+    .await
+    .expect("a legacy link");
+
+    assert_eq!(
+        url,
+        hcfs_client::client::invite_link::build_legacy_invite_url(CONSOLE, "tok_legacy", &file_key)
+    );
+    assert!(calls.lock().unwrap().is_empty(), "a legacy mint sends no envelope");
 }

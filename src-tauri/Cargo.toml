@@ -273,14 +273,21 @@ alloy-signer-local = { version = "0.8", default-features = false, features = [
 # 0x04 here), `build_share_url_for` returns a `Result`, and
 # `FolderShareListItem` gains `link_format`.
 #
+# Now at hcfs main 0b7709c6, which adds #694 + #703 (thenervelab/hcfs#686):
+# link-secret drive invites. When the server advertises
+# `drive_invite_link_envelopes`, an invite link's fragment is `#i=<secret>`
+# derived from the drive entropy and the token, and its key is stored with
+# `PUT .../invites/{id}/link-envelope` (`hcfs_client::client::invite_link`).
+# `DriveInviteEntry` gains `link_format`.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d830cdde6dea7d921d423e626954149620b67ef7" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0b7709c6971a17c62367868359dfc38234d602e4" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "d830cdde6dea7d921d423e626954149620b67ef7" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0b7709c6971a17c62367868359dfc38234d602e4" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
