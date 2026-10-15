@@ -280,7 +280,8 @@ fn invite_replaceable(invite: &DriveInviteInfo) -> bool {
         && invite.email_status.is_none()
         && invite.valid
         && !invite.revoked
-        && (invite.max_uses == 0 || invite.use_count < invite.max_uses)
+        // The server's own join test: `max_uses = 0` admits nobody.
+        && invite.use_count < invite.max_uses
 }
 
 /// Map a non-success shared-drive endpoint response to a typed error.
@@ -2269,33 +2270,42 @@ async fn open_invite_links(
     let console_base = crate::shares::commands::console_base_url();
     let mut key_unavailable = false;
     for invite in invites.iter_mut() {
-        let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
-        invite.link_available = sealed.is_some() && invite.valid;
-        invite.invite_url = None;
-        let open_key: Option<&[u8; 32]> = if invite.path_prefix.is_some() {
-            file_key.as_deref()
-        } else {
-            entropy.as_deref()
-        };
-        let link_secret_row = invite.link_format.as_deref() == Some("envelope");
-        match (sealed, open_key) {
-            (Some(sealed), Some(key)) => {
-                if let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed) {
-                    invite.invite_url = rebuilt_invite_url(&console_base, &token, key, link_secret_row, entropy.as_deref());
-                }
-                if invite.invite_url.is_none() && link_secret_row && entropy.is_none() && invite.link_available {
-                    key_unavailable = true;
-                }
-            }
-            (Some(_), None) if invite.link_available => key_unavailable = true,
-            _ => {}
-        }
+        key_unavailable |= open_listed_invite(invite, &console_base, entropy.as_deref(), file_key.as_deref());
         invite.replaceable = envelopes && entropy.is_some() && invite_replaceable(invite);
         // Never leave ciphertext on the FE wire.
         invite.sealed_token = None;
         normalize_invite_fields(invite);
     }
     key_unavailable
+}
+
+/// Put a listed invite's link on its row, from the keys this session holds.
+/// Returns whether unlocking the session would show a link it cannot show
+/// now.
+///
+/// A link-secret row needs the drive entropy. A folder grant holder never
+/// has it, so its envelope rows show no link field at all rather than an
+/// Unlock that would leave them exactly as locked.
+fn open_listed_invite(invite: &mut DriveInviteInfo, console_base: &str, entropy: Option<&[u8; 32]>, file_key: Option<&[u8; 32]>) -> bool {
+    let sealed = invite.sealed_token.as_deref().filter(|s| !s.is_empty());
+    let link_secret_row = invite.link_format.as_deref() == Some("envelope");
+    invite.link_available = sealed.is_some() && invite.valid;
+    invite.invite_url = None;
+    let open_key = if invite.path_prefix.is_some() { file_key } else { entropy };
+    match (sealed, open_key) {
+        (Some(_), Some(_)) if link_secret_row && entropy.is_none() => {
+            invite.link_available = false;
+            false
+        }
+        (Some(sealed), Some(key)) => {
+            if let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed) {
+                invite.invite_url = rebuilt_invite_url(console_base, &token, key, link_secret_row, entropy);
+            }
+            false
+        }
+        (Some(_), None) => invite.link_available,
+        (None, _) => false,
+    }
 }
 
 /// List the live invites for a drive this account owns or manages.
@@ -4624,6 +4634,52 @@ mod tests {
     }
 
     #[test]
+    fn a_grant_holder_sees_no_link_field_on_a_link_secret_row() {
+        let file_key = [0x22u8; 32];
+        let entropy = [0x11u8; 32];
+        let folder_row = |format: &str| {
+            let mut row = invite(true, false);
+            row.invite_id = super::super::invite_token::invite_id_for_token("tok_abc");
+            row.path_prefix = Some("Photos".into());
+            row.link_format = Some(format.into());
+            row.sealed_token = Some(super::super::invite_token::seal_invite_token(&file_key, &row.invite_id, "tok_abc").unwrap());
+            row
+        };
+
+        let mut row = folder_row("envelope");
+        let needs_unlock = open_listed_invite(&mut row, "https://console.hippius.com", None, Some(&file_key));
+        assert!(!needs_unlock, "unlocking leaves a grant holder without the entropy; never ask");
+        assert!(!row.link_available, "no locked field that can never open");
+        assert_eq!(row.invite_url, None, "and never a #k= link carrying the file key");
+
+        let mut row = folder_row("envelope");
+        assert!(!open_listed_invite(
+            &mut row,
+            "https://console.hippius.com",
+            Some(&entropy),
+            Some(&file_key)
+        ));
+        assert!(
+            row.invite_url.as_deref().is_some_and(is_link_secret_invite_url),
+            "with the entropy it rebuilds as #i="
+        );
+
+        let mut row = folder_row("legacy");
+        assert!(!open_listed_invite(&mut row, "https://console.hippius.com", None, Some(&file_key)));
+        assert_eq!(
+            row.invite_url,
+            Some(build_invite_url("https://console.hippius.com", "tok_abc", &file_key))
+        );
+
+        let mut row = folder_row("envelope");
+        assert!(
+            open_listed_invite(&mut row, "https://console.hippius.com", None, None),
+            "a locked session still asks"
+        );
+        assert!(row.link_available);
+    }
+
+    #[test]
     fn only_a_live_legacy_link_is_replaceable() {
         let legacy = |valid, revoked| {
             let mut row = invite(valid, revoked);
@@ -4637,6 +4693,9 @@ mod tests {
         let mut used_up = legacy(true, false);
         used_up.use_count = 5;
         assert!(!invite_replaceable(&used_up), "a used-up link");
+        let mut no_uses = legacy(true, false);
+        no_uses.max_uses = 0;
+        assert!(!invite_replaceable(&no_uses), "max_uses 0 admits nobody; a replacement would admit one");
         let mut mailed = legacy(true, false);
         mailed.email_status = Some("sent".into());
         assert!(!invite_replaceable(&mailed), "a mailed invitation has no link to replace");

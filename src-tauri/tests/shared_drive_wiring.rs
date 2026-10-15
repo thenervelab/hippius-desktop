@@ -361,8 +361,9 @@ fn an_invite_mint_finishes_through_the_link_secret_seam() {
 fn list_drive_invites_opens_sealed_tokens() {
     let src = shared_drive_commands_src();
     let helper = fn_body(&src, "async fn open_invite_links(");
+    let row = fn_body(&src, "fn open_listed_invite(");
     assert!(
-        helper.contains("open_invite_token") && helper.contains("rebuilt_invite_url"),
+        helper.contains("open_listed_invite(") && row.contains("open_invite_token") && row.contains("rebuilt_invite_url"),
         "open_invite_links must open sealed tokens and attach invite_url"
     );
     assert!(helper.contains("sealed_token = None"), "no ciphertext reaches the FE");
