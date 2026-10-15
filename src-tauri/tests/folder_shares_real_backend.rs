@@ -134,7 +134,7 @@ use tauri_project_lib::auth::state::AuthCapabilities;
 use tauri_project_lib::error::AppError;
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
-    FolderLinkKind, FolderShareOrigin, FolderShareSummary, ShareChoice, create_folder_share_inner, list_folder_shares_inner,
+    FolderLinkKind, FolderShareOrigin, FolderShareSummary, ShareChoice, ShareLink, create_folder_share_inner, list_folder_shares_inner,
     revoke_folder_share_inner,
 };
 use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, share_outside_folder};
@@ -533,6 +533,41 @@ async fn open_as_recipient(recipient: &HcfsClient, share_url: &str, token: &str,
     *opened
 }
 
+/// Asserts the minting device's live listing row for `link` before its
+/// revoke: the derived `folder_hash` the FE badges key on, the shared path,
+/// the link-secret format, privacy, and a rebuild of the minted URL.
+async fn assert_listing_row(state: &AppState, env: &LiveEnv, link: &ShareLink, label: &str, path_prefix: &str) {
+    let rows = list_folder_shares_inner(state, &env.ss58).await.expect("list folder shares");
+    let row = rows
+        .iter()
+        .find(|r| r.token_hash == folder_share_token_hash(&link.share_token))
+        .expect("the minted share must appear in the live listing");
+    assert_eq!(
+        row.folder_hash,
+        hcfs_client::drive::keys::folder_hash(label),
+        "the server row's folder_hash must equal the client derivation the FE badges key on"
+    );
+    assert_eq!(row.path_prefix, path_prefix);
+    assert!(row.resolvable, "the minting device must resolve its own row");
+    assert!(
+        row.share_token.as_deref() == Some(link.share_token.as_str()),
+        "the listing row must carry the minted plaintext token back"
+    );
+    assert_eq!(row.link_format, FolderLinkKind::LinkSecret);
+    assert_eq!(row.is_private, Some(link.password.is_some()));
+    assert_eq!(row.revoked_at, None, "the share is live before the revoke");
+
+    // The rebuilt URL carries the live token in its path AND the link secret
+    // in its fragment, so neither half may be printed. Comparing each side
+    // as a boolean still says WHICH half diverged — a wrong console base, a
+    // wrong token, or a wrong secret.
+    let row_url = row.share_url.as_deref().expect("a resolvable row must rebuild its share URL");
+    let (row_head, row_frag) = row_url.split_once('#').expect("the rebuilt URL must carry a fragment");
+    let (mint_head, mint_frag) = link.share_url.split_once('#').expect("the minted URL must carry a fragment");
+    assert!(row_head == mint_head, "the listing must rebuild the minted URL's base and token path");
+    assert!(row_frag == mint_frag, "the listing must rebuild the minted URL's link-secret fragment");
+}
+
 /// Asserts a revoked link's secret no longer opens anything: the server's
 /// link-key route answers its single 404, so a recipient who kept the link
 /// cannot get the drive key back. The `Ok` arm prints nothing: it holds the
@@ -568,7 +603,7 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
     let http = reqwest::Client::new();
 
     let label = unique_label("pub");
-    let plaintext: &[u8] = b"the fragment key must open exactly these bytes";
+    let plaintext: &[u8] = b"the key the link secret opens must open exactly these bytes";
     let recipient = link_secret_recipient(&env).await;
     let drive = seed_drive_with_file(&env, &label, "docs/hello.txt", plaintext).await;
 
@@ -636,34 +671,7 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
     assert_eq!(decrypted, plaintext, "the decrypted bytes are the original file");
 
     // --- Badge identity: the live listing row's folder_hash is the derived one ---
-    let rows = list_folder_shares_inner(&state, &env.ss58).await.expect("list folder shares");
-    let row = rows
-        .iter()
-        .find(|r| r.token_hash == folder_share_token_hash(&token))
-        .expect("the minted share must appear in the live listing");
-    assert_eq!(
-        row.folder_hash,
-        hcfs_client::drive::keys::folder_hash(&label),
-        "the server row's folder_hash must equal the client derivation the FE badges key on"
-    );
-    assert_eq!(row.path_prefix, "docs");
-    assert!(row.resolvable, "the minting device must resolve its own row");
-    assert!(
-        row.share_token.as_deref() == Some(token.as_str()),
-        "the listing row must carry the minted plaintext token back"
-    );
-    assert_eq!(row.link_format, FolderLinkKind::LinkSecret);
-    // The rebuilt URL carries the live token in its path AND the link secret
-    // in its `#s=` fragment, so neither half may be printed. Comparing each
-    // side as a boolean still says WHICH half diverged — a wrong console
-    // base, a wrong token, or a wrong secret.
-    let row_url = row.share_url.as_deref().expect("a resolvable row must rebuild its share URL");
-    let (row_head, row_frag) = row_url.split_once('#').expect("the rebuilt URL must carry a fragment");
-    let (mint_head, mint_frag) = link.share_url.split_once('#').expect("the minted URL must carry a fragment");
-    assert!(row_head == mint_head, "the listing must rebuild the minted URL's base and token path");
-    assert!(row_frag == mint_frag, "the listing must rebuild the minted URL's key fragment");
-    assert_eq!(row.is_private, Some(false));
-    assert_eq!(row.revoked_at, None, "the share is live before the revoke");
+    assert_listing_row(&state, &env, &link, &label, "docs").await;
 
     // --- Revoke: the anonymous surface dies, the keystore forgets ---
     revoke_folder_share_inner(&state, &env.ss58, &token).await.expect("revoke");
@@ -684,9 +692,9 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
     assert_link_key_revoked(&recipient, &token, &link_secret).await;
 
     let keystore = SqliteShareKeystore::new(pool);
-    // `ShareSecret` derives `Debug` — `Public` holds the raw key, `Private`
-    // the fragment blob — so an `assert_eq!` against `None` would print the
-    // secret on the one failure that matters: it outliving the revoke.
+    // A boolean, like every secret comparison here: `ShareSecret`'s `Debug`
+    // redacts today, but this failure (the secret outliving the revoke)
+    // must print nothing even if that ever changes.
     assert!(
         keystore.get(&token).expect("keystore get").is_none(),
         "the revoked token's secret must be forgotten"
@@ -779,6 +787,7 @@ async fn password_mint_wraps_a_link_secret_and_wrong_password_fails() {
 
     // --- ...which the live envelope trades for exactly the drive key ---
     open_as_recipient(&recipient, &link.share_url, &token, &link_secret, &label).await;
+    assert_listing_row(&state, &env, &link, &label, "").await;
 
     // --- Act while live, then revoke, then assert the surface is dead ---
     let meta_url = format!("{}/v1/folder-shares/{token}/meta", env.server_url);
@@ -797,9 +806,9 @@ async fn password_mint_wraps_a_link_secret_and_wrong_password_fails() {
     assert_link_key_revoked(&recipient, &token, &link_secret).await;
 
     let keystore = SqliteShareKeystore::new(pool);
-    // `ShareSecret` derives `Debug` — `Public` holds the raw key, `Private`
-    // the fragment blob — so an `assert_eq!` against `None` would print the
-    // secret on the one failure that matters: it outliving the revoke.
+    // A boolean, like every secret comparison here: `ShareSecret`'s `Debug`
+    // redacts today, but this failure (the secret outliving the revoke)
+    // must print nothing even if that ever changes.
     assert!(
         keystore.get(&token).expect("keystore get").is_none(),
         "the revoked token's secret must be forgotten"
