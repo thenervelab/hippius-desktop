@@ -365,14 +365,25 @@ type LinkRowProps = {
   unlocking: boolean;
   onUnlock: () => void;
   onRevoke: () => void;
+  /** Offered only on a row Rust marked `replaceable`. */
+  onReplace?: () => void;
 };
 
-/** A link's ⋯ menu with Revoke, which asks in the row first. */
-function LinkRevokeMenu({ title, onAsk }: { title: string; onAsk: () => void }) {
+/** What the "Old invite link" badge says, and why the row offers Replace. */
+export const OLD_INVITE_LINK_BADGE = "Old invite link";
+export const OLD_INVITE_LINK_TOOLTIP =
+  "This link carries the key to the drive or folder it shares. Replace it to get a link that keeps the key off the URL, then send the new link.";
+
+/** A link's ⋯ menu: Replace (on an old link) and Revoke, which asks first. */
+function LinkRevokeMenu({ title, onAsk, onReplace }: { title: string; onAsk: () => void; onReplace?: () => void }) {
+  const replace = onReplace
+    ? [{ icon: <Link2 className="size-4" />, itemTitle: "Replace with a safer link", onItemClick: onReplace }]
+    : [];
   return (
     <TableActionMenu
       dropdownTitle=""
       items={[
+        ...replace,
         {
           icon: <Icons.Trash className="size-4" />,
           itemTitle: "Revoke",
@@ -412,7 +423,8 @@ function UsageBar({ link, className }: { link: AccessPanelLink; className: strin
  * makes people and who made it, how used and when it ends, a usage bar, and
  * the link field under it (key hidden, with Copy, or locked with Unlock).
  */
-export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: LinkRowProps) {
+export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke, onReplace }: LinkRowProps) {
+  const replace = link.replaceable ? onReplace : undefined;
   const { asking, ask, cancel, done, rowRef } = useRowConfirm<"revoke">(link.inviteId);
   const creator = linkCreator(link);
   const title = linkTitle(link);
@@ -469,6 +481,14 @@ export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: L
           </p>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
             {link.pathPrefix ? <FolderTag>{link.pathPrefix}</FolderTag> : null}
+            {link.replaceable ? (
+              <span
+                title={OLD_INVITE_LINK_TOOLTIP}
+                className="shrink-0 rounded-md bg-grey-90 px-1.5 text-[11px] leading-[18px] text-grey-40 dark:bg-white/10 dark:text-grey-dark-600"
+              >
+                {OLD_INVITE_LINK_BADGE}
+              </span>
+            ) : null}
             <span className={cn(MUTED, "min-w-0 truncate")} title={linkMeta(link)}>
               {linkMeta(link)}
             </span>
@@ -479,7 +499,11 @@ export function LinkRow({ link, busy, locked, unlocking, onUnlock, onRevoke }: L
           <LinkField url={link.inviteUrl} locked={locked} onUnlock={onUnlock} unlocking={unlocking} />
         ) : null}
       </div>
-      {busy ? <BusyLabel busy={busy} /> : <LinkRevokeMenu title={title} onAsk={() => ask("revoke")} />}
+      {busy ? (
+        <BusyLabel busy={busy} />
+      ) : (
+        <LinkRevokeMenu title={title} onAsk={() => ask("revoke")} onReplace={replace} />
+      )}
     </div>
   );
 }
