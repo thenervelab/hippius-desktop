@@ -63,6 +63,11 @@ export interface ServerCapabilities {
    * listed so the type matches the wire.
    */
   folder_share_link_envelopes?: boolean;
+  /**
+   * Link-secret drive invites (`#i=`, hcfs#686). Read by Rust only; listed
+   * so the type matches the wire.
+   */
+  drive_invite_link_envelopes?: boolean;
 }
 
 /**

@@ -293,6 +293,12 @@ export interface AccessPanelLink {
   inviteUrl?: string;
   /** A sealed copy exists, so the row has a link field. */
   linkAvailable: boolean;
+  /**
+   * An old `#k=` link (it carries the key itself) that Replace can swap for
+   * a `#i=` link-secret one (hcfs#686). Rust decides; the row shows the
+   * "Old invite link" badge and the Replace action on exactly this.
+   */
+  replaceable?: boolean;
 }
 
 /**
@@ -473,6 +479,13 @@ export interface DriveInviteInfo {
    */
   linkAvailable?: boolean;
   /**
+   * How the link carries its key (hcfs#686): `envelope` (`#i=` link secret),
+   * `legacy` (`#k=`, the key itself) or `email`. Absent from older servers.
+   */
+  linkFormat?: "envelope" | "legacy" | "email";
+  /** An old `#k=` link that `replaceDriveInvite` can swap for a `#i=` one. */
+  replaceable?: boolean;
+  /**
    * Folder of a folder invite; absent for a whole-drive invite. The Links
    * tab must show it, or a folder invite reads as access to everything.
    */
@@ -568,6 +581,31 @@ export async function revokeDriveInvite(
   target?: DriveTarget,
 ): Promise<void> {
   await invoke<void>("revoke_drive_invite", {
+    label,
+    inviteId,
+    ...targetArgs(target),
+  });
+}
+
+/** A replaced invite link and whether the old one was turned off. */
+export interface InviteReplaceOutcome {
+  /** The new `#i=` link. A drive-access capability: copy it, never log it. */
+  link: DriveInviteLink;
+  /** False when the old link could not be revoked and still works. */
+  oldInviteRevoked: boolean;
+}
+
+/**
+ * Replace an old `#k=` invite link with one that keeps the key off the URL
+ * (hcfs#686): same drive or folder, same role, the time and uses the old one
+ * had left. Rust revokes the old link after the new one is stored.
+ */
+export async function replaceDriveInvite(
+  label: string,
+  inviteId: string,
+  target?: DriveTarget,
+): Promise<InviteReplaceOutcome> {
+  return invoke<InviteReplaceOutcome>("replace_drive_invite", {
     label,
     inviteId,
     ...targetArgs(target),
