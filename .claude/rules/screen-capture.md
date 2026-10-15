@@ -404,7 +404,19 @@ and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
-the bar's overlay takes focus. The frontmost app (pid) is remembered and
+the bar's overlay takes focus, and only once every overlay is up
+(`focus_overlays` at the end of `open_capture_ui`); the others are shown
+per `own_windows::overlay_show`, without focus on macOS and Windows
+(`show_without_focus`), a display plugged in mid-choice too. On macOS a
+plain show makes a window key and a WKWebView that is not in the key window
+gets no hover, so a second display's overlay shown after the bar's left the
+bar without tooltips until it was clicked. A focus that did not stick is a
+`warn` line (`log_if_bar_lacks_keyboard`). The bar's tooltip opens on focus
+only for `:focus-visible`, so the window taking the keyboard back does not
+pop one on the last focused button. Pinned by
+`own_windows::tests::only_the_bars_overlay_takes_the_keyboard`,
+`capture_wiring::only_the_bars_overlay_takes_the_keyboard` and
+`overlayPage.test.tsx`. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
 front only if it was key), and never mid-recording (it would be filmed).

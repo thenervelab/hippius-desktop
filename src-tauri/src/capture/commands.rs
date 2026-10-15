@@ -136,6 +136,9 @@ const DISPLAY_WATCH_EVERY: std::time::Duration = std::time::Duration::from_milli
 /// on another display move the bar (`bar::bar_follow`), so it follows within
 /// half a second without jumping as the pointer crosses a display.
 const BAR_FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long after the bar's overlay is focused [`log_if_bar_lacks_keyboard`]
+/// looks: activation and the window server answer asynchronously.
+const BAR_FOCUS_CHECK_AFTER: std::time::Duration = std::time::Duration::from_millis(600);
 /// A card follows the sync engine's row for at most this long.
 const SYNC_FOLLOW_LIMIT: std::time::Duration = std::time::Duration::from_hours(2);
 
@@ -1351,7 +1354,36 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     for display in &displays {
         open_overlay(app, display, Some(display.id) == host, instant).await?;
     }
+    // Last, so no overlay shown after it takes the keyboard back: Return,
+    // Escape and Space act on the bar, and on macOS only the key window gets
+    // the bar's hover.
+    focus_overlays(app);
+    log_if_bar_lacks_keyboard(app);
     Ok(())
+}
+
+/// Say in the log when the bar's overlay does not have the keyboard a moment
+/// after it was focused (the system refused to bring Hippius forward, or
+/// another window took it): on macOS the bar then gets no hover, so no
+/// tooltips, until it is clicked, and nothing else would show why.
+fn log_if_bar_lacks_keyboard(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(BAR_FOCUS_CHECK_AFTER).await;
+        let state = app.state::<AppState>();
+        if !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+            return;
+        }
+        // Read now: the bar may have followed the pointer to another display.
+        let label = lock(&state.capture.bar_display)
+            .as_ref()
+            .map(|d| format!("{OVERLAY_LABEL_PREFIX}{}", d.id));
+        if let Some(window) = label.and_then(|l| app.get_webview_window(&l))
+            && !window.is_focused().unwrap_or(true)
+        {
+            tracing::warn!("capture: the overlay under the pointer does not have the keyboard; hover and keys wait for a click on it");
+        }
+    });
 }
 
 /// Wayland's recording panel: the capture bar alone in one ordinary window,
@@ -1488,6 +1520,8 @@ fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
 /// The overlay for `display`. Only the one hosting the bar takes the
 /// keyboard: focusing every overlay left the last one focused, which was not
 /// necessarily the bar's, and on Windows each focus could inject an Alt press.
+/// The others are shown without focus where a plain show would take it
+/// (macOS, Windows), and the caller focuses the bar's once all are up.
 async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool, instant: bool) -> Result<()> {
     let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
     // A previous session's overlay may still be on its way out.
@@ -1530,13 +1564,17 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
         let _ = window.set_size(tauri::PhysicalSize::new(display.width, display.height));
     }
     raise_above_menu_bar(&window);
-    window
-        .show()
-        .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?;
-    cover_whole_display(&window);
-    if hosts_bar {
-        let _ = window.set_focus();
+    // Every other overlay comes up without taking the keyboard from the
+    // bar's, or the bar got no hover (no tooltips) on macOS until clicked
+    // (`own_windows::overlay_show`). The bar's is focused by the caller once
+    // every overlay is up.
+    match super::own_windows::overlay_show(super::rollout::current_platform(), hosts_bar) {
+        super::own_windows::OverlayShow::WithoutFocus => show_without_focus(&window),
+        super::own_windows::OverlayShow::Plain => window
+            .show()
+            .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?,
     }
+    cover_whole_display(&window);
     Ok(())
 }
 

@@ -94,6 +94,35 @@ pub const fn hide_card_for_screenshot(platform: Platform) -> bool {
     !content_protected(platform, OwnWindow::Card)
 }
 
+/// How a display's selection overlay comes on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayShow {
+    /// A plain show, which may take the keyboard.
+    Plain,
+    /// Brought forward without becoming the key (active) window.
+    WithoutFocus,
+}
+
+/// How the overlay on a display is shown; `hosts_bar` is the one with the
+/// capture bar. Only the bar's overlay may take the keyboard, and it is
+/// focused once every overlay is up.
+///
+/// On macOS a plain show makes the window key, and a WKWebView in a window
+/// that is not key gets no mouse hover: an overlay shown after the bar's
+/// (another display, or one plugged in while choosing) left the bar with no
+/// tooltips and no Escape until it was clicked. On Windows a plain show
+/// activates the window, which took the bar's keyboard the same way. Linux
+/// keeps the plain show: X11 makes the overlay full screen after it and the
+/// window manager decides focus, and hover reaches a window there without
+/// focus.
+#[must_use]
+pub const fn overlay_show(platform: Platform, hosts_bar: bool) -> OverlayShow {
+    match (platform, hosts_bar) {
+        (Platform::MacOs | Platform::Windows, false) => OverlayShow::WithoutFocus,
+        _ => OverlayShow::Plain,
+    }
+}
+
 /// The app's own windows a screen or area recording still films while the
 /// rest of Hippius is left out: the main window (filmed like any app when the
 /// user brings it into what is recorded) and the camera bubble.
@@ -252,6 +281,24 @@ mod tests {
         elapsed_secs: 0,
         microphone: false,
     };
+
+    /// On macOS a window that is not key gets no webview hover, so an overlay
+    /// shown plainly after the bar's took the bar's tooltips away until a
+    /// click. Only the bar's overlay may take the keyboard where a plain show
+    /// takes it.
+    #[test]
+    fn only_the_bars_overlay_takes_the_keyboard() {
+        for platform in [Platform::MacOs, Platform::Windows] {
+            assert_eq!(overlay_show(platform, false), OverlayShow::WithoutFocus, "{platform:?}");
+            assert_eq!(overlay_show(platform, true), OverlayShow::Plain, "{platform:?}");
+        }
+        // Linux: X11 goes full screen after a plain show and the window
+        // manager decides focus; the bar's overlay is focused last.
+        for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
+            assert_eq!(overlay_show(platform, false), OverlayShow::Plain, "{platform:?}");
+            assert_eq!(overlay_show(platform, true), OverlayShow::Plain, "{platform:?}");
+        }
+    }
 
     /// macOS: only the overlays are hidden from other apps' screen sharing;
     /// the pill, the card and the popover show in a Meet share.

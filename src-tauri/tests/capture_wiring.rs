@@ -398,6 +398,33 @@ fn the_overlay_answers_the_first_press() {
     );
 }
 
+/// On macOS a plain show makes a window key, and a WKWebView in a window that
+/// is not key gets no hover: an overlay shown after the bar's (a second
+/// display, or one plugged in while choosing) left the bar with no tooltips
+/// until it was clicked. Every overlay is shown the way
+/// `own_windows::overlay_show` says, none focuses itself as it opens, and the
+/// bar's is focused only once every overlay is up.
+#[test]
+fn only_the_bars_overlay_takes_the_keyboard() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    assert!(
+        open.contains("own_windows::overlay_show(super::rollout::current_platform(), hosts_bar)"),
+        "how an overlay is shown is own_windows' decision"
+    );
+    assert!(open.contains("OverlayShow::WithoutFocus => show_without_focus(&window)"));
+    assert!(!open.contains("set_focus()"), "no overlay focuses itself as it opens");
+    let ui = fn_body(&src, "async fn open_capture_ui(");
+    let opened = ui.rfind("open_overlay(").expect("open_capture_ui opens the overlays");
+    let focused = ui.find("focus_overlays(app)").expect("the bar's overlay is focused");
+    assert!(opened < focused, "the bar's overlay is focused after every overlay is shown");
+    let watch = fn_body(&src, "async fn apply_display_change(");
+    assert!(
+        watch.contains("open_overlay(app, display, false, instant)"),
+        "an overlay for a display plugged in mid-capture never takes the bar's keyboard"
+    );
+}
+
 /// The preview card floats over whatever the user captures next, and it is
 /// information, not a dialog: it must stay out of captures and must not take
 /// the keyboard from the app the user is typing in.
