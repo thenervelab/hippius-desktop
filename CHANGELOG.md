@@ -60,6 +60,11 @@ card after a screenshot or recording no longer starts its wait over.
   left runs out, its bar carrying on from the same point, instead of starting
   the wait over. On Windows and Linux, moving through its buttons with the
   keyboard holds it the same way.
+- **The capture bar's tooltips are easy to read.** Pointing at a button in the
+  capture bar, such as Record entire screen, now shows its name straight away
+  in a label above the bar, instead of a system tooltip that came late and sat
+  behind the bar. Moving through the bar with the keyboard shows the same
+  labels, and a choice you can't use says why.
 
 ## [0.6.11] - 2026-10-13
 
