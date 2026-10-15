@@ -34,7 +34,11 @@ use crate::error::{AppError, NotReadyKind, Result};
 use crate::shared_drives::grant;
 use crate::sync::identity::MemberDriveIdentity;
 use base64::Engine;
-use hcfs_shared::network::{CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse, FolderGrantEntry};
+use hcfs_client::client::invite_link::{InviteLinkMint, InviteLinkTarget};
+use hcfs_shared::network::{
+    CreateDriveInviteRequest, DriveMembersResponse, DriveMembershipsResponse, FolderGrantEntry, SetInviteLinkEnvelopeRequest,
+    SetInviteLinkEnvelopeResponse,
+};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
@@ -248,6 +252,37 @@ fn build_invite_url(console_base: &str, invite_token: &str, entropy: &[u8; 32]) 
     format!("{}/invite/{}#k={}", console_base.trim_end_matches('/'), invite_token, fragment)
 }
 
+/// Rebuild a listed invite's link from its opened token.
+///
+/// A link-secret row (`link_format: envelope`, thenervelab/hcfs#686) gets
+/// `#i=` with the secret derived from the drive entropy and the token, the
+/// same derivation every client mints with. Without the entropy (a folder
+/// grant holder) it cannot be rebuilt, and `#k=` would hand out the very key
+/// the row keeps off the URL, so it is `None`. Any other row gets `#k=` under
+/// the key its token was sealed with, as before.
+fn rebuilt_invite_url(console_base: &str, token: &str, sealed_with: &[u8; 32], link_secret_row: bool, entropy: Option<&[u8; 32]>) -> Option<String> {
+    if !link_secret_row {
+        return Some(build_invite_url(console_base, token, sealed_with));
+    }
+    let entropy = entropy?;
+    let invite_id = hcfs_client::client::invite_link::invite_id_for_token(token);
+    let secret = hcfs_client::client::invite_link::derive_invite_link_secret(entropy, &invite_id);
+    Some(hcfs_client::client::invite_link::build_invite_link_url(console_base, token, &secret))
+}
+
+/// Whether a listed invite is a live legacy `#k=` link that a Replace could
+/// turn into a `#i=` one: not mailed, not revoked, not expired or used up by
+/// the server's own account. The caller adds the conditions that are not on
+/// the row (the server mints link-secret invites, this account holds the
+/// entropy).
+fn invite_replaceable(invite: &DriveInviteInfo) -> bool {
+    invite.link_format.as_deref() == Some("legacy")
+        && invite.email_status.is_none()
+        && invite.valid
+        && !invite.revoked
+        && (invite.max_uses == 0 || invite.use_count < invite.max_uses)
+}
+
 /// Map a non-success shared-drive endpoint response to a typed error.
 ///
 /// A 404 whose body is NOT the server's JSON `{error, message}` envelope is
@@ -456,6 +491,56 @@ pub async fn http_put_sealed_token(
     Ok(())
 }
 
+/// `PUT /v1/drives/{fh}/invites/{id}/link-envelope` — store a link-secret
+/// invite's sealed key (thenervelab/hcfs#686), the second half of its mint.
+///
+/// WRITE-ONCE server-side and minter-only, like the sealed token; an identical
+/// retry answers 200. Unlike the sealed token this is not cosmetic: without
+/// it the `#i=` link never opens, so the caller revokes the invite on any
+/// error here.
+pub async fn http_put_invite_link_envelope(
+    http: &reqwest::Client,
+    base_url: &str,
+    bearer: &str,
+    folder_hash: &str,
+    mint: &InviteLinkMint,
+    owner: Option<&str>,
+) -> Result<()> {
+    let standard = base64::engine::general_purpose::STANDARD;
+    let req = SetInviteLinkEnvelopeRequest {
+        link_envelope: standard.encode(&mint.link_envelope),
+        link_fetch_digest: standard.encode(mint.link_fetch_digest),
+    };
+    let resp = http
+        .put(with_owner(
+            &format!(
+                "{}/v1/drives/{}/invites/{}/link-envelope",
+                base_url.trim_end_matches('/'),
+                folder_hash,
+                mint.invite_id_hex()
+            ),
+            owner,
+        )?)
+        .header("Authorization", format!("Bearer {bearer}"))
+        .json(&req)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| AppError::Hcfs(format!("link-envelope request failed: {e}")))?;
+
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(classify_error_status(status, &body));
+    }
+    let parsed: SetInviteLinkEnvelopeResponse =
+        serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("link-envelope response did not parse: {e}")))?;
+    if !parsed.stored {
+        return Err(AppError::Hcfs("the server did not store the invite link's key".into()));
+    }
+    Ok(())
+}
+
 /// `GET /v1/drives/{folder_hash}/members` — owner-side member listing.
 pub async fn http_list_members(
     http: &reqwest::Client,
@@ -632,6 +717,18 @@ pub struct DriveInviteInfo {
     /// stand-in when absent.
     #[serde(default, skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
     pub link_available: bool,
+    /// How the row's link carries its key (thenervelab/hcfs#686): `envelope`
+    /// (`#i=` link secret), `legacy` (`#k=`, the key itself) or `email`.
+    /// Anything else, or a server predating the field, is dropped by
+    /// [`normalize_invite_fields`].
+    #[serde(default, alias = "link_format", skip_serializing_if = "Option::is_none")]
+    pub link_format: Option<String>,
+    /// A live legacy `#k=` link that can be swapped for a `#i=` one here: the
+    /// server mints link-secret invites and this account holds the drive
+    /// entropy they derive from. Set by [`open_invite_links`]; the FE shows the
+    /// "Old invite link" badge and the Replace action on exactly these rows.
+    #[serde(default, skip_deserializing, skip_serializing_if = "std::ops::Not::not")]
+    pub replaceable: bool,
     /// Folder of a folder invite; absent for a whole-drive invite. The Links
     /// tab must show it, or a folder invite reads as access to everything.
     #[serde(default, alias = "path_prefix", skip_serializing_if = "Option::is_none")]
@@ -669,7 +766,11 @@ pub(crate) fn normalize_invite_fields(invite: &mut DriveInviteInfo) {
     invite.recipient_email = present_email(invite.recipient_email.take());
     invite.requester_ss58 = present_text(invite.requester_ss58.take());
     invite.email_status = invite.email_status.take().filter(|s| EMAIL_STATUSES.contains(&s.as_str()));
+    invite.link_format = invite.link_format.take().filter(|f| INVITE_LINK_FORMATS.contains(&f.as_str()));
 }
+
+/// The invite link formats this build understands (thenervelab/hcfs#686).
+pub(crate) const INVITE_LINK_FORMATS: [&str; 3] = ["envelope", "legacy", "email"];
 
 #[derive(Debug, Deserialize)]
 struct DriveInvitesResponse {
@@ -1246,6 +1347,11 @@ async fn mint_invite_link(
 ) -> Result<DriveInviteLink> {
     let ctx = api_ctx(state).await?;
     let identity = resolve_managed_target(state.pool()?, &ctx.account_id, label, owner_ss58, folder_hash).await?;
+    // Read before the mint: it decides the folder gate below and whether the
+    // link is a `#i=` link-secret invite or a `#k=` one. A failed read fails
+    // the mint, as a folder mint always has: minting `#k=` because the read
+    // failed would put the key in a URL the server could have kept it out of.
+    let caps = crate::shares::capabilities::fetch_capabilities(state, &ctx.account_id).await?;
 
     // Resolve the policy BEFORE touching the key or the network: a folder
     // with no path is refused here, not sent.
@@ -1255,7 +1361,6 @@ async fn mint_invite_link(
             // `rooted_path` puts a browsed grant in front (identity for an
             // ordinary drive).
             let plan = super::folder_roles::plan_folder_invite(&crate::sync::identity::rooted_path(label, &path), role, secs)?;
-            let caps = crate::shares::capabilities::fetch_capabilities(state, &ctx.account_id).await?;
             super::folder_roles::require_server_knows_folder_invites(&caps)?;
             (Some(plan.path_prefix), plan.expires_in_secs, plan.max_uses, plan.role)
         }
@@ -1272,11 +1377,15 @@ async fn mint_invite_link(
     // Mixing them up would hand a grant holder the wrong kind of key.
     // A folder grant holder has only the derived key, which is exactly what
     // a folder invite carries and never enough for a whole-drive one.
-    let fragment_key: Zeroizing<[u8; 32]> = {
+    // The drive entropy is also what a link-secret invite's secret derives
+    // from, for folder invites too; a folder grant holder has none, so their
+    // folder invites stay `#k=` (see `invite_link_entropy`).
+    let (fragment_key, entropy): (Zeroizing<[u8; 32]>, Option<Zeroizing<[u8; 32]>>) = {
         let _recovery_guard = state.recovery_lock.lock().await;
         let mnemonic = crate::sync::remote::session_mnemonic(state)?;
         let material = crate::sync::remote::drive_key_material_for_label(state, &ctx.account_id, label, &mnemonic, &identity).await?;
-        sealed_invite_payload(material, folder_prefix.is_some())?
+        let entropy = invite_link_entropy(&material);
+        (sealed_invite_payload(material, folder_prefix.is_some())?, entropy)
     };
 
     let http = state.api_client.clone();
@@ -1310,7 +1419,23 @@ async fn mint_invite_link(
         .await;
     }
 
-    let invite_url = build_invite_url(&crate::shares::commands::console_base_url(), &minted.token, &fragment_key);
+    let invite_url = finish_invite_link(
+        &http,
+        InviteLinkFinish {
+            base_url: &ctx.base_url,
+            bearer: &ctx.bearer,
+            folder_hash: &identity.wire_folder_hash,
+            owner: member_owner(&identity),
+            console_base: &crate::shares::commands::console_base_url(),
+        },
+        &minted,
+        InviteLinkKey {
+            fragment_key: &fragment_key,
+            entropy: entropy.as_deref().filter(|_| caps.drive_invite_link_envelopes),
+            folder: folder_prefix.is_some(),
+        },
+    )
+    .await?;
 
     info!(
         label = %label,
@@ -1325,6 +1450,101 @@ async fn mint_invite_link(
         expires_in_secs,
         max_uses,
     })
+}
+
+/// Where a freshly minted invite's link is finished: the server routes and
+/// the console base its URL points at.
+pub struct InviteLinkFinish<'a> {
+    /// The resolved HCFS base URL.
+    pub base_url: &'a str,
+    /// The account's bearer.
+    pub bearer: &'a str,
+    /// The drive's wire folder hash.
+    pub folder_hash: &'a str,
+    /// Set by a MANAGER minting for a drive they do not own.
+    pub owner: Option<&'a str>,
+    /// The console the link points at.
+    pub console_base: &'a str,
+}
+
+/// The keys a freshly minted invite's link can carry.
+pub struct InviteLinkKey<'a> {
+    /// What a `#k=` link carries: the drive entropy, or a folder invite's
+    /// derived file key.
+    pub fragment_key: &'a [u8; 32],
+    /// The drive entropy, set only when the server mints link-secret invites
+    /// and this account holds it; `None` keeps the link `#k=`.
+    pub entropy: Option<&'a [u8; 32]>,
+    /// A folder invite: its envelope seals `fragment_key` (the file key), not
+    /// the entropy.
+    pub folder: bool,
+}
+
+/// Turn a freshly minted invite into its link (thenervelab/hcfs#686).
+///
+/// With the entropy, the link is `#i=`: the invite's key is sealed under a
+/// secret derived from the entropy and the token, stored with
+/// [`http_put_invite_link_envelope`], and the URL carries only the secret.
+/// If that fails the invite is revoked and the error returned: the token
+/// exists nowhere else, the `#i=` link could never open, and handing out
+/// `#k=` instead is exactly what the server's capability asked us not to do.
+/// Without the entropy the link is `#k=`, as every desktop minted before.
+pub async fn finish_invite_link(http: &reqwest::Client, at: InviteLinkFinish<'_>, minted: &MintedInvite, key: InviteLinkKey<'_>) -> Result<String> {
+    let Some(entropy) = key.entropy else {
+        return Ok(build_invite_url(at.console_base, &minted.token, key.fragment_key));
+    };
+    let target = if key.folder {
+        InviteLinkTarget::Folder { file_key: key.fragment_key }
+    } else {
+        InviteLinkTarget::Drive
+    };
+    match store_invite_link(http, &at, minted, entropy, target).await {
+        Ok(secret) => Ok(hcfs_client::client::invite_link::build_invite_link_url(
+            at.console_base,
+            &minted.token,
+            &secret,
+        )),
+        Err(e) => {
+            if let Err(revoke) = http_revoke_invite(http, at.base_url, at.bearer, at.folder_hash, &minted.invite_id, at.owner).await {
+                warn!(error = %revoke, "could not revoke an invite whose link envelope was not stored");
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Seal the invite's key under its link secret and store it on the server.
+/// Returns the link secret for the `#i=` URL.
+///
+/// The secret derives from the drive entropy and the token, so every client
+/// that holds the entropy rebuilds the same link from the listing later.
+async fn store_invite_link(
+    http: &reqwest::Client,
+    at: &InviteLinkFinish<'_>,
+    minted: &MintedInvite,
+    entropy: &[u8; 32],
+    target: InviteLinkTarget<'_>,
+) -> Result<Zeroizing<[u8; 32]>> {
+    let mint = hcfs_client::client::invite_link::mint_invite_link(entropy, target, &minted.token)
+        .map_err(|e| AppError::Crypto(format!("could not seal the invite link: {e}")))?;
+    // Both ids are blake3(token); a server id that disagrees means the row
+    // the PUT would address is not the invite this token admits to.
+    if mint.invite_id_hex() != minted.invite_id {
+        return Err(AppError::Hcfs("the server named a different invite than its token".into()));
+    }
+    http_put_invite_link_envelope(http, at.base_url, at.bearer, at.folder_hash, &mint, at.owner).await?;
+    Ok(mint.link_secret)
+}
+
+/// The drive entropy a link-secret invite derives from, when this account
+/// holds it: an own drive or a whole-drive membership. A folder grant holder
+/// holds only the derived file key and cannot derive the secret any client
+/// would rebuild, so its folder invites stay `#k=`.
+fn invite_link_entropy(material: &crate::sync::remote::DriveKeyMaterial) -> Option<Zeroizing<[u8; 32]>> {
+    match material {
+        crate::sync::remote::DriveKeyMaterial::Phrase(phrase) => grant::entropy_from_phrase(phrase).ok(),
+        crate::sync::remote::DriveKeyMaterial::FileKey(_) => None,
+    }
 }
 
 /// List the members of a drive this account owns or belongs to.
@@ -2013,10 +2233,18 @@ async fn open_invite_links(
     let any_sealed = invites
         .iter()
         .any(|i| i.valid && i.sealed_token.as_deref().is_some_and(|s| !s.is_empty()));
+    let any_legacy = invites.iter().any(|i| i.valid && i.link_format.as_deref() == Some("legacy"));
+    // Only a listing with a legacy row asks; a failed read offers nothing,
+    // the safe direction.
+    let envelopes = any_legacy
+        && crate::sync::identity::folder_grant_browse(label).is_none()
+        && crate::shares::capabilities::fetch_capabilities(state, account_id)
+            .await
+            .is_ok_and(|caps| caps.drive_invite_link_envelopes);
     // Folder invites are sealed under the derived file key; whole-drive under
     // folder-mnemonic entropy. Failure is not fatal to the listing: rows keep
     // their metadata and show the locked link field.
-    let (entropy, file_key) = if any_sealed {
+    let (entropy, file_key) = if any_sealed || envelopes {
         let _recovery_guard = state.recovery_lock.lock().await;
         let mnemonic = crate::sync::remote::session_mnemonic(state).ok();
         match mnemonic {
@@ -2049,15 +2277,20 @@ async fn open_invite_links(
         } else {
             entropy.as_deref()
         };
+        let link_secret_row = invite.link_format.as_deref() == Some("envelope");
         match (sealed, open_key) {
             (Some(sealed), Some(key)) => {
                 if let Some(token) = super::invite_token::open_invite_token(key, &invite.invite_id, sealed) {
-                    invite.invite_url = Some(build_invite_url(&console_base, &token, key));
+                    invite.invite_url = rebuilt_invite_url(&console_base, &token, key, link_secret_row, entropy.as_deref());
+                }
+                if invite.invite_url.is_none() && link_secret_row && entropy.is_none() && invite.link_available {
+                    key_unavailable = true;
                 }
             }
             (Some(_), None) if invite.link_available => key_unavailable = true,
             _ => {}
         }
+        invite.replaceable = envelopes && entropy.is_some() && invite_replaceable(invite);
         // Never leave ciphertext on the FE wire.
         invite.sealed_token = None;
         normalize_invite_fields(invite);
@@ -2101,6 +2334,150 @@ pub async fn list_drive_invites(
     let live = invites.iter().filter(|i| i.valid && !i.revoked).count();
     info!(label = %label, count = invites.len(), live, "Listed drive invites");
     Ok(invites)
+}
+
+/// A replaced invite link and whether the link it replaces was turned off.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InviteReplaceOutcome {
+    /// The new `#i=` link.
+    pub link: DriveInviteLink,
+    /// `false` when the old link could not be revoked and still works; the FE
+    /// says so, and the old row stays listed to revoke by hand.
+    pub old_invite_revoked: bool,
+}
+
+/// What a Replace says when the server is not minting link-secret invites.
+pub const REPLACE_INVITE_UNAVAILABLE: &str =
+    "Hippius can't make the safer kind of invite link right now, so your old link was left as it was. Try again later.";
+
+/// Replace a legacy invite link (its fragment is the drive key, or a folder's
+/// file key) with a `#i=` link that keeps the key off the URL
+/// (thenervelab/hcfs#686), then revoke the old link.
+///
+/// The new invite admits to the same drive or folder with the same role, for
+/// the time and uses the old one had left ([`replacement_policy`]). It is
+/// minted through [`mint_invite_link`], so every gate and the manager path
+/// apply exactly as for a new invite.
+#[tauri::command]
+pub async fn replace_drive_invite(
+    app: tauri::AppHandle,
+    label: String,
+    invite_id: String,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<InviteReplaceOutcome> {
+    let state = app.state::<AppState>();
+    replace_drive_invite_inner(&state, &label, &invite_id, owner_ss58, folder_hash).await
+}
+
+/// Inner of [`replace_drive_invite`], taking `&AppState` so the mock-server
+/// suite can drive it.
+pub async fn replace_drive_invite_inner(
+    state: &AppState,
+    label: &str,
+    invite_id: &str,
+    owner_ss58: Option<String>,
+    folder_hash: Option<String>,
+) -> Result<InviteReplaceOutcome> {
+    // A grant browses a folder below the drive root, and a listed folder is
+    // drive-relative: re-minting it from here would root it twice.
+    if crate::sync::identity::folder_grant_browse(label).is_some() {
+        return Err(AppError::Validation("Replace this link from the drive it belongs to.".into()));
+    }
+    let ctx = api_ctx(state).await?;
+    let identity = resolve_managed_target(state.pool()?, &ctx.account_id, label, owner_ss58.clone(), folder_hash.clone()).await?;
+    let caps = crate::shares::capabilities::fetch_capabilities(state, &ctx.account_id).await?;
+    if !caps.drive_invite_link_envelopes {
+        return Err(AppError::Validation(REPLACE_INVITE_UNAVAILABLE.into()));
+    }
+
+    let http = state.api_client.clone();
+    let old = http_list_invites(&http, &ctx.base_url, &ctx.bearer, &identity.wire_folder_hash, member_owner(&identity))
+        .await?
+        .into_iter()
+        .map(|mut invite| {
+            normalize_invite_fields(&mut invite);
+            invite
+        })
+        .find(|invite| invite.invite_id == invite_id)
+        .ok_or_else(|| AppError::Validation("This invite no longer exists.".into()))?;
+    if !invite_replaceable(&old) {
+        return Err(AppError::Validation(
+            "This invite cannot be replaced: it is already protected, or it no longer works.".into(),
+        ));
+    }
+
+    let (secs, uses) = replacement_policy(&old, chrono::Utc::now());
+    let scope = match old.path_prefix.as_deref().map(|p| p.trim_matches('/')).filter(|p| !p.is_empty()) {
+        Some(path) => InviteScope::Folder { path: path.to_string() },
+        None => InviteScope::Drive { max_uses: Some(uses) },
+    };
+    let link = mint_invite_link(state, label, owner_ss58, folder_hash, Some(secs), Some(old.role.clone()), scope).await?;
+
+    // The capability was read before the mint, and the mint reads it again.
+    // If the server stopped advertising link-secret invites in between, the
+    // new link came out `#k=`; replacing one key-carrying link with another
+    // would only cost the user the link they shared. Take the new one back.
+    if !is_link_secret_invite_url(&link.invite_url) {
+        warn!("replace: the new invite link came out legacy; revoking it and keeping the old link");
+        if let Err(e) = http_revoke_invite(
+            &http,
+            &ctx.base_url,
+            &ctx.bearer,
+            &identity.wire_folder_hash,
+            &link.invite_id,
+            member_owner(&identity),
+        )
+        .await
+        {
+            warn!(error = %e, "replace: revoking the legacy replacement failed");
+        }
+        return Err(AppError::Validation(REPLACE_INVITE_UNAVAILABLE.into()));
+    }
+
+    let old_invite_revoked = match http_revoke_invite(
+        &http,
+        &ctx.base_url,
+        &ctx.bearer,
+        &identity.wire_folder_hash,
+        &old.invite_id,
+        member_owner(&identity),
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(e) => {
+            warn!(error = %e, "replace: the old invite link could not be revoked");
+            false
+        }
+    };
+    info!(label = %label, old_invite_revoked, "Drive invite replaced with a link-secret invite");
+    Ok(InviteReplaceOutcome { link, old_invite_revoked })
+}
+
+/// The lifetime and uses a replacement invite gets: what the old one had
+/// left, so a Replace never widens what was shared. A lifetime that will not
+/// parse falls back to the desktop default; at least one use and one minute
+/// remain, since the old link was live when the Replace was offered.
+fn replacement_policy(old: &DriveInviteInfo, now: chrono::DateTime<chrono::Utc>) -> (u64, u32) {
+    let secs = chrono::DateTime::parse_from_rfc3339(&old.expires_at)
+        .ok()
+        .map(|t| (t.with_timezone(&chrono::Utc) - now).num_seconds().max(60))
+        .and_then(|s| u64::try_from(s).ok())
+        .unwrap_or(DEFAULT_INVITE_EXPIRES_IN_SECS);
+    let uses = old.max_uses.saturating_sub(old.use_count).max(1);
+    (secs, uses)
+}
+
+/// Whether an invite URL carries a link secret (`#i=`), not a key (`#k=`).
+fn is_link_secret_invite_url(url: &str) -> bool {
+    url.split_once('#').is_some_and(|(_, fragment)| {
+        matches!(
+            hcfs_client::client::invite_link::parse_invite_fragment(fragment),
+            Ok(hcfs_client::client::invite_link::InviteFragment::LinkSecret(_))
+        )
+    })
 }
 
 // ─── Emailed invites (hcfs #459), owner/manager side ───────────────────────
@@ -3762,6 +4139,8 @@ mod tests {
             sealed_token: None,
             invite_url: None,
             link_available: false,
+            link_format: None,
+            replaceable: false,
             path_prefix: None,
             recipient_email: None,
             email_status: None,
@@ -4188,6 +4567,103 @@ mod tests {
         )
         .expect("sealed_token must deserialize");
         assert_eq!(parsed.sealed_token.as_deref(), Some("c2VhbGVk"));
+    }
+
+    // ─── Link-secret invites (thenervelab/hcfs#686) ───────────────────────
+
+    #[test]
+    fn link_format_reaches_the_frontend_and_unknown_values_are_dropped() {
+        let parsed: DriveInviteInfo = serde_json::from_str(
+            r#"{"invite_id":"abc","role":"writer","expires_at":"2126-01-01T00:00:00Z",
+                "max_uses":50,"use_count":2,"revoked":false,"valid":true,
+                "created_at":"2026-01-01T00:00:00Z","link_format":"envelope"}"#,
+        )
+        .expect("link_format must deserialize");
+        let mut row = parsed;
+        normalize_invite_fields(&mut row);
+        row.replaceable = true;
+        let json = serde_json::to_value(&row).unwrap();
+        assert_eq!(json["linkFormat"], "envelope");
+        assert_eq!(json["replaceable"], true);
+
+        for unknown in ["future_format", ""] {
+            let mut row = invite(true, false);
+            row.link_format = Some(unknown.into());
+            normalize_invite_fields(&mut row);
+            assert_eq!(row.link_format, None, "{unknown:?} is not a format this build knows");
+        }
+        let json = serde_json::to_value(invite(true, false)).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("replaceable"), "false stays off the wire");
+    }
+
+    #[test]
+    fn a_link_secret_row_rebuilds_the_secret_every_client_derives() {
+        let entropy = [0x11u8; 32];
+        let file_key = [0x22u8; 32];
+        let token = "tok_abc";
+
+        let url = rebuilt_invite_url("https://console.hippius.com", token, &file_key, true, Some(&entropy)).expect("rebuilt");
+        let secret =
+            hcfs_client::client::invite_link::derive_invite_link_secret(&entropy, &hcfs_client::client::invite_link::invite_id_for_token(token));
+        assert_eq!(
+            url,
+            hcfs_client::client::invite_link::build_invite_link_url("https://console.hippius.com", token, &secret)
+        );
+        assert!(is_link_secret_invite_url(&url));
+        let key_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(file_key);
+        assert!(!url.contains(&key_b64), "the key its token was sealed with stays off the URL");
+
+        assert_eq!(
+            rebuilt_invite_url("https://console.hippius.com", token, &file_key, true, None),
+            None,
+            "without the entropy a link-secret row cannot be rebuilt, and #k= would leak the key"
+        );
+        let legacy = rebuilt_invite_url("https://console.hippius.com", token, &file_key, false, Some(&entropy)).expect("legacy");
+        assert_eq!(legacy, build_invite_url("https://console.hippius.com", token, &file_key));
+        assert!(!is_link_secret_invite_url(&legacy));
+    }
+
+    #[test]
+    fn only_a_live_legacy_link_is_replaceable() {
+        let legacy = |valid, revoked| {
+            let mut row = invite(valid, revoked);
+            row.link_format = Some("legacy".into());
+            row.max_uses = 5;
+            row
+        };
+        assert!(invite_replaceable(&legacy(true, false)));
+        assert!(!invite_replaceable(&legacy(false, false)), "an expired link");
+        assert!(!invite_replaceable(&legacy(true, true)), "a revoked link");
+        let mut used_up = legacy(true, false);
+        used_up.use_count = 5;
+        assert!(!invite_replaceable(&used_up), "a used-up link");
+        let mut mailed = legacy(true, false);
+        mailed.email_status = Some("sent".into());
+        assert!(!invite_replaceable(&mailed), "a mailed invitation has no link to replace");
+        for format in [Some("envelope"), Some("email"), None] {
+            let mut row = legacy(true, false);
+            row.link_format = format.map(str::to_string);
+            assert!(!invite_replaceable(&row), "{format:?} is not an old #k= link");
+        }
+    }
+
+    #[test]
+    fn a_replacement_keeps_what_the_old_link_had_left() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut row = invite(true, false);
+        row.expires_at = "2026-10-16T12:00:00Z".into();
+        row.max_uses = 5;
+        row.use_count = 2;
+        assert_eq!(replacement_policy(&row, now), (86_400, 3));
+
+        row.expires_at = "2026-10-15T12:00:10Z".into();
+        row.use_count = 5;
+        assert_eq!(replacement_policy(&row, now), (60, 1), "a minute and a use at least");
+
+        row.expires_at = "not a time".into();
+        assert_eq!(replacement_policy(&row, now).0, DEFAULT_INVITE_EXPIRES_IN_SECS);
     }
 
     // ...while still reading the server's snake_case on the way in. Both

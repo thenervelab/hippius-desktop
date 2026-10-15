@@ -333,6 +333,28 @@ fn a_folder_invite_can_never_go_out_as_a_drive_invite() {
     assert!(email.contains("require_server_knows_folder_invites"));
 }
 
+/// A mint finishes its link through `finish_invite_link`, after the create
+/// and only on the server's say-so: a link-secret invite (hcfs #686) is
+/// stored and linked as `#i=`, and an envelope the server did not store
+/// revokes the invite instead of leaving a link that never opens.
+#[test]
+fn an_invite_mint_finishes_through_the_link_secret_seam() {
+    let src = shared_drive_commands_src();
+    let funnel = fn_body(&src, "async fn mint_invite_link(");
+    let request = funnel.find("http_create_invite(").expect("minted");
+    let finish = funnel.find("finish_invite_link(").expect("then finished");
+    assert!(request < finish, "the link is finished after the create returns its token");
+    assert!(
+        funnel.contains("caps.drive_invite_link_envelopes"),
+        "only a server that advertises link-secret invites is sent an envelope"
+    );
+    let finish_body = fn_body(&src, "pub async fn finish_invite_link(");
+    assert!(
+        finish_body.contains("http_revoke_invite("),
+        "a failed envelope store must revoke the invite"
+    );
+}
+
 /// Opening sealed tokens on list is what puts a copyable URL on each Links
 /// row; without it the tab only shows role/usage/expiry metadata.
 #[test]
@@ -340,7 +362,7 @@ fn list_drive_invites_opens_sealed_tokens() {
     let src = shared_drive_commands_src();
     let helper = fn_body(&src, "async fn open_invite_links(");
     assert!(
-        helper.contains("open_invite_token") && helper.contains("build_invite_url"),
+        helper.contains("open_invite_token") && helper.contains("rebuilt_invite_url"),
         "open_invite_links must open sealed tokens and attach invite_url"
     );
     assert!(helper.contains("sealed_token = None"), "no ciphertext reaches the FE");

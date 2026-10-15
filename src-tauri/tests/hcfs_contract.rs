@@ -1379,3 +1379,66 @@ fn network_and_http_failures_classify_to_their_kinds() {
     assert_eq!(kind, FileFailureKind::ServerError { status: 429 });
     assert_eq!(status, Some(429));
 }
+// ── Link-secret drive invites (hcfs #686) ──────────────────────────────────
+//
+// An invite minted once the server advertises `drive_invite_link_envelopes`
+// carries a per-link secret (`#i=`) derived from the drive entropy and the
+// token, and the server keeps the invite's key sealed under it. The console's
+// invite page parses exactly these shapes, and every client re-derives the
+// same secret from the listing.
+
+/// Exact `#i=` URL vector, the twin of `invite_fragment_base64url_no_pad_is_pinned`.
+#[test]
+fn invite_link_url_builder_is_pinned() {
+    let url = hcfs_client::client::invite_link::build_invite_link_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(
+        url,
+        format!("https://x.io/invite/tok#i={}", "A".repeat(43)),
+        "link-secret invite URL drifted"
+    );
+}
+
+/// The invite id the PUT addresses is `hex(blake3(token))`, the same id the
+/// desktop's sealed-token code and the server use.
+#[test]
+fn invite_link_mint_addresses_the_listed_invite_id() {
+    let mint =
+        hcfs_client::client::invite_link::mint_invite_link(&[0x11u8; 32], hcfs_client::client::invite_link::InviteLinkTarget::Drive, "tok_abc")
+            .expect("mint");
+    assert_eq!(
+        mint.invite_id_hex(),
+        tauri_project_lib::shared_drives::invite_token::invite_id_for_token("tok_abc")
+    );
+}
+
+/// The parser reads back both invite forms the console's page accepts.
+#[test]
+fn every_invite_fragment_parses_back() {
+    use hcfs_client::client::invite_link::{InviteFragment, build_invite_link_url, build_legacy_invite_url, parse_invite_fragment};
+    let fragment = |url: &str| url.split_once('#').expect("fragment").1.to_string();
+    assert_eq!(
+        parse_invite_fragment(&fragment(&build_legacy_invite_url("https://x.io", "t", &[1u8; 32]))).expect("k"),
+        InviteFragment::LegacyKey([1u8; 32])
+    );
+    assert_eq!(
+        parse_invite_fragment(&fragment(&build_invite_link_url("https://x.io", "t", &[2u8; 32]))).expect("i"),
+        InviteFragment::LinkSecret([2u8; 32])
+    );
+}
+
+/// The PUT body and answer the desktop sends and reads: standard base64 of a
+/// 73-byte envelope and a 32-byte digest, and `{"stored": bool}`.
+#[test]
+fn invite_link_envelope_wire_is_pinned() {
+    let req = hcfs_shared::network::SetInviteLinkEnvelopeRequest {
+        link_envelope: "ZW52".into(),
+        link_fetch_digest: "ZGln".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&req).expect("serialize"),
+        serde_json::json!({ "link_envelope": "ZW52", "link_fetch_digest": "ZGln" })
+    );
+    let resp: hcfs_shared::network::SetInviteLinkEnvelopeResponse = serde_json::from_str(r#"{"stored":true}"#).expect("parse");
+    assert!(resp.stored);
+    assert_eq!(hcfs_shared::shares::INVITE_LINK_ENVELOPE_LEN, 73);
+}
