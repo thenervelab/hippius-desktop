@@ -21,10 +21,12 @@ The capture bar's tooltips now show the moment the bar opens, on every display.
 
 ### Fixed
 
-- **The capture bar's tooltips show as soon as the bar opens.** With more than
-  one display, pointing at the bar's buttons showed nothing until you clicked
-  the bar once. The labels now show straight away, and Escape, Return and Space
-  work on the bar from the start.
+- **The capture bar's tooltips show as soon as the bar opens.** Pointing at the
+  bar's buttons could show nothing until you clicked the bar once, for example
+  with more than one display, or on a Mac after a click landed in another app
+  while you were choosing. The labels now show straight away, Escape, Return
+  and Space work on the bar from the start, and on a Mac the app you were using
+  stays in front while you choose.
 
 ## [0.6.12] - 2026-10-15
 

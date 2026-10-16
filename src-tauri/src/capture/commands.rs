@@ -1358,15 +1358,18 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     // Escape and Space act on the bar, and on macOS only the key window gets
     // the bar's hover.
     focus_overlays(app);
-    log_if_bar_lacks_keyboard(app);
+    log_if_bar_lacks_keyboard(app, "bar opened");
     Ok(())
 }
 
-/// Say in the log when the bar's overlay does not have the keyboard a moment
-/// after it was focused (the system refused to bring Hippius forward, or
-/// another window took it): on macOS the bar then gets no hover, so no
-/// tooltips, until it is clicked, and nothing else would show why.
-fn log_if_bar_lacks_keyboard(app: &AppHandle) {
+/// Say in the log, a moment after the bar's overlay was given the keyboard,
+/// whether the bar gets hover and keys (macOS): WebKit gives them only to
+/// the key window, and an ordinary window is key in that sense only while
+/// Hippius is the active app; a non-activating panel is key on its own
+/// (`overlay_panel::bar_gets_pointer`). Without it the bar shows no tooltips
+/// until it is clicked, and nothing else would show why. `why` names the
+/// moment (the bar opened, its page loaded).
+fn log_if_bar_lacks_keyboard(app: &AppHandle, why: &'static str) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(BAR_FOCUS_CHECK_AFTER).await;
@@ -1375,13 +1378,26 @@ fn log_if_bar_lacks_keyboard(app: &AppHandle) {
             return;
         }
         // Read now: the bar may have followed the pointer to another display.
-        let label = lock(&state.capture.bar_display)
-            .as_ref()
-            .map(|d| format!("{OVERLAY_LABEL_PREFIX}{}", d.id));
-        if let Some(window) = label.and_then(|l| app.get_webview_window(&l))
-            && !window.is_focused().unwrap_or(true)
-        {
-            tracing::warn!("capture: the overlay under the pointer does not have the keyboard; hover and keys wait for a click on it");
+        let Some(window) = bar_overlay(&app) else { return };
+        let Some(k) = super::overlay_panel::keyboard_state(&window).await else {
+            return;
+        };
+        if k.bar_gets_pointer() {
+            tracing::info!(
+                when = why,
+                panel = k.panel,
+                hippius_frontmost = k.frontmost,
+                "capture: the capture bar has the keyboard"
+            );
+        } else {
+            tracing::warn!(
+                when = why,
+                key = k.key,
+                panel = k.panel,
+                app_active = k.app_active,
+                hippius_frontmost = k.frontmost,
+                "capture: the capture bar does not have the keyboard; hover, tooltips and keys wait for a click on it"
+            );
         }
     });
 }
@@ -1521,7 +1537,8 @@ fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
 /// keyboard: focusing every overlay left the last one focused, which was not
 /// necessarily the bar's, and on Windows each focus could inject an Alt press.
 /// The others are shown without focus where a plain show would take it
-/// (macOS, Windows), and the caller focuses the bar's once all are up.
+/// (macOS, Windows; on macOS the bar's too), and the caller gives the bar's
+/// the keyboard once all are up (`focus_overlays`).
 async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool, instant: bool) -> Result<()> {
     let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
     // A previous session's overlay may still be on its way out.
@@ -1535,6 +1552,12 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         build_overlay(app, &label, display, instant)?
     };
+    // A non-activating panel on macOS, before it is shown: the bar's overlay
+    // then takes the keyboard (hover, tooltips, Escape) without bringing
+    // Hippius forward, whichever app is frontmost (`overlay_panel`).
+    if super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+        super::overlay_panel::make_panel(&window);
+    }
     // Content protection is asked for, not promised: on Windows it is
     // `SetWindowDisplayAffinity`, whose failure tao discards. Read it back;
     // if it did not hold, this session's screenshot closes the overlays
@@ -1566,8 +1589,8 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
     raise_above_menu_bar(&window);
     // Every other overlay comes up without taking the keyboard from the
     // bar's, or the bar got no hover (no tooltips) on macOS until clicked
-    // (`own_windows::overlay_show`). The bar's is focused by the caller once
-    // every overlay is up.
+    // (`own_windows::overlay_show`); on macOS the bar's too. The bar's is
+    // given the keyboard by the caller once every overlay is up.
     match super::own_windows::overlay_show(super::rollout::current_platform(), hosts_bar) {
         super::own_windows::OverlayShow::WithoutFocus => show_without_focus(&window),
         super::own_windows::OverlayShow::Plain => window
@@ -2066,13 +2089,20 @@ fn set_window_level(window: &tauri::WebviewWindow, level: Option<i64>) {
 #[cfg(not(target_os = "macos"))]
 fn raise_above_menu_bar(_window: &tauri::WebviewWindow) {}
 
+/// Give the bar's overlay the keyboard: on macOS a non-activating panel
+/// made key without bringing Hippius forward, elsewhere (or an overlay left
+/// an ordinary window) a plain focus (`overlay_panel::make_key`).
 fn focus_overlays(app: &AppHandle) {
+    if let Some(window) = bar_overlay(app) {
+        super::overlay_panel::make_key(&window);
+    }
+}
+
+/// The overlay hosting the capture bar now (it follows the pointer).
+fn bar_overlay(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     let state = app.state::<AppState>();
     let host = lock(&state.capture.bar_display).as_ref().map(|d| d.id);
-    let label = host.map(|id| format!("{OVERLAY_LABEL_PREFIX}{id}"));
-    if let Some(window) = label.and_then(|l| app.get_webview_window(&l)) {
-        let _ = window.set_focus();
-    }
+    host.and_then(|id| app.get_webview_window(&format!("{OVERLAY_LABEL_PREFIX}{id}")))
 }
 
 // ── The displays changing under an open capture ────────────────────────────
@@ -2149,7 +2179,7 @@ async fn apply_display_change(app: &AppHandle, now: &[DisplayTarget], change: &b
             if let Some(label) = host.map(|id| format!("{OVERLAY_LABEL_PREFIX}{id}"))
                 && let Some(w) = app.get_webview_window(&label)
             {
-                let _ = w.set_focus();
+                super::overlay_panel::make_key(&w);
             }
         }
     }
@@ -2186,6 +2216,14 @@ fn spawn_bar_follow(app: AppHandle) {
                 move_bar(&app, &state.capture, display);
             }
             seen_before = under_pointer;
+            // Another app took the keyboard (a click or gesture reached it):
+            // give it back to the bar once the pointer is on an overlay, so
+            // its tooltips and keys work without a click on it (macOS).
+            if super::own_windows::overlay_is_panel(super::rollout::current_platform())
+                && let Some(window) = bar_overlay(&app)
+            {
+                super::overlay_panel::rekey_if_pointer_on_overlay(&window);
+            }
         }
     });
 }
@@ -2209,8 +2247,9 @@ fn move_bar(app: &AppHandle, state: &CaptureState, display: DisplayTarget) {
     // one stops. The pill, still hidden, is placed on the bar's display when
     // it comes on screen (`open_controls`).
     state.rebroadcast(|e| emit_phase(app, e));
-    // The keyboard goes with the bar: Return, Escape and Space act on it.
-    let _ = overlay.set_focus();
+    // The keyboard goes with the bar: Return, Escape and Space act on it,
+    // and on macOS only the key window gets hover.
+    super::overlay_panel::make_key(&overlay);
 }
 
 /// The bar's overlay holds the bar on its display (`held` true) or lets it
@@ -2272,7 +2311,7 @@ pub struct OverlayContext {
 }
 
 #[tauri::command]
-pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_id: u32) -> Result<OverlayContext> {
+pub async fn capture_overlay_context(app: AppHandle, state: tauri::State<'_, AppState>, display_id: u32) -> Result<OverlayContext> {
     let CapturePhase::Selecting { mode, kind } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
@@ -2294,6 +2333,12 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         Err(_) => None,
     };
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
+    // The bar's page has loaded (a dev page can take seconds): make sure its
+    // overlay has the keyboard now, in case another app took it meanwhile.
+    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+        focus_overlays(&app);
+        log_if_bar_lacks_keyboard(&app, "bar page loaded");
+    }
     let pending = *lock(&state.capture.pending);
     let instant = state.capture.instant.load(Ordering::SeqCst);
     let frozen = lock(&state.capture.frozen).is_some();
