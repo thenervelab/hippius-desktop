@@ -398,6 +398,93 @@ fn the_overlay_answers_the_first_press() {
     );
 }
 
+/// On macOS a plain show makes a window key, and a WKWebView in a window that
+/// is not key gets no hover: an overlay shown after the bar's (a second
+/// display, or one plugged in while choosing) left the bar with no tooltips
+/// until it was clicked. Every overlay is shown the way
+/// `own_windows::overlay_show` says, none focuses itself as it opens, and the
+/// bar's is focused only once every overlay is up.
+#[test]
+fn only_the_bars_overlay_takes_the_keyboard() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    assert!(
+        open.contains("own_windows::overlay_show(super::rollout::current_platform(), hosts_bar)"),
+        "how an overlay is shown is own_windows' decision"
+    );
+    assert!(open.contains("OverlayShow::WithoutFocus => show_without_focus(&window)"));
+    assert!(!open.contains("set_focus()"), "no overlay focuses itself as it opens");
+    let ui = fn_body(&src, "async fn open_capture_ui(");
+    let opened = ui.rfind("open_overlay(").expect("open_capture_ui opens the overlays");
+    let focused = ui.find("focus_overlays(app)").expect("the bar's overlay is focused");
+    assert!(opened < focused, "the bar's overlay is focused after every overlay is shown");
+    let watch = fn_body(&src, "async fn apply_display_change(");
+    assert!(
+        watch.contains("open_overlay(app, display, false, instant)"),
+        "an overlay for a display plugged in mid-capture never takes the bar's keyboard"
+    );
+}
+
+/// WebKit gives a page hover and keys only while its window is key, and an
+/// ordinary window is key only while Hippius is the active app. With the
+/// user's app in front (the shortcut, the tray, or a click that reached it
+/// while choosing) the bar showed no tooltips and Escape did nothing until it
+/// was clicked. So on macOS every overlay is made a non-activating panel
+/// before it is shown, and every hand-over of the keyboard to the bar goes
+/// through `overlay_panel::make_key` (key without activating Hippius), never
+/// a plain `set_focus`, which activates.
+#[test]
+fn the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    let panel = open
+        .find("overlay_panel::make_panel(&window)")
+        .expect("every overlay is made a panel as it opens");
+    assert!(open.contains("own_windows::overlay_is_panel(super::rollout::current_platform())"));
+    let shown = open.find("show_without_focus(&window)").expect("the overlay is shown");
+    assert!(panel < shown, "the panel is made before the overlay is shown");
+
+    for (sig, what) in [
+        ("fn focus_overlays(", "once every overlay is up"),
+        ("fn move_bar(", "when the bar moves to another display"),
+        ("async fn apply_display_change(", "when the bar's display was unplugged"),
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(body.contains("overlay_panel::make_key("), "the bar's overlay is keyed {what}");
+        assert!(!body.contains("set_focus()"), "no plain focus {what}: it activates Hippius");
+    }
+
+    // The keyboard is checked and given back while the user chooses: when
+    // the bar's page has loaded (a dev page can take seconds) and by the
+    // bar-follow watch once another app has taken it.
+    let context = fn_body(&src, "pub async fn capture_overlay_context(");
+    assert!(context.contains("focus_overlays(&app)"), "the bar's overlay is keyed when its page loads");
+    assert!(context.contains("log_if_bar_lacks_keyboard(&app,"));
+    let follow = fn_body(&src, "fn spawn_bar_follow(");
+    assert!(follow.contains("overlay_panel::rekey_if_pointer_on_overlay("));
+
+    // The log tells the truth: key AND (panel OR Hippius active), not
+    // `is_focused` alone, which said "key" while the bar got no hover.
+    let check = fn_body(&src, "fn log_if_bar_lacks_keyboard(");
+    assert!(check.contains("overlay_panel::keyboard_state("));
+    assert!(check.contains("bar_gets_pointer()"));
+    assert!(!check.contains("is_focused()"));
+
+    // The class swap happens only with the content view taken out, so no
+    // key-value observer of the window is cut off (a later removeObserver:
+    // would throw and abort the app), and a panel never hides when Hippius
+    // is not the active app.
+    let panel_src = read("src/capture/overlay_panel.rs");
+    let convert = fn_body(&panel_src, "unsafe fn convert(");
+    let detached = convert.find("setContentView: placeholder").expect("the content view is taken out");
+    let gate = convert.find("kvo_subclass_allows_swap(&observed)").expect("observers are checked");
+    let swapped = convert.find("object_setClass(ns_window, panel_ptr)").expect("the class is swapped");
+    let attached = convert.find("setContentView: content").expect("the content view goes back");
+    assert!(detached < gate && gate < swapped && swapped < attached);
+    assert!(convert.contains("setHidesOnDeactivate: NO"));
+    assert!(convert.contains("NONACTIVATING_PANEL_MASK"));
+}
+
 /// The preview card floats over whatever the user captures next, and it is
 /// information, not a dialog: it must stay out of captures and must not take
 /// the keyboard from the app the user is typing in.
@@ -2121,6 +2208,147 @@ fn the_bubble_controls_are_never_filmed() {
     assert!(shell.contains("\"/capture-bubble-controls\""), "a capture route boots provider-free");
 }
 
+/// The pill is never the key window (the app being recorded keeps the
+/// keyboard), and macOS gives a webview hover only in the key window, so the
+/// pill's buttons never saw the pointer and their native `title` tooltips
+/// never showed. Its hover comes from Rust's pointer watch, and its tooltip is
+/// a window of its own: the pill's window is only as tall as the pill. That
+/// window never covers the pill and is up only while the pointer is on it (a
+/// click always reaches the pill or the app under it), is never focused, and
+/// is left out of the recording like the pill.
+#[test]
+fn the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains("pill_hover::supported("), "no tooltips where the pill is filmed");
+    assert!(open.contains("spawn_pill_hover_watch(app.clone())"), "the watch starts with the pill");
+    assert!(open.contains("pill_tip_window(app)"), "the tooltip window is built with the pill");
+
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_pill_hover_watch(");
+    for needle in [
+        "pointer_point(",
+        "pill_hover::pointer_on_row(",
+        "pill_hover::pill_row(",
+        "PILL_POINTER_EVENT",
+        "sync_pill_tip(&app)",
+    ] {
+        assert!(watch.contains(needle), "the pill's watch lost {needle}");
+    }
+    assert!(watch.contains("close_pill_tip(&app)"), "the tooltip goes with the pill");
+
+    let tip = fn_body(&src, "fn pill_tip_window(");
+    assert!(tip.contains("PILL_TIP_LABEL"));
+    assert!(
+        tip.contains(".content_protected(super::own_windows::content_protected(") && tip.contains("OwnWindow::PillTip"),
+        "the tooltip's protection is own_windows' decision, the pill's"
+    );
+    assert!(
+        tip.contains(".focused(false)") && tip.contains(".focusable(false)"),
+        "it never takes the keyboard"
+    );
+    assert!(
+        tip.contains("#[cfg(target_os = \"macos\")]\n            let _ = window.set_ignore_cursor_events(true);"),
+        "clicks go through it on macOS (it never covers the pill anywhere: pill_hover::tip_frame)"
+    );
+    assert!(fn_body(&src, "fn close_controls(").contains("close_pill_tip(app)"));
+    assert!(fn_body(&src, "fn hide_controls(").contains("hide_pill_tip(app)"));
+
+    let sync = fn_body(&src, "fn sync_pill_tip(");
+    for needle in [
+        "pill_hover::tip_allowed(",
+        "pill_hover::tip_frame(",
+        "pill_hover::anchor_in_tip(",
+        "PILL_TIP_EVENT",
+    ] {
+        assert!(sync.contains(needle), "the tooltip's sync lost {needle}");
+    }
+    // Placing and showing wait on the main thread: never under the lock a
+    // main-thread command (`capture_pill_tip_now`) takes too.
+    let decided = sync.find("let (first, needs_placing, tell) = {").expect("decided under the lock");
+    let placed = sync.find("place(&window, frame, scale)").expect("placed");
+    let shown = sync.find("show_pill_tip(&window)").expect("shown");
+    assert!(
+        fn_body(&src, "fn show_pill_tip(").contains("show_without_focus(window)"),
+        "macOS: never key, never activates"
+    );
+    assert!(decided < placed && placed < shown);
+
+    let main = read("src/main.rs");
+    for command in ["capture_pill_tip,", "capture_pill_tip_now,"] {
+        assert!(main.contains(&format!("crate::capture::commands::{command}")), "{command} is registered");
+    }
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const PILL_TIP_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("PILL_TIP_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-pill-tip.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label]);
+    assert!(
+        capability["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(|p| p.as_str())
+            .all(|p| p.starts_with("core:") && p != "core:window:allow-start-dragging"),
+        "core permissions only, and it is never dragged"
+    );
+    assert!(read("tauri.conf.json").contains(&format!("\"{label}\"")));
+    assert!(
+        read("../app/components/AppShell.tsx").contains(&format!("\"/{label}\"")),
+        "a capture route boots provider-free"
+    );
+
+    // The event names the two sides use agree.
+    let ipc = read("../app/lib/tauri/capture.ts");
+    for (name, value) in [
+        ("PILL_POINTER_EVENT", "capture_pill_pointer"),
+        ("PILL_TIP_EVENT", "capture_pill_tip"),
+        ("BUBBLE_CONTROLS_POINTER_EVENT", "capture_bubble_controls_pointer"),
+    ] {
+        assert!(src.contains(&format!("pub const {name}: &str = \"{value}\";")), "Rust's {name}");
+        assert!(ipc.contains(&format!("export const {name} = \"{value}\";")), "the frontend's {name}");
+    }
+
+    // No native tooltip on the pill, so two never show; the page finds the
+    // button under Rust's point and asks for the custom one.
+    let pill = read("../app/capture-controls/page.tsx");
+    assert!(!pill.contains("title="), "a native title never shows on a window that is not key");
+    assert!(!pill.contains("<title>"), "nor an SVG's");
+    assert!(pill.contains("usePillTips(tips, rowRef)"));
+    let tips = read("../app/capture-controls/pillTips.ts");
+    assert!(tips.contains("PILL_POINTER_EVENT") && tips.contains("markedAt(") && tips.contains("setCapturePillTip("));
+    let page = read("../app/capture-pill-tip/page.tsx");
+    assert!(
+        page.contains("placeTooltip(") && page.contains("TIP_BOX"),
+        "the bar's tooltip, placed the bar's way"
+    );
+}
+
+/// The bubble's controls and the preview card are never key either: which
+/// button the pointer is on comes from Rust there too, never from the
+/// webview's own hover, and neither carries a native `title`.
+#[test]
+fn the_bubble_controls_and_the_card_find_hover_from_rusts_pointer() {
+    let src = read("src/capture/commands.rs");
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_camera_hover_watch(");
+    assert!(watch.contains("BUBBLE_CONTROLS_POINTER_EVENT") && watch.contains("pill_hover::pointer_in("));
+    let controls = read("../app/capture-bubble-controls/page.tsx");
+    assert!(controls.contains("BUBBLE_CONTROLS_POINTER_EVENT") && controls.contains("markedAt("));
+    assert!(!controls.contains("onMouseEnter"), "hover never reaches a window that is not key");
+
+    let card = read("../app/capture-preview/page.tsx");
+    assert!(card.contains("getCapturePreviewPointer()") && card.contains("markedAt("));
+    assert!(card.contains("if (!up) return;"), "the card asks where the pointer is whenever it is up");
+    assert!(!card.contains("title="), "a native title never shows on the card");
+}
+
 /// The bubble's size changes mid-recording by moving its window inside what
 /// is filmed, so the camera in the file follows; the camera only stage is
 /// never resized (it is the recording).
@@ -2503,8 +2731,8 @@ fn the_bar_follows_the_pointer_to_another_display() {
     );
     let moved = fn_body(&src, "fn move_bar(");
     assert!(
-        moved.contains("rebroadcast(") && moved.contains("set_focus()"),
-        "the overlays hear the move"
+        moved.contains("rebroadcast(") && moved.contains("overlay_panel::make_key(&overlay)"),
+        "the overlays hear the move, and the keyboard goes with the bar"
     );
     assert!(
         fn_body(&src, "async fn open_capture_ui(").contains("bar_held.store(false"),

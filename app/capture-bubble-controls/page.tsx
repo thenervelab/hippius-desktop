@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Pause, Play } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
+  BUBBLE_CONTROLS_POINTER_EVENT,
   getCaptureCameraContext,
   getCaptureState,
   pauseCapture,
@@ -13,7 +14,9 @@ import {
   type CaptureCameraState,
   type CapturePhase,
   type CapturePhaseEvent,
+  type CaptureWindowPoint,
 } from "@/app/lib/tauri/capture";
+import { markedAt } from "@/app/lib/capture/rustHover";
 import { GLASS_FOCUS } from "@/app/lib/capture/glass";
 import { stepIndex } from "@/app/capture-overlay/keyNav";
 import { nextRoundSize, sizeControls, type RoundSize } from "@/app/capture-camera/cameraDevices";
@@ -42,6 +45,11 @@ import { SizeGlyph } from "@/app/capture-camera/SizeGlyph";
  * No native `title`: a system tooltip is a window of its own and could be
  * filmed. The button under the pointer or focus is named in the line above
  * the strip instead. Escape does nothing here, as on the pill.
+ *
+ * Which button the pointer is on comes from Rust (`capture_bubble_controls_pointer`,
+ * from the camera's pointer watch): this window is never key, and on macOS
+ * a webview in a window that is not key gets no hover, so `mouseenter` and
+ * `:hover` never happened here and the line never named anything.
  */
 
 function isLive(phase: CapturePhase): boolean {
@@ -49,6 +57,8 @@ function isLive(phase: CapturePhase): boolean {
 }
 
 const BUTTON = `grid size-7 place-items-center rounded-full transition-colors ${GLASS_FOCUS}`;
+/** Marks each button with its place in the strip, for the hit test. */
+const TIP_INDEX = "data-tip-index";
 
 export default function CaptureBubbleControlsPage() {
   const [phase, setPhase] = useState<CapturePhase>({ phase: "idle" });
@@ -60,6 +70,27 @@ export default function CaptureBubbleControlsPage() {
   const [lastRound, setLastRound] = useState<RoundSize>("small");
   const [focusAt, setFocusAt] = useState(0);
   const stripRef = useRef<HTMLDivElement | null>(null);
+  /** Where Rust says the pointer is on this window, and the button there. */
+  const [pointer, setPointer] = useState<CaptureWindowPoint | null>(null);
+  const [pointedAt, setPointedAt] = useState<number | null>(null);
+
+  useEffect(() => {
+    const unlisten = listen<CaptureWindowPoint | null>(BUBBLE_CONTROLS_POINTER_EVENT, (e) => setPointer(e.payload));
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // The button under the pointer, read after every render: the strip under a
+  // still pointer changes too (full size swaps its third button).
+  // After every render on purpose; it sets state only when the element
+  // under the pointer changed, so it settles at once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const el = markedAt(pointer, { left: 0, top: 0 }, TIP_INDEX);
+    const at = el ? Number(el.getAttribute(TIP_INDEX)) : null;
+    if (at !== pointedAt) setPointedAt(at);
+  });
 
   useEffect(() => {
     // Rust numbers every phase: an older one (a first read that answers
@@ -104,7 +135,9 @@ export default function CaptureBubbleControlsPage() {
   const tabStop = Math.min(focusAt, labels.length - 1);
   // By position, so the line follows the button's own label as it changes
   // (Pause becomes Resume under the pointer).
-  const tip = tipAt === null ? null : (labels[tipAt] ?? null);
+  // The pointer wins over keyboard focus while it is on a button.
+  const shownAt = pointedAt ?? tipAt;
+  const tip = shownAt === null ? null : (labels[shownAt] ?? null);
 
   const run = async (action: () => Promise<unknown>) => {
     if (busy) return;
@@ -130,11 +163,12 @@ export default function CaptureBubbleControlsPage() {
 
   const named = (index: number) => ({
     "aria-label": labels[index],
-    "aria-describedby": tipAt === index ? "bubble-controls-tip" : undefined,
+    "aria-describedby": shownAt === index ? "bubble-controls-tip" : undefined,
     // One Tab stop into the strip; the arrows move along it.
     tabIndex: index === tabStop ? 0 : -1,
-    onMouseEnter: () => setTipAt(index),
-    onMouseLeave: () => setTipAt(null),
+    [TIP_INDEX]: index,
+    // Lit like `:hover`, which never happens in a window that is not key.
+    "data-hover": pointedAt === index ? "true" : undefined,
     onFocus: () => {
       setTipAt(index);
       setFocusAt(index);
@@ -169,7 +203,7 @@ export default function CaptureBubbleControlsPage() {
             disabled={busy}
             {...named(i)}
             onClick={() => void run(() => setCaptureCameraSize(c.target))}
-            className={`${BUTTON} ${c.pressed ? "bg-white/25" : "hover:bg-white/15"} disabled:opacity-40`}
+            className={`${BUTTON} ${c.pressed ? "bg-white/25" : "hover:bg-white/15 data-[hover=true]:bg-white/15"} disabled:opacity-40`}
           >
             <SizeGlyph icon={c.icon} />
           </button>
@@ -180,7 +214,7 @@ export default function CaptureBubbleControlsPage() {
           disabled={busy}
           {...named(sizes.length)}
           onClick={() => void run(paused ? resumeCapture : pauseCapture)}
-          className={`${BUTTON} hover:bg-white/15 disabled:opacity-40`}
+          className={`${BUTTON} hover:bg-white/15 data-[hover=true]:bg-white/15 disabled:opacity-40`}
         >
           {paused ? <Play className="size-3.5 fill-current" aria-hidden /> : <Pause className="size-3.5" aria-hidden />}
         </button>

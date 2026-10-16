@@ -85,6 +85,16 @@ pub const MICROPHONE_STATE_EVENT: &str = "capture_microphone_state";
 /// To the pill: seconds left before a recording begins (Wayland counts down
 /// there, after the desktop's dialog), or `null` once it has.
 pub const PILL_COUNTDOWN_EVENT: &str = "capture_pill_countdown";
+/// To the pill: where the pointer is on its row (`pill_hover::WindowPoint`),
+/// or `null` once it left. The pill is never the key window, so its webview
+/// gets no hover of its own on macOS; the page finds the button under this
+/// point and names it in the pill's tooltip.
+pub const PILL_POINTER_EVENT: &str = "capture_pill_pointer";
+/// To the pill's tooltip window: what to show (`pill_hover::TipShown`).
+pub const PILL_TIP_EVENT: &str = "capture_pill_tip";
+/// To the bubble's controls: where the pointer is on their window, or `null`
+/// (same reason as [`PILL_POINTER_EVENT`]).
+pub const BUBBLE_CONTROLS_POINTER_EVENT: &str = "capture_bubble_controls_pointer";
 
 /// What [`DEVICE_LOST_EVENT`] carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -112,6 +122,9 @@ pub const CAMERA_LABEL: &str = "capture-camera";
 /// The camera bubble's controls mid-recording (`bubble_controls`): a window
 /// of their own over the bubble, because the bubble's own window is filmed.
 pub const BUBBLE_CONTROLS_LABEL: &str = "capture-bubble-controls";
+/// The pill's tooltip (`pill_hover`): a window of its own over the pill,
+/// because the pill's window is only as tall as the pill.
+pub const PILL_TIP_LABEL: &str = "capture-pill-tip";
 /// Wayland's area selection: one full-screen window showing the chosen
 /// monitor's picture to draw the area on (`area_pick`).
 pub const AREA_LABEL: &str = "capture-area";
@@ -136,6 +149,9 @@ const DISPLAY_WATCH_EVERY: std::time::Duration = std::time::Duration::from_milli
 /// on another display move the bar (`bar::bar_follow`), so it follows within
 /// half a second without jumping as the pointer crosses a display.
 const BAR_FOLLOW_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long after the bar's overlay is focused [`log_if_bar_lacks_keyboard`]
+/// looks: activation and the window server answer asynchronously.
+const BAR_FOCUS_CHECK_AFTER: std::time::Duration = std::time::Duration::from_millis(600);
 /// A card follows the sync engine's row for at most this long.
 const SYNC_FOLLOW_LIMIT: std::time::Duration = std::time::Duration::from_hours(2);
 
@@ -335,6 +351,20 @@ pub struct CaptureState {
     /// A pill menu is open and the pill's window has grown for it: whether
     /// above the pill (`live_controls::pill_with_menu`).
     pill_menu: Mutex<Option<bool>>,
+    /// Which pill hover watch is current (`spawn_pill_hover_watch`).
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    pill_watch: AtomicU64,
+    /// Where the pointer is on the pill's row, as last told to the page
+    /// (`None`: off it).
+    pill_pointer: Mutex<Option<super::pill_hover::WindowPoint>>,
+    /// The tooltip the pill page asked for, and the pill row it was placed
+    /// against while its window is up.
+    pill_tip: Mutex<PillTip>,
+    /// Numbers what the tooltip window is told (`pill_hover::TipShown`).
+    pill_tip_seq: AtomicU64,
+    /// Where the pointer is on the bubble's controls, as last told to them.
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
+    bubble_controls_pointer: Mutex<Option<super::pill_hover::WindowPoint>>,
     /// The monitor a Wayland area's stream covers, in GDK's layout (and its
     /// scale), when the compositor said which (`fill_stream_monitor`): where
     /// the pill must stay out of the area.
@@ -1160,6 +1190,7 @@ fn close_controls(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
         let _ = w.close();
     }
+    close_pill_tip(app);
 }
 
 // ── Starting ────────────────────────────────────────────────────────────────
@@ -1351,7 +1382,52 @@ async fn open_capture_ui(app: &AppHandle, state: &CaptureState, areas: &bar::Rem
     for display in &displays {
         open_overlay(app, display, Some(display.id) == host, instant).await?;
     }
+    // Last, so no overlay shown after it takes the keyboard back: Return,
+    // Escape and Space act on the bar, and on macOS only the key window gets
+    // the bar's hover.
+    focus_overlays(app);
+    log_if_bar_lacks_keyboard(app, "bar opened");
     Ok(())
+}
+
+/// Say in the log, a moment after the bar's overlay was given the keyboard,
+/// whether the bar gets hover and keys (macOS): WebKit gives them only to
+/// the key window, and an ordinary window is key in that sense only while
+/// Hippius is the active app; a non-activating panel is key on its own
+/// (`overlay_panel::bar_gets_pointer`). Without it the bar shows no tooltips
+/// until it is clicked, and nothing else would show why. `why` names the
+/// moment (the bar opened, its page loaded).
+fn log_if_bar_lacks_keyboard(app: &AppHandle, why: &'static str) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(BAR_FOCUS_CHECK_AFTER).await;
+        let state = app.state::<AppState>();
+        if !matches!(state.capture.current(), CapturePhase::Selecting { .. }) {
+            return;
+        }
+        // Read now: the bar may have followed the pointer to another display.
+        let Some(window) = bar_overlay(&app) else { return };
+        let Some(k) = super::overlay_panel::keyboard_state(&window).await else {
+            return;
+        };
+        if k.bar_gets_pointer() {
+            tracing::info!(
+                when = why,
+                panel = k.panel,
+                hippius_frontmost = k.frontmost,
+                "capture: the capture bar has the keyboard"
+            );
+        } else {
+            tracing::warn!(
+                when = why,
+                key = k.key,
+                panel = k.panel,
+                app_active = k.app_active,
+                hippius_frontmost = k.frontmost,
+                "capture: the capture bar does not have the keyboard; hover, tooltips and keys wait for a click on it"
+            );
+        }
+    });
 }
 
 /// Wayland's recording panel: the capture bar alone in one ordinary window,
@@ -1488,6 +1564,9 @@ fn list_displays_blocking() -> Result<Vec<DisplayTarget>> {
 /// The overlay for `display`. Only the one hosting the bar takes the
 /// keyboard: focusing every overlay left the last one focused, which was not
 /// necessarily the bar's, and on Windows each focus could inject an Alt press.
+/// The others are shown without focus where a plain show would take it
+/// (macOS, Windows; on macOS the bar's too), and the caller gives the bar's
+/// the keyboard once all are up (`focus_overlays`).
 async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool, instant: bool) -> Result<()> {
     let label = format!("{OVERLAY_LABEL_PREFIX}{}", display.id);
     // A previous session's overlay may still be on its way out.
@@ -1501,6 +1580,12 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         build_overlay(app, &label, display, instant)?
     };
+    // A non-activating panel on macOS, before it is shown: the bar's overlay
+    // then takes the keyboard (hover, tooltips, Escape) without bringing
+    // Hippius forward, whichever app is frontmost (`overlay_panel`).
+    if super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+        super::overlay_panel::make_panel(&window);
+    }
     // Content protection is asked for, not promised: on Windows it is
     // `SetWindowDisplayAffinity`, whose failure tao discards. Read it back;
     // if it did not hold, this session's screenshot closes the overlays
@@ -1530,13 +1615,17 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
         let _ = window.set_size(tauri::PhysicalSize::new(display.width, display.height));
     }
     raise_above_menu_bar(&window);
-    window
-        .show()
-        .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?;
-    cover_whole_display(&window);
-    if hosts_bar {
-        let _ = window.set_focus();
+    // Every other overlay comes up without taking the keyboard from the
+    // bar's, or the bar got no hover (no tooltips) on macOS until clicked
+    // (`own_windows::overlay_show`); on macOS the bar's too. The bar's is
+    // given the keyboard by the caller once every overlay is up.
+    match super::own_windows::overlay_show(super::rollout::current_platform(), hosts_bar) {
+        super::own_windows::OverlayShow::WithoutFocus => show_without_focus(&window),
+        super::own_windows::OverlayShow::Plain => window
+            .show()
+            .map_err(|e| AppError::Other(format!("Could not show the capture overlay: {e}")))?,
     }
+    cover_whole_display(&window);
     Ok(())
 }
 
@@ -1642,6 +1731,13 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
         }
         window
     };
+    // The pill's hover and tooltip (`pill_hover`), on every open: a pill
+    // found still closing from the last capture keeps its watch too (a new
+    // one retires any older one).
+    if super::pill_hover::supported(super::rollout::current_platform()) {
+        let _ = pill_tip_window(app);
+        spawn_pill_hover_watch(app.clone());
+    }
     if !window.is_visible().unwrap_or(false) {
         let state = app.state::<AppState>();
         if let Some(d) = lock(&state.capture.bar_display).clone() {
@@ -1733,6 +1829,281 @@ fn pill_frame_for_stream_area(monitor: super::area_pick::MonitorBox, area: recor
 fn hide_controls(app: &AppHandle) {
     if let Some(w) = app.get_webview_window(CONTROLS_LABEL) {
         let _ = w.hide();
+    }
+    hide_pill_tip(app);
+}
+
+// ── The pill's hover and tooltip ────────────────────────────────────────────
+
+/// The tooltip the pill page asked for, and the pill row its window was
+/// placed against while it is up (`pill_hover`).
+#[derive(Debug, Default)]
+struct PillTip {
+    request: Option<super::pill_hover::TipRequest>,
+    /// The pill's row when the tooltip window was placed; `None` while it is
+    /// hidden.
+    placed_for: Option<camera::Frame>,
+    /// What the tooltip page was last told, so it is told only of a change.
+    sent: Option<super::pill_hover::TipText>,
+}
+
+/// How often the pointer is checked against the pill: often enough that a
+/// tooltip follows the pointer from button to button with no felt delay.
+#[cfg(any(target_os = "macos", windows))]
+const PILL_HOVER_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// Watch the pointer over the pill while its window exists, and tell the
+/// page where it is on the pill's row ([`PILL_POINTER_EVENT`]).
+///
+/// The pill is never the key window, so the app being recorded keeps the
+/// keyboard, and AppKit gives a webview hover only in the key window: the
+/// pill's buttons never knew the pointer was on them, and no tooltip ever
+/// showed. Windows does deliver hover to the pill, but takes the same path,
+/// so the tooltip is the same everywhere. The tooltip itself goes with the
+/// pointer here (it leaves, a menu opens, the pill hides) and follows the
+/// pill when it is dragged, without waiting for the page.
+#[cfg(any(target_os = "macos", windows))]
+fn spawn_pill_hover_watch(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        #[cfg(target_os = "macos")]
+        let primary_height = {
+            let primary_height = tauri::async_runtime::spawn_blocking(list_displays_blocking)
+                .await
+                .ok()
+                .and_then(std::result::Result::ok)
+                .and_then(|d| d.iter().find(|d| d.is_primary).or_else(|| d.first()).map(|d| f64::from(d.height)));
+            let Some(primary_height) = primary_height else { return };
+            primary_height
+        };
+        #[cfg(not(target_os = "macos"))]
+        let primary_height = 0.0;
+        let state = app.state::<AppState>();
+        // One watch per pill window: a pill rebuilt while an older watch is
+        // between ticks retires that one.
+        let generation = state.capture.pill_watch.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut interval = tokio::time::interval(PILL_HOVER_EVERY);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            if state.capture.pill_watch.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let Some(window) = app.get_webview_window(CONTROLS_LABEL) else { break };
+            let menu = *lock(&state.capture.pill_menu);
+            let now = if window.is_visible().unwrap_or(false) {
+                current_camera_frame(&window).and_then(|frame| {
+                    let row = super::pill_hover::pill_row(frame, menu, CONTROLS_HEIGHT);
+                    super::pill_hover::pointer_on_row(row, menu.is_some(), pointer_point(&app, &window, primary_height))
+                })
+            } else {
+                None
+            };
+            let changed = {
+                let mut last = lock(&state.capture.pill_pointer);
+                let changed = super::pill_hover::pointer_changed(*last, now);
+                if changed {
+                    *last = now;
+                }
+                changed
+            };
+            if changed {
+                if now.is_none() {
+                    // A tooltip shown for the pointer goes with it; one for
+                    // keyboard focus stays.
+                    let mut tip = lock(&state.capture.pill_tip);
+                    if tip.request.as_ref().is_some_and(|r| r.from_pointer) {
+                        tip.request = None;
+                    }
+                }
+                let _ = app.emit_to(CONTROLS_LABEL, PILL_POINTER_EVENT, now);
+            }
+            if changed || lock(&state.capture.pill_tip).placed_for.is_some() {
+                sync_pill_tip(&app);
+            }
+        }
+        // The pill is gone: so is its tooltip.
+        close_pill_tip(&app);
+    });
+}
+
+/// Linux: the pill is filmed, so it has no tooltips (`pill_hover::supported`).
+#[cfg(not(any(target_os = "macos", windows)))]
+fn spawn_pill_hover_watch(_app: AppHandle) {}
+
+/// Show, move or take away the pill's tooltip to match what the page asked
+/// for and where the pill and the pointer are now (`pill_hover::tip_allowed`).
+fn sync_pill_tip(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let supported = super::pill_hover::supported(super::rollout::current_platform());
+    let pill = app.get_webview_window(CONTROLS_LABEL);
+    let visible = pill.as_ref().is_some_and(|w| w.is_visible().unwrap_or(false));
+    let menu = *lock(&state.capture.pill_menu);
+    let on_pill = lock(&state.capture.pill_pointer).is_some();
+    let wanted = lock(&state.capture.pill_tip)
+        .request
+        .clone()
+        .filter(|r| super::pill_hover::tip_allowed(supported && visible, menu, r.from_pointer, on_pill));
+    let row = wanted
+        .as_ref()
+        .and(pill.as_ref())
+        .and_then(current_camera_frame)
+        .map(|frame| super::pill_hover::pill_row(frame, menu, CONTROLS_HEIGHT));
+    let (Some(request), Some(row)) = (wanted, row) else {
+        hide_pill_tip(app);
+        return;
+    };
+    let Some(window) = pill_tip_window(app) else { return };
+    let (work, scale) = work_area_at(&state.capture, row).unwrap_or((row, 1.0));
+    let frame = super::pill_hover::tip_frame(row, work);
+    let text = super::pill_hover::TipText {
+        label: request.label,
+        detail: request.detail,
+        anchor: super::pill_hover::anchor_in_tip(request.anchor, row, frame),
+    };
+    // Decided under the lock, done after it: placing and showing wait on the
+    // main thread, which must never wait on this lock in return.
+    let (first, needs_placing, tell) = {
+        let mut tip = lock(&state.capture.pill_tip);
+        let first = tip.placed_for.is_none();
+        let needs_placing = super::pill_hover::tip_needs_placing(tip.placed_for, row);
+        tip.placed_for = Some(row);
+        let tell = (tip.sent.as_ref() != Some(&text)).then(|| {
+            tip.sent = Some(text.clone());
+            super::pill_hover::TipShown {
+                seq: state.capture.pill_tip_seq.fetch_add(1, Ordering::SeqCst) + 1,
+                tip: Some(text),
+            }
+        });
+        (first, needs_placing, tell)
+    };
+    if let Some(shown) = tell {
+        let _ = app.emit_to(PILL_TIP_LABEL, PILL_TIP_EVENT, shown);
+    }
+    if needs_placing {
+        place(&window, frame, scale);
+    }
+    if first {
+        // Told what to show before it comes on screen, so it never shows the
+        // last tooltip for a moment in the new place.
+        show_pill_tip(&window);
+    }
+}
+
+/// Bring the tooltip window forward without it, or Hippius, taking the
+/// keyboard. Elsewhere than macOS a plain show: the window is built
+/// unfocusable, and `show_without_focus` would make it focusable again after.
+fn show_pill_tip(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    show_without_focus(window);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window.show();
+    }
+}
+
+/// Take the tooltip off screen (it stays built, empty, for the next one).
+fn hide_pill_tip(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut tip = lock(&state.capture.pill_tip);
+    let was_up = tip.placed_for.take().is_some();
+    if tip.sent.take().is_some() || was_up {
+        let seq = state.capture.pill_tip_seq.fetch_add(1, Ordering::SeqCst) + 1;
+        let _ = app.emit_to(PILL_TIP_LABEL, PILL_TIP_EVENT, super::pill_hover::TipShown { seq, tip: None });
+    }
+    drop(tip);
+    if was_up && let Some(w) = app.get_webview_window(PILL_TIP_LABEL) {
+        let _ = w.hide();
+    }
+}
+
+/// The pill went: its tooltip window goes, and what it had asked for.
+fn close_pill_tip(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    *lock(&state.capture.pill_tip) = PillTip::default();
+    lock(&state.capture.pill_pointer).take();
+    if let Some(w) = app.get_webview_window(PILL_TIP_LABEL) {
+        let _ = w.destroy();
+    }
+}
+
+/// The pill's tooltip window, built hidden on first need (with the pill, so
+/// the first tooltip does not wait for a webview to load). It never takes a
+/// click or the keyboard: it sits beside the pill, never over its glass, is
+/// up only while the pointer is on the pill, ignores the mouse on macOS, and
+/// cannot be focused. Above the pill and the bubble on macOS, and left out of
+/// the recording like the pill.
+fn pill_tip_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+    if let Some(w) = app.get_webview_window(PILL_TIP_LABEL) {
+        return Some(w);
+    }
+    let route = if cfg!(dev) { "capture-pill-tip" } else { "capture-pill-tip.html" };
+    let built = WebviewWindowBuilder::new(app, PILL_TIP_LABEL, WebviewUrl::App(route.into()))
+        .title("Hippius recording tooltip")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .content_protected(super::own_windows::content_protected(
+            super::rollout::current_platform(),
+            super::own_windows::OwnWindow::PillTip,
+        ))
+        .focused(false)
+        .focusable(false)
+        .inner_size(CONTROLS_WIDTH, super::pill_hover::TIP_ROOM)
+        .visible(false)
+        .build();
+    match built {
+        Ok(window) => {
+            // It never covers the pill (`pill_hover::tip_frame`) and is up
+            // only while the pointer is on the pill; on macOS it lets clicks
+            // through as well. Not on Windows: tao does that there by making
+            // the window layered, not proven with a transparent WebView2
+            // window, and the frame alone keeps it out of the way.
+            #[cfg(target_os = "macos")]
+            let _ = window.set_ignore_cursor_events(true);
+            raise_pill_tip(&window);
+            Some(window)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "the recording pill's tooltip could not open");
+            None
+        }
+    }
+}
+
+/// Above the pill (1000), the bubble (1001) and its controls (1002).
+#[cfg(target_os = "macos")]
+fn raise_pill_tip(window: &tauri::WebviewWindow) {
+    set_window_level(window, Some(1003));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_pill_tip(_window: &tauri::WebviewWindow) {}
+
+/// The pill page names the button under the pointer (from
+/// [`PILL_POINTER_EVENT`]) or with keyboard focus, or `null` for none; Rust
+/// shows it in the tooltip window over the pill, when it still applies.
+#[tauri::command]
+pub async fn capture_pill_tip(app: AppHandle, tip: Option<super::pill_hover::TipRequest>) -> Result<()> {
+    let tip = tip.and_then(super::pill_hover::cleaned);
+    lock(&app.state::<AppState>().capture.pill_tip).request = tip;
+    sync_pill_tip(&app);
+    Ok(())
+}
+
+/// What the tooltip window shows now, for its page to start from (an event
+/// sent before it loaded is not lost).
+#[tauri::command]
+pub fn capture_pill_tip_now(state: tauri::State<'_, AppState>) -> super::pill_hover::TipShown {
+    let tip = lock(&state.capture.pill_tip);
+    super::pill_hover::TipShown {
+        seq: state.capture.pill_tip_seq.load(Ordering::SeqCst),
+        tip: tip.sent.clone(),
     }
 }
 
@@ -2028,13 +2399,20 @@ fn set_window_level(window: &tauri::WebviewWindow, level: Option<i64>) {
 #[cfg(not(target_os = "macos"))]
 fn raise_above_menu_bar(_window: &tauri::WebviewWindow) {}
 
+/// Give the bar's overlay the keyboard: on macOS a non-activating panel
+/// made key without bringing Hippius forward, elsewhere (or an overlay left
+/// an ordinary window) a plain focus (`overlay_panel::make_key`).
 fn focus_overlays(app: &AppHandle) {
+    if let Some(window) = bar_overlay(app) {
+        super::overlay_panel::make_key(&window);
+    }
+}
+
+/// The overlay hosting the capture bar now (it follows the pointer).
+fn bar_overlay(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     let state = app.state::<AppState>();
     let host = lock(&state.capture.bar_display).as_ref().map(|d| d.id);
-    let label = host.map(|id| format!("{OVERLAY_LABEL_PREFIX}{id}"));
-    if let Some(window) = label.and_then(|l| app.get_webview_window(&l)) {
-        let _ = window.set_focus();
-    }
+    host.and_then(|id| app.get_webview_window(&format!("{OVERLAY_LABEL_PREFIX}{id}")))
 }
 
 // ── The displays changing under an open capture ────────────────────────────
@@ -2111,7 +2489,7 @@ async fn apply_display_change(app: &AppHandle, now: &[DisplayTarget], change: &b
             if let Some(label) = host.map(|id| format!("{OVERLAY_LABEL_PREFIX}{id}"))
                 && let Some(w) = app.get_webview_window(&label)
             {
-                let _ = w.set_focus();
+                super::overlay_panel::make_key(&w);
             }
         }
     }
@@ -2148,6 +2526,14 @@ fn spawn_bar_follow(app: AppHandle) {
                 move_bar(&app, &state.capture, display);
             }
             seen_before = under_pointer;
+            // Another app took the keyboard (a click or gesture reached it):
+            // give it back to the bar once the pointer is on an overlay, so
+            // its tooltips and keys work without a click on it (macOS).
+            if super::own_windows::overlay_is_panel(super::rollout::current_platform())
+                && let Some(window) = bar_overlay(&app)
+            {
+                super::overlay_panel::rekey_if_pointer_on_overlay(&window);
+            }
         }
     });
 }
@@ -2171,8 +2557,9 @@ fn move_bar(app: &AppHandle, state: &CaptureState, display: DisplayTarget) {
     // one stops. The pill, still hidden, is placed on the bar's display when
     // it comes on screen (`open_controls`).
     state.rebroadcast(|e| emit_phase(app, e));
-    // The keyboard goes with the bar: Return, Escape and Space act on it.
-    let _ = overlay.set_focus();
+    // The keyboard goes with the bar: Return, Escape and Space act on it,
+    // and on macOS only the key window gets hover.
+    super::overlay_panel::make_key(&overlay);
 }
 
 /// The bar's overlay holds the bar on its display (`held` true) or lets it
@@ -2234,7 +2621,7 @@ pub struct OverlayContext {
 }
 
 #[tauri::command]
-pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_id: u32) -> Result<OverlayContext> {
+pub async fn capture_overlay_context(app: AppHandle, state: tauri::State<'_, AppState>, display_id: u32) -> Result<OverlayContext> {
     let CapturePhase::Selecting { mode, kind } = state.capture.current() else {
         return Err(AppError::Validation("No capture is waiting for a selection.".into()));
     };
@@ -2256,6 +2643,12 @@ pub async fn capture_overlay_context(state: tauri::State<'_, AppState>, display_
         Err(_) => None,
     };
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
+    // The bar's page has loaded (a dev page can take seconds): make sure its
+    // overlay has the keyboard now, in case another app took it meanwhile.
+    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+        focus_overlays(&app);
+        log_if_bar_lacks_keyboard(&app, "bar page loaded");
+    }
     let pending = *lock(&state.capture.pending);
     let instant = state.capture.instant.load(Ordering::SeqCst);
     let frozen = lock(&state.capture.frozen).is_some();
@@ -3746,6 +4139,13 @@ pub struct ControlsContext {
     /// points (`live_controls::fixed_menu_room`): the page is laid out once
     /// at that height (macOS), or, at 0, it is the window's own size.
     pub menu_room: f64,
+    /// Whether the pill shows tooltips (`pill_hover::supported`): it then
+    /// names the button under the pointer or focus through
+    /// `capture_pill_tip`. None where the pill is filmed.
+    pub tips: bool,
+    /// The shortcut that stops the recording, as a Tauri accelerator, for
+    /// Stop's tooltip (`shortcut::stop_shortcut`); `None` when none works.
+    pub stop_shortcut: Option<String>,
 }
 
 const PILL_NOTE_SEEN_KEY: &str = "capture_pill_note_seen_v1";
@@ -3762,10 +4162,26 @@ pub async fn capture_controls_context(state: tauri::State<'_, AppState>) -> Resu
             filmed_note = Some(super::support::PILL_FILMED_NOTE);
         }
     }
+    let tips = super::pill_hover::supported(super::rollout::current_platform());
+    let stop_shortcut = if tips {
+        // A shortcut that cannot be read is left out of the tooltip, never a
+        // reason the pill cannot start.
+        match state.pool() {
+            Ok(pool) => super::shortcut::load_both(pool).await.ok().and_then(|active| {
+                use super::shortcut::{ShortcutKind, is_registered};
+                super::shortcut::stop_shortcut(active, [is_registered(ShortcutKind::Screenshot), is_registered(ShortcutKind::Record)])
+            }),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
     Ok(ControlsContext {
         compact,
         filmed_note,
         menu_room: super::live_controls::fixed_menu_room(super::rollout::current_platform()),
+        tips,
+        stop_shortcut,
     })
 }
 
@@ -6408,6 +6824,7 @@ fn spawn_camera_hover_watch(app: AppHandle) {
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut last_frame: Option<camera::Frame> = None;
         let mut controls_shown = false;
+        let mut controls_frame: Option<camera::Frame> = None;
         loop {
             interval.tick().await;
             if state.capture.camera_watch.load(Ordering::SeqCst) != generation {
@@ -6421,6 +6838,18 @@ fn spawn_camera_hover_watch(app: AppHandle) {
             let over = frame.contains(px, py);
             if state.capture.camera_hover.swap(over, Ordering::SeqCst) != over {
                 let _ = app.emit_to(CAMERA_LABEL, CAMERA_HOVER_EVENT, over);
+            }
+            // The controls' window is never key either: their page finds the
+            // button under the pointer from where it is on them.
+            let on_controls = controls_frame
+                .filter(|_| controls_shown)
+                .and_then(|f| super::pill_hover::pointer_in(f, Some((px, py))));
+            {
+                let mut last = lock(&state.capture.bubble_controls_pointer);
+                if super::pill_hover::pointer_changed(*last, on_controls) {
+                    *last = on_controls;
+                    let _ = app.emit_to(BUBBLE_CONTROLS_LABEL, BUBBLE_CONTROLS_POINTER_EVENT, on_controls);
+                }
             }
 
             let moving = super::bubble_controls::moved(last_frame, frame);
@@ -6447,7 +6876,9 @@ fn spawn_camera_hover_watch(app: AppHandle) {
                     Err(_) => CameraSize::default(),
                 };
                 let scale = window.scale_factor().unwrap_or(1.0);
-                place(&controls, super::bubble_controls::frame(frame, size), scale);
+                let placed = super::bubble_controls::frame(frame, size);
+                place(&controls, placed, scale);
+                controls_frame = Some(placed);
                 show_bubble_controls(&controls);
             } else {
                 let _ = controls.hide();

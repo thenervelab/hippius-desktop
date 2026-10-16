@@ -65,6 +65,16 @@ const advance = (ms: number) =>
 // jsdom lays nothing out, so the card's box is 0 x 0 at the origin.
 let pointer: [number, number] | null = null;
 
+/**
+ * Rust says the pointer is on `el`: the card finds what is under Rust's point
+ * with the page's hit test, which jsdom lacks, so it is stood in for here.
+ */
+async function pointAt(el: Element | null) {
+  pointer = el ? [10, 10] : null;
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => el });
+  await advance(150);
+}
+
 async function setup(first: CapturePreviewCard | null) {
   tauri.onInvoke("capture_preview_context", () => first);
   tauri.onInvoke("capture_preview_pointer", () => pointer);
@@ -94,7 +104,10 @@ beforeEach(() => {
   tauri.reset();
   vi.useFakeTimers({ shouldAdvanceTime: false });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+});
 
 describe("the preview card", () => {
   it("slides away on its own once uploaded", async () => {
@@ -223,6 +236,24 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(0);
     await wait(1_500);
     expect(dismissed()).toBe(1);
+  });
+
+  // The card is never key, so no hover event and no native title reach it:
+  // what Rust's pointer is on is lit and named, while the card is up, not
+  // only once its timer runs.
+  it("names what Rust's pointer is on and lights the picture, with no native title", async () => {
+    await setup(linked({ state: "uploading" }, 1, { reveal: true }));
+    expect(document.querySelector("[title]")).toBeNull();
+    await pointAt(screen.getByRole("button", { name: "More" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("More");
+    const picture = screen.getByRole("button", { name: `Show ${FILE} in its folder` });
+    await pointAt(picture);
+    // The picture's own hover face says it; no tooltip repeats it.
+    expect(picture).toHaveAttribute("data-hover", "true");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await pointAt(null);
+    expect(picture).not.toHaveAttribute("data-hover");
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   // On Windows and Linux the keyboard can reach the card's buttons; focus
@@ -357,8 +388,12 @@ describe("the preview card", () => {
     expect(live).toHaveLength(1);
     // Rust words the link; the card says it as it is.
     expect(live[0]).toHaveTextContent("Uploaded · Public link copied");
-    // Who can open the link has its own line, with where it went in its tooltip.
-    expect(screen.getByText("Anyone with the link can view. Never expires.")).toHaveAttribute("title", "Work › Captures");
+    // Who can open the link has its own line, with where it went in its
+    // tooltip: the card's own, from Rust's pointer, never a native title.
+    const note = screen.getByText("Anyone with the link can view. Never expires.");
+    expect(note).not.toHaveAttribute("title");
+    await pointAt(note);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Work › Captures");
   });
 
   it("keeps a long failure to one line, with the whole of it in the tooltip", async () => {
@@ -366,7 +401,8 @@ describe("the preview card", () => {
     await setup(card(failed(message), 1, { retry: true, discard: true }));
     const line = screen.getByText(message);
     expect(line).toHaveClass("line-clamp-1");
-    expect(line).toHaveAttribute("title", message);
+    await pointAt(line);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(message);
   });
 
   // The card is prewarmed hidden at every capture start; the sync engine
@@ -482,7 +518,7 @@ describe("the card's actions (Rust decides which)", () => {
     const note = screen.getByTestId("capture-link-note");
     expect(note).toHaveTextContent("Anyone with the link can view. Never expires.");
     expect(note).toHaveClass("truncate");
-    expect(note).toHaveAttribute("title", "Work › Captures");
+    expect(note).toHaveAttribute("data-card-tip", "destination");
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Manage link" }));
     await act(async () => {
@@ -530,8 +566,10 @@ describe("the card's actions (Rust decides which)", () => {
   it("turns Discard into an icon when Upgrade and Retry are there too", async () => {
     await setup(card(failed("Your storage is full.", "storageFull"), 1, { retry: true, discard: true, upgrade: true }));
     const discard = screen.getByRole("button", { name: "Discard" });
-    expect(discard).toHaveAttribute("title", "Discard");
     expect(discard).not.toHaveTextContent("Discard");
+    // Named in the card's tooltip when Rust says the pointer is on it.
+    await pointAt(discard);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Discard");
     fireEvent.click(discard);
     await act(async () => {
       await Promise.resolve();
