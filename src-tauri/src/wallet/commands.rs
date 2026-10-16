@@ -478,8 +478,6 @@ const MAX_BACKUP_JSON_BYTES: u64 = 64 * 1024;
 /// pretty-printed JSON.
 #[tauri::command]
 pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64, password: String) -> Result<Vec<u8>, AppError> {
-    use std::io::{Cursor, Write};
-
     // Delegates the password gate to `local_wallet_export_backup` (audit R-07);
     // it acquires the rate-limit attempt gate, so this wrapper must NOT also
     // acquire it (that would deadlock the per-wallet gate).
@@ -492,14 +490,46 @@ pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64,
         "passwordHash": backup.password_hash,
         "exportedAt": backup.exported_at,
     }))?;
+    write_backup_zip(&json)
+}
 
-    let buf = Cursor::new(Vec::new());
-    let mut zip = zip::ZipWriter::new(buf);
+/// Wraps the backup JSON in a single-entry Deflated `.zip`.
+///
+/// Split out of the command so the archive shape (entry name, compression)
+/// can be pinned by a round-trip test without an `AppState`.
+fn write_backup_zip(json: &[u8]) -> Result<Vec<u8>, AppError> {
+    use std::io::{Cursor, Write};
+
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(BACKUP_ZIP_ENTRY, options)?;
-    zip.write_all(&json)?;
+    zip.write_all(json)?;
     let cursor = zip.finish()?;
     Ok(cursor.into_inner())
+}
+
+/// Reads the `wallet-backup.json` entry out of a backup `.zip`, capped at
+/// [`MAX_BACKUP_JSON_BYTES`].
+fn read_backup_zip_entry(zip_bytes: Vec<u8>) -> Result<Vec<u8>, AppError> {
+    use std::io::{Cursor, Read};
+
+    let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes))?;
+    let mut entry = archive
+        .by_name(BACKUP_ZIP_ENTRY)
+        .map_err(|_| AppError::Validation(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
+    // Reject an entry whose declared size is already oversized (cheap,
+    // header-based), then read with a hard cap so a lying header can't make us
+    // allocate/read unbounded memory. `Vec::with_capacity` is intentionally NOT
+    // sized from the attacker-controlled `entry.size()`.
+    if entry.size() > MAX_BACKUP_JSON_BYTES {
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
+    }
+    let mut json_bytes = Vec::new();
+    (&mut entry).take(MAX_BACKUP_JSON_BYTES + 1).read_to_end(&mut json_bytes)?;
+    if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
+        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
+    }
+    Ok(json_bytes)
 }
 
 /// Import a wallet from a `.zip` archive produced by
@@ -518,33 +548,12 @@ pub async fn local_wallet_import_encrypted_backup_from_zip(
     zip_bytes: Vec<u8>,
     password: String,
 ) -> Result<PublicLocalWallet, AppError> {
-    use std::io::{Cursor, Read};
-
     let password = Zeroizing::new(password);
     if name.trim().is_empty() {
         return Err(AppError::Validation("Wallet name is required".into()));
     }
 
-    let reader = Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader)?;
-
-    let mut entry = archive
-        .by_name(BACKUP_ZIP_ENTRY)
-        .map_err(|_| AppError::Validation(format!("Backup zip is missing `{BACKUP_ZIP_ENTRY}`")))?;
-    // Reject an entry whose declared size is already oversized (cheap,
-    // header-based), then read with a hard cap so a lying header can't make us
-    // allocate/read unbounded memory. `Vec::with_capacity` is intentionally NOT
-    // sized from the attacker-controlled `entry.size()`.
-    if entry.size() > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
-    }
-    let mut json_bytes = Vec::new();
-    (&mut entry).take(MAX_BACKUP_JSON_BYTES + 1).read_to_end(&mut json_bytes)?;
-    drop(entry);
-    if json_bytes.len() as u64 > MAX_BACKUP_JSON_BYTES {
-        return Err(AppError::Validation("Backup entry is unexpectedly large".into()));
-    }
-
+    let json_bytes = read_backup_zip_entry(zip_bytes)?;
     let parsed: serde_json::Value = serde_json::from_slice(&json_bytes)?;
     let address = parsed
         .get("address")
@@ -652,5 +661,63 @@ mod tests {
         // A non-ASCII-alphanumeric char satisfies the "special" rule, matching
         // the FE regex `[^A-Za-z0-9]`.
         assert!(validate_new_password("Abcdefg1€").is_ok());
+    }
+
+    // ── backup zip ──────────────────────────────────────────────────
+
+    /// Writes a one-entry Stored zip, for archives the real writer would never produce.
+    fn zip_with_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        zip.start_file(name, options).expect("start entry");
+        zip.write_all(bytes).expect("write entry");
+        zip.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn backup_zip_round_trips_one_deflated_entry() {
+        use std::io::{Cursor, Read};
+
+        let json = br#"{"version":2,"address":"5Grw","encryptedMnemonic":"abc"}"#;
+        let bytes = write_backup_zip(json).unwrap();
+
+        // The archive shape is what older app versions and the v1 frontend
+        // read back, so pin it: one entry, its name, Deflated, default mode.
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
+        assert_eq!(archive.len(), 1);
+        let mut entry = archive.by_index(0).unwrap();
+        assert_eq!(entry.name(), BACKUP_ZIP_ENTRY);
+        assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
+        assert_eq!(entry.unix_mode(), Some(0o100_644));
+        assert!(!entry.encrypted());
+        let mut raw = Vec::new();
+        entry.read_to_end(&mut raw).unwrap();
+        assert_eq!(raw, json);
+        drop(entry);
+
+        assert_eq!(read_backup_zip_entry(bytes).unwrap(), json);
+    }
+
+    #[test]
+    fn backup_zip_without_the_entry_is_refused() {
+        let bytes = zip_with_entry("other.json", b"{}");
+        let err = read_backup_zip_entry(bytes).unwrap_err();
+        assert!(matches!(err, AppError::Validation(m) if m.contains(BACKUP_ZIP_ENTRY)));
+    }
+
+    #[test]
+    fn backup_zip_with_an_oversized_entry_is_refused() {
+        let cap = usize::try_from(MAX_BACKUP_JSON_BYTES).unwrap();
+        let bytes = zip_with_entry(BACKUP_ZIP_ENTRY, &vec![b'x'; cap + 1]);
+        let err = read_backup_zip_entry(bytes).unwrap_err();
+        assert!(matches!(err, AppError::Validation(m) if m.contains("unexpectedly large")));
+    }
+
+    #[test]
+    fn backup_zip_that_is_not_a_zip_is_a_zip_error() {
+        let err = read_backup_zip_entry(b"not a zip".to_vec()).unwrap_err();
+        assert!(matches!(err, AppError::Zip(_)), "got {err:?}");
     }
 }

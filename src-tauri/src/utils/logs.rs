@@ -778,12 +778,19 @@ mod tests {
         assert!(archive.len() >= 2, "expected both log files zipped, got {}", archive.len());
 
         let mut combined = String::new();
+        let mut names = Vec::new();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
+            // Support reads these bundles with stock tools: entries keep the
+            // log file's own name and are Deflated.
+            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{}", entry.name());
+            names.push(entry.name().to_owned());
             let mut contents = String::new();
             entry.read_to_string(&mut contents).expect("read entry");
             combined.push_str(&contents);
         }
+        assert!(names.iter().any(|n| n == "hippius.2026-06-08.log"), "names: {names:?}");
+        assert!(names.iter().any(|n| n == "hippius.2026-06-07.log"), "names: {names:?}");
         assert!(!combined.contains("abandon"), "mnemonic leaked into zip: {combined}");
         assert!(combined.contains("[REDACTED_MNEMONIC]"), "redaction missing from zip: {combined}");
     }

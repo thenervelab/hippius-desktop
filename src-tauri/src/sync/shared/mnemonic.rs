@@ -681,24 +681,34 @@ pub async fn create_encrypted_backup(mnemonic: String, password: String, output_
     let mnemonic = Zeroizing::new(mnemonic);
     let password = Zeroizing::new(password);
 
-    let buf = Cursor::new(Vec::new());
-    let mut zip = zip::ZipWriter::new(buf);
+    let archive = encrypted_backup_zip(&mnemonic, &password)?;
+    std::fs::write(&output_path, archive)?;
 
+    // `mnemonic` and `password` are zeroized here via Drop, even on panic unwind.
+    Ok(())
+}
+
+/// Entry name of the recovery phrase inside the encrypted backup `.zip`.
+const RECOVERY_PHRASE_ENTRY: &str = "recovery-phrase.txt";
+
+/// Builds the AES-256, Deflated, single-entry `.zip` holding `mnemonic`.
+///
+/// Split out of [`create_encrypted_backup`] so the archive shape can be
+/// pinned by a round-trip test without touching the filesystem.
+fn encrypted_backup_zip(mnemonic: &str, password: &str) -> Result<Vec<u8>> {
+    let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let options = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
-        .with_aes_encryption(zip::AesMode::Aes256, &password);
+        .with_aes_encryption(zip::AesMode::Aes256, password);
 
     // `ZipError` flows through `?` via `AppError::Zip(#[from] …)`, preserving
     // its `source()` chain and surfacing as a stable `kind: "Zip"` to the FE —
     // the `.to_string()` collapse into `Other` discarded both.
-    zip.start_file("recovery-phrase.txt", options)?;
+    zip.start_file(RECOVERY_PHRASE_ENTRY, options)?;
     zip.write_all(mnemonic.as_bytes())?;
 
     let cursor = zip.finish()?;
-    std::fs::write(&output_path, cursor.into_inner())?;
-
-    // `mnemonic` and `password` are zeroized here via Drop, even on panic unwind.
-    Ok(())
+    Ok(cursor.into_inner())
 }
 
 /// Re-derive and re-encrypt every sync-folder's `enc_mnemonic.json` under
@@ -898,6 +908,39 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
 )]
 mod tests {
     use super::*;
+
+    // ── encrypted_backup_zip ────────────────────────────────────────
+
+    #[test]
+    fn encrypted_backup_zip_round_trips_with_the_password() {
+        use std::io::Read;
+
+        let mnemonic = "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let bytes = encrypted_backup_zip(mnemonic, "correct horse").unwrap();
+
+        // Users open this file in a stock unzip tool, so the shape is the
+        // contract: one AES-encrypted Deflated entry with this exact name.
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.name_for_index(0), Some(RECOVERY_PHRASE_ENTRY));
+
+        let mut entry = archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"correct horse").unwrap();
+        assert!(entry.encrypted());
+        assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
+        assert_eq!(entry.unix_mode(), Some(0o100_644));
+        let mut raw = String::new();
+        entry.read_to_string(&mut raw).unwrap();
+        assert_eq!(raw, mnemonic);
+    }
+
+    #[test]
+    fn encrypted_backup_zip_refuses_the_wrong_password_and_plain_reads() {
+        let bytes = encrypted_backup_zip("abandon ability able", "correct horse").unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+
+        assert!(archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"wrong").is_err());
+        assert!(archive.by_name(RECOVERY_PHRASE_ENTRY).is_err());
+    }
 
     // ── folder_hash ─────────────────────────────────────────────────
 

@@ -464,6 +464,37 @@ mod tests {
         );
     }
 
+    /// Entries carry the crate's default modes, not the source file's: the
+    /// pack never copies on-disk permissions, so a setuid or world-writable
+    /// file cannot hand those bits to whoever extracts the download.
+    #[test]
+    fn entries_carry_default_unix_modes() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("a.txt"), b"alpha").expect("write a");
+        fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path().join("a.txt"), fs::Permissions::from_mode(0o777)).expect("chmod");
+        }
+
+        let out = TempDir::new().expect("out tempdir");
+        let zip_path = out.path().join("out.zip");
+        zip_folder_store_only(dir.path(), &zip_path).expect("zip");
+        let file = fs::File::open(&zip_path).expect("open zip");
+        let mut archive = ZipArchive::new(file).expect("read archive");
+
+        let modes: BTreeMap<String, Option<u32>> = (0..archive.len())
+            .map(|i| {
+                let entry = archive.by_index(i).expect("entry");
+                (entry.name().to_owned(), entry.unix_mode())
+            })
+            .collect();
+
+        assert_eq!(modes["a.txt"], Some(0o100_644), "{modes:?}");
+        assert_eq!(modes["sub/"], Some(0o040_755), "{modes:?}");
+    }
+
     /// A symlink must be skipped: its target could be outside the zipped
     /// tree (a data-exfil escape) and a self-referential link would loop
     /// the walk.
