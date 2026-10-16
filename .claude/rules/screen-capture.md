@@ -5,6 +5,7 @@ paths:
   - "app/capture-controls/**"
   - "app/capture-camera/**"
   - "app/capture-bubble-controls/**"
+  - "app/capture-pill-tip/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
   - "app/components/page-sections/settings/EditedImageSetting.tsx"
@@ -689,9 +690,11 @@ bubble is live (no load wait on the first hover), level 1002 above the
 bubble on macOS, `focused(false)` + `accept_first_mouse(true)`, destroyed
 by `end_camera` and when the camera window goes. It calls only the pill's
 commands (`capture_camera_set_size`, `capture_pause` / `capture_resume`),
-mirrors Rust's phase (by `seq`) and camera state, names the hovered button in
-its own `role="tooltip"` line (no native `title`: a system tooltip is a
-window), and is one Tab stop with arrow keys. Pinned by
+mirrors Rust's phase (by `seq`) and camera state, names the button under
+Rust's pointer (`capture_bubble_controls_pointer`, from the same watch; the
+window is never key, so `mouseenter` never fired) in its own
+`role="tooltip"` line (no native `title`: a system tooltip is a window), and
+is one Tab stop with arrow keys. Pinned by
 `bubble_controls::tests`, `bubbleControlsPage.test.tsx` and
 `capture_wiring::the_bubble_controls_are_never_filmed`. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
@@ -1262,8 +1265,27 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   distinct from `BarTooltip.tsx`: `barTooltip.ts` resolved as the component
   on a case-insensitive disk. Pinned by `overlayPage.test.tsx` and
   `tooltipPlacement.test.ts`.
+- **Pill hover comes from Rust: the pill is never key.** WebKit gives hover
+  only to the key window, so its buttons got no `:hover`, no pointer events
+  and no native `title`. `spawn_pill_hover_watch` (50 ms, macOS and Windows)
+  sends `capture_pill_pointer` (the point on the pill's row,
+  `pill_hover::pointer_on_row`; none while a menu is open); `usePillTips`
+  hit-tests it (`rustHover::markedAt`), sets `data-hover` and calls
+  `capture_pill_tip`. The tooltip is the window `capture-pill-tip`
+  (`pill_hover::tip_frame`: the row plus `TIP_ROOM` above, below near the top
+  of the work area), ignoring the mouse, unfocusable, level 1003,
+  `OwnWindow::PillTip` (kept out like the pill), shown only while a tooltip
+  is; the watch hides it when the pointer leaves. Placing waits on the main
+  thread, so `sync_pill_tip` never does it under the `pill_tip` lock. No
+  `title` on the pill. Linux has none (`pill_hover::supported`: filmed).
+  The bubble's controls (`capture_bubble_controls_pointer`) and the card
+  (`capture_preview_pointer`, polled whenever it is up) find hover the same
+  way, with no `title` either. Pinned by `pill_hover::tests`,
+  `controlsPage.test.tsx`, `pillTipPage.test.tsx` and
+  `capture_wiring::the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
-  `capture-camera.json`, `capture-bubble-controls.json`) must match
+  `capture-camera.json`, `capture-bubble-controls.json`,
+  `capture-pill-tip.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.

@@ -76,15 +76,37 @@ describe("the camera bubble's controls", () => {
     await waitFor(() => expect(called("capture_resume")).toBe(true));
   });
 
-  it("names the button under the pointer in its own line, never a native title", async () => {
+  // The controls' window is never key, so no hover event reaches it on
+  // macOS: Rust says where the pointer is on the window and the page finds the
+  // button there (the hit test, which jsdom lacks, is stood in for).
+  it("names the button under Rust's pointer in its own line, never a native title", async () => {
     setup(recording());
     const pause = await screen.findByRole("button", { name: "Pause recording" });
-    fireEvent.mouseEnter(pause);
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Pause recording");
-    // The line follows the button's label as it changes under the pointer.
-    await act(() => tauri.emitEvent("capture_state_changed", paused(2)));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("Resume recording");
-    expect(document.querySelector("[title]")).toBeNull();
+    const hits: [number, number][] = [];
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: (x: number, y: number) => {
+        hits.push([x, y]);
+        return pause.querySelector("svg") ?? pause;
+      },
+    });
+    try {
+      await act(() => tauri.emitEvent("capture_bubble_controls_pointer", { x: 120, y: 40 }));
+      // The window's own point: the controls' page is their whole window.
+      expect(hits.at(-1)).toEqual([120, 40]);
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Pause recording");
+      expect(pause).toHaveAttribute("data-hover", "true");
+      // The line follows the button's label as it changes under the pointer.
+      await act(() => tauri.emitEvent("capture_state_changed", paused(2)));
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Resume recording");
+      // The pointer leaves: nothing is named.
+      await act(() => tauri.emitEvent("capture_bubble_controls_pointer", null));
+      expect(document.getElementById("bubble-controls-tip")?.textContent).toBe("");
+      expect(screen.getByRole("button", { name: "Resume recording" })).not.toHaveAttribute("data-hover");
+      expect(document.querySelector("[title]")).toBeNull();
+    } finally {
+      delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+    }
   });
 
   it("is one Tab stop, and the arrow keys move along it", async () => {

@@ -34,6 +34,7 @@ pub mod overlay_panel;
 pub mod own_windows;
 pub mod permission_flow;
 pub mod permissions;
+pub mod pill_hover;
 pub mod poster;
 pub mod preview;
 pub mod privacy;

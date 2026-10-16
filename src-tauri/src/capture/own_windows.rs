@@ -58,6 +58,9 @@ pub enum OwnWindow {
     /// The camera bubble's controls, over the bubble mid-recording
     /// (`bubble_controls`). The bubble itself is filmed; these never are.
     BubbleControls,
+    /// The pill's tooltip, in a window of its own over the pill
+    /// (`pill_hover`). Never filmed, like the pill.
+    PillTip,
     /// The preview card in the corner.
     Card,
     /// The tray popover, opened during a recording (`recording`) or not.
@@ -73,7 +76,7 @@ pub const fn content_protected(platform: Platform, window: OwnWindow) -> bool {
     match window {
         // On screen while a screenshot is read, on every platform.
         OwnWindow::Overlay => true,
-        OwnWindow::Pill | OwnWindow::BubbleControls | OwnWindow::Card => !recorder_leaves_app_out(platform),
+        OwnWindow::Pill | OwnWindow::BubbleControls | OwnWindow::PillTip | OwnWindow::Card => !recorder_leaves_app_out(platform),
         OwnWindow::TrayPopover { recording } => recording && !recorder_leaves_app_out(platform),
     }
 }
@@ -346,6 +349,7 @@ mod tests {
         assert!(content_protected(Platform::MacOs, OwnWindow::Overlay));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Pill));
         assert!(!content_protected(Platform::MacOs, OwnWindow::BubbleControls));
+        assert!(!content_protected(Platform::MacOs, OwnWindow::PillTip));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Card));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: true }));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: false }));
@@ -361,6 +365,7 @@ mod tests {
             OwnWindow::Overlay,
             OwnWindow::Pill,
             OwnWindow::BubbleControls,
+            OwnWindow::PillTip,
             OwnWindow::Card,
             OwnWindow::TrayPopover { recording: true },
         ] {

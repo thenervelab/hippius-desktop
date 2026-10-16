@@ -698,10 +698,71 @@ export interface CaptureControlsContext {
    * pill; at 0 the page is the window's own size and grows with it.
    */
   menuRoom: number;
+  /**
+   * Whether the pill shows tooltips (Rust's `pill_hover::supported`): false
+   * where the pill is filmed (Linux), since a tooltip would be filmed too.
+   */
+  tips?: boolean;
+  /** The shortcut that stops the recording (a Tauri accelerator), for Stop's tooltip. */
+  stopShortcut?: string | null;
 }
 
 export function getCaptureControlsContext(): Promise<CaptureControlsContext> {
   return invoke("capture_controls_context");
+}
+
+/**
+ * A point in a window from Rust's pointer watch, in points from the top left
+ * of what it is measured against (the pill's row; the bubble controls'
+ * window). Mirrors Rust's `pill_hover::WindowPoint`. These windows are never
+ * key, so their webview gets no hover of its own on macOS.
+ */
+export interface CaptureWindowPoint {
+  x: number;
+  y: number;
+}
+
+/** To the pill: where the pointer is on its row, or null once it left. */
+export const PILL_POINTER_EVENT = "capture_pill_pointer";
+
+/** To the bubble's controls: where the pointer is on their window, or null. */
+export const BUBBLE_CONTROLS_POINTER_EVENT = "capture_bubble_controls_pointer";
+
+/** A box in a window's CSS pixels. Mirrors Rust's `pill_hover::TipBox`. */
+export interface CaptureTipBox {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** The pill's tooltip as the pill asks for it. Mirrors Rust's `pill_hover::TipRequest`. */
+export interface CapturePillTipRequest {
+  label: string;
+  detail?: string;
+  /** The button's box, relative to the pill's row. */
+  anchor: CaptureTipBox;
+  /** From the pointer (shown only while it is on the pill) or from keyboard focus. */
+  fromPointer: boolean;
+}
+
+/** Name the pill button under the pointer or focus (null: none); Rust shows it over the pill. */
+export function setCapturePillTip(tip: CapturePillTipRequest | null): Promise<void> {
+  return invoke("capture_pill_tip", { tip });
+}
+
+/** What the pill's tooltip window draws. Mirrors Rust's `pill_hover::TipShown`. */
+export interface CapturePillTipShown {
+  seq: number;
+  tip: { label: string; detail: string | null; anchor: CaptureTipBox } | null;
+}
+
+/** To the pill's tooltip window: what to show now. */
+export const PILL_TIP_EVENT = "capture_pill_tip";
+
+/** What the pill's tooltip window shows now, for its page to start from. */
+export function getCapturePillTipNow(): Promise<CapturePillTipShown> {
+  return invoke("capture_pill_tip_now");
 }
 
 /**
