@@ -297,6 +297,11 @@
         "cleaned": "Eve"
       },
       {
+        "label": "overrides inside a name do not push text past the limit",
+        "name": "a\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202eb",
+        "cleaned": "ab"
+      },
+      {
         "label": "a cut at a space does not end in it",
         "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
         "cleaned": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

@@ -232,9 +232,11 @@ fn is_js_whitespace(c: char) -> bool {
 /// The bidi embedding, override and isolate controls (U+202A-U+202E,
 /// U+2066-U+2069). Inside a name they reorder it: U+202E before "Eve" shows
 /// "evE", so a viewer could make their name read as someone else's. The
-/// marks (LRM U+200E, RLM U+200F, ALM U+061C) are not in this set: they only
-/// nudge neutral characters, and mixed-direction names need them. Same set as
-/// the console's `BIDI_CONTROLS` (`comment-crypto.ts`).
+/// marks (LRM U+200E, RLM U+200F, ALM U+061C) are not in this set: they can
+/// reorder digits and punctuation next to them but never letters, and
+/// mixed-direction names need them. The UI isolates each name (`<bdi>`) so a
+/// mark cannot reach the text after it. Same set as the console's
+/// `BIDI_CONTROLS` (`comment-crypto.ts`).
 fn is_bidi_control(c: char) -> bool {
     matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
@@ -269,10 +271,10 @@ fn shown_char(c: char) -> Option<char> {
 /// Stripped of bidi controls, trimmed, cut to [`MAX_NAME_CHARS`] and trimmed
 /// at the end exactly as the console does, then judged blank on what is left,
 /// so visible text past the limit cannot keep an otherwise invisible name
-/// alive. Stripping comes first so a name of only overrides is blank and an
-/// override cannot shield spaces from the trim or use up the limit. A visible
-/// name is kept as typed, except that [`is_display_unsafe`] characters are
-/// replaced by [`shown_char`] and the result is trimmed again.
+/// alive. Stripping comes first so an override cannot shield spaces from the
+/// trim or use up the limit. A visible name is kept as typed, except that
+/// [`is_display_unsafe`] characters are replaced by [`shown_char`] and the
+/// result is trimmed again.
 fn clean_name(name: Option<&str>) -> Option<String> {
     let stripped = strip_bidi_controls(name?);
     let kept: String = stripped.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
@@ -606,8 +608,8 @@ mod tests {
 
     proptest! {
         /// Whatever a viewer sends, a shown name has something visible in it,
-        /// fits the limit, has no outer whitespace and nothing that reorders
-        /// or garbles the row.
+        /// fits the limit, and has no outer whitespace, control character,
+        /// line separator or bidi control.
         #[test]
         fn a_shown_name_is_never_blank_or_unsafe(name in prop_oneof![any::<String>(), mixed_name()]) {
             if let Some(shown) = clean_name(Some(&name)) {

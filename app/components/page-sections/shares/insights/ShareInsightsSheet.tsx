@@ -257,7 +257,9 @@ function ViewerList({ viewers }: { viewers: InsightsViewer[] }) {
           {viewers.map((v) => (
             <li key={v.viewerId} className="flex items-center justify-between gap-3 py-2">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-grey-10 dark:text-white">{viewerName(v.name)}</p>
+                <p className="truncate text-sm font-medium text-grey-10 dark:text-white">
+                  <bdi>{viewerName(v.name)}</bdi>
+                </p>
                 <p className="text-xs text-grey-50 dark:text-grey-dark-600">{viewerSummary(v)}</p>
               </div>
               {v.lastViewedAt && (
@@ -353,7 +355,7 @@ function CommentRow({
     <li className="flex items-start justify-between gap-3 py-2">
       <div className="min-w-0 flex-1">
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          <span className="font-medium text-grey-20 dark:text-grey-dark-800">{viewerName(comment.name)}</span>
+          <bdi className="font-medium text-grey-20 dark:text-grey-dark-800">{viewerName(comment.name)}</bdi>
           {meta ? ` · ${meta}` : null}
         </p>
         {comment.text !== null ? (
