@@ -1272,10 +1272,12 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `pill_hover::pointer_on_row`; none while a menu is open); `usePillTips`
   hit-tests it (`rustHover::markedAt`), sets `data-hover` and calls
   `capture_pill_tip`. The tooltip is the window `capture-pill-tip`
-  (`pill_hover::tip_frame`: the row plus `TIP_ROOM` above, below near the top
-  of the work area), ignoring the mouse, unfocusable, level 1003,
+  (`pill_hover::tip_frame`: `TIP_ROOM` tall on top of the pill's glass, below
+  it near the top of the work area, NEVER over the glass, so it cannot take a
+  button's click; it ignores the mouse on macOS only, since tao's Windows
+  click-through makes the window layered), unfocusable, level 1003,
   `OwnWindow::PillTip` (kept out like the pill), shown only while a tooltip
-  is; the watch hides it when the pointer leaves. Placing waits on the main
+  is; the watch hides it when the pointer leaves the pill. Placing waits on the main
   thread, so `sync_pill_tip` never does it under the `pill_tip` lock. No
   `title` on the pill. Linux has none (`pill_hover::supported`: filmed).
   The bubble's controls (`capture_bubble_controls_pointer`) and the card
