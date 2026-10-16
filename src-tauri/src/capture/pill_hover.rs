@@ -19,12 +19,14 @@
 //! by its edge; growing the window for a tooltip would move the pill on
 //! Windows (its page grows with the window) and leave a transparent band
 //! taking clicks from the app under it. So the tooltip is drawn in
-//! `capture-pill-tip`, a window over the pill's row and the room above it
-//! (below it near the top of the usable area, [`tip_frame`]) that ignores the
-//! mouse: every click goes through it to the pill or the app underneath. It
-//! is shown only while a tooltip is, and is left out of the recording like
-//! the pill: the macOS helper leaves out every Hippius window it is not told
-//! to film, and Windows protects it (`own_windows::content_protected`).
+//! `capture-pill-tip`, a window in the room just above the pill (below it
+//! near the top of the usable area, [`tip_frame`]). It never covers the
+//! pill's glass, so it can never take a click meant for a button, and it is
+//! up only while the pointer is on the pill, so it never takes one meant for
+//! the app under it either; on macOS it also ignores the mouse. It is left
+//! out of the recording like the pill: the macOS helper leaves out every
+//! Hippius window it is not told to film, and Windows protects it
+//! (`own_windows::content_protected`).
 //!
 //! **Linux has none** ([`supported`]): the pill is filmed there, and a
 //! tooltip would be in the video with it. The buttons keep their names for
@@ -38,9 +40,14 @@ use super::live_controls::pill_without_menu;
 use super::rollout::Platform;
 use super::support::pill_filmed;
 
-/// The room the tooltip window keeps beside the pill's row for the tooltip,
-/// in points: two lines of the tooltip (46 pt) and the gap above the button.
+/// The tooltip window's height, in points: two lines of the tooltip (46 pt)
+/// and the gap between it and the pill.
 pub const TIP_ROOM: f64 = 56.0;
+
+/// The transparent band between the pill window's edge and the pill's glass,
+/// in points (the 60 pt row holds the 42 pt pill in its middle). The tooltip
+/// window may lie over it, never over the glass.
+pub const ROW_MARGIN: f64 = 9.0;
 
 /// The longest label or detail line a tooltip carries; longer text from the
 /// page is cut, so the tooltip window never holds a paragraph.
@@ -106,18 +113,24 @@ pub fn pointer_changed(before: Option<WindowPoint>, now: Option<WindowPoint>) ->
     }
 }
 
-/// The tooltip window's frame for the pill's `row`: the row and [`TIP_ROOM`]
-/// above it, or below it where the room above would leave the usable area
-/// (`work`, the pill dragged to the top of the screen). As wide as the row,
-/// so a tooltip kept inside it is never wider than the pill's span.
+/// The tooltip window's frame for the pill's `row`: [`TIP_ROOM`] tall, its
+/// bottom on the top of the pill's glass (over the row's transparent band,
+/// [`ROW_MARGIN`]), or below the pill the same way where the room above
+/// would leave the usable area (`work`, the pill dragged to the top of the
+/// screen). As wide as the row, so a tooltip kept inside it is never wider
+/// than the pill's span.
 #[must_use]
 pub fn tip_frame(row: Frame, work: Frame) -> Frame {
-    let above = row.y - TIP_ROOM >= work.y;
+    let above = row.y + ROW_MARGIN - TIP_ROOM >= work.y;
     Frame {
         x: row.x,
-        y: if above { row.y - TIP_ROOM } else { row.y },
+        y: if above {
+            row.y + ROW_MARGIN - TIP_ROOM
+        } else {
+            row.y + row.height - ROW_MARGIN
+        },
         width: row.width,
-        height: row.height + TIP_ROOM,
+        height: TIP_ROOM,
     }
 }
 
@@ -286,22 +299,44 @@ mod tests {
         assert!(pointer_changed(at(10.0), at(11.0)));
     }
 
-    /// The tooltip goes above the pill, in a window as wide as the pill's that
-    /// covers the row too, so the tooltip sits just above the button.
+    /// The pill's glass: the row less its transparent band above and below.
+    fn glass(row: Frame) -> Frame {
+        Frame {
+            y: row.y + ROW_MARGIN,
+            height: row.height - 2.0 * ROW_MARGIN,
+            ..row
+        }
+    }
+
+    fn overlaps(a: Frame, b: Frame) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    /// The tooltip goes just above the pill, in a window as wide as the
+    /// pill's, its bottom on the top of the glass.
     #[test]
-    fn the_tooltip_window_is_over_the_row_and_the_room_above_it() {
+    fn the_tooltip_window_sits_on_top_of_the_pill() {
         let tip = tip_frame(ROW, WORK);
         assert_eq!(
             tip,
             Frame {
                 x: ROW.x,
-                y: ROW.y - TIP_ROOM,
+                y: ROW.y + ROW_MARGIN - TIP_ROOM,
                 width: ROW.width,
-                height: ROW.height + TIP_ROOM,
+                height: TIP_ROOM,
             }
         );
-        // The row is the bottom of the tooltip window.
-        assert!((tip.y + tip.height - (ROW.y + ROW.height)).abs() < f64::EPSILON);
+        assert!((tip.y + tip.height - glass(ROW).y).abs() < f64::EPSILON);
+    }
+
+    /// A click on the pill's glass (every button) never lands on the tooltip
+    /// window, wherever it goes: it does not rely on the window ignoring the
+    /// mouse.
+    #[test]
+    fn the_tooltip_window_never_covers_the_pill() {
+        for row in [ROW, Frame { y: WORK.y, ..ROW }, Frame { y: WORK.y + 30.0, ..ROW }] {
+            assert!(!overlaps(tip_frame(row, WORK), glass(row)), "{row:?}");
+        }
     }
 
     /// Dragged to the top of the screen, the room above would be under the
@@ -310,10 +345,13 @@ mod tests {
     fn near_the_top_of_the_screen_the_tooltip_window_is_below_the_pill() {
         let high = Frame { y: WORK.y + 10.0, ..ROW };
         let tip = tip_frame(high, WORK);
-        assert!((tip.y - high.y).abs() < f64::EPSILON);
-        assert!((tip.height - (high.height + TIP_ROOM)).abs() < f64::EPSILON);
+        assert!((tip.y - (glass(high).y + glass(high).height)).abs() < f64::EPSILON);
+        assert!((tip.height - TIP_ROOM).abs() < f64::EPSILON);
         // Exactly enough room still goes above.
-        let just = Frame { y: WORK.y + TIP_ROOM, ..ROW };
+        let just = Frame {
+            y: WORK.y + TIP_ROOM - ROW_MARGIN,
+            ..ROW
+        };
         assert!((tip_frame(just, WORK).y - WORK.y).abs() < f64::EPSILON);
     }
 
@@ -333,16 +371,20 @@ mod tests {
             a,
             TipBox {
                 left: 290.0,
-                top: 16.0 + TIP_ROOM,
+                top: 16.0 + TIP_ROOM - ROW_MARGIN,
                 width: 28.0,
                 height: 28.0,
             }
         );
-        // Same screen point either way.
+        // The same screen point: below the tooltip window's bottom, so the
+        // tooltip page places the tooltip above it.
         assert!((above.y + a.top - (ROW.y + stop.top)).abs() < f64::EPSILON);
+        assert!(a.top > TIP_ROOM);
         let high = Frame { y: WORK.y, ..ROW };
         let below = tip_frame(high, WORK);
-        assert_eq!(anchor_in_tip(stop, high, below), stop);
+        let b = anchor_in_tip(stop, high, below);
+        assert!((below.y + b.top - (high.y + stop.top)).abs() < f64::EPSILON);
+        assert!(b.top + b.height < 0.0, "above the window: the tooltip goes under it");
     }
 
     #[test]

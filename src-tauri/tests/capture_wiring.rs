@@ -2213,8 +2213,9 @@ fn the_bubble_controls_are_never_filmed() {
 /// pill's buttons never saw the pointer and their native `title` tooltips
 /// never showed. Its hover comes from Rust's pointer watch, and its tooltip is
 /// a window of its own: the pill's window is only as tall as the pill. That
-/// window ignores the mouse (a click always reaches the pill or the app under
-/// it), is never focused, and is left out of the recording like the pill.
+/// window never covers the pill and is up only while the pointer is on it (a
+/// click always reaches the pill or the app under it), is never focused, and
+/// is left out of the recording like the pill.
 #[test]
 fn the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way() {
     let src = read("src/capture/commands.rs");
@@ -2245,7 +2246,10 @@ fn the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way
         tip.contains(".focused(false)") && tip.contains(".focusable(false)"),
         "it never takes the keyboard"
     );
-    assert!(tip.contains("set_ignore_cursor_events(true)"), "every click goes through it");
+    assert!(
+        tip.contains("#[cfg(target_os = \"macos\")]\n            let _ = window.set_ignore_cursor_events(true);"),
+        "clicks go through it on macOS (it never covers the pill anywhere: pill_hover::tip_frame)"
+    );
     assert!(fn_body(&src, "fn close_controls(").contains("close_pill_tip(app)"));
     assert!(fn_body(&src, "fn hide_controls(").contains("hide_pill_tip(app)"));
 

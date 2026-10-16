@@ -8,18 +8,19 @@ import { TIP_BOX, TipLines } from "@/app/capture-overlay/BarTooltip";
 import { placeTooltip } from "@/app/capture-overlay/tooltipPlacement";
 
 /**
- * The recording pill's tooltip, in a window of its own over the pill.
+ * The recording pill's tooltip, in a window of its own beside the pill.
  *
  * The pill's window is only as tall as the pill, so a tooltip drawn in it
- * above a button would be cut off. Rust puts this window over the pill's row
- * and the room above it (below it near the top of the screen), shows it
- * while the pill asks for a tooltip (`capture_pill_tip`) and hides it when
- * the pointer leaves. It ignores the mouse, so every click goes through it
- * to the pill or the app underneath, it never takes the keyboard, and the
+ * above a button would be cut off. Rust puts this window just above the
+ * pill (below it near the top of the screen), never over its glass, shows it
+ * while the pill asks for a tooltip (`capture_pill_tip`) and hides it the
+ * moment the pointer leaves the pill, so it never takes a click meant for
+ * the pill or the app underneath. It never takes the keyboard, and the
  * recording leaves it out like the pill.
  *
  * The page decides nothing: it draws the text Rust sends against the
- * button's box (already in this window's pixels), placed the way the capture
+ * button's box (already in this window's pixels, so below this window's
+ * bottom edge when it sits above the pill), placed the way the capture
  * bar places its own tooltip (`placeTooltip`: above the button, kept inside
  * the window), in the bar's glass, so both read as one tooltip.
  */

@@ -2028,9 +2028,10 @@ fn close_pill_tip(app: &AppHandle) {
 
 /// The pill's tooltip window, built hidden on first need (with the pill, so
 /// the first tooltip does not wait for a webview to load). It never takes a
-/// click or the keyboard: it ignores the mouse, so a click on the pill or on
-/// the app beside it goes through, and it cannot be focused. Above the pill
-/// and the bubble on macOS, and left out of the recording like the pill.
+/// click or the keyboard: it sits beside the pill, never over its glass, is
+/// up only while the pointer is on the pill, ignores the mouse on macOS, and
+/// cannot be focused. Above the pill and the bubble on macOS, and left out of
+/// the recording like the pill.
 fn pill_tip_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -2053,12 +2054,17 @@ fn pill_tip_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         ))
         .focused(false)
         .focusable(false)
-        .inner_size(CONTROLS_WIDTH, CONTROLS_HEIGHT + super::pill_hover::TIP_ROOM)
+        .inner_size(CONTROLS_WIDTH, super::pill_hover::TIP_ROOM)
         .visible(false)
         .build();
     match built {
         Ok(window) => {
-            // Every click goes through it, to the pill or the app under it.
+            // It never covers the pill (`pill_hover::tip_frame`) and is up
+            // only while the pointer is on the pill; on macOS it lets clicks
+            // through as well. Not on Windows: tao does that there by making
+            // the window layered, not proven with a transparent WebView2
+            // window, and the frame alone keeps it out of the way.
+            #[cfg(target_os = "macos")]
             let _ = window.set_ignore_cursor_events(true);
             raise_pill_tip(&window);
             Some(window)
