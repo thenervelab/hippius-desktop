@@ -404,7 +404,36 @@ and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
-the bar's overlay takes focus. The frontmost app (pid) is remembered and
+the bar's overlay takes the keyboard, and only once every overlay is up
+(`focus_overlays` at the end of `open_capture_ui`); the overlays are shown
+per `own_windows::overlay_show`, without focus on macOS (the bar's too) and
+Windows (the others), a display plugged in mid-choice too. **On macOS the
+overlays are non-activating panels** (`overlay_panel.rs`,
+`own_windows::overlay_is_panel`): WebKit gives hover, mouse moves and keys
+only to the key window, and an ordinary window is key only while Hippius is
+the active app, so whenever the user's app was in front (the shortcut, the
+tray, a click or gesture that reached another app while choosing) the bar
+had no tooltips, no lit window and no Escape until it was clicked. A panel
+is key without activating Hippius; every hand-over of the keyboard to the
+bar is `overlay_panel::make_key`, never `set_focus` (which activates): once
+all are up, on a bar move, when the bar's page has loaded
+(`capture_overlay_context`), and from the bar-follow watch when another app
+took the keyboard and the pointer is on an overlay (`should_rekey`; never
+from another Hippius window or a prompt above the overlays). The panel is
+made by swapping the built window's class (`make_panel`, before show) with
+the content view taken out first, so WebKit's KVO observer of `contentView`
+is gone during the swap (a class swapped under an observer aborts the app on
+the next `removeObserver:`); any unexpected class, layout or KVO override
+leaves an ordinary window, logged. `log_if_bar_lacks_keyboard` logs key AND
+(panel OR Hippius active), at open and at page load; `isKeyWindow` alone said
+"key" while the bar had no hover. The bar's tooltip opens on focus only for
+`:focus-visible`, so the window taking the keyboard back does not pop one on
+the last focused button. Pinned by
+`own_windows::tests::only_the_bars_overlay_takes_the_keyboard`,
+`overlay_panel::tests`,
+`capture_wiring::only_the_bars_overlay_takes_the_keyboard`,
+`capture_wiring::the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward`
+and `overlayPage.test.tsx`. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
 front only if it was key), and never mid-recording (it would be filmed).

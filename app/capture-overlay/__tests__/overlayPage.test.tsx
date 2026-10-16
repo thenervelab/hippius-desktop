@@ -1520,6 +1520,22 @@ describe("the capture bar's tooltips", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
+  // The bar's window taking the keyboard focuses the last focused button
+  // again; with nobody pointing at it, that must not open its tooltip.
+  it("does not open for focus that did not come from the keyboard", async () => {
+    setup();
+    const close = await screen.findByRole("button", { name: "Close" });
+    const matches = Element.prototype.matches;
+    vi.spyOn(close, "matches").mockImplementation((selector: string) =>
+      selector === ":focus-visible" ? false : matches.call(close, selector),
+    );
+    act(() => close.focus());
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // Pointing at it still names it.
+    fireEvent.pointerEnter(close);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("ClosePress Esc");
+  });
+
   it("places itself above the button and inside the window at its edge", async () => {
     setup();
     const mode = await screen.findByRole("radio", { name: "Record entire screen" });

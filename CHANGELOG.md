@@ -187,6 +187,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **The capture bar's tooltips show as soon as the bar opens.** Pointing at the bar's buttons could show nothing until you clicked the bar once, for example with more than one display, or on a Mac after a click landed in another app while you were choosing. The labels now show straight away, Escape, Return and Space work on the bar from the start, and on a Mac the app you were using stays in front while you choose.
 - **The capture bar's tooltips are easy to read.** Pointing at a button in the capture bar, such as Record entire screen, now shows its name straight away in a label above the bar, instead of a system tooltip that came late and sat behind the bar. Moving through the bar with the keyboard shows the same labels, and a choice you can't use says why.
 - **The card after a screenshot or recording no longer starts its wait over.** Pointing at it still keeps it open, and when you move away it closes once the time it had left runs out, its bar carrying on from where it stopped. On Windows and Linux, moving through its buttons with the keyboard holds it the same way.
 - **Large uploads no longer show an error when the connection drops after Hippius has already saved the file.** This covers files you add to a folder you don't sync on this computer, and failed uploads there now say what went wrong in plain words.
