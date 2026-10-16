@@ -17,10 +17,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [0.6.13] - 2026-10-15
 
-The capture bar's tooltips now show the moment the bar opens, on every display.
+The capture bar and the recording controls now show what each button does
+as soon as you point at it.
 
 ### Fixed
 
+- **The recording controls name their buttons when you point at them.** While
+  you record, pointing at the microphone, camera, pause, restart, stop or
+  delete button now shows what it does straight away, without clicking first,
+  and Stop shows the shortcut that stops the recording. The app you are
+  recording keeps the keyboard, the labels never appear in the recording, and
+  the camera's own controls and the card that appears after a capture name
+  their buttons the same way. On Linux, where the controls show in the
+  recording, they stay without labels.
 - **The capture bar's tooltips show as soon as the bar opens.** Pointing at the
   bar's buttons could show nothing until you clicked the bar once, for example
   with more than one display, or on a Mac after a click landed in another app

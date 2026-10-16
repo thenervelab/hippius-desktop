@@ -14,6 +14,7 @@ const ROOTS = [
   "app/capture-controls",
   "app/capture-camera",
   "app/capture-bubble-controls",
+  "app/capture-pill-tip",
   "app/capture-preview",
   "app/components/capture",
   "app/lib/capture",
