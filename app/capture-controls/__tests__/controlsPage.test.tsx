@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { CapturePhaseEvent } from "@/app/lib/tauri/capture";
@@ -567,5 +567,143 @@ describe("a Free plan recording near its limit", () => {
     await screen.findByRole("group", { name: "Recording controls" });
     await waitFor(() => expect(screen.queryByRole("button", { name: "Stop recording" })).toBeNull());
     expect(screen.getByRole("timer")).toHaveTextContent("00:10left");
+  });
+});
+
+// The pill is never the key window, so on macOS its webview gets no hover and
+// a native `title` never shows. Rust says where the pointer is on the pill's
+// row; the page finds the button there (the hit test, which jsdom lacks, is
+// stood in for) and asks Rust to show its tooltip over the pill.
+describe("the pill's tooltips", () => {
+  const MIC = { recorded: true, muted: false, deviceId: null, canMute: true, canSwitch: true };
+  const withMic = (elapsedSecs = 3, seq = 1): CapturePhaseEvent => ({ phase: "recording", elapsedSecs, microphone: true, seq });
+  const tips = () => tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_pill_tip").map(([, a]) => (a as { tip: unknown }).tip);
+  const lastTip = () => tips().at(-1) as { label: string; detail?: string; anchor: object; fromPointer: boolean } | null | undefined;
+  let under: Element | null = null;
+  const hits: [number, number][] = [];
+
+  beforeEach(() => {
+    under = null;
+    hits.length = 0;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: (x: number, y: number) => {
+        hits.push([x, y]);
+        return under;
+      },
+    });
+    tauri.onInvoke("capture_pill_tip", () => null);
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_controls_context", () => ({
+      compact: false,
+      filmedNote: null,
+      menuRoom: 0,
+      tips: true,
+      stopShortcut: "CommandOrControl+Alt+Shift+2",
+    }));
+  });
+  afterEach(() => {
+    delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+  });
+
+  /** Rust: the pointer is on `el` (a point on the pill's row), or off the pill. */
+  const point = async (el: Element | null, at = { x: 300, y: 30 }) => {
+    under = el;
+    await act(() => tauri.emitEvent("capture_pill_pointer", el ? at : null));
+  };
+
+  it("names the button under Rust's pointer, with the key that does it, and never carries a native title", async () => {
+    setup(withMic());
+    const stop = await screen.findByRole("button", { name: "Stop recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    // An icon inside the button is what the hit test finds.
+    await point(stop.querySelector("svg"));
+    await waitFor(() => expect(lastTip()).toMatchObject({ label: "Stop recording", fromPointer: true }));
+    // Rust's point is on the pill's row; the hit test is in page pixels from
+    // the row's corner (0, 0 in jsdom).
+    expect(hits.at(-1)).toEqual([300, 30]);
+    // Not a Mac in jsdom: the keys as Windows and Linux write them.
+    expect(lastTip()?.detail).toBe("Press Ctrl+Alt+Shift+2");
+    expect(lastTip()?.anchor).toEqual({ left: 0, top: 0, width: 0, height: 0 });
+    // Lit as `:hover` would, which never happens in a window that is not key.
+    expect(stop).toHaveAttribute("data-hover", "true");
+    expect(document.querySelector("[title]")).toBeNull();
+    expect(document.querySelector("title")).toBeNull();
+  });
+
+  it("names every control on the pill", async () => {
+    setup(withMic());
+    await screen.findByRole("button", { name: "Mute microphone" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    for (const name of ["Mute microphone", "Choose a microphone", "Pause recording", "Restart recording", "Stop recording", "Discard recording"]) {
+      await point(screen.getByRole("button", { name }));
+      await waitFor(() => expect(lastTip()?.label).toBe(name));
+    }
+  });
+
+  it("takes the tooltip away when the pointer leaves the button or the pill", async () => {
+    setup(withMic());
+    const pause = await screen.findByRole("button", { name: "Pause recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    await point(pause);
+    await waitFor(() => expect(lastTip()?.label).toBe("Pause recording"));
+    // On the pill's glass between buttons: no button, no tooltip.
+    await point(screen.getByRole("timer"));
+    await waitFor(() => expect(lastTip()).toBeNull());
+    expect(pause).not.toHaveAttribute("data-hover");
+    await point(pause);
+    await waitFor(() => expect(lastTip()?.label).toBe("Pause recording"));
+    await point(null);
+    await waitFor(() => expect(lastTip()).toBeNull());
+  });
+
+  // Pause becomes Resume under a pointer that did not move.
+  it("follows the button's words as they change under the pointer", async () => {
+    setup(withMic());
+    const pause = await screen.findByRole("button", { name: "Pause recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    await point(pause);
+    await waitFor(() => expect(lastTip()?.label).toBe("Pause recording"));
+    under = null;
+    await act(() => tauri.emitEvent("capture_state_changed", { phase: "paused", elapsedSecs: 3, microphone: true, seq: 2 }));
+    under = screen.getByRole("button", { name: "Resume recording" });
+    await point(under);
+    await waitFor(() => expect(lastTip()?.label).toBe("Resume recording"));
+  });
+
+  it("asks Rust only when something changed", async () => {
+    setup(withMic());
+    const stop = await screen.findByRole("button", { name: "Stop recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    await point(stop, { x: 300, y: 30 });
+    await waitFor(() => expect(lastTip()?.label).toBe("Stop recording"));
+    const sent = tips().length;
+    // The pointer moves on the same button.
+    await point(stop, { x: 302, y: 31 });
+    await point(stop, { x: 304, y: 29 });
+    expect(tips().length).toBe(sent);
+  });
+
+  it("names a button that has keyboard focus, from the keyboard only", async () => {
+    setup(withMic());
+    const restart = await screen.findByRole("button", { name: "Restart recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    act(() => restart.focus());
+    await waitFor(() => expect(lastTip()).toMatchObject({ label: "Restart recording", fromPointer: false }));
+    act(() => restart.blur());
+    await waitFor(() => expect(lastTip()).toBeNull());
+  });
+
+  // Linux films the pill, so a tooltip would be in the video: Rust offers none.
+  it("asks for no tooltip where Rust says the pill has none", async () => {
+    tauri.onInvoke("capture_controls_context", () => ({ compact: false, filmedNote: null, menuRoom: 0, tips: false }));
+    setup(withMic());
+    const stop = await screen.findByRole("button", { name: "Stop recording" });
+    await waitFor(() => expect(called("capture_controls_context")).toBe(true));
+    await point(stop);
+    act(() => stop.focus());
+    await act(async () => undefined);
+    expect(tips().filter((t) => t !== null)).toEqual([]);
+    expect(document.querySelector("[title]")).toBeNull();
   });
 });

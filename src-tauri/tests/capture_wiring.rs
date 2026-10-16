@@ -2208,6 +2208,147 @@ fn the_bubble_controls_are_never_filmed() {
     assert!(shell.contains("\"/capture-bubble-controls\""), "a capture route boots provider-free");
 }
 
+/// The pill is never the key window (the app being recorded keeps the
+/// keyboard), and macOS gives a webview hover only in the key window, so the
+/// pill's buttons never saw the pointer and their native `title` tooltips
+/// never showed. Its hover comes from Rust's pointer watch, and its tooltip is
+/// a window of its own: the pill's window is only as tall as the pill. That
+/// window never covers the pill and is up only while the pointer is on it (a
+/// click always reaches the pill or the app under it), is never focused, and
+/// is left out of the recording like the pill.
+#[test]
+fn the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "fn open_controls(");
+    assert!(open.contains("pill_hover::supported("), "no tooltips where the pill is filmed");
+    assert!(open.contains("spawn_pill_hover_watch(app.clone())"), "the watch starts with the pill");
+    assert!(open.contains("pill_tip_window(app)"), "the tooltip window is built with the pill");
+
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_pill_hover_watch(");
+    for needle in [
+        "pointer_point(",
+        "pill_hover::pointer_on_row(",
+        "pill_hover::pill_row(",
+        "PILL_POINTER_EVENT",
+        "sync_pill_tip(&app)",
+    ] {
+        assert!(watch.contains(needle), "the pill's watch lost {needle}");
+    }
+    assert!(watch.contains("close_pill_tip(&app)"), "the tooltip goes with the pill");
+
+    let tip = fn_body(&src, "fn pill_tip_window(");
+    assert!(tip.contains("PILL_TIP_LABEL"));
+    assert!(
+        tip.contains(".content_protected(super::own_windows::content_protected(") && tip.contains("OwnWindow::PillTip"),
+        "the tooltip's protection is own_windows' decision, the pill's"
+    );
+    assert!(
+        tip.contains(".focused(false)") && tip.contains(".focusable(false)"),
+        "it never takes the keyboard"
+    );
+    assert!(
+        tip.contains("#[cfg(target_os = \"macos\")]\n            let _ = window.set_ignore_cursor_events(true);"),
+        "clicks go through it on macOS (it never covers the pill anywhere: pill_hover::tip_frame)"
+    );
+    assert!(fn_body(&src, "fn close_controls(").contains("close_pill_tip(app)"));
+    assert!(fn_body(&src, "fn hide_controls(").contains("hide_pill_tip(app)"));
+
+    let sync = fn_body(&src, "fn sync_pill_tip(");
+    for needle in [
+        "pill_hover::tip_allowed(",
+        "pill_hover::tip_frame(",
+        "pill_hover::anchor_in_tip(",
+        "PILL_TIP_EVENT",
+    ] {
+        assert!(sync.contains(needle), "the tooltip's sync lost {needle}");
+    }
+    // Placing and showing wait on the main thread: never under the lock a
+    // main-thread command (`capture_pill_tip_now`) takes too.
+    let decided = sync.find("let (first, needs_placing, tell) = {").expect("decided under the lock");
+    let placed = sync.find("place(&window, frame, scale)").expect("placed");
+    let shown = sync.find("show_pill_tip(&window)").expect("shown");
+    assert!(
+        fn_body(&src, "fn show_pill_tip(").contains("show_without_focus(window)"),
+        "macOS: never key, never activates"
+    );
+    assert!(decided < placed && placed < shown);
+
+    let main = read("src/main.rs");
+    for command in ["capture_pill_tip,", "capture_pill_tip_now,"] {
+        assert!(main.contains(&format!("crate::capture::commands::{command}")), "{command} is registered");
+    }
+    let label = src
+        .lines()
+        .find(|l| l.contains("pub const PILL_TIP_LABEL"))
+        .and_then(|l| l.split('"').nth(1))
+        .expect("PILL_TIP_LABEL is declared");
+    let capability: serde_json::Value = serde_json::from_str(&read("capabilities/capture-pill-tip.json")).expect("capability parses");
+    let windows: Vec<&str> = capability["windows"]
+        .as_array()
+        .expect("windows")
+        .iter()
+        .filter_map(|w| w.as_str())
+        .collect();
+    assert_eq!(windows, vec![label]);
+    assert!(
+        capability["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(|p| p.as_str())
+            .all(|p| p.starts_with("core:") && p != "core:window:allow-start-dragging"),
+        "core permissions only, and it is never dragged"
+    );
+    assert!(read("tauri.conf.json").contains(&format!("\"{label}\"")));
+    assert!(
+        read("../app/components/AppShell.tsx").contains(&format!("\"/{label}\"")),
+        "a capture route boots provider-free"
+    );
+
+    // The event names the two sides use agree.
+    let ipc = read("../app/lib/tauri/capture.ts");
+    for (name, value) in [
+        ("PILL_POINTER_EVENT", "capture_pill_pointer"),
+        ("PILL_TIP_EVENT", "capture_pill_tip"),
+        ("BUBBLE_CONTROLS_POINTER_EVENT", "capture_bubble_controls_pointer"),
+    ] {
+        assert!(src.contains(&format!("pub const {name}: &str = \"{value}\";")), "Rust's {name}");
+        assert!(ipc.contains(&format!("export const {name} = \"{value}\";")), "the frontend's {name}");
+    }
+
+    // No native tooltip on the pill, so two never show; the page finds the
+    // button under Rust's point and asks for the custom one.
+    let pill = read("../app/capture-controls/page.tsx");
+    assert!(!pill.contains("title="), "a native title never shows on a window that is not key");
+    assert!(!pill.contains("<title>"), "nor an SVG's");
+    assert!(pill.contains("usePillTips(tips, rowRef)"));
+    let tips = read("../app/capture-controls/pillTips.ts");
+    assert!(tips.contains("PILL_POINTER_EVENT") && tips.contains("markedAt(") && tips.contains("setCapturePillTip("));
+    let page = read("../app/capture-pill-tip/page.tsx");
+    assert!(
+        page.contains("placeTooltip(") && page.contains("TIP_BOX"),
+        "the bar's tooltip, placed the bar's way"
+    );
+}
+
+/// The bubble's controls and the preview card are never key either: which
+/// button the pointer is on comes from Rust there too, never from the
+/// webview's own hover, and neither carries a native `title`.
+#[test]
+fn the_bubble_controls_and_the_card_find_hover_from_rusts_pointer() {
+    let src = read("src/capture/commands.rs");
+    let watch = fn_body(&src, "#[cfg(any(target_os = \"macos\", windows))]\nfn spawn_camera_hover_watch(");
+    assert!(watch.contains("BUBBLE_CONTROLS_POINTER_EVENT") && watch.contains("pill_hover::pointer_in("));
+    let controls = read("../app/capture-bubble-controls/page.tsx");
+    assert!(controls.contains("BUBBLE_CONTROLS_POINTER_EVENT") && controls.contains("markedAt("));
+    assert!(!controls.contains("onMouseEnter"), "hover never reaches a window that is not key");
+
+    let card = read("../app/capture-preview/page.tsx");
+    assert!(card.contains("getCapturePreviewPointer()") && card.contains("markedAt("));
+    assert!(card.contains("if (!up) return;"), "the card asks where the pointer is whenever it is up");
+    assert!(!card.contains("title="), "a native title never shows on the card");
+}
+
 /// The bubble's size changes mid-recording by moving its window inside what
 /// is filmed, so the camera in the file follows; the camera only stage is
 /// never resized (it is the recording).
