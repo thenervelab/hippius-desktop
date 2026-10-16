@@ -65,7 +65,8 @@
         "capture-controls",
         "capture-preview",
         "capture-camera",
-        "capture-bubble-controls"
+        "capture-bubble-controls",
+        "capture-pill-tip"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"

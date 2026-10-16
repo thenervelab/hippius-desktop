@@ -33,12 +33,30 @@ const TIP_ID = "capture-bar-tip";
  * with nobody pointing at it looked like a glitch. `:focus-visible` is the
  * WebView's own "focus from the keyboard"; one without it shows the tooltip.
  */
-function focusFromKeyboard(el: HTMLElement): boolean {
+export function focusFromKeyboard(el: Element): boolean {
   try {
     return el.matches(":focus-visible");
   } catch {
     return true;
   }
+}
+
+/**
+ * The tooltip's glass: the bar's, and the recording pill's in its own window
+ * (`app/capture-pill-tip`), so the two read as one tooltip. Fixed, hidden
+ * until placed, and never in the way of the pointer.
+ */
+export const TIP_BOX =
+  "pointer-events-none fixed left-0 top-0 z-[2147483647] max-w-[280px] rounded-[8px] border border-white/10 bg-[#1c1d21]/95 px-2.5 py-1.5 text-left text-[12px] leading-4 text-white shadow-[0_2px_8px_rgba(0,0,0,0.4)] backdrop-blur-xl";
+
+/** The tooltip's words: the name, and a second line when there is one. */
+export function TipLines({ label, detail }: TipText) {
+  return (
+    <>
+      <span className="block font-medium">{label}</span>
+      {detail && <span className="mt-0.5 block text-white/75">{detail}</span>}
+    </>
+  );
 }
 
 /**
@@ -48,13 +66,13 @@ function focusFromKeyboard(el: HTMLElement): boolean {
  * Wayland's panel the body is the panel's window, so the same holds there.
  */
 export function useBarTooltip() {
-  const [shown, setShown] = useState<{ key: string; anchor: HTMLElement } | null>(null);
+  const [shown, setShown] = useState<{ key: string; anchor: Element } | null>(null);
   // Each button's current text, read when the tooltip draws, so a reason
   // that changes while it shows is shown as it is now.
   const texts = useRef(new Map<string, TipText>());
   const tipRef = useRef<HTMLDivElement | null>(null);
 
-  const show = useCallback((key: string, anchor: HTMLElement) => setShown({ key, anchor }), []);
+  const show = useCallback((key: string, anchor: Element) => setShown({ key, anchor }), []);
   const hide = useCallback((key: string) => setShown((s) => (s && s.key === key ? null : s)), []);
 
   /** The handlers and description for one button. */
@@ -73,6 +91,17 @@ export function useBarTooltip() {
       "aria-describedby": shown?.key === key ? TIP_ID : undefined,
     };
   };
+
+  /**
+   * Show `key`'s tooltip against `anchor`, or none (`null`), from somewhere
+   * other than the button's own events: the preview card, never key, learns
+   * where the pointer is from Rust.
+   */
+  const showAt = useCallback(
+    (key: string | null, anchor: Element | null) =>
+      setShown((s) => (key && anchor ? (s?.key === key && s.anchor === anchor ? s : { key, anchor }) : null)),
+    [],
+  );
 
   const text = shown ? texts.current.get(shown.key) : undefined;
 
@@ -109,15 +138,15 @@ export function useBarTooltip() {
         data-testid="capture-bar-tooltip"
         // Hidden until placed (the layout effect above, before paint).
         style={{ visibility: "hidden" }}
-        className="pointer-events-none fixed left-0 top-0 z-[2147483647] max-w-[280px] rounded-[8px] border border-white/10 bg-[#1c1d21]/95 px-2.5 py-1.5 text-left text-[12px] leading-4 text-white shadow-[0_2px_8px_rgba(0,0,0,0.4)] backdrop-blur-xl"
+        className={TIP_BOX}
       >
-        <span className="block font-medium">{text.label}</span>
-        {text.detail && <span className="mt-0.5 block text-white/75">{text.detail}</span>}
+        <TipLines label={text.label} detail={text.detail} />
       </div>
     ) : null;
 
   return {
     tipProps,
+    showAt,
     tooltip: tooltip && typeof document !== "undefined" ? createPortal(tooltip, document.body) : null,
   };
 }
