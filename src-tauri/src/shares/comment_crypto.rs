@@ -16,7 +16,9 @@
 //!   `<token>:comment` or `<token>:viewer-name`, so a ciphertext copied onto
 //!   another share, or a comment passed off as a name, fails to open.
 //! - Plaintext: `{"text": ..., "name": ... | null}` for a comment,
-//!   `{"name": ...}` for a viewer name.
+//!   `{"name": ...}` for a viewer name. A lone UTF-16 surrogate escape in
+//!   either, which older console builds wrote, reads as U+FFFD (see
+//!   [`replace_lone_surrogate_escapes`]).
 //!
 //! The share key is the link's own key (`#k=`), which the owner gets back
 //! from this device's keystore or its owner wrap. A password link's key is
@@ -168,8 +170,8 @@ struct NamePlaintext {
 /// As [`open`], plus [`OpenError::Shape`] when the plaintext is not the
 /// comment JSON.
 pub fn open_comment(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b64: &str) -> Result<CommentPlaintext, OpenError> {
-    let plain = open(key, token, Purpose::Comment, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
-    let mut comment: CommentPlaintext = serde_json::from_slice(&plain).map_err(|_| OpenError::Shape)?;
+    let mut plain = open(key, token, Purpose::Comment, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
+    let mut comment: CommentPlaintext = parse_plaintext(&mut plain)?;
     comment.name = clean_name(comment.name.as_deref());
     Ok(comment)
 }
@@ -181,9 +183,67 @@ pub fn open_comment(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b
 ///
 /// As [`open_comment`].
 pub fn open_viewer_name(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b64: &str) -> Result<Option<String>, OpenError> {
-    let plain = open(key, token, Purpose::ViewerName, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
-    let parsed: NamePlaintext = serde_json::from_slice(&plain).map_err(|_| OpenError::Shape)?;
+    let mut plain = open(key, token, Purpose::ViewerName, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
+    let parsed: NamePlaintext = parse_plaintext(&mut plain)?;
     Ok(clean_name(Some(&parsed.name)))
+}
+
+/// Parse a decrypted plaintext, reading a lone surrogate escape as U+FFFD.
+///
+/// Older console builds sealed text and names holding a lone UTF-16
+/// surrogate, which `JSON.stringify` writes as a `\ud800`-style escape, and
+/// `serde_json` refuses the whole document over one (it only accepts lone
+/// surrogates when deserializing bytes, as WTF-8). The escapes are rewritten
+/// to `\ufffd` before parsing, so the comment opens with the same characters
+/// the console shows. Rewriting the escaped JSON is preferred over a lossy
+/// string type: the replacement is the same length, so it happens in place in
+/// the zeroized buffer, and a WTF-8 detour would need its own decoder, since
+/// `String::from_utf8_lossy` turns one encoded surrogate into three U+FFFD.
+fn parse_plaintext<T: serde::de::DeserializeOwned>(plain: &mut [u8]) -> Result<T, OpenError> {
+    replace_lone_surrogate_escapes(plain);
+    serde_json::from_slice(plain).map_err(|_| OpenError::Shape)
+}
+
+/// The UTF-16 unit a well-formed `\uXXXX` escape starting at `at` stands for.
+fn escaped_unit(json: &[u8], at: usize) -> Option<u16> {
+    let escape = json.get(at..at + 6)?;
+    let hex = escape.strip_prefix(b"\\u")?;
+    if !hex.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    u16::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
+}
+
+/// Rewrite every `\uXXXX` escape of a lone surrogate in `json` to `\ufffd`:
+/// a high surrogate not directly followed by an escaped low one, or a low
+/// surrogate not directly preceded by an escaped high one. This is what
+/// `String.prototype.toWellFormed` does to the decoded string, and what the
+/// console's `replaceLoneSurrogates` does before sealing.
+///
+/// A surrogate can only reach valid JSON as an escape, since UTF-8 cannot
+/// encode one, so escapes are all that need looking at. A backslash outside
+/// a string is not valid JSON, so the scan does not track strings; it only
+/// steps over every other escape whole, so the `u` in an escaped backslash
+/// (`\\u...`) is never read as the start of one. Malformed escapes are left
+/// for the parser to refuse.
+fn replace_lone_surrogate_escapes(json: &mut [u8]) {
+    const REPLACEMENT: &[u8; 4] = b"fffd";
+    let mut i = 0;
+    while i < json.len() {
+        if json[i] != b'\\' {
+            i += 1;
+            continue;
+        }
+        match escaped_unit(json, i) {
+            Some(0xD800..=0xDBFF) if matches!(escaped_unit(json, i + 6), Some(0xDC00..=0xDFFF)) => i += 12,
+            Some(0xD800..=0xDFFF) => {
+                json[i + 2..i + 6].copy_from_slice(REPLACEMENT);
+                i += 6;
+            }
+            Some(_) => i += 6,
+            None => i += 2,
+        }
+    }
 }
 
 /// The longest name kept, in characters (code points, as the console's
@@ -275,6 +335,12 @@ fn shown_char(c: char) -> Option<char> {
 /// trim or use up the limit. A visible name is kept as typed, except that
 /// [`is_display_unsafe`] characters are replaced by [`shown_char`] and the
 /// result is trimmed again.
+///
+/// Lone surrogates are already U+FFFD by the time a name gets here
+/// ([`parse_plaintext`]), so the order is the console's: replace, strip,
+/// trim, cut, blank check. A bidi control between the halves of a pair
+/// therefore leaves two U+FFFD, never a rejoined character, and U+FFFD draws
+/// a glyph, so a name of only lone surrogates is not blank.
 fn clean_name(name: Option<&str>) -> Option<String> {
     let stripped = strip_bidi_controls(name?);
     let kept: String = stripped.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
@@ -300,6 +366,21 @@ mod tests {
         comment_key_hex: String,
         vectors: Vec<Vector>,
         names: NameVectors,
+        lone_surrogates: LoneSurrogateVectors,
+    }
+
+    /// Plaintexts older console builds sealed with lone surrogate escapes.
+    #[derive(Deserialize)]
+    struct LoneSurrogateVectors {
+        cases: Vec<LoneSurrogateCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct LoneSurrogateCase {
+        label: String,
+        plaintext: String,
+        text: String,
+        name: Option<String>,
     }
 
     /// The name-cleaning rule both clients apply, as cases each one runs.
@@ -585,6 +666,99 @@ mod tests {
         assert_eq!(open_viewer_name(&key, &f.token, &b64(&nonce), &ct).unwrap(), None);
     }
 
+    /// Seal `plaintext` exactly as given, as another client might have, for
+    /// `purpose`. Returns the base64 nonce and ciphertext.
+    fn seal_raw(f: &Fixture, purpose: Purpose, plaintext: &str) -> (String, String) {
+        let key = CommentKey::derive(&share_key(f));
+        let nonce = [5u8; NONCE_LEN];
+        let ct = seal_with_nonce(&key, &f.token, purpose, &nonce, plaintext.as_bytes()).expect("a 12-byte nonce");
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        (b64(&nonce), b64(&ct))
+    }
+
+    fn open_raw_comment(f: &Fixture, plaintext: &str) -> Result<CommentPlaintext, OpenError> {
+        let (nonce, ct) = seal_raw(f, Purpose::Comment, plaintext);
+        open_comment(&CommentKey::derive(&share_key(f)), &f.token, &nonce, &ct)
+    }
+
+    /// Comments sealed before the console replaced lone surrogates read the
+    /// same on both clients, instead of failing whole.
+    #[test]
+    fn lone_surrogate_vectors_open_to_their_text_and_name() {
+        let f = fixture();
+        assert!(!f.lone_surrogates.cases.is_empty());
+        for case in &f.lone_surrogates.cases {
+            let opened = open_raw_comment(&f, &case.plaintext).unwrap_or_else(|e| panic!("{}: {e}", case.label));
+            assert_eq!(opened.text, case.text, "text: {}", case.label);
+            assert_eq!(opened.name, case.name, "name: {}", case.label);
+        }
+    }
+
+    #[test]
+    fn a_lone_surrogate_in_a_viewer_name_opens_as_a_replacement_character() {
+        let f = fixture();
+        let key = CommentKey::derive(&share_key(&f));
+        let (nonce, ct) = seal_raw(&f, Purpose::ViewerName, r#"{"name":"Sam\ud83d"}"#);
+        assert_eq!(open_viewer_name(&key, &f.token, &nonce, &ct).unwrap().as_deref(), Some("Sam\u{FFFD}"));
+        let (nonce, ct) = seal_raw(&f, Purpose::ViewerName, r#"{"name":"\udc00\ud800"}"#);
+        assert_eq!(
+            open_viewer_name(&key, &f.token, &nonce, &ct).unwrap().as_deref(),
+            Some("\u{FFFD}\u{FFFD}")
+        );
+    }
+
+    /// Only a surrogate escape without its other half is replaced: a pair in
+    /// either case decodes to its one character, and an escaped backslash
+    /// followed by `u` is text, not an escape.
+    #[test]
+    fn pairs_and_escaped_backslashes_are_left_alone() {
+        let f = fixture();
+        let cases = [
+            (r#"{"text":"\ud83d\ude00"}"#, "\u{1F600}"),
+            (r#"{"text":"\uD83D\uDE00"}"#, "\u{1F600}"),
+            (r#"{"text":"\\ud800"}"#, r"\ud800"),
+            (r#"{"text":"\\\ud800"}"#, "\\\u{FFFD}"),
+            (r#"{"text":"\ud800\ud83d\ude00"}"#, "\u{FFFD}\u{1F600}"),
+            (r#"{"text":"\ud83d\ude00\udc00"}"#, "\u{1F600}\u{FFFD}"),
+            (r#"{"text":"\ud83d\n\ude00"}"#, "\u{FFFD}\n\u{FFFD}"),
+        ];
+        for (plaintext, want) in cases {
+            assert_eq!(open_raw_comment(&f, plaintext).unwrap().text, want, "{plaintext}");
+        }
+    }
+
+    /// Escapes that are not well formed stay that way, so a plaintext that
+    /// was never valid JSON is still refused rather than repaired.
+    #[test]
+    fn malformed_escapes_are_still_refused() {
+        let f = fixture();
+        for plaintext in [r#"{"text":"\ud8"}"#, r#"{"text":"\ud80g"}"#, r#"{"text":"\u+d80"}"#, r#"{"text":"a\"#] {
+            assert_eq!(open_raw_comment(&f, plaintext).unwrap_err(), OpenError::Shape, "{plaintext}");
+        }
+    }
+
+    /// A comment plaintext holding `units` as a browser's `JSON.stringify`
+    /// writes it: lone surrogates as escapes, everything else as serde writes
+    /// it. Even surrogates are escaped in upper case and odd ones in lower,
+    /// so both spellings are covered.
+    fn json_of_units(units: &[u16]) -> String {
+        use std::fmt::Write as _;
+        let mut text = String::new();
+        for decoded in char::decode_utf16(units.iter().copied()) {
+            match decoded {
+                Ok(c) => {
+                    let quoted = serde_json::to_string(&c).expect("a char serializes");
+                    text.push_str(&quoted[1..quoted.len() - 1]);
+                }
+                Err(e) if e.unpaired_surrogate() % 2 == 0 => {
+                    write!(text, "\\u{:04X}", e.unpaired_surrogate()).expect("writing to a String cannot fail");
+                }
+                Err(e) => write!(text, "\\u{:04x}", e.unpaired_surrogate()).expect("writing to a String cannot fail"),
+            }
+        }
+        format!(r#"{{"text":"{text}"}}"#)
+    }
+
     /// Characters that draw nothing on their own, drawn from each class the
     /// rule covers.
     const INVISIBLE_SAMPLE: &str = concat!(
@@ -606,6 +780,14 @@ mod tests {
         proptest::collection::vec(pick, 0..120).prop_map(|chars| chars.into_iter().collect())
     }
 
+    /// UTF-16 units weighted toward surrogates, both halves of one pair, and
+    /// the characters JSON escapes, so pairs, lone halves and escaped
+    /// backslashes meet often.
+    fn utf16_unit() -> impl Strategy<Value = u16> {
+        let notable = proptest::sample::select(vec![0x61u16, 0x5C, 0x22, 0x0A, 0xE9, 0xD83D, 0xDE00, 0xFFFD]);
+        prop_oneof![3 => notable, 2 => 0xD800u16..=0xDFFF, 1 => any::<u16>()]
+    }
+
     proptest! {
         /// Whatever a viewer sends, a shown name has something visible in it,
         /// fits the limit, and has no outer whitespace, control character,
@@ -619,6 +801,16 @@ mod tests {
                 prop_assert!(!shown.chars().any(is_display_unsafe));
                 prop_assert!(!shown.chars().any(is_bidi_control));
             }
+        }
+
+        /// Any UTF-16 text, lone surrogates included, opens as a lossy UTF-16
+        /// decode reads it, which is what `String.prototype.toWellFormed`
+        /// and the console's `replaceLoneSurrogates` give.
+        #[test]
+        fn any_utf16_text_opens_as_a_lossy_decode(units in proptest::collection::vec(utf16_unit(), 0..16)) {
+            let want = String::from_utf16_lossy(&units);
+            let opened = open_raw_comment(&fixture(), &json_of_units(&units));
+            prop_assert_eq!(opened.map(|c| c.text), Ok(want));
         }
 
         /// Any run of invisible characters is blank, however it is mixed.
