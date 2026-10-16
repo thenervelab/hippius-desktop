@@ -28,7 +28,7 @@
     }
   ],
   "names": {
-    "rule": "cleanName(name): trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc, line or paragraph separators or bidi controls: the desktop replaces those in a shown name, so only the blank list may hold them.",
+    "rule": "cleanName(name): remove the bidi embedding, override and isolate controls (U+202A-U+202E, U+2066-U+2069; LRM, RLM and ALM stay), trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc and no line or paragraph separators: the desktop replaces those in a shown name, so only the blank list may hold them.",
     "max_chars": 80,
     "blank": [
       {
@@ -122,6 +122,46 @@
       {
         "label": "control characters up to the limit",
         "name": "\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001Sam"
+      },
+      {
+        "label": "only overrides and isolates",
+        "name": "\u202e\u2066 \u2069\u202c"
+      },
+      {
+        "label": "only LRE",
+        "name": "\u202a\u202a\u202a"
+      },
+      {
+        "label": "only RLE",
+        "name": "\u202b\u202b\u202b"
+      },
+      {
+        "label": "only PDF",
+        "name": "\u202c\u202c\u202c"
+      },
+      {
+        "label": "only LRO",
+        "name": "\u202d\u202d\u202d"
+      },
+      {
+        "label": "only RLO",
+        "name": "\u202e\u202e\u202e"
+      },
+      {
+        "label": "only LRI",
+        "name": "\u2066\u2066\u2066"
+      },
+      {
+        "label": "only RLI",
+        "name": "\u2067\u2067\u2067"
+      },
+      {
+        "label": "only FSI",
+        "name": "\u2068\u2068\u2068"
+      },
+      {
+        "label": "only PDI",
+        "name": "\u2069\u2069\u2069"
       }
     ],
     "visible": [
@@ -172,9 +212,90 @@
       {
         "label": "the limit counts code points, not UTF-16 units",
         "name": "\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41Sam"
+      },
+      {
+        "label": "Hebrew then Latin",
+        "name": "\u05d3\u05e0\u05d9 Dan"
+      },
+      {
+        "label": "Arabic with a digit and RLM",
+        "name": "\u0639\u0644\u064a\u200f 2"
+      },
+      {
+        "label": "Latin then Arabic with LRM",
+        "name": "Ali\u200e \u0639\u0644\u064a"
+      },
+      {
+        "label": "ALM is kept",
+        "name": "Sam\u061c1"
       }
     ],
     "cleaned": [
+      {
+        "label": "LRE is removed",
+        "name": "\u202aSam\u202a",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLE is removed",
+        "name": "\u202bSam\u202b",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "PDF is removed",
+        "name": "\u202cSam\u202c",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "LRO is removed",
+        "name": "\u202dSam\u202d",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLO is removed",
+        "name": "\u202eSam\u202e",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "LRI is removed",
+        "name": "\u2066Sam\u2066",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLI is removed",
+        "name": "\u2067Sam\u2067",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "FSI is removed",
+        "name": "\u2068Sam\u2068",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "PDI is removed",
+        "name": "\u2069Sam\u2069",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "an override inside a visible name is removed",
+        "name": "Ev\u202ee",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "an override cannot keep leading spaces past the trim",
+        "name": "\u202e  Eve",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "overrides do not count toward the limit",
+        "name": "\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202eEve",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "an isolated name loses its isolates",
+        "name": "\u2067Eve\u2069",
+        "cleaned": "Eve"
+      },
       {
         "label": "a cut at a space does not end in it",
         "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
