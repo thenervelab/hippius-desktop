@@ -697,7 +697,7 @@ const RECOVERY_PHRASE_ENTRY: &str = "recovery-phrase.txt";
 /// pinned by a round-trip test without touching the filesystem.
 fn encrypted_backup_zip(mnemonic: &str, password: &str) -> Result<Vec<u8>> {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default()
+    let options = crate::utils::zip_entry::options()
         .compression_method(zip::CompressionMethod::Deflated)
         .with_aes_encryption(zip::AesMode::Aes256, password);
 
@@ -938,8 +938,33 @@ mod tests {
         let bytes = encrypted_backup_zip("abandon ability able", "correct horse").unwrap();
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
 
-        assert!(archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"wrong").is_err());
+        // AES zip checks only a 2-byte password verifier on open, so a wrong
+        // password gets past it about once in 65,536 random salts; the HMAC
+        // check at the end of the read is what refuses it then.
+        match archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"wrong") {
+            Err(_) => {}
+            Ok(mut entry) => {
+                use std::io::Read;
+                assert!(entry.read_to_end(&mut Vec::new()).is_err(), "wrong password decrypted");
+            }
+        }
         assert!(archive.by_name(RECOVERY_PHRASE_ENTRY).is_err());
+    }
+
+    #[test]
+    fn encrypted_backup_written_by_zip_4_still_decrypts() {
+        use std::io::Read;
+
+        // Written by zip 4.6.1 with the options Hippius 0.6.13 used, so a
+        // recovery-phrase backup saved before the zip 9 upgrade must still
+        // open. Never regenerate it with a newer zip.
+        let bytes = include_bytes!("../../../tests/fixtures/zip/recovery-phrase-zip-4.6.1.zip");
+        let mut archive = zip::ZipArchive::new(Cursor::new(&bytes[..])).unwrap();
+        let mut entry = archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"correct horse").unwrap();
+        assert!(entry.encrypted());
+        let mut raw = String::new();
+        entry.read_to_string(&mut raw).unwrap();
+        assert_eq!(raw, "legal winner thank year wave sausage worth useful legal winner thank yellow");
     }
 
     // ── folder_hash ─────────────────────────────────────────────────

@@ -122,7 +122,7 @@ fn is_skipped_entry(name: Option<&str>) -> bool {
 }
 
 fn stored_options() -> SimpleFileOptions {
-    SimpleFileOptions::default()
+    crate::utils::zip_entry::options()
         .compression_method(CompressionMethod::Stored)
         // Per-file ZIP64. Default `large_file: false` aborts a single
         // entry past 4 GiB with an opaque Io ("Large file option has not
@@ -475,7 +475,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(dir.path().join("a.txt"), fs::Permissions::from_mode(0o777)).expect("chmod");
+            fs::set_permissions(dir.path().join("a.txt"), fs::Permissions::from_mode(0o4777)).expect("chmod a");
+            fs::set_permissions(dir.path().join("sub"), fs::Permissions::from_mode(0o777)).expect("chmod sub");
         }
 
         let out = TempDir::new().expect("out tempdir");

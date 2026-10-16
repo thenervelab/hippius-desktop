@@ -490,18 +490,18 @@ pub async fn local_wallet_export_backup_zip(state: State<'_, AppState>, id: i64,
         "passwordHash": backup.password_hash,
         "exportedAt": backup.exported_at,
     }))?;
-    write_backup_zip(&json)
+    backup_zip(&json)
 }
 
 /// Wraps the backup JSON in a single-entry Deflated `.zip`.
 ///
 /// Split out of the command so the archive shape (entry name, compression)
 /// can be pinned by a round-trip test without an `AppState`.
-fn write_backup_zip(json: &[u8]) -> Result<Vec<u8>, AppError> {
+fn backup_zip(json: &[u8]) -> Result<Vec<u8>, AppError> {
     use std::io::{Cursor, Write};
 
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    let options = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = crate::utils::zip_entry::options().compression_method(zip::CompressionMethod::Deflated);
     zip.start_file(BACKUP_ZIP_ENTRY, options)?;
     zip.write_all(json)?;
     let cursor = zip.finish()?;
@@ -681,7 +681,7 @@ mod tests {
         use std::io::{Cursor, Read};
 
         let json = br#"{"version":2,"address":"5Grw","encryptedMnemonic":"abc"}"#;
-        let bytes = write_backup_zip(json).unwrap();
+        let bytes = backup_zip(json).unwrap();
 
         // The archive shape is what older app versions and the v1 frontend
         // read back, so pin it: one entry, its name, Deflated, default mode.
@@ -713,6 +713,37 @@ mod tests {
         let bytes = zip_with_entry(BACKUP_ZIP_ENTRY, &vec![b'x'; cap + 1]);
         let err = read_backup_zip_entry(bytes).unwrap_err();
         assert!(matches!(err, AppError::Validation(m) if m.contains("unexpectedly large")));
+    }
+
+    /// A header that understates the entry size must not let the read run past
+    /// the cap. zip 9 already fails such a read itself (9.0.1, "fail reads that
+    /// exceed the declared uncompressed size"); the `take` cap stays as the
+    /// second line of defence, and this pins that the import is refused.
+    #[test]
+    fn backup_zip_whose_header_understates_the_size_is_refused() {
+        let cap = usize::try_from(MAX_BACKUP_JSON_BYTES).unwrap();
+        let mut bytes = zip_with_entry(BACKUP_ZIP_ENTRY, &vec![b'x'; cap + 1]);
+
+        // Uncompressed size sits 22 bytes into the local header and 24 into
+        // the central directory header (APPNOTE 4.3.7, 4.3.12).
+        for (signature, offset) in [(b"PK\x03\x04", 22), (b"PK\x01\x02", 24)] {
+            let start = bytes.windows(4).position(|w| w == signature).unwrap();
+            bytes[start + offset..start + offset + 4].copy_from_slice(&16u32.to_le_bytes());
+        }
+
+        assert!(read_backup_zip_entry(bytes).is_err());
+    }
+
+    #[test]
+    fn backup_zip_written_by_zip_4_still_imports() {
+        // Written by zip 4.6.1 with the options Hippius 0.6.13 used, so a backup
+        // exported before the zip 9 upgrade must still open. Never regenerate
+        // it with a newer zip.
+        let bytes = include_bytes!("../../tests/fixtures/zip/wallet-backup-zip-4.6.1.zip").to_vec();
+        let json = read_backup_zip_entry(bytes).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(parsed["address"], "5Grw");
+        assert_eq!(parsed["encryptedMnemonic"], "abc");
     }
 
     #[test]

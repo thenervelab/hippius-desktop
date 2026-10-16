@@ -26,7 +26,7 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use tracing::info;
 use zip::CompressionMethod;
-use zip::write::{SimpleFileOptions, ZipWriter};
+use zip::write::ZipWriter;
 
 /// Newest log files to include. Matches the appender's `max_log_files(7)` so a
 /// week of daily rotations is the natural upper bound.
@@ -332,7 +332,7 @@ fn build_log_bundle(dir: &Path, system_info: &str) -> Result<Option<TempZip>, Ap
 
     let file = std::fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(file);
-    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    let options = crate::utils::zip_entry::options().compression_method(CompressionMethod::Deflated);
 
     let mut total: u64 = 0;
     let mut wrote_any = false;
@@ -782,9 +782,12 @@ mod tests {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
             // Support reads these bundles with stock tools: entries keep the
-            // log file's own name and are Deflated.
-            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{:?}", entry.name());
-            names.push(entry.name().expect("entry name").into_owned());
+            // log file's own name, are Deflated, and carry Unix modes on
+            // every platform (see `utils::zip_entry`).
+            let name = entry.name().expect("entry name").into_owned();
+            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{name}");
+            assert_eq!(entry.unix_mode(), Some(0o100_644), "{name}");
+            names.push(name);
             let mut contents = String::new();
             entry.read_to_string(&mut contents).expect("read entry");
             combined.push_str(&contents);
