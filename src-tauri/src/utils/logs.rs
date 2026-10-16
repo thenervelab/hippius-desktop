@@ -26,7 +26,7 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use tracing::info;
 use zip::CompressionMethod;
-use zip::write::{FileOptions, ZipWriter};
+use zip::write::{SimpleFileOptions, ZipWriter};
 
 /// Newest log files to include. Matches the appender's `max_log_files(7)` so a
 /// week of daily rotations is the natural upper bound.
@@ -332,7 +332,7 @@ fn build_log_bundle(dir: &Path, system_info: &str) -> Result<Option<TempZip>, Ap
 
     let file = std::fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(file);
-    let options: FileOptions<'_, ()> = FileOptions::default().compression_method(CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
 
     let mut total: u64 = 0;
     let mut wrote_any = false;
@@ -783,8 +783,8 @@ mod tests {
             let mut entry = archive.by_index(i).expect("entry");
             // Support reads these bundles with stock tools: entries keep the
             // log file's own name and are Deflated.
-            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{}", entry.name());
-            names.push(entry.name().to_owned());
+            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{:?}", entry.name());
+            names.push(entry.name().expect("entry name").into_owned());
             let mut contents = String::new();
             entry.read_to_string(&mut contents).expect("read entry");
             combined.push_str(&contents);
@@ -876,7 +876,7 @@ mod tests {
         // independently of the system-info entry — a raw `len() <= MAX + 1`
         // would let an eighth log file pass whenever system-info went missing.
         let log_entries = (0..archive.len())
-            .filter(|&i| archive.by_index(i).expect("entry").name() != "system-info.txt")
+            .filter(|&i| archive.by_index(i).expect("entry").name().expect("entry name") != "system-info.txt")
             .count();
         assert!(log_entries <= MAX_FILES, "must never ship more than MAX_FILES log entries");
         assert!(log_entries > 0, "small files must all fit");

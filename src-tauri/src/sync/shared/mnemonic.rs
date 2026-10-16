@@ -922,7 +922,7 @@ mod tests {
         // contract: one AES-encrypted Deflated entry with this exact name.
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         assert_eq!(archive.len(), 1);
-        assert_eq!(archive.name_for_index(0), Some(RECOVERY_PHRASE_ENTRY));
+        assert_eq!(archive.name_for_index(0).unwrap().unwrap(), RECOVERY_PHRASE_ENTRY);
 
         let mut entry = archive.by_name_decrypt(RECOVERY_PHRASE_ENTRY, b"correct horse").unwrap();
         assert!(entry.encrypted());

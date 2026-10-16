@@ -96,7 +96,11 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "form",
 ] }
 ed25519-dalek = "2.2"
-zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
+# zip 9: upstream yanked every older release on 2026-10-16 ahead of security
+# advisories, and 4.6.1 is unyanked only until 2026-10-30 (zip-rs/zip2#1075).
+# The app only writes archives and reads back its own wallet backup; it never
+# calls `extract`, which those advisories are about.
+zip = { version = "9.0.4", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
 base64 = "0.22"
 bs58 = "0.5"
