@@ -564,11 +564,53 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/// Whether `kind`'s shortcut is registered now: a saved one that another app
+/// holds, or one turned off, is not.
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+#[must_use]
+pub fn is_registered(kind: ShortcutKind) -> bool {
+    registered()[kind.index()].is_some()
+}
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
+#[must_use]
+pub fn is_registered(_kind: ShortcutKind) -> bool {
+    false
+}
+
+/// The shortcut the pill's Stop names (every shortcut stops a running
+/// recording, [`action_for`]): the Record one when it is registered, else the
+/// screenshot one, else none. `active` is both in force (screenshot first,
+/// as [`load_both`]) and `registered` whether each is registered now.
+#[must_use]
+pub fn stop_shortcut(active: [Option<String>; 2], registered: [bool; 2]) -> Option<String> {
+    let [screenshot, record] = active;
+    let [screenshot_on, record_on] = registered;
+    record.filter(|_| record_on).or_else(|| screenshot.filter(|_| screenshot_on))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::capture::session::{CaptureKind, CaptureMode};
+
+    /// The pill names a shortcut that will stop the recording, never one that
+    /// did not register (another app holds it) or is off.
+    #[test]
+    fn the_pills_stop_names_a_shortcut_that_works() {
+        let both = || {
+            [
+                Some("CommandOrControl+Shift+2".to_string()),
+                Some("CommandOrControl+Alt+Shift+2".to_string()),
+            ]
+        };
+        assert_eq!(stop_shortcut(both(), [true, true]).as_deref(), Some("CommandOrControl+Alt+Shift+2"));
+        assert_eq!(stop_shortcut(both(), [true, false]).as_deref(), Some("CommandOrControl+Shift+2"));
+        assert_eq!(stop_shortcut(both(), [false, false]), None);
+        assert_eq!(stop_shortcut([None, None], [true, true]), None);
+        assert_eq!(stop_shortcut([Some("Alt+2".into()), None], [true, true]).as_deref(), Some("Alt+2"));
+    }
 
     /// The press asks the main window for the one-step area screenshot; the
     /// frontend passes `instant` straight on to `capture_start`.

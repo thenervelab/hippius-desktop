@@ -64,6 +64,12 @@ const CAPTURE_CAMERA_ROUTE = "/capture-camera";
 const CAPTURE_BUBBLE_CONTROLS_ROUTE = "/capture-bubble-controls";
 
 /**
+ * The recording pill's tooltip (`app/capture-pill-tip`), a window of its own
+ * over the pill. Same provider rules as the overlay.
+ */
+const CAPTURE_PILL_TIP_ROUTE = "/capture-pill-tip";
+
+/**
  * Wayland's area selection (`app/capture-area`): the chosen monitor's
  * picture to draw the area to record on. Same provider rules as the overlay.
  */
@@ -95,6 +101,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     pathname?.startsWith(CAPTURE_PREVIEW_ROUTE) ||
     pathname?.startsWith(CAPTURE_CAMERA_ROUTE) ||
     pathname?.startsWith(CAPTURE_BUBBLE_CONTROLS_ROUTE) ||
+    pathname?.startsWith(CAPTURE_PILL_TIP_ROUTE) ||
     pathname?.startsWith(CAPTURE_AREA_ROUTE)
   ) {
     // The popover skips the app providers but still mounts the theme

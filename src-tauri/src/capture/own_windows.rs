@@ -58,6 +58,9 @@ pub enum OwnWindow {
     /// The camera bubble's controls, over the bubble mid-recording
     /// (`bubble_controls`). The bubble itself is filmed; these never are.
     BubbleControls,
+    /// The pill's tooltip, in a window of its own over the pill
+    /// (`pill_hover`). Never filmed, like the pill.
+    PillTip,
     /// The preview card in the corner.
     Card,
     /// The tray popover, opened during a recording (`recording`) or not.
@@ -73,7 +76,7 @@ pub const fn content_protected(platform: Platform, window: OwnWindow) -> bool {
     match window {
         // On screen while a screenshot is read, on every platform.
         OwnWindow::Overlay => true,
-        OwnWindow::Pill | OwnWindow::BubbleControls | OwnWindow::Card => !recorder_leaves_app_out(platform),
+        OwnWindow::Pill | OwnWindow::BubbleControls | OwnWindow::PillTip | OwnWindow::Card => !recorder_leaves_app_out(platform),
         OwnWindow::TrayPopover { recording } => recording && !recorder_leaves_app_out(platform),
     }
 }
@@ -92,6 +95,57 @@ pub const fn recorder_leaves_app_out(platform: Platform) -> bool {
 #[must_use]
 pub const fn hide_card_for_screenshot(platform: Platform) -> bool {
     !content_protected(platform, OwnWindow::Card)
+}
+
+/// How a display's selection overlay comes on screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayShow {
+    /// A plain show, which may take the keyboard.
+    Plain,
+    /// Brought forward without becoming the key (active) window.
+    WithoutFocus,
+}
+
+/// How the overlay on a display is shown; `hosts_bar` is the one with the
+/// capture bar. Only the bar's overlay may take the keyboard, and it is
+/// given it once every overlay is up.
+///
+/// On macOS every overlay, the bar's included, is ordered front without
+/// taking the keyboard, and the bar's is then made the key window by
+/// `overlay_panel::make_key`, which does not activate Hippius (the overlays
+/// are non-activating panels, [`overlay_is_panel`]). A plain show there
+/// made the window key, and a WKWebView whose window is not key gets no
+/// mouse hover: an overlay shown after the bar's (another display, or one
+/// plugged in while choosing) left the bar with no tooltips and no Escape
+/// until it was clicked. On Windows a plain show activates the window,
+/// which took the bar's keyboard the same way, so only the bar's is shown
+/// plainly. Linux keeps the plain show: X11 makes the overlay full screen
+/// after it and the window manager decides focus, and hover reaches a
+/// window there without focus.
+#[must_use]
+pub const fn overlay_show(platform: Platform, hosts_bar: bool) -> OverlayShow {
+    match (platform, hosts_bar) {
+        (Platform::MacOs, _) | (Platform::Windows, false) => OverlayShow::WithoutFocus,
+        _ => OverlayShow::Plain,
+    }
+}
+
+/// Whether the selection overlays are non-activating panels
+/// (`overlay_panel`): macOS only.
+///
+/// WebKit gives a page hover, mouse moves and keys only while its window is
+/// the key window, and an ordinary window is only key while Hippius is the
+/// active app. The user's app is frontmost when a capture starts from the
+/// shortcut or the tray, and it can come back to the front while the user
+/// is choosing (a click or gesture that reaches it); from then on the bar
+/// showed no tooltips, the window under the pointer was not lit and Escape
+/// did nothing, until a click on the bar brought Hippius forward. A
+/// non-activating panel becomes key without activating Hippius, so the bar
+/// has hover and keys whichever app is frontmost, and the user's app stays
+/// active (its menu bar, its Space) while they choose.
+#[must_use]
+pub const fn overlay_is_panel(platform: Platform) -> bool {
+    matches!(platform, Platform::MacOs)
 }
 
 /// The app's own windows a screen or area recording still films while the
@@ -253,6 +307,41 @@ mod tests {
         microphone: false,
     };
 
+    /// On macOS a window that is not key gets no webview hover, so an overlay
+    /// shown plainly after the bar's took the bar's tooltips away until a
+    /// click. Only the bar's overlay may take the keyboard where a plain show
+    /// takes it.
+    #[test]
+    fn only_the_bars_overlay_takes_the_keyboard() {
+        // macOS: every overlay comes up without the keyboard, the bar's too;
+        // `overlay_panel::make_key` gives the bar's the keyboard once all are
+        // up, without activating Hippius. A plain show would make it key in
+        // AppKit's own way and pull Hippius to the front.
+        assert_eq!(overlay_show(Platform::MacOs, false), OverlayShow::WithoutFocus);
+        assert_eq!(overlay_show(Platform::MacOs, true), OverlayShow::WithoutFocus);
+        // Windows: a plain show activates the window, so only the bar's has one.
+        assert_eq!(overlay_show(Platform::Windows, false), OverlayShow::WithoutFocus);
+        assert_eq!(overlay_show(Platform::Windows, true), OverlayShow::Plain);
+        // Linux: X11 goes full screen after a plain show and the window
+        // manager decides focus; the bar's overlay is focused last.
+        for platform in [Platform::LinuxX11, Platform::LinuxWayland] {
+            assert_eq!(overlay_show(platform, false), OverlayShow::Plain, "{platform:?}");
+            assert_eq!(overlay_show(platform, true), OverlayShow::Plain, "{platform:?}");
+        }
+    }
+
+    /// The overlays are non-activating panels on macOS only: WebKit gives
+    /// hover and keys only to the key window, and only a panel can be key
+    /// while another app is frontmost. Windows and Linux keep ordinary
+    /// windows (their webviews get hover without the keyboard).
+    #[test]
+    fn only_macos_overlays_are_non_activating_panels() {
+        assert!(overlay_is_panel(Platform::MacOs));
+        for platform in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
+            assert!(!overlay_is_panel(platform), "{platform:?}");
+        }
+    }
+
     /// macOS: only the overlays are hidden from other apps' screen sharing;
     /// the pill, the card and the popover show in a Meet share.
     #[test]
@@ -260,6 +349,7 @@ mod tests {
         assert!(content_protected(Platform::MacOs, OwnWindow::Overlay));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Pill));
         assert!(!content_protected(Platform::MacOs, OwnWindow::BubbleControls));
+        assert!(!content_protected(Platform::MacOs, OwnWindow::PillTip));
         assert!(!content_protected(Platform::MacOs, OwnWindow::Card));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: true }));
         assert!(!content_protected(Platform::MacOs, OwnWindow::TrayPopover { recording: false }));
@@ -275,6 +365,7 @@ mod tests {
             OwnWindow::Overlay,
             OwnWindow::Pill,
             OwnWindow::BubbleControls,
+            OwnWindow::PillTip,
             OwnWindow::Card,
             OwnWindow::TrayPopover { recording: true },
         ] {

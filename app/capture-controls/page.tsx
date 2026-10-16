@@ -31,8 +31,10 @@ import {
 } from "@/app/lib/tauri/capture";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_PILL } from "@/app/lib/capture/glass";
 import { mmss } from "@/app/lib/capture/time";
+import { acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
 import { discardNeedsConfirm } from "./discard";
 import { PillMenu, type PillMenuKind } from "./PillMenu";
+import { usePillTips } from "./pillTips";
 
 /**
  * Floating recording pill: time, microphone, camera, pause/resume, restart,
@@ -66,6 +68,14 @@ import { PillMenu, type PillMenuKind } from "./PillMenu";
  * pointed at or focused, and the first time ever it says so (Rust's
  * `filmedNote`). The tray menu and the shortcut stop a recording there too.
  *
+ * Tooltips: the pill is never the key window, so on macOS its webview gets no
+ * hover and a native `title` never shows. Rust watches the pointer and says
+ * where it is on the pill's row; `usePillTips` finds the button there, lights
+ * it (`data-hover`, in place of `:hover`) and has Rust show its tooltip in a
+ * window over the pill (`capture-pill-tip`), out of the recording like the
+ * pill. No button carries a native `title`, so two tooltips never show. Where
+ * the pill is filmed (Linux) there are none: they would be filmed too.
+ *
  * Escape does nothing here. The pill becomes the key window as soon as it is
  * clicked (Pause, say), so a stray Escape meant for another app landed here
  * and threw a recording away. Discarding is the trash button only, and past
@@ -87,12 +97,17 @@ const FILL = "fixed inset-0 flex items-center justify-center";
 /** The pill's own row: the window's height when no menu is open (Rust's `CONTROLS_HEIGHT`). */
 const PILL_ROW = "flex h-[60px] w-full shrink-0 items-center justify-center";
 /** The small button beside the microphone and the camera that opens their menu. */
-const MENU_BUTTON = `grid h-7 w-4 place-items-center rounded-full ${GLASS_BUTTON}`;
+/**
+ * Lit while Rust says the pointer is on it (`usePillTips`): `:hover` never
+ * happens in a window that is not key.
+ */
+const POINTED = "data-[hover=true]:bg-white/10 data-[hover=true]:text-white";
+const MENU_BUTTON = `grid h-7 w-4 place-items-center rounded-full ${GLASS_BUTTON} ${POINTED}`;
 /** How long the one-time "filmed" line stays before the pill folds up. */
 const NOTE_MS = 8000;
 /** The grace before a pointed-at compact pill folds up again. */
 const COLLAPSE_MS = 600;
-const ICON_BUTTON = `grid size-7 place-items-center rounded-full ${GLASS_BUTTON}`;
+const ICON_BUTTON = `grid size-7 place-items-center rounded-full ${GLASS_BUTTON} ${POINTED}`;
 
 /** What the pill is asking before it throws the recording away. */
 type Question = "discard" | "restart";
@@ -140,6 +155,12 @@ export default function CaptureControlsPage() {
   const focusBack = useRef<Question | null>(null);
   const trashRef = useRef<HTMLButtonElement | null>(null);
   const restartRef = useRef<HTMLButtonElement | null>(null);
+  // Whether Rust shows tooltips here, and the shortcut Stop names (Rust's).
+  const [tips, setTips] = useState(false);
+  const [stopShortcut, setStopShortcut] = useState<string | null>(null);
+  // The pill's row: Rust's pointer and the tooltip's box are measured from it.
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const { tipProps } = usePillTips(tips, rowRef);
 
   useEffect(() => {
     // Rust numbers every phase: an older one (a first read that answers
@@ -168,6 +189,8 @@ export default function CaptureControlsPage() {
         setCompact(c.compact);
         setNote(c.filmedNote);
         setMenuRoom(c.menuRoom ?? 0);
+        setTips(!!c.tips);
+        setStopShortcut(c.stopShortcut ?? null);
       })
       .catch(() => undefined);
     const unlisteners = [
@@ -317,28 +340,31 @@ export default function CaptureControlsPage() {
   if (starting && countdown !== null) {
     return (
       <div className={FILL}>
-        <div data-tauri-drag-region className={`${PILL} gap-2 py-1.5 pl-3.5 pr-1.5`}>
-          <span aria-hidden data-tauri-drag-region className="size-2.5 rounded-full bg-[#FF453A]" />
-          <span data-tauri-drag-region role="timer" aria-live="assertive" className="whitespace-nowrap text-sm">
-            Recording in <span className="font-mono tabular-nums">{countdown}</span>
-          </span>
-          <button
-            type="button"
-            onClick={() => void skipCaptureCountdown().catch(() => undefined)}
-            className={`h-7 shrink-0 rounded-full bg-white/10 px-2.5 text-[11.5px] font-medium ${GLASS_BUTTON}`}
-          >
-            Start now
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            aria-label="Cancel recording"
-            title="Cancel (nothing is recorded)"
-            className={ICON_BUTTON}
-            onClick={() => void run(cancelCapture)}
-          >
-            <X className="size-4" />
-          </button>
+        {/* The row the window shows, which Rust measures the pointer from. */}
+        <div ref={rowRef} className={PILL_ROW}>
+          <div data-tauri-drag-region className={`${PILL} gap-2 py-1.5 pl-3.5 pr-1.5`}>
+            <span aria-hidden data-tauri-drag-region className="size-2.5 rounded-full bg-[#FF453A]" />
+            <span data-tauri-drag-region role="timer" aria-live="assertive" className="whitespace-nowrap text-sm">
+              Recording in <span className="font-mono tabular-nums">{countdown}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => void skipCaptureCountdown().catch(() => undefined)}
+              className={`h-7 shrink-0 rounded-full bg-white/10 px-2.5 text-[11.5px] font-medium ${GLASS_BUTTON}`}
+            >
+              Start now
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              aria-label="Cancel recording"
+              {...tipProps("cancel", { label: "Cancel recording" })}
+              className={ICON_BUTTON}
+              onClick={() => void run(cancelCapture)}
+            >
+              <X className="size-4" />
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -436,6 +462,10 @@ export default function CaptureControlsPage() {
 
   const paused = phase.phase === "paused";
   const collapsed = compact && !expanded && !busy;
+  // Stop's tooltip names the shortcut that stops the recording, drawn as
+  // Settings draws it ("⌥⇧⌘2" on a Mac, "Ctrl+Alt+Shift+2" elsewhere).
+  const mac = isMacPlatform();
+  const stopKeys = stopShortcut ? acceleratorKeys(stopShortcut, mac).join(mac ? "" : "+") : null;
   // Only a bubble can be hidden: the camera-only stage IS the recording.
   // `shape` goes null while hidden, so a hidden bubble is still a bubble here.
   const hasBubble = camera?.shape === "bubble" || camera?.hidden === true;
@@ -480,7 +510,7 @@ export default function CaptureControlsPage() {
       }}
     >
       {slot(true)}
-      <div className={PILL_ROW}>
+      <div ref={rowRef} className={PILL_ROW}>
         <div
           data-tauri-drag-region
           role="group"
@@ -532,9 +562,12 @@ export default function CaptureControlsPage() {
           )}
           {phase.microphone &&
             (micLost ? (
-              <MicOff className="size-3.5 text-amber-400" role="img" aria-label={lost?.message}>
-                <title>{lost?.message}</title>
-              </MicOff>
+              <MicOff
+                className="size-3.5 text-amber-400"
+                role="img"
+                aria-label={lost?.message}
+                {...tipProps("mic-lost", { label: lost?.message ?? "" })}
+              />
             ) : canMute && !collapsed ? (
               <span className="flex items-center">
                 <button
@@ -542,7 +575,7 @@ export default function CaptureControlsPage() {
                   disabled={busy}
                   aria-label={mic?.muted ? "Unmute microphone" : "Mute microphone"}
                   aria-pressed={!!mic?.muted}
-                  title={mic?.muted ? "Unmute (the recording is silent while muted)" : "Mute (the recording carries on, silent)"}
+                  {...tipProps("mute", { label: mic?.muted ? "Unmute microphone" : "Mute microphone" })}
                   className={ICON_BUTTON}
                   onClick={() => void run(() => muteCaptureMicrophone(!mic?.muted).then(setMic))}
                 >
@@ -556,7 +589,7 @@ export default function CaptureControlsPage() {
                     aria-label="Choose a microphone"
                     aria-haspopup="menu"
                     aria-expanded={menu === "microphone"}
-                    title="Choose a microphone"
+                    {...tipProps("mic-menu", { label: "Choose a microphone" })}
                     className={MENU_BUTTON}
                     onClick={() => void openMenu("microphone")}
                   >
@@ -565,14 +598,22 @@ export default function CaptureControlsPage() {
                 )}
               </span>
             ) : mic?.muted ? (
-              <MicOff className="size-3.5 text-[#FF453A]" role="img" aria-label="Microphone muted" />
+              <MicOff
+                className="size-3.5 text-[#FF453A]"
+                role="img"
+                aria-label="Microphone muted"
+                {...tipProps("mic", { label: "Microphone muted" })}
+              />
             ) : (
-              <Mic className="size-3.5 text-white/60" role="img" aria-label="Recording the microphone" />
+              <Mic
+                className="size-3.5 text-white/60"
+                role="img"
+                aria-label="Recording the microphone"
+                {...tipProps("mic", { label: "Recording the microphone" })}
+              />
             ))}
           {lost && lost.device !== "microphone" && (
-            <VolumeX className="size-3.5 text-amber-400" role="img" aria-label={lost.message}>
-              <title>{lost.message}</title>
-            </VolumeX>
+            <VolumeX className="size-3.5 text-amber-400" role="img" aria-label={lost.message} {...tipProps("sound-lost", { label: lost.message })} />
           )}
           {/* Always mounted, so a screen reader hears the line when it arrives. */}
           <span role="status" className="sr-only">
@@ -588,7 +629,7 @@ export default function CaptureControlsPage() {
                 disabled={busy}
                 aria-label={bubbleShown ? "Hide camera" : "Show camera"}
                 aria-pressed={bubbleShown}
-                title={bubbleShown ? "Hide the camera (the recording carries on)" : "Show the camera again"}
+                {...tipProps("camera", { label: bubbleShown ? "Hide camera" : "Show camera" })}
                 className={ICON_BUTTON}
                 onClick={() => void run(toggleCaptureCamera)}
               >
@@ -603,7 +644,7 @@ export default function CaptureControlsPage() {
                 aria-label="Camera options"
                 aria-haspopup="menu"
                 aria-expanded={menu === "camera"}
-                title="Camera and size"
+                {...tipProps("camera-menu", { label: "Camera options" })}
                 className={hasBubble ? MENU_BUTTON : ICON_BUTTON}
                 onClick={() => void openMenu("camera")}
               >
@@ -614,7 +655,7 @@ export default function CaptureControlsPage() {
               type="button"
               disabled={busy}
               aria-label={paused ? "Resume recording" : "Pause recording"}
-              title={paused ? "Resume" : "Pause"}
+              {...tipProps("pause", { label: paused ? "Resume recording" : "Pause recording" })}
               className={ICON_BUTTON}
               onClick={() => void run(paused ? resumeCapture : pauseCapture)}
             >
@@ -625,7 +666,7 @@ export default function CaptureControlsPage() {
               type="button"
               disabled={busy}
               aria-label="Restart recording"
-              title="Restart (throws this take away)"
+              {...tipProps("restart", { label: "Restart recording" })}
               className={ICON_BUTTON}
               onClick={() => throwAway("restart")}
             >
@@ -635,7 +676,7 @@ export default function CaptureControlsPage() {
               type="button"
               disabled={busy}
               aria-label="Stop recording"
-              title="Stop and save"
+              {...tipProps("stop", { label: "Stop recording", detail: stopKeys ? `Press ${stopKeys}` : undefined })}
               className={ICON_BUTTON}
               onClick={() => void run(stopCapture)}
             >
@@ -646,7 +687,7 @@ export default function CaptureControlsPage() {
               type="button"
               disabled={busy}
               aria-label="Discard recording"
-              title="Discard (nothing is saved)"
+              {...tipProps("discard", { label: "Discard recording" })}
               className={ICON_BUTTON}
               onClick={() => throwAway("discard")}
             >

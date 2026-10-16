@@ -5,6 +5,7 @@ paths:
   - "app/capture-controls/**"
   - "app/capture-camera/**"
   - "app/capture-bubble-controls/**"
+  - "app/capture-pill-tip/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
   - "app/components/page-sections/settings/EditedImageSetting.tsx"
@@ -404,7 +405,36 @@ and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
-the bar's overlay takes focus. The frontmost app (pid) is remembered and
+the bar's overlay takes the keyboard, and only once every overlay is up
+(`focus_overlays` at the end of `open_capture_ui`); the overlays are shown
+per `own_windows::overlay_show`, without focus on macOS (the bar's too) and
+Windows (the others), a display plugged in mid-choice too. **On macOS the
+overlays are non-activating panels** (`overlay_panel.rs`,
+`own_windows::overlay_is_panel`): WebKit gives hover, mouse moves and keys
+only to the key window, and an ordinary window is key only while Hippius is
+the active app, so whenever the user's app was in front (the shortcut, the
+tray, a click or gesture that reached another app while choosing) the bar
+had no tooltips, no lit window and no Escape until it was clicked. A panel
+is key without activating Hippius; every hand-over of the keyboard to the
+bar is `overlay_panel::make_key`, never `set_focus` (which activates): once
+all are up, on a bar move, when the bar's page has loaded
+(`capture_overlay_context`), and from the bar-follow watch when another app
+took the keyboard and the pointer is on an overlay (`should_rekey`; never
+from another Hippius window or a prompt above the overlays). The panel is
+made by swapping the built window's class (`make_panel`, before show) with
+the content view taken out first, so WebKit's KVO observer of `contentView`
+is gone during the swap (a class swapped under an observer aborts the app on
+the next `removeObserver:`); any unexpected class, layout or KVO override
+leaves an ordinary window, logged. `log_if_bar_lacks_keyboard` logs key AND
+(panel OR Hippius active), at open and at page load; `isKeyWindow` alone said
+"key" while the bar had no hover. The bar's tooltip opens on focus only for
+`:focus-visible`, so the window taking the keyboard back does not pop one on
+the last focused button. Pinned by
+`own_windows::tests::only_the_bars_overlay_takes_the_keyboard`,
+`overlay_panel::tests`,
+`capture_wiring::only_the_bars_overlay_takes_the_keyboard`,
+`capture_wiring::the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward`
+and `overlayPage.test.tsx`. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
 front only if it was key), and never mid-recording (it would be filmed).
@@ -660,9 +690,11 @@ bubble is live (no load wait on the first hover), level 1002 above the
 bubble on macOS, `focused(false)` + `accept_first_mouse(true)`, destroyed
 by `end_camera` and when the camera window goes. It calls only the pill's
 commands (`capture_camera_set_size`, `capture_pause` / `capture_resume`),
-mirrors Rust's phase (by `seq`) and camera state, names the hovered button in
-its own `role="tooltip"` line (no native `title`: a system tooltip is a
-window), and is one Tab stop with arrow keys. Pinned by
+mirrors Rust's phase (by `seq`) and camera state, names the button under
+Rust's pointer (`capture_bubble_controls_pointer`, from the same watch; the
+window is never key, so `mouseenter` never fired) in its own
+`role="tooltip"` line (no native `title`: a system tooltip is a window), and
+is one Tab stop with arrow keys. Pinned by
 `bubble_controls::tests`, `bubbleControlsPage.test.tsx` and
 `capture_wiring::the_bubble_controls_are_never_filmed`. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
@@ -1233,8 +1265,29 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   distinct from `BarTooltip.tsx`: `barTooltip.ts` resolved as the component
   on a case-insensitive disk. Pinned by `overlayPage.test.tsx` and
   `tooltipPlacement.test.ts`.
+- **Pill hover comes from Rust: the pill is never key.** WebKit gives hover
+  only to the key window, so its buttons got no `:hover`, no pointer events
+  and no native `title`. `spawn_pill_hover_watch` (50 ms, macOS and Windows)
+  sends `capture_pill_pointer` (the point on the pill's row,
+  `pill_hover::pointer_on_row`; none while a menu is open); `usePillTips`
+  hit-tests it (`rustHover::markedAt`), sets `data-hover` and calls
+  `capture_pill_tip`. The tooltip is the window `capture-pill-tip`
+  (`pill_hover::tip_frame`: `TIP_ROOM` tall on top of the pill's glass, below
+  it near the top of the work area, NEVER over the glass, so it cannot take a
+  button's click; it ignores the mouse on macOS only, since tao's Windows
+  click-through makes the window layered), unfocusable, level 1003,
+  `OwnWindow::PillTip` (kept out like the pill), shown only while a tooltip
+  is; the watch hides it when the pointer leaves the pill. Placing waits on the main
+  thread, so `sync_pill_tip` never does it under the `pill_tip` lock. No
+  `title` on the pill. Linux has none (`pill_hover::supported`: filmed).
+  The bubble's controls (`capture_bubble_controls_pointer`) and the card
+  (`capture_preview_pointer`, polled whenever it is up) find hover the same
+  way, with no `title` either. Pinned by `pill_hover::tests`,
+  `controlsPage.test.tsx`, `pillTipPage.test.tsx` and
+  `capture_wiring::the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
-  `capture-camera.json`, `capture-bubble-controls.json`) must match
+  `capture-camera.json`, `capture-bubble-controls.json`,
+  `capture-pill-tip.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.
