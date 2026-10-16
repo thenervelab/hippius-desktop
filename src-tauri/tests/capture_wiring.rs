@@ -425,6 +425,66 @@ fn only_the_bars_overlay_takes_the_keyboard() {
     );
 }
 
+/// WebKit gives a page hover and keys only while its window is key, and an
+/// ordinary window is key only while Hippius is the active app. With the
+/// user's app in front (the shortcut, the tray, or a click that reached it
+/// while choosing) the bar showed no tooltips and Escape did nothing until it
+/// was clicked. So on macOS every overlay is made a non-activating panel
+/// before it is shown, and every hand-over of the keyboard to the bar goes
+/// through `overlay_panel::make_key` (key without activating Hippius), never
+/// a plain `set_focus`, which activates.
+#[test]
+fn the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward() {
+    let src = read("src/capture/commands.rs");
+    let open = fn_body(&src, "async fn open_overlay(");
+    let panel = open
+        .find("overlay_panel::make_panel(&window)")
+        .expect("every overlay is made a panel as it opens");
+    assert!(open.contains("own_windows::overlay_is_panel(super::rollout::current_platform())"));
+    let shown = open.find("show_without_focus(&window)").expect("the overlay is shown");
+    assert!(panel < shown, "the panel is made before the overlay is shown");
+
+    for (sig, what) in [
+        ("fn focus_overlays(", "once every overlay is up"),
+        ("fn move_bar(", "when the bar moves to another display"),
+        ("async fn apply_display_change(", "when the bar's display was unplugged"),
+    ] {
+        let body = fn_body(&src, sig);
+        assert!(body.contains("overlay_panel::make_key("), "the bar's overlay is keyed {what}");
+        assert!(!body.contains("set_focus()"), "no plain focus {what}: it activates Hippius");
+    }
+
+    // The keyboard is checked and given back while the user chooses: when
+    // the bar's page has loaded (a dev page can take seconds) and by the
+    // bar-follow watch once another app has taken it.
+    let context = fn_body(&src, "pub async fn capture_overlay_context(");
+    assert!(context.contains("focus_overlays(&app)"), "the bar's overlay is keyed when its page loads");
+    assert!(context.contains("log_if_bar_lacks_keyboard(&app,"));
+    let follow = fn_body(&src, "fn spawn_bar_follow(");
+    assert!(follow.contains("overlay_panel::rekey_if_pointer_on_overlay("));
+
+    // The log tells the truth: key AND (panel OR Hippius active), not
+    // `is_focused` alone, which said "key" while the bar got no hover.
+    let check = fn_body(&src, "fn log_if_bar_lacks_keyboard(");
+    assert!(check.contains("overlay_panel::keyboard_state("));
+    assert!(check.contains("bar_gets_pointer()"));
+    assert!(!check.contains("is_focused()"));
+
+    // The class swap happens only with the content view taken out, so no
+    // key-value observer of the window is cut off (a later removeObserver:
+    // would throw and abort the app), and a panel never hides when Hippius
+    // is not the active app.
+    let panel_src = read("src/capture/overlay_panel.rs");
+    let convert = fn_body(&panel_src, "unsafe fn convert(");
+    let detached = convert.find("setContentView: placeholder").expect("the content view is taken out");
+    let gate = convert.find("kvo_subclass_allows_swap(&observed)").expect("observers are checked");
+    let swapped = convert.find("object_setClass(ns_window, panel_ptr)").expect("the class is swapped");
+    let attached = convert.find("setContentView: content").expect("the content view goes back");
+    assert!(detached < gate && gate < swapped && swapped < attached);
+    assert!(convert.contains("setHidesOnDeactivate: NO"));
+    assert!(convert.contains("NONACTIVATING_PANEL_MASK"));
+}
+
 /// The preview card floats over whatever the user captures next, and it is
 /// information, not a dialog: it must stay out of captures and must not take
 /// the keyboard from the app the user is typing in.
@@ -2530,8 +2590,8 @@ fn the_bar_follows_the_pointer_to_another_display() {
     );
     let moved = fn_body(&src, "fn move_bar(");
     assert!(
-        moved.contains("rebroadcast(") && moved.contains("set_focus()"),
-        "the overlays hear the move"
+        moved.contains("rebroadcast(") && moved.contains("overlay_panel::make_key(&overlay)"),
+        "the overlays hear the move, and the keyboard goes with the bar"
     );
     assert!(
         fn_body(&src, "async fn open_capture_ui(").contains("bar_held.store(false"),

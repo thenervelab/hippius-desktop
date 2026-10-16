@@ -30,6 +30,7 @@ pub mod linux_x11;
 pub mod live_controls;
 pub mod mic_meter;
 pub mod naming;
+pub mod overlay_panel;
 pub mod own_windows;
 pub mod permission_flow;
 pub mod permissions;
