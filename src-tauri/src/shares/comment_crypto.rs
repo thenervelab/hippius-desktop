@@ -194,8 +194,8 @@ const MAX_NAME_CHARS: usize = 80;
 
 /// A name of nothing but code points that draw nothing on their own:
 /// whitespace, control characters, format characters (zero-width space,
-/// ZWNJ, ZWJ, word joiner, BOM, bidi marks, tags), other default-ignorables
-/// (variation selectors, Hangul fillers, soft hyphen), and the braille blank,
+/// ZWNJ, ZWJ, word joiner, BOM, bidi marks, soft hyphen, tags), other
+/// default-ignorables (variation selectors, Hangul fillers), and the braille blank,
 /// a common way to fake an empty name. The Arabic, Syriac and Kaithi
 /// prepended concatenation marks are format characters that draw a glyph, so
 /// they are taken out of the set.
@@ -206,9 +206,12 @@ const MAX_NAME_CHARS: usize = 80;
 /// ICU there), so a code point assigned in a newer Unicode version can be
 /// judged differently until both catch up.
 static INVISIBLE_ONLY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"^[[\p{White_Space}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\x{2800}]--[\x{600}-\x{605}\x{6DD}\x{70F}\x{890}\x{891}\x{8E2}\x{110BD}\x{110CD}]]*$",
-    )
+    Regex::new(concat!(
+        r"^[",
+        r"[\p{White_Space}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\x{2800}]",
+        r"--[\x{600}-\x{605}\x{6DD}\x{70F}\x{890}\x{891}\x{8E2}\x{110BD}\x{110CD}]",
+        r"]*$",
+    ))
     .expect("a fixed pattern of supported Unicode classes")
 });
 
@@ -226,13 +229,29 @@ fn is_js_whitespace(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
 }
 
-/// Characters removed from a visible name before it is shown: controls, and
-/// bidi marks, embeddings, overrides and isolates, which can make a name read
-/// as something it is not or reorder the rest of its row. The console does
-/// not remove these; it only matters that every one of them is invisible by
-/// [`is_blank_name`], so removing them never changes whether a name is blank.
+/// Characters a visible name cannot show as typed: controls, line and
+/// paragraph separators, and bidi marks, embeddings, overrides and isolates,
+/// which can make a name read as something it is not, break its row, or
+/// reorder the rest of it. The console does not touch these; it only matters
+/// that every one of them is invisible by [`is_blank_name`], so replacing
+/// them never changes whether a name is blank.
 fn is_display_unsafe(c: char) -> bool {
-    c.is_control() || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// How one character of a visible name is shown. Unsafe whitespace (tab,
+/// newline, line separator) becomes a space so the words it separated stay
+/// apart, as the console's page shows them; other unsafe characters go.
+fn shown_char(c: char) -> Option<char> {
+    match (is_display_unsafe(c), c.is_whitespace()) {
+        (false, _) => Some(c),
+        (true, true) => Some(' '),
+        (true, false) => None,
+    }
 }
 
 /// A viewer-chosen name made safe to show, or `None` when it would show as
@@ -241,7 +260,8 @@ fn is_display_unsafe(c: char) -> bool {
 /// Trimmed, cut to [`MAX_NAME_CHARS`] and trimmed at the end exactly as the
 /// console does, then judged blank on what is left, so visible text past the
 /// limit cannot keep an otherwise invisible name alive. A visible name is
-/// kept as typed apart from [`is_display_unsafe`] characters.
+/// kept as typed, except that [`is_display_unsafe`] characters are replaced
+/// by [`shown_char`] and the result is trimmed again.
 fn clean_name(name: Option<&str>) -> Option<String> {
     let kept: String = name?.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
     let kept = kept.trim_end_matches(is_js_whitespace);
@@ -249,13 +269,14 @@ fn clean_name(name: Option<&str>) -> Option<String> {
         return None;
     }
 
-    let shown: String = kept.chars().filter(|&c| !is_display_unsafe(c)).collect();
+    let shown: String = kept.chars().filter_map(shown_char).collect();
     Some(shown.trim_matches(is_js_whitespace).to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[derive(Deserialize)]
     struct Fixture {
@@ -434,6 +455,8 @@ mod tests {
         assert_eq!(clean_name(Some("  Ahmad  ")).as_deref(), Some("Ahmad"));
         assert_eq!(clean_name(Some("Bob\u{202E}nimda")).as_deref(), Some("Bobnimda"));
         assert_eq!(clean_name(Some("\u{202E} Bob\t")).as_deref(), Some("Bob"));
+        assert_eq!(clean_name(Some("Bob\tAdmin")).as_deref(), Some("Bob Admin"));
+        assert_eq!(clean_name(Some("Bob\u{2028}Admin\n")).as_deref(), Some("Bob Admin"));
         assert_eq!(clean_name(Some("\u{200B}\n ")), None);
         assert_eq!(clean_name(None), None);
         assert_eq!(clean_name(Some(&"x".repeat(200))).unwrap().chars().count(), MAX_NAME_CHARS);
@@ -488,28 +511,45 @@ mod tests {
 
     /// Characters that draw nothing on their own, drawn from each class the
     /// rule covers.
-    const INVISIBLE_SAMPLE: &str = " \t\n\u{85}\u{A0}\u{3000}\u{1}\u{7F}\u{9B}\u{AD}\u{34F}\u{200B}\u{200C}\u{200D}\u{200E}\u{202E}\u{2060}\u{2066}\u{FE0F}\u{FEFF}\u{3164}\u{2800}\u{E0041}";
+    const INVISIBLE_SAMPLE: &str = concat!(
+        " \t\n\u{85}\u{A0}\u{3000}\u{1}\u{7F}\u{9B}\u{AD}\u{34F}\u{200B}\u{200C}",
+        "\u{200D}\u{200E}\u{202E}\u{2060}\u{2066}\u{FE0F}\u{FEFF}\u{3164}\u{2800}\u{E0041}",
+    );
 
-    proptest::proptest! {
+    fn invisible_char() -> impl Strategy<Value = char> {
+        proptest::sample::select(INVISIBLE_SAMPLE.chars().collect::<Vec<_>>())
+    }
+
+    /// Names that mix invisible characters with a few visible ones and run
+    /// past the limit, so the cut, the blank check and the replacement of
+    /// unsafe characters all get exercised.
+    fn mixed_name() -> impl Strategy<Value = String> {
+        let invisible = invisible_char();
+        let visible = proptest::sample::select(vec!['a', 'Z', '\u{5C71}', '\u{1F600}', '\u{6DD}', '\u{2028}']);
+        let pick = prop_oneof![8 => invisible, 1 => visible, 1 => any::<char>()];
+        proptest::collection::vec(pick, 0..120).prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
         /// Whatever a viewer sends, a shown name has something visible in it,
         /// fits the limit, has no outer whitespace and nothing that reorders
         /// or garbles the row.
         #[test]
-        fn a_shown_name_is_never_blank_or_unsafe(name in proptest::prelude::any::<String>()) {
+        fn a_shown_name_is_never_blank_or_unsafe(name in prop_oneof![any::<String>(), mixed_name()]) {
             if let Some(shown) = clean_name(Some(&name)) {
-                proptest::prop_assert!(!is_blank_name(&shown));
-                proptest::prop_assert!(shown.chars().count() <= MAX_NAME_CHARS);
-                proptest::prop_assert_eq!(shown.trim_matches(is_js_whitespace), shown.as_str());
-                proptest::prop_assert!(!shown.chars().any(is_display_unsafe));
+                prop_assert!(!is_blank_name(&shown));
+                prop_assert!(shown.chars().count() <= MAX_NAME_CHARS);
+                prop_assert_eq!(shown.trim_matches(is_js_whitespace), shown.as_str());
+                prop_assert!(!shown.chars().any(is_display_unsafe));
             }
         }
 
         /// Any run of invisible characters is blank, however it is mixed.
         #[test]
-        fn invisible_characters_alone_are_blank(picks in proptest::collection::vec(proptest::sample::select(INVISIBLE_SAMPLE.chars().collect::<Vec<_>>()), 0..120)) {
+        fn invisible_characters_alone_are_blank(picks in proptest::collection::vec(invisible_char(), 0..120)) {
             let name: String = picks.into_iter().collect();
-            proptest::prop_assert!(is_blank_name(&name));
-            proptest::prop_assert_eq!(clean_name(Some(&name)), None);
+            prop_assert!(is_blank_name(&name));
+            prop_assert_eq!(clean_name(Some(&name)), None);
         }
 
         /// Joiners inside a name with visible text are kept as typed, so ZWJ
@@ -517,7 +557,7 @@ mod tests {
         #[test]
         fn joiners_inside_a_visible_name_are_kept(left in "[a-z]{1,20}", right in "[a-z]{1,20}", joiner in "[\u{200C}\u{200D}]") {
             let name = format!("{left}{joiner}{right}");
-            proptest::prop_assert_eq!(clean_name(Some(&name)), Some(name));
+            prop_assert_eq!(clean_name(Some(&name)), Some(name));
         }
     }
 }

@@ -28,7 +28,7 @@
     }
   ],
   "names": {
-    "rule": "cleanName(name): trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value.",
+    "rule": "cleanName(name): trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc, line or paragraph separators or bidi controls: the desktop replaces those in a shown name, so only the blank list may hold them.",
     "max_chars": 80,
     "blank": [
       {
@@ -118,6 +118,10 @@
       {
         "label": "next line is not trimmed, so it counts toward the limit",
         "name": "\u0085\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam"
+      },
+      {
+        "label": "control characters up to the limit",
+        "name": "\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001Sam"
       }
     ],
     "visible": [
@@ -160,6 +164,14 @@
       {
         "label": "Kaithi number sign",
         "name": "\ud804\udcbd"
+      },
+      {
+        "label": "every prepended concatenation mark",
+        "name": "\u0600\u0601\u0602\u0603\u0604\u0605\u06dd\u070f\u0890\u0891\u08e2\ud804\udcbd\ud804\udccd"
+      },
+      {
+        "label": "the limit counts code points, not UTF-16 units",
+        "name": "\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41Sam"
       }
     ],
     "cleaned": [
