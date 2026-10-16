@@ -1,21 +1,22 @@
 //! Indexer API client — base URL resolution and typed HTTP wrappers.
 
-use super::client::{ApiError, url_with_params};
-use reqwest::header::ACCEPT;
+use super::client::{ApiError, get_auth_token_for_account, url_with_params};
+use crate::app_state::{AppState, SessionAccount};
+use crate::error::AppError;
+use reqwest::header::{ACCEPT, AUTHORIZATION};
 use serde::de::DeserializeOwned;
+use sqlx::sqlite::SqlitePool;
 use std::sync::OnceLock;
 
 const DEFAULT_INDEXER_URL: &str = "https://indexer.hippius.network";
 
-/// Cache the resolved indexer base URL and API key for the process lifetime.
+/// Cache the resolved indexer base URL for the process lifetime.
 ///
 /// `std::env::var` walks the process environment table on every call —
-/// micro-cost individually, but billing/chart commands hit `from_env`
-/// dozens of times during a single page render. One-shot caching is
-/// safe because both env vars are read at process start (via dotenvy)
-/// and never reseeded at runtime.
+/// micro-cost individually, but billing/chart commands hit this dozens of
+/// times during a single page render. One-shot caching is safe because the
+/// var is read at process start (via dotenvy) and never reseeded at runtime.
 static INDEXER_BASE_URL: OnceLock<String> = OnceLock::new();
-static INDEXER_API_KEY: OnceLock<Option<String>> = OnceLock::new();
 
 fn indexer_base_url() -> &'static str {
     INDEXER_BASE_URL
@@ -23,54 +24,52 @@ fn indexer_base_url() -> &'static str {
         .as_str()
 }
 
-fn indexer_api_key() -> Option<&'static str> {
-    INDEXER_API_KEY.get_or_init(|| std::env::var("INDEXER_API_KEY").ok()).as_deref()
-}
-
-/// Refuse a missing or whitespace-only key so indexer-backed screens can
-/// error instead of rendering a confident zero. Extracted so the rule is
-/// unit-testable without the process-wide `OnceLock`.
-pub(crate) fn require_indexer_api_key(key: Option<&str>) -> Result<&str, ApiError> {
-    match key.map(str::trim) {
-        Some(k) if !k.is_empty() => Ok(k),
-        _ => Err(ApiError::Other("INDEXER_API_KEY not set".into())),
-    }
-}
-
-/// HTTP client for the Hippius indexer. Uses `X-API-KEY` header for authentication.
+/// HTTP client for the Hippius indexer, authenticated as the logged-in user.
 ///
-/// `base_url` and `api_key` are `&'static str` borrowed from process-wide
-/// `OnceLock`s populated at first access. Cloning a client is cheap (an
-/// `Arc` bump on `reqwest::Client` plus two pointer copies); allocation-free.
+/// This used to send a shared `X-API-KEY` read from a bundled `.env`, which meant one
+/// operator credential — good for the whole indexer surface, cache invalidation included —
+/// shipped inside every installer and could be unpacked out of any of them. The indexer now
+/// takes the user's own Hippius session token, resolves it to an SS58, and answers only for
+/// that account on the routes that carry account records.
+///
+/// **The credential and the queried account are deliberately separate.** The token is always
+/// the *session* account's, minted here from [`AppState::current_session_account`]. What a
+/// given call asks *about* stays in its query parameters, and the wallet page legitimately
+/// asks about a local wallet the user holds but is not logged in as — the indexer allows that
+/// for `/system-account-balance` and `/balance-transfers`, which serve public chain state.
 pub struct IndexerClient {
     client: reqwest::Client,
     base_url: &'static str,
-    api_key: &'static str,
+    pool: SqlitePool,
+    session_account: SessionAccount,
 }
 
 impl IndexerClient {
-    /// Create from the cached `INDEXER_API_KEY` env var.
+    /// Build a client that authenticates as the current session account.
     ///
-    /// Reads the env var exactly once per process via [`indexer_api_key`].
-    /// All subsequent calls return a client backed by the same `&'static`
-    /// strings — no allocation, no env lookup.
-    pub fn from_env(client: reqwest::Client) -> Result<Self, ApiError> {
-        let api_key = require_indexer_api_key(indexer_api_key())?;
+    /// # Errors
+    ///
+    /// [`AppError::Auth`] when nobody is logged in — indexer-backed screens then surface an
+    /// error rather than a confident zero, which is the failure the old missing-key guard
+    /// existed to prevent and is worth preserving as the credential changes.
+    pub fn for_session(state: &AppState, client: reqwest::Client) -> Result<Self, AppError> {
         Ok(Self {
             client,
             base_url: indexer_base_url(),
-            api_key,
+            pool: state.pool()?.clone(),
+            session_account: state.current_session_account()?,
         })
     }
 
     /// GET with query parameters.
     pub async fn get<T: DeserializeOwned>(&self, path: &str, params: &[(&str, &str)]) -> Result<T, ApiError> {
+        let token = get_auth_token_for_account(&self.pool, &self.session_account).await?;
         let url = url_with_params(self.base_url, path, params);
         let resp = self
             .client
             .get(&url)
             .header(ACCEPT, "application/json")
-            .header("X-API-KEY", self.api_key)
+            .header(AUTHORIZATION, format!("Token {token}"))
             .send()
             .await
             .map_err(|e| ApiError::Other(e.to_string()))?;
@@ -92,30 +91,5 @@ impl IndexerClient {
                 body,
             })
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_key_is_an_error_not_a_client() {
-        let err = require_indexer_api_key(None).expect_err("must refuse");
-        assert!(err.to_string().contains("INDEXER_API_KEY not set"), "unexpected: {err}");
-    }
-
-    #[test]
-    fn empty_or_whitespace_key_is_an_error_not_a_client() {
-        for key in [Some(""), Some("   "), Some("\n")] {
-            let err = require_indexer_api_key(key).expect_err("must refuse blank key");
-            assert!(err.to_string().contains("INDEXER_API_KEY not set"), "key={key:?} unexpected: {err}");
-        }
-    }
-
-    #[test]
-    fn a_non_empty_key_is_accepted() {
-        assert_eq!(require_indexer_api_key(Some("k")).expect("ok"), "k");
-        assert_eq!(require_indexer_api_key(Some("  k  ")).expect("trim"), "k");
     }
 }
