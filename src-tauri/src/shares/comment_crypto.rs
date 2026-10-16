@@ -22,8 +22,11 @@
 //! from this device's keystore or its owner wrap. A password link's key is
 //! wrapped by a password nobody stores, so its comments cannot be read here.
 
+use std::sync::LazyLock;
+
 use base64::Engine;
 use hkdf::Hkdf;
+use regex::Regex;
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -172,7 +175,7 @@ pub fn open_comment(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b
 }
 
 /// Open a viewer's name from its base64 nonce and ciphertext. `None` for a
-/// name that is empty once trimmed.
+/// name that would show as nothing (see [`clean_name`]).
 ///
 /// # Errors
 ///
@@ -183,27 +186,71 @@ pub fn open_viewer_name(key: &CommentKey, token: &str, nonce_b64: &str, cipherte
     Ok(clean_name(Some(&parsed.name)))
 }
 
-/// The longest name shown, in characters. A viewer chooses it, so it is
-/// bounded here rather than trusted to fit a row.
-const MAX_NAME_CHARS: usize = 60;
+/// The longest name kept, in characters (code points, as the console's
+/// `Array.from` counts them). It must equal the console's `MAX_NAME_CHARS`:
+/// the blank check runs on what is left after the cut, so a different limit
+/// would make the two clients disagree on which names are blank.
+const MAX_NAME_CHARS: usize = 80;
 
-/// A viewer-chosen name made safe to show: control, bidi and zero-width
-/// characters removed (they can make a name read as something it is not),
-/// trimmed, at most [`MAX_NAME_CHARS`]. `None` when nothing is left.
+/// A name of nothing but code points that draw nothing on their own:
+/// whitespace, control characters, format characters (zero-width space,
+/// ZWNJ, ZWJ, word joiner, BOM, bidi marks, tags), other default-ignorables
+/// (variation selectors, Hangul fillers, soft hyphen), and the braille blank,
+/// a common way to fake an empty name. The Arabic, Syriac and Kaithi
+/// prepended concatenation marks are format characters that draw a glyph, so
+/// they are taken out of the set.
+///
+/// This is the console's `INVISIBLE_ONLY` (`comment-crypto.ts`), written with
+/// set subtraction where the console needs a lookahead. Each side takes its
+/// Unicode tables from its own engine (the `regex` crate here, the browser's
+/// ICU there), so a code point assigned in a newer Unicode version can be
+/// judged differently until both catch up.
+static INVISIBLE_ONLY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^[[\p{White_Space}\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\x{2800}]--[\x{600}-\x{605}\x{6DD}\x{70F}\x{890}\x{891}\x{8E2}\x{110BD}\x{110CD}]]*$",
+    )
+    .expect("a fixed pattern of supported Unicode classes")
+});
+
+/// True when a name would show as nothing. Only this check treats joiners as
+/// invisible: a name with anything visible keeps them, so ZWJ emoji and ZWNJ
+/// in Persian or Indic names stay intact.
+fn is_blank_name(name: &str) -> bool {
+    INVISIBLE_ONLY.is_match(name)
+}
+
+/// What ECMAScript's `String.prototype.trim` removes: `White_Space` without
+/// U+0085, plus U+FEFF. The console trims before it cuts, so trimming
+/// anything else here would count characters differently toward the limit.
+fn is_js_whitespace(c: char) -> bool {
+    (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
+}
+
+/// Characters removed from a visible name before it is shown: controls, and
+/// bidi marks, embeddings, overrides and isolates, which can make a name read
+/// as something it is not or reorder the rest of its row. The console does
+/// not remove these; it only matters that every one of them is invisible by
+/// [`is_blank_name`], so removing them never changes whether a name is blank.
+fn is_display_unsafe(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// A viewer-chosen name made safe to show, or `None` when it would show as
+/// nothing.
+///
+/// Trimmed, cut to [`MAX_NAME_CHARS`] and trimmed at the end exactly as the
+/// console does, then judged blank on what is left, so visible text past the
+/// limit cannot keep an otherwise invisible name alive. A visible name is
+/// kept as typed apart from [`is_display_unsafe`] characters.
 fn clean_name(name: Option<&str>) -> Option<String> {
-    let cleaned: String = name?
-        .chars()
-        .filter(|c| {
-            !c.is_control()
-                && !matches!(
-                    c,
-                    '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
-                )
-        })
-        .collect();
-    let name: String = cleaned.trim().chars().take(MAX_NAME_CHARS).collect();
-    let name = name.trim_end().to_string();
-    (!name.is_empty()).then_some(name)
+    let kept: String = name?.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
+    let kept = kept.trim_end_matches(is_js_whitespace);
+    if is_blank_name(kept) {
+        return None;
+    }
+
+    let shown: String = kept.chars().filter(|&c| !is_display_unsafe(c)).collect();
+    Some(shown.trim_matches(is_js_whitespace).to_string())
 }
 
 #[cfg(test)]
@@ -217,6 +264,29 @@ mod tests {
         token: String,
         comment_key_hex: String,
         vectors: Vec<Vector>,
+        names: NameVectors,
+    }
+
+    /// The name-cleaning rule both clients apply, as cases each one runs.
+    #[derive(Deserialize)]
+    struct NameVectors {
+        max_chars: usize,
+        blank: Vec<NameCase>,
+        visible: Vec<NameCase>,
+        cleaned: Vec<CleanedCase>,
+    }
+
+    #[derive(Deserialize)]
+    struct NameCase {
+        label: String,
+        name: String,
+    }
+
+    #[derive(Deserialize)]
+    struct CleanedCase {
+        label: String,
+        name: String,
+        cleaned: String,
     }
 
     #[derive(Deserialize)]
@@ -363,8 +433,91 @@ mod tests {
     fn names_are_cleaned_before_they_are_shown() {
         assert_eq!(clean_name(Some("  Ahmad  ")).as_deref(), Some("Ahmad"));
         assert_eq!(clean_name(Some("Bob\u{202E}nimda")).as_deref(), Some("Bobnimda"));
+        assert_eq!(clean_name(Some("\u{202E} Bob\t")).as_deref(), Some("Bob"));
         assert_eq!(clean_name(Some("\u{200B}\n ")), None);
         assert_eq!(clean_name(None), None);
         assert_eq!(clean_name(Some(&"x".repeat(200))).unwrap().chars().count(), MAX_NAME_CHARS);
+    }
+
+    /// The console decides which names are blank by the same rule, so a name
+    /// one client shows as "Someone" is never shown blank by the other.
+    #[test]
+    fn names_clean_as_the_shared_vectors_say() {
+        let names = fixture().names;
+        assert_eq!(MAX_NAME_CHARS, names.max_chars, "both clients cut names at the same length");
+        for case in &names.blank {
+            assert_eq!(clean_name(Some(&case.name)), None, "blank: {}", case.label);
+        }
+        for case in &names.visible {
+            let padded = format!(" {} ", case.name);
+            assert_eq!(clean_name(Some(&padded)).as_deref(), Some(case.name.as_str()), "visible: {}", case.label);
+        }
+        for case in &names.cleaned {
+            assert_eq!(
+                clean_name(Some(&case.name)).as_deref(),
+                Some(case.cleaned.as_str()),
+                "cleaned: {}",
+                case.label
+            );
+        }
+    }
+
+    /// The blank rule reaches both decrypted shapes, not only the helper.
+    #[test]
+    fn blank_names_decrypt_as_no_name() {
+        let f = fixture();
+        let key = CommentKey::derive(&share_key(&f));
+        let nonce = [9u8; NONCE_LEN];
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        for case in &f.names.blank {
+            let comment = serde_json::json!({ "text": "hi", "name": case.name }).to_string();
+            let ct = seal_with_nonce(&key, &f.token, Purpose::Comment, &nonce, comment.as_bytes()).unwrap();
+            let opened = open_comment(&key, &f.token, &b64(&nonce), &b64(&ct)).unwrap();
+            assert_eq!(opened.name, None, "comment: {}", case.label);
+
+            let viewer = serde_json::json!({ "name": case.name }).to_string();
+            let ct = seal_with_nonce(&key, &f.token, Purpose::ViewerName, &nonce, viewer.as_bytes()).unwrap();
+            assert_eq!(
+                open_viewer_name(&key, &f.token, &b64(&nonce), &b64(&ct)).unwrap(),
+                None,
+                "viewer: {}",
+                case.label
+            );
+        }
+    }
+
+    /// Characters that draw nothing on their own, drawn from each class the
+    /// rule covers.
+    const INVISIBLE_SAMPLE: &str = " \t\n\u{85}\u{A0}\u{3000}\u{1}\u{7F}\u{9B}\u{AD}\u{34F}\u{200B}\u{200C}\u{200D}\u{200E}\u{202E}\u{2060}\u{2066}\u{FE0F}\u{FEFF}\u{3164}\u{2800}\u{E0041}";
+
+    proptest::proptest! {
+        /// Whatever a viewer sends, a shown name has something visible in it,
+        /// fits the limit, has no outer whitespace and nothing that reorders
+        /// or garbles the row.
+        #[test]
+        fn a_shown_name_is_never_blank_or_unsafe(name in proptest::prelude::any::<String>()) {
+            if let Some(shown) = clean_name(Some(&name)) {
+                proptest::prop_assert!(!is_blank_name(&shown));
+                proptest::prop_assert!(shown.chars().count() <= MAX_NAME_CHARS);
+                proptest::prop_assert_eq!(shown.trim_matches(is_js_whitespace), shown.as_str());
+                proptest::prop_assert!(!shown.chars().any(is_display_unsafe));
+            }
+        }
+
+        /// Any run of invisible characters is blank, however it is mixed.
+        #[test]
+        fn invisible_characters_alone_are_blank(picks in proptest::collection::vec(proptest::sample::select(INVISIBLE_SAMPLE.chars().collect::<Vec<_>>()), 0..120)) {
+            let name: String = picks.into_iter().collect();
+            proptest::prop_assert!(is_blank_name(&name));
+            proptest::prop_assert_eq!(clean_name(Some(&name)), None);
+        }
+
+        /// Joiners inside a name with visible text are kept as typed, so ZWJ
+        /// emoji and ZWNJ in Persian or Indic names survive.
+        #[test]
+        fn joiners_inside_a_visible_name_are_kept(left in "[a-z]{1,20}", right in "[a-z]{1,20}", joiner in "[\u{200C}\u{200D}]") {
+            let name = format!("{left}{joiner}{right}");
+            proptest::prop_assert_eq!(clean_name(Some(&name)), Some(name));
+        }
     }
 }
