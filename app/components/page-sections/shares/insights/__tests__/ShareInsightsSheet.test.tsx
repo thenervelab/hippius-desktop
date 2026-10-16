@@ -122,6 +122,19 @@ describe("ShareInsightsSheet", () => {
     expect(screen.getByText("Watched 1:18 (50%) · 2 visits · 1 comment")).toBeInTheDocument();
   });
 
+  // A name keeps its LRM/RLM/ALM marks, which would otherwise reorder the
+  // text after it in the same line (" · 2m ago"), so each name is isolated.
+  it("isolates viewer and commenter names from the text around them", async () => {
+    answer({ share_get_insights: PAID, share_list_comments: COMMENTS });
+    renderSheet();
+
+    expect(await screen.findByText("Looks great at 1:23!")).toBeInTheDocument();
+    const names = screen.getAllByText("Ahmad");
+    expect(names).toHaveLength(2);
+    for (const name of names) expect(name.tagName).toBe("BDI");
+    for (const someone of screen.getAllByText("Someone")) expect(someone.tagName).toBe("BDI");
+  });
+
   it("lists comments and deletes one only after asking in its row", async () => {
     answer({ share_get_insights: PAID, share_list_comments: COMMENTS, share_delete_comment: undefined });
     renderSheet();

@@ -229,18 +229,29 @@ fn is_js_whitespace(c: char) -> bool {
     (c.is_whitespace() && c != '\u{85}') || c == '\u{FEFF}'
 }
 
-/// Characters a visible name cannot show as typed: controls, line and
-/// paragraph separators, and bidi marks, embeddings, overrides and isolates,
-/// which can make a name read as something it is not, break its row, or
-/// reorder the rest of it. The console does not touch these; it only matters
-/// that every one of them is invisible by [`is_blank_name`], so replacing
-/// them never changes whether a name is blank.
+/// The bidi embedding, override and isolate controls (U+202A-U+202E,
+/// U+2066-U+2069). Inside a name they reorder it: U+202E before "Eve" shows
+/// "evE", so a viewer could make their name read as someone else's. The
+/// marks (LRM U+200E, RLM U+200F, ALM U+061C) are not in this set: they can
+/// reorder digits and punctuation next to them but never letters, and
+/// mixed-direction names need them. The UI isolates each name (`<bdi>`) so a
+/// mark cannot reach the text after it. Same set as the console's
+/// `BIDI_CONTROLS` (`comment-crypto.ts`).
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// A name without bidi embedding, override and isolate controls.
+fn strip_bidi_controls(name: &str) -> String {
+    name.chars().filter(|&c| !is_bidi_control(c)).collect()
+}
+
+/// Characters a visible name cannot show as typed: controls, and line and
+/// paragraph separators, which can garble or break its row. The console does
+/// not touch these; it only matters that every one of them is invisible by
+/// [`is_blank_name`], so replacing them never changes whether a name is blank.
 fn is_display_unsafe(c: char) -> bool {
-    c.is_control()
-        || matches!(
-            c,
-            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
-        )
+    c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')
 }
 
 /// How one character of a visible name is shown. Unsafe whitespace (tab,
@@ -257,13 +268,16 @@ fn shown_char(c: char) -> Option<char> {
 /// A viewer-chosen name made safe to show, or `None` when it would show as
 /// nothing.
 ///
-/// Trimmed, cut to [`MAX_NAME_CHARS`] and trimmed at the end exactly as the
-/// console does, then judged blank on what is left, so visible text past the
-/// limit cannot keep an otherwise invisible name alive. A visible name is
-/// kept as typed, except that [`is_display_unsafe`] characters are replaced
-/// by [`shown_char`] and the result is trimmed again.
+/// Stripped of bidi controls, trimmed, cut to [`MAX_NAME_CHARS`] and trimmed
+/// at the end exactly as the console does, then judged blank on what is left,
+/// so visible text past the limit cannot keep an otherwise invisible name
+/// alive. Stripping comes first so an override cannot shield spaces from the
+/// trim or use up the limit. A visible name is kept as typed, except that
+/// [`is_display_unsafe`] characters are replaced by [`shown_char`] and the
+/// result is trimmed again.
 fn clean_name(name: Option<&str>) -> Option<String> {
-    let kept: String = name?.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
+    let stripped = strip_bidi_controls(name?);
+    let kept: String = stripped.trim_matches(is_js_whitespace).chars().take(MAX_NAME_CHARS).collect();
     let kept = kept.trim_end_matches(is_js_whitespace);
     if is_blank_name(kept) {
         return None;
@@ -509,6 +523,68 @@ mod tests {
         }
     }
 
+    /// The embedding, override and isolate controls: removed from every name.
+    const BIDI_CONTROLS: [(&str, char); 9] = [
+        ("LRE", '\u{202A}'),
+        ("RLE", '\u{202B}'),
+        ("PDF", '\u{202C}'),
+        ("LRO", '\u{202D}'),
+        ("RLO", '\u{202E}'),
+        ("LRI", '\u{2066}'),
+        ("RLI", '\u{2067}'),
+        ("FSI", '\u{2068}'),
+        ("PDI", '\u{2069}'),
+    ];
+
+    /// The marks: kept, because mixed-direction names need them.
+    const BIDI_MARKS: [(&str, char); 3] = [("LRM", '\u{200E}'), ("RLM", '\u{200F}'), ("ALM", '\u{061C}')];
+
+    #[test]
+    fn bidi_controls_are_removed_and_marks_kept() {
+        for (label, c) in BIDI_CONTROLS {
+            assert_eq!(strip_bidi_controls(&format!("Sam{c}")), "Sam", "{label}");
+            assert_eq!(clean_name(Some(&format!("{c}Sam{c}"))).as_deref(), Some("Sam"), "{label}");
+            assert_eq!(clean_name(Some(&c.to_string().repeat(3))), None, "only {label}");
+        }
+        for (label, m) in BIDI_MARKS {
+            assert_eq!(strip_bidi_controls(&format!("Sam{m}")), format!("Sam{m}"), "{label}");
+            assert_eq!(clean_name(Some(&format!("Sam{m}1"))), Some(format!("Sam{m}1")), "{label}");
+        }
+    }
+
+    #[test]
+    fn overrides_cannot_reorder_shield_or_pad_a_name() {
+        let cases = [
+            ("inside a visible name", "Ev\u{202E}e".to_string(), Some("Eve")),
+            ("before a name", "\u{202E}Eve".to_string(), Some("Eve")),
+            ("shielding spaces from the trim", "\u{202E}  Eve".to_string(), Some("Eve")),
+            ("toward the limit", format!("{}Eve", "\u{202E}".repeat(MAX_NAME_CHARS)), Some("Eve")),
+            ("alone, mixed with isolates", "\u{202E}\u{2066} \u{2069}\u{202C}".to_string(), None),
+        ];
+        for (label, name, want) in cases {
+            assert_eq!(clean_name(Some(&name)).as_deref(), want, "{label}");
+        }
+    }
+
+    /// Names another client sealed raw come back without the controls.
+    #[test]
+    fn bidi_controls_are_removed_from_decrypted_names() {
+        let f = fixture();
+        let key = CommentKey::derive(&share_key(&f));
+        let nonce = [3u8; NONCE_LEN];
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let seal = |purpose, plain: serde_json::Value| b64(&seal_with_nonce(&key, &f.token, purpose, &nonce, plain.to_string().as_bytes()).unwrap());
+
+        let ct = seal(Purpose::Comment, serde_json::json!({ "text": "hi", "name": "\u{202E}Eve" }));
+        assert_eq!(open_comment(&key, &f.token, &b64(&nonce), &ct).unwrap().name.as_deref(), Some("Eve"));
+
+        let ct = seal(Purpose::ViewerName, serde_json::json!({ "name": "\u{2067}Eve\u{2069}" }));
+        assert_eq!(open_viewer_name(&key, &f.token, &b64(&nonce), &ct).unwrap().as_deref(), Some("Eve"));
+
+        let ct = seal(Purpose::ViewerName, serde_json::json!({ "name": "\u{202E}\u{202D}" }));
+        assert_eq!(open_viewer_name(&key, &f.token, &b64(&nonce), &ct).unwrap(), None);
+    }
+
     /// Characters that draw nothing on their own, drawn from each class the
     /// rule covers.
     const INVISIBLE_SAMPLE: &str = concat!(
@@ -532,8 +608,8 @@ mod tests {
 
     proptest! {
         /// Whatever a viewer sends, a shown name has something visible in it,
-        /// fits the limit, has no outer whitespace and nothing that reorders
-        /// or garbles the row.
+        /// fits the limit, and has no outer whitespace, control character,
+        /// line separator or bidi control.
         #[test]
         fn a_shown_name_is_never_blank_or_unsafe(name in prop_oneof![any::<String>(), mixed_name()]) {
             if let Some(shown) = clean_name(Some(&name)) {
@@ -541,6 +617,7 @@ mod tests {
                 prop_assert!(shown.chars().count() <= MAX_NAME_CHARS);
                 prop_assert_eq!(shown.trim_matches(is_js_whitespace), shown.as_str());
                 prop_assert!(!shown.chars().any(is_display_unsafe));
+                prop_assert!(!shown.chars().any(is_bidi_control));
             }
         }
 
