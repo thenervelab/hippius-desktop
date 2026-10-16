@@ -688,7 +688,7 @@ mod tests {
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes.clone())).unwrap();
         assert_eq!(archive.len(), 1);
         let mut entry = archive.by_index(0).unwrap();
-        assert_eq!(entry.name(), BACKUP_ZIP_ENTRY);
+        assert_eq!(entry.name().unwrap(), BACKUP_ZIP_ENTRY);
         assert_eq!(entry.compression(), zip::CompressionMethod::Deflated);
         assert_eq!(entry.unix_mode(), Some(0o100_644));
         assert!(!entry.encrypted());

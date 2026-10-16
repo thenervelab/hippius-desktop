@@ -333,7 +333,7 @@ mod tests {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
             methods.push(entry.compression());
-            let name = entry.name().to_owned();
+            let name = entry.name().expect("entry name").into_owned();
             if entry.is_dir() {
                 dirs.push(name);
             } else {
@@ -487,7 +487,7 @@ mod tests {
         let modes: BTreeMap<String, Option<u32>> = (0..archive.len())
             .map(|i| {
                 let entry = archive.by_index(i).expect("entry");
-                (entry.name().to_owned(), entry.unix_mode())
+                (entry.name().expect("entry name").into_owned(), entry.unix_mode())
             })
             .collect();
 
@@ -704,8 +704,8 @@ mod tests {
             let mut entry = archive.by_index(i).expect("entry");
             assert_eq!(entry.compression(), CompressionMethod::Stored);
             if entry.is_file() {
-                names.push(entry.name().to_owned());
-                if entry.name() == "a.txt" {
+                names.push(entry.name().expect("entry name").into_owned());
+                if entry.name().expect("entry name") == "a.txt" {
                     let mut buf = Vec::new();
                     entry.read_to_end(&mut buf).expect("read");
                     assert_eq!(buf, b"alpha");
