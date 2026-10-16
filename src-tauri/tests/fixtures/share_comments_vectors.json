@@ -26,5 +26,165 @@
       "plaintext": "{\"name\":\"Ahmad\"}",
       "ciphertext_b64": "vm3htAddsORN2SklnX+O6Bxf4dXj2QevbVAeBeRoQRA="
     }
-  ]
+  ],
+  "names": {
+    "rule": "cleanName(name): trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc, line or paragraph separators or bidi controls: the desktop replaces those in a shown name, so only the blank list may hold them.",
+    "max_chars": 80,
+    "blank": [
+      {
+        "label": "empty",
+        "name": ""
+      },
+      {
+        "label": "spaces",
+        "name": "   "
+      },
+      {
+        "label": "tab and newline",
+        "name": "\t\n"
+      },
+      {
+        "label": "no-break space",
+        "name": "\u00a0"
+      },
+      {
+        "label": "control characters",
+        "name": "\u0001\u007f\u009b"
+      },
+      {
+        "label": "ideographic space",
+        "name": "\u3000"
+      },
+      {
+        "label": "zero-width space",
+        "name": "\u200b"
+      },
+      {
+        "label": "zero-width non-joiner",
+        "name": "\u200c"
+      },
+      {
+        "label": "zero-width joiner",
+        "name": "\u200d"
+      },
+      {
+        "label": "word joiner",
+        "name": "\u2060"
+      },
+      {
+        "label": "byte order mark",
+        "name": "\ufeff"
+      },
+      {
+        "label": "left-to-right mark",
+        "name": "\u200e"
+      },
+      {
+        "label": "right-to-left override",
+        "name": "\u202e"
+      },
+      {
+        "label": "soft hyphen",
+        "name": "\u00ad"
+      },
+      {
+        "label": "combining grapheme joiner",
+        "name": "\u034f"
+      },
+      {
+        "label": "variation selector",
+        "name": "\ufe0f"
+      },
+      {
+        "label": "Hangul filler",
+        "name": "\u3164"
+      },
+      {
+        "label": "braille blank",
+        "name": "\u2800"
+      },
+      {
+        "label": "tag character",
+        "name": "\udb40\udc41"
+      },
+      {
+        "label": "mixed",
+        "name": " \u200b\u200c \u200d\u2060\ufeff "
+      },
+      {
+        "label": "invisible up to the limit",
+        "name": "\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam"
+      },
+      {
+        "label": "next line is not trimmed, so it counts toward the limit",
+        "name": "\u0085\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam"
+      },
+      {
+        "label": "control characters up to the limit",
+        "name": "\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001Sam"
+      }
+    ],
+    "visible": [
+      {
+        "label": "plain",
+        "name": "Sam"
+      },
+      {
+        "label": "accented",
+        "name": "Zo\u00eb"
+      },
+      {
+        "label": "CJK",
+        "name": "\u5c71\u7530"
+      },
+      {
+        "label": "emoji",
+        "name": "\ud83d\ude00"
+      },
+      {
+        "label": "ZWJ emoji sequence",
+        "name": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67"
+      },
+      {
+        "label": "Persian with ZWNJ",
+        "name": "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+      },
+      {
+        "label": "visible inside zero-width",
+        "name": "\u200bSam\u200b"
+      },
+      {
+        "label": "Arabic end of ayah",
+        "name": "\u06dd"
+      },
+      {
+        "label": "Arabic number sign",
+        "name": "\u0600"
+      },
+      {
+        "label": "Kaithi number sign",
+        "name": "\ud804\udcbd"
+      },
+      {
+        "label": "every prepended concatenation mark",
+        "name": "\u0600\u0601\u0602\u0603\u0604\u0605\u06dd\u070f\u0890\u0891\u08e2\ud804\udcbd\ud804\udccd"
+      },
+      {
+        "label": "the limit counts code points, not UTF-16 units",
+        "name": "\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41Sam"
+      }
+    ],
+    "cleaned": [
+      {
+        "label": "a cut at a space does not end in it",
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
+        "cleaned": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "label": "a byte order mark is trimmed before the cut",
+        "name": "\ufeff\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam",
+        "cleaned": "\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bS"
+      }
+    ]
+  }
 }
