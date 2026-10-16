@@ -17,8 +17,7 @@
 //!   another share, or a comment passed off as a name, fails to open.
 //! - Plaintext: `{"text": ..., "name": ... | null}` for a comment,
 //!   `{"name": ...}` for a viewer name. A lone UTF-16 surrogate escape in
-//!   either, which older console builds wrote, reads as U+FFFD (see
-//!   [`replace_lone_surrogate_escapes`]).
+//!   either, which older console builds wrote, reads as U+FFFD.
 //!
 //! The share key is the link's own key (`#k=`), which the owner gets back
 //! from this device's keystore or its owner wrap. A password link's key is
@@ -204,21 +203,12 @@ fn parse_plaintext<T: serde::de::DeserializeOwned>(plain: &mut [u8]) -> Result<T
     serde_json::from_slice(plain).map_err(|_| OpenError::Shape)
 }
 
-/// The UTF-16 unit a well-formed `\uXXXX` escape starting at `at` stands for.
-fn escaped_unit(json: &[u8], at: usize) -> Option<u16> {
-    let escape = json.get(at..at + 6)?;
-    let hex = escape.strip_prefix(b"\\u")?;
-    if !hex.iter().all(u8::is_ascii_hexdigit) {
-        return None;
-    }
-    u16::from_str_radix(std::str::from_utf8(hex).ok()?, 16).ok()
-}
-
-/// Rewrite every `\uXXXX` escape of a lone surrogate in `json` to `\ufffd`:
-/// a high surrogate not directly followed by an escaped low one, or a low
-/// surrogate not directly preceded by an escaped high one. This is what
-/// `String.prototype.toWellFormed` does to the decoded string, and what the
-/// console's `replaceLoneSurrogates` does before sealing.
+/// Rewrites every `\uXXXX` escape of a lone surrogate in `json` to `\ufffd`.
+///
+/// Lone means a high surrogate not directly followed by an escaped low one,
+/// or a low surrogate not directly preceded by an escaped high one. This is
+/// what `String.prototype.toWellFormed` does to the decoded string, and what
+/// the console's `replaceLoneSurrogates` does before sealing.
 ///
 /// A surrogate can only reach valid JSON as an escape, since UTF-8 cannot
 /// encode one, so escapes are all that need looking at. A backslash outside
@@ -227,7 +217,7 @@ fn escaped_unit(json: &[u8], at: usize) -> Option<u16> {
 /// (`\\u...`) is never read as the start of one. Malformed escapes are left
 /// for the parser to refuse.
 fn replace_lone_surrogate_escapes(json: &mut [u8]) {
-    const REPLACEMENT: &[u8; 4] = b"fffd";
+    const REPLACEMENT_HEX: &[u8; 4] = b"fffd";
     let mut i = 0;
     while i < json.len() {
         if json[i] != b'\\' {
@@ -237,13 +227,25 @@ fn replace_lone_surrogate_escapes(json: &mut [u8]) {
         match escaped_unit(json, i) {
             Some(0xD800..=0xDBFF) if matches!(escaped_unit(json, i + 6), Some(0xDC00..=0xDFFF)) => i += 12,
             Some(0xD800..=0xDFFF) => {
-                json[i + 2..i + 6].copy_from_slice(REPLACEMENT);
+                json[i + 2..i + 6].copy_from_slice(REPLACEMENT_HEX);
                 i += 6;
             }
             Some(_) => i += 6,
             None => i += 2,
         }
     }
+}
+
+/// The UTF-16 unit a well-formed `\uXXXX` escape starting at `at` stands for.
+fn escaped_unit(json: &[u8], at: usize) -> Option<u16> {
+    let escape = json.get(at..at + 6)?;
+    let hex = escape.strip_prefix(b"\\u")?;
+    // `from_str_radix` accepts a leading `+`, which JSON does not.
+    if !hex.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    let hex = std::str::from_utf8(hex).expect("ASCII hex digits are UTF-8");
+    u16::from_str_radix(hex, 16).ok()
 }
 
 /// The longest name kept, in characters (code points, as the console's
@@ -676,6 +678,7 @@ mod tests {
         (b64(&nonce), b64(&ct))
     }
 
+    /// Seal `plaintext` exactly as given as a comment, and open it.
     fn open_raw_comment(f: &Fixture, plaintext: &str) -> Result<CommentPlaintext, OpenError> {
         let (nonce, ct) = seal_raw(f, Purpose::Comment, plaintext);
         open_comment(&CommentKey::derive(&share_key(f)), &f.token, &nonce, &ct)
@@ -694,6 +697,8 @@ mod tests {
         }
     }
 
+    /// A viewer name keeps its visible text and shows each lone surrogate as
+    /// U+FFFD, even when nothing else is left.
     #[test]
     fn a_lone_surrogate_in_a_viewer_name_opens_as_a_replacement_character() {
         let f = fixture();
@@ -727,6 +732,16 @@ mod tests {
         }
     }
 
+    /// The reason [`parse_plaintext`] rewrites escapes at all: if a
+    /// `serde_json` release starts accepting lone surrogates in strings, this
+    /// fails and the rewrite can be reconsidered.
+    #[test]
+    fn serde_json_still_refuses_a_lone_surrogate_in_a_string() {
+        assert!(serde_json::from_str::<String>(r#""a\ud800b""#).is_err());
+        assert!(serde_json::from_str::<String>(r#""\udc00""#).is_err());
+        assert_eq!(serde_json::from_str::<String>(r#""\ud83d\ude00""#).unwrap(), "\u{1F600}");
+    }
+
     /// Escapes that are not well formed stay that way, so a plaintext that
     /// was never valid JSON is still refused rather than repaired.
     #[test]
@@ -737,23 +752,50 @@ mod tests {
         }
     }
 
-    /// A comment plaintext holding `units` as a browser's `JSON.stringify`
-    /// writes it: lone surrogates as escapes, everything else as serde writes
-    /// it. Even surrogates are escaped in upper case and odd ones in lower,
-    /// so both spellings are covered.
-    fn json_of_units(units: &[u16]) -> String {
+    /// How a unit is written in generated JSON text. A lone surrogate can
+    /// only be written as an escape, so `Raw` falls back to `Lower` for one.
+    #[derive(Debug, Clone, Copy)]
+    enum Spelling {
+        Raw,
+        Lower,
+        Upper,
+    }
+
+    /// Appends `\uXXXX` escapes for each of `units` to `out`.
+    fn push_escapes(out: &mut String, units: &[u16], spelling: Spelling) {
         use std::fmt::Write as _;
+        for u in units {
+            match spelling {
+                Spelling::Upper => write!(out, "\\u{u:04X}"),
+                Spelling::Raw | Spelling::Lower => write!(out, "\\u{u:04x}"),
+            }
+            .expect("writing to a String cannot fail");
+        }
+    }
+
+    /// A comment plaintext holding `units` as JSON text, each character
+    /// spelled as its first unit says: raw as serde writes it, or as escapes
+    /// (a pair as two escapes) in either case. A browser's `JSON.stringify`
+    /// writes the lone surrogates the same way.
+    fn json_of_units(units: &[(u16, Spelling)]) -> String {
         let mut text = String::new();
-        for decoded in char::decode_utf16(units.iter().copied()) {
-            match decoded {
-                Ok(c) => {
+        let mut at = 0;
+        for decoded in char::decode_utf16(units.iter().map(|&(u, _)| u)) {
+            let spelling = units[at].1;
+            match (decoded, spelling) {
+                (Ok(c), Spelling::Raw) => {
                     let quoted = serde_json::to_string(&c).expect("a char serializes");
                     text.push_str(&quoted[1..quoted.len() - 1]);
+                    at += c.len_utf16();
                 }
-                Err(e) if e.unpaired_surrogate() % 2 == 0 => {
-                    write!(text, "\\u{:04X}", e.unpaired_surrogate()).expect("writing to a String cannot fail");
+                (Ok(c), _) => {
+                    push_escapes(&mut text, c.encode_utf16(&mut [0; 2]), spelling);
+                    at += c.len_utf16();
                 }
-                Err(e) => write!(text, "\\u{:04x}", e.unpaired_surrogate()).expect("writing to a String cannot fail"),
+                (Err(e), _) => {
+                    push_escapes(&mut text, &[e.unpaired_surrogate()], spelling);
+                    at += 1;
+                }
             }
         }
         format!(r#"{{"text":"{text}"}}"#)
@@ -781,11 +823,13 @@ mod tests {
     }
 
     /// UTF-16 units weighted toward surrogates, both halves of one pair, and
-    /// the characters JSON escapes, so pairs, lone halves and escaped
-    /// backslashes meet often.
-    fn utf16_unit() -> impl Strategy<Value = u16> {
+    /// the characters JSON escapes, each with a spelling, so escaped pairs,
+    /// lone halves next to them and escaped backslashes meet often.
+    fn utf16_unit() -> impl Strategy<Value = (u16, Spelling)> {
         let notable = proptest::sample::select(vec![0x61u16, 0x5C, 0x22, 0x0A, 0xE9, 0xD83D, 0xDE00, 0xFFFD]);
-        prop_oneof![3 => notable, 2 => 0xD800u16..=0xDFFF, 1 => any::<u16>()]
+        let unit = prop_oneof![3 => notable, 2 => 0xD800u16..=0xDFFF, 1 => any::<u16>()];
+        let spelling = proptest::sample::select(vec![Spelling::Raw, Spelling::Lower, Spelling::Upper]);
+        (unit, spelling)
     }
 
     proptest! {
@@ -808,7 +852,7 @@ mod tests {
         /// and the console's `replaceLoneSurrogates` give.
         #[test]
         fn any_utf16_text_opens_as_a_lossy_decode(units in proptest::collection::vec(utf16_unit(), 0..16)) {
-            let want = String::from_utf16_lossy(&units);
+            let want = String::from_utf16_lossy(&units.iter().map(|&(u, _)| u).collect::<Vec<_>>());
             let opened = open_raw_comment(&fixture(), &json_of_units(&units));
             prop_assert_eq!(opened.map(|c| c.text), Ok(want));
         }
