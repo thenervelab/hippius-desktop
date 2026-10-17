@@ -28,7 +28,7 @@
     }
   ],
   "names": {
-    "rule": "cleanName(name): remove the bidi embedding, override and isolate controls (U+202A-U+202E, U+2066-U+2069; LRM, RLM and ALM stay), trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc and no line or paragraph separators: the desktop replaces those in a shown name, so only the blank list may hold them.",
+    "rule": "cleanName(name): replace each lone surrogate with U+FFFD (see lone_surrogates), then remove the bidi embedding, override and isolate controls (U+202A-U+202E, U+2066-U+2069; LRM, RLM and ALM stay), trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc and no line or paragraph separators: the desktop replaces those in a shown name, so only the blank list may hold them.",
     "max_chars": 80,
     "blank": [
       {
@@ -310,6 +310,77 @@
         "label": "a byte order mark is trimmed before the cut",
         "name": "\ufeff\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam",
         "cleaned": "\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bS"
+      }
+    ]
+  },
+  "lone_surrogates": {
+    "rule": "A lone UTF-16 surrogate (U+D800-U+DBFF not followed by U+DC00-U+DFFF, or U+DC00-U+DFFF not preceded by U+D800-U+DBFF) becomes U+FFFD, as String.prototype.toWellFormed and a lossy UTF-8 decode do. The console does this to the text and the name before sealing, so it never writes a lone surrogate escape. Plaintexts sealed before that may hold one as a \\uXXXX escape: each case's plaintext must open to its text and name, the name then cleaned as `names` says (U+FFFD draws a glyph, so it is never blank). Sealing a case's text and name again gives {\"text\":text,\"name\":name} with no lone surrogate escape.",
+    "cases": [
+      {
+        "label": "lone high surrogate in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\ud800b\"}",
+        "text": "Hi",
+        "name": "a\ufffdb"
+      },
+      {
+        "label": "lone low surrogate in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\udc00b\"}",
+        "text": "Hi",
+        "name": "a\ufffdb"
+      },
+      {
+        "label": "reversed pair in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\udc00\\ud800b\"}",
+        "text": "Hi",
+        "name": "a\ufffd\ufffdb"
+      },
+      {
+        "label": "high surrogate at the end of a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"Sam\\ud83d\"}",
+        "text": "Hi",
+        "name": "Sam\ufffd"
+      },
+      {
+        "label": "a pair then a lone low surrogate",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\ud83d\ude00\\ude00\"}",
+        "text": "Hi",
+        "name": "\ud83d\ude00\ufffd"
+      },
+      {
+        "label": "a valid pair is untouched",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\ud83d\ude00\"}",
+        "text": "Hi",
+        "name": "\ud83d\ude00"
+      },
+      {
+        "label": "only lone surrogates is a name, not blank",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\\udc00\\udc00\"}",
+        "text": "Hi",
+        "name": "\ufffd\ufffd"
+      },
+      {
+        "label": "spaces around a lone surrogate are trimmed",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\" \\ud800 \"}",
+        "text": "Hi",
+        "name": "\ufffd"
+      },
+      {
+        "label": "a lone surrogate counts once toward the limit",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\ud800b\"}",
+        "text": "Hi",
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ufffd"
+      },
+      {
+        "label": "a bidi control between the halves of a pair does not rejoin them",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\\ud83d\\u202e\\ude00\"}",
+        "text": "Hi",
+        "name": "\ufffd\ufffd"
+      },
+      {
+        "label": "lone surrogate in the text",
+        "plaintext": "{\"text\":\"a\\udfffb\",\"name\":null}",
+        "text": "a\ufffdb",
+        "name": null
       }
     ]
   }
