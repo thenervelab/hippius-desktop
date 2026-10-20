@@ -26,6 +26,11 @@ const VERSION: u8 = 1;
 const NONCE_LEN: usize = 24;
 const FLAG_PRIVATE: u8 = 0x01;
 const FLAG_FOLDER_TOKEN: u8 = 0x02;
+/// The secret is a link-secret folder link's (`#s=` / `#sp=`), not a drive key
+/// (thenervelab/hcfs#665). Decoders from before it reject the flag, so an
+/// older device shows the row as unrecoverable instead of rebuilding a `#k=`
+/// link out of a link secret. Only valid with [`FLAG_FOLDER_TOKEN`].
+const FLAG_LINK_SECRET: u8 = 0x04;
 const PRIVATE_BLOB_LEN: usize = hcfs_client::client::share::SHARE_WRAP_BLOB_LEN;
 const MAX_FOLDER_TOKEN_LEN: usize = 64;
 const MAX_BATCH: usize = 64;
@@ -136,12 +141,18 @@ fn bind_aad(owner_ss58: &str, row_key: &str) -> Vec<u8> {
 }
 
 fn encode_plaintext(secret: &ShareSecret, folder_token: Option<&str>) -> std::result::Result<Vec<u8>, String> {
+    if secret.is_folder_link() && folder_token.is_none() {
+        return Err("folder link secret sealed without its token".into());
+    }
     let mut flags = 0u8;
     if secret.is_private() {
         flags |= FLAG_PRIVATE;
     }
     if folder_token.is_some() {
         flags |= FLAG_FOLDER_TOKEN;
+    }
+    if secret.is_folder_link() {
+        flags |= FLAG_LINK_SECRET;
     }
 
     let mut out = Vec::new();
@@ -155,8 +166,8 @@ fn encode_plaintext(secret: &ShareSecret, folder_token: Option<&str>) -> std::re
         out.extend_from_slice(bytes);
     }
     match secret {
-        ShareSecret::Public(k) => out.extend_from_slice(k),
-        ShareSecret::Private(blob) => {
+        ShareSecret::Public(k) | ShareSecret::FolderLink(k) => out.extend_from_slice(k),
+        ShareSecret::Private(blob) | ShareSecret::FolderLinkPrivate(blob) => {
             if blob.len() != PRIVATE_BLOB_LEN {
                 return Err("private wrap blob has wrong length".into());
             }
@@ -170,8 +181,12 @@ fn decode_plaintext(plaintext: &[u8]) -> std::result::Result<Opened, String> {
     let Some((&flags, rest)) = plaintext.split_first() else {
         return Err("owner wrap plaintext is empty".into());
     };
-    if flags & !(FLAG_PRIVATE | FLAG_FOLDER_TOKEN) != 0 {
+    if flags & !(FLAG_PRIVATE | FLAG_FOLDER_TOKEN | FLAG_LINK_SECRET) != 0 {
         return Err("owner wrap has unknown flags".into());
+    }
+    let link_secret = flags & FLAG_LINK_SECRET != 0;
+    if link_secret && flags & FLAG_FOLDER_TOKEN == 0 {
+        return Err("folder link secret without a folder token".into());
     }
 
     let (folder_token, secret_bytes) = if flags & FLAG_FOLDER_TOKEN != 0 {
@@ -193,14 +208,23 @@ fn decode_plaintext(plaintext: &[u8]) -> std::result::Result<Opened, String> {
         if secret_bytes.len() != PRIVATE_BLOB_LEN {
             return Err("private secret has wrong length".into());
         }
-        ShareSecret::Private(secret_bytes.to_vec())
+        let blob = secret_bytes.to_vec();
+        if link_secret {
+            ShareSecret::FolderLinkPrivate(blob)
+        } else {
+            ShareSecret::Private(blob)
+        }
     } else {
         if secret_bytes.len() != 32 {
             return Err("public secret has wrong length".into());
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(secret_bytes);
-        ShareSecret::Public(key)
+        if link_secret {
+            ShareSecret::FolderLink(key)
+        } else {
+            ShareSecret::Public(key)
+        }
     };
 
     Ok(Opened { secret, folder_token })
@@ -638,6 +662,93 @@ mod tests {
         assert_eq!(token, FOLDER_TOKEN);
         assert!(opened.is_private());
         assert_eq!(opened, secret);
+    }
+
+    /// hcfs-client's `FROZEN_FOLDER_LINK_WRAP` (`share_wrap.rs`), same inputs:
+    /// the flag byte is `FOLDER_TOKEN | LINK_SECRET`. A desktop that sealed a
+    /// link secret without flag 0x04 would let other devices rebuild it as a
+    /// `#k=` link that opens nothing.
+    #[test]
+    fn frozen_vector_folder_link_matches_hcfs_client() {
+        let secret = ShareSecret::FolderLink([0x11u8; 32]);
+        let nonce = [0x22u8; NONCE_LEN];
+        let row_key = folder_share_token_hash(FOLDER_TOKEN);
+        let wrap = seal_with(&key(), SS58, &row_key, &secret, Some(FOLDER_TOKEN), &nonce).unwrap();
+        assert_eq!(
+            hex::encode(&wrap),
+            concat!(
+                "012222222222222222222222222222222222222222222222226151162b6b8cd5",
+                "cb35ec9a17e5d65208b81c63247cbea5bed41093336a91f80a7e4121d094030b",
+                "c9dd2ed175cddf9baa2361676210b7f4e34c659feed9f8fcfde056e463b4fc88",
+                "7db5c95beea63cf98a4dbbce951d4121c805d72881df",
+            ),
+        );
+        let (token, opened) = open_folder_secret(&key(), SS58, &row_key, &wrap).unwrap();
+        assert_eq!(token, FOLDER_TOKEN);
+        assert_eq!(opened, secret);
+    }
+
+    /// hcfs-client's `FROZEN_FOLDER_LINK_PRIVATE_WRAP`, same inputs.
+    #[test]
+    fn frozen_vector_folder_link_private_matches_hcfs_client() {
+        let secret = ShareSecret::FolderLinkPrivate(PRIVATE_BLOB.to_vec());
+        let nonce = [0x22u8; NONCE_LEN];
+        let row_key = folder_share_token_hash(FOLDER_TOKEN);
+        let wrap = seal_with(&key(), SS58, &row_key, &secret, Some(FOLDER_TOKEN), &nonce).unwrap();
+        assert_eq!(
+            hex::encode(&wrap),
+            concat!(
+                "012222222222222222222222222222222222222222222222226051162b6b8cd5",
+                "cb35ec9a17e5d65208b81c63247cbea5bed41093336a91f80a7e4121d094030b",
+                "c9dd2ed175cdfdb988014345403295d6c16e47bdccfbdadedfc274c64196deaa",
+                "5f97eb79cc841c5f6ce9c179b37f7bdd6aa7356dfe0cbcedabcf305709643c1c",
+                "579d073be2555a9013882b8b21a28c9a1019bc4afda1e80cb8f2aa63572635dd",
+                "902cd3cb118c36216bb25565872128",
+            ),
+        );
+        let (token, opened) = open_folder_secret(&key(), SS58, &row_key, &wrap).unwrap();
+        assert_eq!(token, FOLDER_TOKEN);
+        assert_eq!(opened, secret);
+    }
+
+    /// Every folder secret this codec seals opens in hcfs-client (and so on
+    /// the console and other devices), and the reverse, variant for variant.
+    #[test]
+    fn folder_wraps_interoperate_with_hcfs_client_both_ways() {
+        use hcfs_client::client::share_wrap::{OwnerWrapContext, open_folder_owner_secret, seal_folder_owner_secret};
+
+        let row_key = folder_share_token_hash(FOLDER_TOKEN);
+        let ctx = OwnerWrapContext {
+            master_mnemonic: MNEMONIC,
+            owner_ss58: SS58,
+            row_key: &row_key,
+        };
+        for secret in [
+            ShareSecret::Public([0x11u8; 32]),
+            ShareSecret::Private(PRIVATE_BLOB.to_vec()),
+            ShareSecret::FolderLink([0x5Au8; 32]),
+            ShareSecret::FolderLinkPrivate(PRIVATE_BLOB.to_vec()),
+        ] {
+            let ours = seal_folder_secret_with_key(&key(), SS58, FOLDER_TOKEN, &secret).unwrap();
+            let (token, opened) = open_folder_owner_secret(ctx, &ours).unwrap();
+            assert_eq!((token.as_str(), &opened), (FOLDER_TOKEN, &secret));
+
+            let theirs = seal_folder_owner_secret(MNEMONIC, SS58, FOLDER_TOKEN, &secret).unwrap();
+            let (token, opened) = open_folder_secret(&key(), SS58, &row_key, &theirs).unwrap();
+            assert_eq!((token.as_str(), &opened), (FOLDER_TOKEN, &secret));
+        }
+    }
+
+    /// A link secret names a folder link; sealing one as a file share has no
+    /// token to rebuild the link from, so it is refused.
+    #[test]
+    fn a_link_secret_cannot_be_sealed_as_a_file_share() {
+        for secret in [
+            ShareSecret::FolderLink([0x5Au8; 32]),
+            ShareSecret::FolderLinkPrivate(PRIVATE_BLOB.to_vec()),
+        ] {
+            assert!(seal_file_secret_with_key(&key(), SS58, FILE_TOKEN, &secret).is_err());
+        }
     }
 
     #[test]

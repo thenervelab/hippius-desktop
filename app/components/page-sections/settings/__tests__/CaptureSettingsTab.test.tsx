@@ -113,12 +113,12 @@ beforeEach(() => {
 });
 
 describe("the Screenshots & Recording tab", () => {
-  it("lists the shortcuts first, then the folder, then the editor's save", async () => {
+  it("lists the shortcuts first, Record before Screenshot, then the folder, then the editor's save", async () => {
     const { container } = setup();
     await card("Recording shortcut");
     await screen.findByText("Copy a share link after capture");
     const text = container.textContent ?? "";
-    const order = ["Screenshot shortcut", "Recording shortcut", "Capture folder", "When saving an edited image"].map(
+    const order = ["Recording shortcut", "Screenshot shortcut", "Capture folder", "When saving an edited image"].map(
       (t) => text.indexOf(t),
     );
     expect(order.every((i) => i >= 0)).toBe(true);

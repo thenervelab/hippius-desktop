@@ -74,10 +74,11 @@ const itemNames = () => screen.getAllByRole("menuitem").map((el) => el.textConte
 
 describe("CaptureButtons", () => {
   // The separate "…" button is gone: each button carries its own menu.
-  it("has no separate More button, only Screenshot and Record, each opening a menu", () => {
+  // Record leads: it is the capture people reach for most.
+  it("has no separate More button, only Record then Screenshot, each opening a menu", () => {
     renderWith();
     const buttons = screen.getAllByRole("button");
-    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Screenshot", "Record"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Record", "Screenshot"]);
     expect(screen.queryByRole("button", { name: /more/i })).toBeNull();
     for (const b of buttons) expect(b).toHaveAttribute("aria-haspopup", "menu");
   });
@@ -199,6 +200,8 @@ describe("CaptureButtons", () => {
   it("shows Record disabled with the reason, and its menu does not open", () => {
     renderWith({ recording: false });
     const record = screen.getByRole("button", { name: "Record" });
+    // Dimmed, it keeps Record's first place, so the buttons never swap.
+    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label"))).toEqual(["Record", "Screenshot"]);
     expect(record).toHaveAttribute("aria-disabled", "true");
     expect(record).toHaveAttribute("title", "Screen recording isn't available in this build.");
     expect(record).not.toBeDisabled();

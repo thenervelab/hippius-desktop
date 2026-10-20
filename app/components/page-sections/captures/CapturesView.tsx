@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo } from "react";
 import { useSetAtom } from "jotai";
-import { Camera, HardDrive } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Camera, FolderOpen, HardDrive } from "lucide-react";
 
 import PageHeader from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
@@ -11,7 +12,7 @@ import DriveContainer from "@/app/components/page-sections/drive/DriveContainer"
 import { DriveRouteContext, type DriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useCaptureDriveStatus } from "@/app/lib/hooks/useCaptureDriveStatus";
 import { captureDialogAtom } from "@/app/lib/capture/captureFlow";
-import { CAPTURES_ROUTE } from "@/app/lib/routes";
+import { CAPTURES_ROUTE, driveFolderRoute } from "@/app/lib/routes";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { freeRecordingsUsed, useFreePlanNotice } from "@/app/lib/capture/freePlanNotice";
@@ -39,6 +40,10 @@ const SUBTITLE = "Your screenshots and recordings, in a drive of their own.";
  * way any drive does. Before the drive exists (nobody has said where captures
  * go, or the chosen folder could not be added yet) it says what happens and
  * offers to set it up. Which state applies is Rust's (`capture_drive_status`).
+ *
+ * Captures kept in a folder inside one of the user's drives (their main
+ * drive, say) are not pinned here: the page would show that whole drive. It
+ * says where they are and opens that folder in Drive instead.
  */
 export default function CapturesView() {
   const { data: status, isLoading, isError, refetch } = useCaptureDriveStatus();
@@ -52,7 +57,10 @@ export default function CapturesView() {
     return () => setFileDetails(null);
   }, [setActiveSubMenuItem, setFileDetails]);
 
-  const label = status?.state === "ready" ? status.label : null;
+  const router = useRouter();
+  // A folder inside another drive: never pin the whole drive here.
+  const inFolder = status?.state === "ready" && status.folder ? status : null;
+  const label = status?.state === "ready" && !inFolder ? status.label : null;
   const remote = status?.state === "ready" ? status.remote : false;
   const route = useMemo<DriveRoute | null>(
     () =>
@@ -78,7 +86,7 @@ export default function CapturesView() {
         subtitle={SUBTITLE}
         hideStats
         className="!shadow-none"
-        // In the drive, Screenshot and Record sit in its own toolbar, as on
+        // In the drive, Record and Screenshot sit in its own toolbar, as on
         // every drive; before it exists they are here and in the card.
         actions={route ? null : <CaptureButtons />}
       />
@@ -87,7 +95,27 @@ export default function CapturesView() {
           {recordingsUsed}
         </p>
       )}
-      {route ? (
+      {inFolder ? (
+        <div className="flex flex-col gap-3 px-3 pb-10">
+          <div data-testid="captures-in-folder" className={NOTE}>
+            <FolderOpen
+              aria-hidden
+              className="mt-0.5 size-[18px] shrink-0 text-primary-50 dark:text-primary-brand-dark"
+              strokeWidth={2}
+            />
+            <p className="min-w-0 flex-1 basis-60">
+              {`Your captures are saved in ${inFolder.location?.place ?? inFolder.folder}, in your ${inFolder.name} drive.`}
+            </p>
+            <Button
+              variant="defaultStable"
+              size="sm"
+              onClick={() => router.push(driveFolderRoute(inFolder.label, inFolder.remote, inFolder.folder))}
+            >
+              Open folder
+            </Button>
+          </div>
+        </div>
+      ) : route ? (
         // Keyed on the drive: a moved captures drive is a different drive,
         // opened fresh rather than over the old one's view.
         <DriveRouteContext.Provider value={route}>
@@ -168,10 +196,10 @@ export function CapturesEmptyState({ place, onSetUp }: { place?: string; onSetUp
       <h2 className="mt-4 text-base font-medium text-grey-10 dark:text-white">No captures yet</h2>
       <p className="mt-1 max-w-md text-sm text-grey-50 dark:text-grey-dark-600">
         {onSetUp
-          ? `Take a screenshot or record your screen. The first time, Hippius makes a folder for your captures${
+          ? `Record your screen or take a screenshot. The first time, Hippius makes a folder for your captures${
               place ? ` (${place})` : ""
             }, backs it up as a drive of its own, and copies a link you can paste anywhere.`
-          : "Take a screenshot or record your screen. It lands here and a link you can paste anywhere is copied."}
+          : "Record your screen or take a screenshot. It lands here and a link you can paste anywhere is copied."}
       </p>
       <div className="mt-5 flex flex-wrap justify-center gap-2">
         <CaptureButtons />

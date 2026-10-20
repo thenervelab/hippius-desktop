@@ -5,6 +5,7 @@ paths:
   - "app/capture-controls/**"
   - "app/capture-camera/**"
   - "app/capture-bubble-controls/**"
+  - "app/capture-pill-tip/**"
   - "app/capture-preview/**"
   - "app/capture-area/**"
   - "app/components/page-sections/settings/EditedImageSetting.tsx"
@@ -404,7 +405,36 @@ and the tray keep the bar.
 `capture_start` never prompts for Screen Recording: it refuses with
 `NotReady(ScreenRecordingPermission)` and the permission dialog takes over
 (see "Screen Recording permission" below). Only
-the bar's overlay takes focus. The frontmost app (pid) is remembered and
+the bar's overlay takes the keyboard, and only once every overlay is up
+(`focus_overlays` at the end of `open_capture_ui`); the overlays are shown
+per `own_windows::overlay_show`, without focus on macOS (the bar's too) and
+Windows (the others), a display plugged in mid-choice too. **On macOS the
+overlays are non-activating panels** (`overlay_panel.rs`,
+`own_windows::overlay_is_panel`): WebKit gives hover, mouse moves and keys
+only to the key window, and an ordinary window is key only while Hippius is
+the active app, so whenever the user's app was in front (the shortcut, the
+tray, a click or gesture that reached another app while choosing) the bar
+had no tooltips, no lit window and no Escape until it was clicked. A panel
+is key without activating Hippius; every hand-over of the keyboard to the
+bar is `overlay_panel::make_key`, never `set_focus` (which activates): once
+all are up, on a bar move, when the bar's page has loaded
+(`capture_overlay_context`), and from the bar-follow watch when another app
+took the keyboard and the pointer is on an overlay (`should_rekey`; never
+from another Hippius window or a prompt above the overlays). The panel is
+made by swapping the built window's class (`make_panel`, before show) with
+the content view taken out first, so WebKit's KVO observer of `contentView`
+is gone during the swap (a class swapped under an observer aborts the app on
+the next `removeObserver:`); any unexpected class, layout or KVO override
+leaves an ordinary window, logged. `log_if_bar_lacks_keyboard` logs key AND
+(panel OR Hippius active), at open and at page load; `isKeyWindow` alone said
+"key" while the bar had no hover. The bar's tooltip opens on focus only for
+`:focus-visible`, so the window taking the keyboard back does not pop one on
+the last focused button. Pinned by
+`own_windows::tests::only_the_bars_overlay_takes_the_keyboard`,
+`overlay_panel::tests`,
+`capture_wiring::only_the_bars_overlay_takes_the_keyboard`,
+`capture_wiring::the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward`
+and `overlayPage.test.tsx`. The frontmost app (pid) is remembered and
 re-activated when the overlays close; the main window comes back per
 `restore_plan` (hidden stays hidden, behind stays behind via `orderBack:`,
 front only if it was key), and never mid-recording (it would be filmed).
@@ -660,9 +690,11 @@ bubble is live (no load wait on the first hover), level 1002 above the
 bubble on macOS, `focused(false)` + `accept_first_mouse(true)`, destroyed
 by `end_camera` and when the camera window goes. It calls only the pill's
 commands (`capture_camera_set_size`, `capture_pause` / `capture_resume`),
-mirrors Rust's phase (by `seq`) and camera state, names the hovered button in
-its own `role="tooltip"` line (no native `title`: a system tooltip is a
-window), and is one Tab stop with arrow keys. Pinned by
+mirrors Rust's phase (by `seq`) and camera state, names the button under
+Rust's pointer (`capture_bubble_controls_pointer`, from the same watch; the
+window is never key, so `mouseenter` never fired) in its own
+`role="tooltip"` line (no native `title`: a system tooltip is a window), and
+is one Tab stop with arrow keys. Pinned by
 `bubble_controls::tests`, `bubbleControlsPage.test.tsx` and
 `capture_wiring::the_bubble_controls_are_never_filmed`. Screen off = **stage**: a
 centred 16:9 window that `capture_confirm` records as `Selection::Window` by
@@ -750,8 +782,13 @@ prewarmed hidden at `capture_start`, shown when the file exists, bottom-right
 of the bar display's WORK area (`work_area`: NSScreen `visibleFrame`, not the
 full display, or it sits under the Dock), `focused(false)` + content-protected except on macOS (`own_windows`) +
 `accept_first_mouse(true)` (never key, so without it every button needed two
-clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered (the timer bar
-stays mounted and pauses, or the card changes height under the pointer).
+clicks). Stays `AUTO_HIDE_MS` (10 s) once done, held while hovered or while
+keyboard focus (`:focus-visible`, in a focused window) is in it. **A hold is a
+pause, never a restart**: letting go runs on with the time left
+(`autoHide.ts`, pure, pinned by `autoHide.test.ts` and `previewPage.test.tsx`).
+The timer bar stays mounted and pauses (or the card changes height under the
+pointer), and each pause redraws it at the countdown's own offset (a negative
+`animation-delay`), so the bar and the timer cannot drift apart.
 It must fit 316 x 346 in every state: it sits at the window's bottom, so an
 overflow clips the TOP (the close button first). Hence the 16:9 picture and
 the one-line failure reason with the full text in `title`, and ONE row of
@@ -1215,8 +1252,42 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   glass, one accent, `GLASS_FOCUS`) and `floating-window.css` (transparent
   window, system font). Text on the glass is never below white/60; every
   `animate-*` carries `motion-reduce:animate-none`.
+- **No native `title` in the capture bar.** macOS draws a system tooltip in
+  a window of its own, below the overlay's screen saver level, so it showed
+  behind the toolbar and only after the system's delay. The bar's buttons
+  take `useBarTooltip`'s handlers (`BarTooltip.tsx`): one glass tooltip,
+  shown at once on hover (pointer AND mouse events) and keyboard focus,
+  portalled to `body` (the column's transform and the glass's backdrop
+  blur would trap a `fixed` child), placed by the pure
+  `tooltipPlacement.ts` (above, below only without room, clamped inside the
+  window). The name stays the button's `aria-label`; an unavailable mode's
+  reason is the tooltip's second line. Keep the module's lowercase name
+  distinct from `BarTooltip.tsx`: `barTooltip.ts` resolved as the component
+  on a case-insensitive disk. Pinned by `overlayPage.test.tsx` and
+  `tooltipPlacement.test.ts`.
+- **Pill hover comes from Rust: the pill is never key.** WebKit gives hover
+  only to the key window, so its buttons got no `:hover`, no pointer events
+  and no native `title`. `spawn_pill_hover_watch` (50 ms, macOS and Windows)
+  sends `capture_pill_pointer` (the point on the pill's row,
+  `pill_hover::pointer_on_row`; none while a menu is open); `usePillTips`
+  hit-tests it (`rustHover::markedAt`), sets `data-hover` and calls
+  `capture_pill_tip`. The tooltip is the window `capture-pill-tip`
+  (`pill_hover::tip_frame`: `TIP_ROOM` tall on top of the pill's glass, below
+  it near the top of the work area, NEVER over the glass, so it cannot take a
+  button's click; it ignores the mouse on macOS only, since tao's Windows
+  click-through makes the window layered), unfocusable, level 1003,
+  `OwnWindow::PillTip` (kept out like the pill), shown only while a tooltip
+  is; the watch hides it when the pointer leaves the pill. Placing waits on the main
+  thread, so `sync_pill_tip` never does it under the `pill_tip` lock. No
+  `title` on the pill. Linux has none (`pill_hover::supported`: filmed).
+  The bubble's controls (`capture_bubble_controls_pointer`) and the card
+  (`capture_preview_pointer`, polled whenever it is up) find hover the same
+  way, with no `title` either. Pinned by `pill_hover::tests`,
+  `controlsPage.test.tsx`, `pillTipPage.test.tsx` and
+  `capture_wiring::the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way`.
 - **Capabilities** (`capture-overlay.json`, `capture-controls.json`,
-  `capture-camera.json`, `capture-bubble-controls.json`) must match
+  `capture-camera.json`, `capture-bubble-controls.json`,
+  `capture-pill-tip.json`) must match
   the window labels and hold `core:` permissions only. The pill is dragged
   (`data-tauri-drag-region`), so its capability has
   `core:window:allow-start-dragging`.
@@ -1291,13 +1362,25 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   forward + `capture_drive_setup_needed`, which `CaptureHost` turns into
   `CaptureDriveDialog`. The dialog only draws `capture_drive_status`
   (`ready` / `needsSetup` / `pending`), `capture_drive_location` (a picked
-  folder, checked) and calls `capture_drive_create`. The folder is
-  `Documents/Hippius Captures` (`suggested_dir`; the home folder when
-  Documents is inside a drive); a picked folder gets `Hippius Captures` made
-  inside it (`folder_for_choice`), so the user's own folder is never uploaded
-  whole. `check_location` refuses a folder inside or around another drive, a
-  member drive and `~/.hippius`, and takes an own drive already synced at
-  that exact folder (a setup cut short after the row was written).
+  folder, resolved and checked; the dialog shows the resolved path and sends
+  it back, so `folder_for_choice` must stay idempotent) and calls
+  `capture_drive_create`. The suggestion is `Documents/hippius-captures`
+  (`naming::CAPTURES_FOLDER_NAME`; `suggested_dir`, the home folder when
+  Documents is inside a drive). A picked folder is used as it is, except the
+  home folder, a disk root, Documents or a home standard folder
+  (`too_broad`) and the root of an own drive that is not a captures drive,
+  which get `hippius-captures` inside. A NEW drive is always labelled
+  `Hippius Captures` (`CAPTURES_DIR_NAME`) whatever its folder is called:
+  the web console and the extension find the captures drive by label, and
+  the drive key derives from it. `check_location` answers `Place::NewDrive`
+  or `Place::InDrive { label, folder }` (a folder in an own drive: captures
+  are filed there, `CaptureDestination.folder` non-empty, no new drive) and
+  refuses a member drive or a folder in one, a folder holding a drive and
+  `~/.hippius`. Such a folder is remembered in `capture_drive_folders_v1`
+  (`own_capture_folders`), never in the labels list, so the free plan's
+  count and the share dialog's capture default read only that folder of the
+  drive; the Captures page does not pin that drive, it names the folder and
+  opens it in Drive.
   `permission_note` warns before macOS's Documents/Desktop/Downloads prompt;
   `folder_refused_copy` explains a refusal. The drive is added through
   `add_local_sync_folder` (Sync a Folder's path) under `ENSURE_LOCK`; a
@@ -1319,7 +1402,7 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `basePath` for folder links and navigation, `pinned` opens it straight in
   and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
   page's `emptyState` at the pinned root), keyed on the drive. Before it
-  exists: an empty state with Screenshot / Record and "Set up the folder
+  exists: an empty state with Record / Screenshot and "Set up the folder
   now", plus Rust's pending sentence or the waiting count.
 
 ## Screen Recording permission (macOS)
@@ -1613,7 +1696,11 @@ argument, dialog source, new-capture branch before any write).
 ## Where Capture is offered
 
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
-**Screenshot** and **Record**, each a normal toolbar button with a chevron
+**Record** and **Screenshot**, Record first everywhere they sit together
+(here, the tray's tiles, the capture bar's groups via `barGroups`, the
+empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+its place), each a normal
+toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
 ("Capture an area / a window / entire screen", `modeLabel` + `MODE_ICON`),
 each `startCapture(kind, mode)` (the screenshot "Capture an area" item
@@ -1646,8 +1733,8 @@ capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
 before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles (`layout="tile"`, keys at `ShortcutKeys` size `lg`), the
-captures folder row (with "Show in Finder" / "Show in folder" through
+side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
+size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
 `reveal_drive_in_finder` only for a drive synced here), the options as a grid
 of cards (`layout="cards"`, `@container` columns so they follow the tab's
 width), then `EditedImageSetting`; each setting's icon sits in a

@@ -16,9 +16,10 @@ import { cappedPercent } from "@/app/lib/upload-feed/percent";
  */
 
 /**
- * How long a finished card stays before it slides away. Hovering holds it
- * for as long as the pointer is on it, and leaving starts the full time
- * again, so reaching for a button never races the card.
+ * How long a finished card stays before it slides away. The pointer on it,
+ * or keyboard focus in it, holds it for as long as it stays, so reaching for
+ * a button never races the card; letting go runs on the time it had left
+ * (`autoHide.ts`) rather than starting the wait over.
  */
 export const AUTO_HIDE_MS = 10_000;
 

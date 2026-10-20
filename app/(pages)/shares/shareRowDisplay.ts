@@ -163,7 +163,19 @@ export interface FolderShareRowPlan {
    *  the presets there could only ever end in an error toast. */
   canChangeExpiry: boolean;
   expiryTooltip?: string;
+  /** The link carries the drive key and this device can replace it with one
+   *  that does not: Rust's `reshareOffered`, on a live row this device can
+   *  still revoke by token. Drives both the "Old link" badge and the
+   *  Reshare action, so neither shows without the other. */
+  canReshare: boolean;
 }
+
+/** Badge on a legacy folder link this device can replace. */
+export const OLD_LINK_BADGE = "Old link";
+
+/** Why the badge is there, in the user's terms. */
+export const OLD_LINK_TOOLTIP =
+  "This link carries the key to your whole drive. Reshare it to get a link that opens only this folder's files, then send the new link.";
 
 const FOREIGN_FOLDER_COPY_TOOLTIP =
   "The link can only be copied from the device that created it.";
@@ -199,6 +211,7 @@ export function folderShareRowPlan(
   const canManage = row.shareToken !== null || canActByHash;
   const canRevoke = canManage && state !== "revoked";
   const canChangeExpiry = canManage && state === "live";
+  const canReshare = row.reshareOffered && state === "live" && row.shareToken !== null;
 
   const copyTooltip =
     state === "revoked"
@@ -224,5 +237,6 @@ export function folderShareRowPlan(
         : state === "revoked"
           ? undefined
           : FOREIGN_FOLDER_EXPIRY_TOOLTIP,
+    canReshare,
   };
 }

@@ -16,34 +16,44 @@
 //!   ciphertext is produced by the REAL sync engine (`SyncRunner` +
 //!   `DriveManager`, the desktop's own upload path), fetched back through
 //!   the ANONYMOUS `/v1/folder-shares/{token}/blob` route with a plain
-//!   `reqwest` client, and decrypted with nothing but the key parsed out of
-//!   the minted URL's `#k=` fragment. If the mint's derivation chain and
-//!   the engine's ever diverge, this decrypt fails.
+//!   `reqwest` client, and decrypted with nothing but what the minted URL
+//!   carries: the `#s=` link secret, traded for the drive key through the
+//!   anonymous `/v1/folder-shares/{token}/link-key` route (the envelope
+//!   from hcfs #683). If the mint's derivation chain and the engine's ever
+//!   diverge, or the envelope seals some other key, this decrypt fails.
 //! - **Badge identity**: the live listing row's `folder_hash` must equal
 //!   `hcfs_client::drive::keys::folder_hash(label)` — the pair the FE's
 //!   `driveFolderHash` keys "Shared" badges on. The mock suite pins both
 //!   sides against the same constant; here the server's own row is the
 //!   second opinion.
-//! - **The password wrap**: a `#p=` mint's fragment blob unwraps with the
-//!   password (client-side Argon2id, no server involvement) to exactly the
-//!   drive key, and a wrong password fails.
+//! - **The password wrap**: a `#sp=` mint's fragment blob unwraps with the
+//!   password (client-side Argon2id) to a link secret that opens the live
+//!   envelope to exactly the drive key. A wrong password fails, and the
+//!   drive key appears nowhere in the URL.
+//! - **The link format**: the target must advertise
+//!   `folder_share_link_envelopes` (production does since hcfs #691), so
+//!   every own-drive mint here is link-secret. The legacy `#k=` / `#p=`
+//!   mint a server without the flag still gets is covered by
+//!   `shares_server_mock.rs`, not here.
 //! - **The uploaded copy** (scenario 4): an outside folder shared through
 //!   `share_outside_folder` uploads under the link's own key; the live
 //!   browse lists its file and empty subfolder, the `#k=` key opens the
 //!   blob, the owner listing marks the row `UploadedCopy` with no drive
 //!   identity, and a revoke cuts recipients off. Needs a server that
 //!   advertises `upload_folder_shares`.
-//! - **Revocation**: while live the anonymous meta/blob answer; after
-//!   `revoke_folder_share_inner` both collapse to the server's bodiless
-//!   404 and the local keystore has forgotten the token.
+//! - **Revocation**: while live the anonymous meta/blob/link-key routes
+//!   answer; after `revoke_folder_share_inner` they collapse to the
+//!   server's 404, so the link secret no longer yields the drive key, and
+//!   the local keystore has forgotten the token.
 //!
 //! # What it does NOT drive (and why that's honest)
 //!
-//! The member-drive refusal here is client-side: the funnel refuses after
-//! the live capability probe but before any mint request, so one bearer
-//! suffices. A server-side member topology (a second account actually
-//! joined to the drive) adds nothing to that gate — the mint never leaves
-//! the process — and is covered behaviorally by `shares_server_mock.rs`.
+//! The member-drive scenario covers only the refusal: the funnel reads the
+//! live capability document and memberships listing, finds no membership
+//! for the seeded foreign drive, and refuses before any mint request, so
+//! one bearer suffices. A successful member mint needs a second account
+//! actually joined to the drive as an Editor or Manager, which this
+//! single-bearer suite does not set up.
 //!
 //! # How to run
 //!
@@ -59,7 +69,8 @@
 //!   python3 scripts/e2e-auth-stub.py &
 //! python3 scripts/e2e-entitlement-stub.py &
 //! # 3. hcfs-server with the shared_drives_real_backend env (S3 backend,
-//! #    HCFS_FEATURE_SHARED_DRIVES=1, stub auth/entitlement URLs)
+//! #    HCFS_FEATURE_SHARED_DRIVES=1, stub auth/entitlement URLs) plus
+//! #    HCFS_FEATURE_FOLDER_LINK_ENVELOPES=1 (exactly `1`), as production runs
 //! # 4. These tests
 //! HCFS_DESKTOP_E2E_SERVER_URL=http://127.0.0.1:19999 \
 //! HCFS_DESKTOP_E2E_BEARER=<bearer> \
@@ -110,7 +121,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;
 
-use hcfs_client::client::folder_share::{ShareTtl, folder_share_token_hash};
+use hcfs_client::client::folder_share::{FolderShareError, ShareTtl, folder_share_token_hash};
 use hcfs_client::client::share::{ShareKeystore, unwrap_share_key};
 use hcfs_client::client::{HcfsClient, HcfsClientConfig};
 use hcfs_client::engine::events::{NoopCallbacks, SyncEvent, SyncEventHandler};
@@ -123,7 +134,8 @@ use tauri_project_lib::auth::state::AuthCapabilities;
 use tauri_project_lib::error::AppError;
 use tauri_project_lib::shares::SqliteShareKeystore;
 use tauri_project_lib::shares::commands::{
-    FolderShareOrigin, FolderShareSummary, ShareChoice, create_folder_share_inner, list_folder_shares_inner, revoke_folder_share_inner,
+    FolderLinkKind, FolderShareOrigin, FolderShareSummary, ShareChoice, ShareLink, create_folder_share_inner, list_folder_shares_inner,
+    revoke_folder_share_inner,
 };
 use tauri_project_lib::shares::outside_folder::{OutsideFolderShare, share_outside_folder};
 use tauri_project_lib::utils::schema::ensure_table_schema;
@@ -421,8 +433,8 @@ async fn seed_drive_with_file(env: &LiveEnv, label: &str, rel_path: &str, conten
 // ── URL + anonymous-request helpers ────────────────────────────────────────
 
 /// Split a minted share URL into `(token, fragment_bytes)` at `marker`
-/// (`"#k="` or `"#p="`). Panic messages deliberately do NOT echo the URL —
-/// it carries the fragment secret.
+/// (`"#s="`, `"#sp="`, or `"#k="` for an uploaded copy). Panic messages
+/// deliberately do NOT echo the URL — it carries the fragment secret.
 fn split_share_url(share_url: &str, marker: &str) -> (String, Vec<u8>) {
     let (head, frag) = share_url
         .split_once(marker)
@@ -451,13 +463,133 @@ async fn anon_get(http: &reqwest::Client, url: &str) -> reqwest::Response {
         .expect("anonymous recipient request must reach the server")
 }
 
+/// `bytes` as a 32-byte key or link secret. `Vec<u8> -> [u8; 32]` fails
+/// with the Vec itself as its error, so an `expect` would print the secret;
+/// the length is the whole diagnostic and is not secret.
+fn secret_32(bytes: Vec<u8>, what: &str) -> [u8; 32] {
+    let len = bytes.len();
+    bytes.try_into().unwrap_or_else(|_| panic!("{what} must be exactly 32 bytes, got {len}"))
+}
+
+/// A client holding nothing but the server URL: no bearer, no account, no
+/// drive. `open_folder_link` is what a recipient's app calls with a pasted
+/// link, so it runs here with no owner credentials in reach.
+///
+/// Also asserts the target advertises `folder_share_link_envelopes`, so the
+/// funnel mints `#s=` / `#sp=`. Without it every own-drive mint is a legacy
+/// `#k=` / `#p=` link, and the fragment asserts would fail with a message
+/// that hides why.
+async fn link_secret_recipient(env: &LiveEnv) -> HcfsClient {
+    let recipient = HcfsClient::new(HcfsClientConfig {
+        base_url: env.server_url.clone(),
+        bearer_token: String::new(),
+        accept_invalid_certs: false,
+        billing_bypass_token: None,
+        ss58_address: String::new(),
+        folder_hash: String::new(),
+        read_timeout_ms: None,
+        shared_drive_member: false,
+    })
+    .expect("construct a credential-less recipient HcfsClient");
+
+    let supported = recipient
+        .folder_share_link_envelopes_supported()
+        .await
+        .expect("read the live /v1/capabilities");
+    assert!(
+        supported,
+        "the target must advertise folder_share_link_envelopes \
+         (hcfs-server with HCFS_FEATURE_FOLDER_LINK_ENVELOPES=1, as production runs)"
+    );
+    recipient
+}
+
+/// Opens a live link-secret link the way a recipient's app does and returns
+/// the drive key it yields, asserting the point of the format on the way:
+/// the link secret is not the drive key, the drive key appears nowhere in
+/// the URL, and the server's envelope seals exactly the key the drive's
+/// files are encrypted with (derived here from the in-test `MASTER`, an
+/// independent mnemonic source: the funnel recovers its master from the
+/// sealed `master_enc_mnemonic.json`).
+/// Every comparison is a boolean so a failure prints no secret.
+async fn open_as_recipient(recipient: &HcfsClient, share_url: &str, token: &str, link_secret: &[u8; 32], label: &str) -> [u8; 32] {
+    let drive_key = hcfs_client::drive::remote::derive_encryption_key(MASTER, label).expect("drive-key derivation from the in-test master");
+    assert!(
+        *link_secret != drive_key,
+        "the link's fragment must carry a link secret, not the drive key"
+    );
+    assert!(
+        !share_url.contains(&URL_SAFE_NO_PAD.encode(drive_key)),
+        "the raw drive key must not appear anywhere in a link-secret URL"
+    );
+
+    let opened = recipient
+        .open_folder_link(token, link_secret)
+        .await
+        .expect("the link secret must open the live envelope");
+    assert!(*opened == drive_key, "the envelope must seal exactly the drive's derived file key");
+    // The opened key, not `drive_key`: callers decrypt with what the link
+    // yielded, so the decrypt stays a second, independent check.
+    *opened
+}
+
+/// Asserts the minting device's live listing row for `link` before its
+/// revoke: the derived `folder_hash` the FE badges key on, the shared path,
+/// the link-secret format, privacy, and a rebuild of the minted URL.
+async fn assert_listing_row(state: &AppState, env: &LiveEnv, link: &ShareLink, label: &str, path_prefix: &str) {
+    let rows = list_folder_shares_inner(state, &env.ss58).await.expect("list folder shares");
+    let row = rows
+        .iter()
+        .find(|r| r.token_hash == folder_share_token_hash(&link.share_token))
+        .expect("the minted share must appear in the live listing");
+    assert_eq!(
+        row.folder_hash,
+        hcfs_client::drive::keys::folder_hash(label),
+        "the server row's folder_hash must equal the client derivation the FE badges key on"
+    );
+    assert_eq!(row.path_prefix, path_prefix);
+    assert!(row.resolvable, "the minting device must resolve its own row");
+    assert!(
+        row.share_token.as_deref() == Some(link.share_token.as_str()),
+        "the listing row must carry the minted plaintext token back"
+    );
+    assert_eq!(row.link_format, FolderLinkKind::LinkSecret);
+    assert_eq!(row.is_private, Some(link.password.is_some()));
+    assert_eq!(row.revoked_at, None, "the share is live before the revoke");
+
+    // The rebuilt URL carries the live token in its path AND the link secret
+    // in its fragment, so neither half may be printed. Comparing each side
+    // as a boolean still says WHICH half diverged — a wrong console base, a
+    // wrong token, or a wrong secret.
+    let row_url = row.share_url.as_deref().expect("a resolvable row must rebuild its share URL");
+    let (row_head, row_frag) = row_url.split_once('#').expect("the rebuilt URL must carry a fragment");
+    let (mint_head, mint_frag) = link.share_url.split_once('#').expect("the minted URL must carry a fragment");
+    assert!(row_head == mint_head, "the listing must rebuild the minted URL's base and token path");
+    assert!(row_frag == mint_frag, "the listing must rebuild the minted URL's link-secret fragment");
+}
+
+/// Asserts a revoked link's secret no longer opens anything: the server's
+/// link-key route answers its single 404, so a recipient who kept the link
+/// cannot get the drive key back. The `Ok` arm prints nothing: it holds the
+/// key.
+async fn assert_link_key_revoked(recipient: &HcfsClient, token: &str, link_secret: &[u8; 32]) {
+    match recipient.open_folder_link(token, link_secret).await {
+        Err(FolderShareError::NotFound) => {}
+        Err(other) => panic!("expected the link-key route's 404 after the revoke, got {other}"),
+        Ok(_) => panic!("a revoked link's secret must not open the envelope"),
+    }
+}
+
 // ── Scenario 1: public mint → anonymous decrypt → list → revoke ────────────
 
 /// The pivotal no-mock round trip: the real funnel mints a public share
-/// over engine-uploaded ciphertext; the `#k=` fragment key — and nothing
-/// else — decrypts the bytes the anonymous blob route streams back; the
-/// live listing row carries the derived `folder_hash` (badge identity);
-/// revocation kills the anonymous surface and forgets the local secret.
+/// over engine-uploaded ciphertext; the `#s=` link secret — and nothing
+/// else — opens the live envelope to the drive key, which decrypts the
+/// bytes the anonymous blob route streams back; the drive key itself is
+/// nowhere in the URL; the live listing row carries the derived
+/// `folder_hash` (badge identity) and the link-secret format; revocation
+/// kills the anonymous surface (the envelope included) and forgets the
+/// local secret.
 ///
 /// `multi_thread`: the engine's `spawn_blocking` walk, the SQLite
 /// keystore's `block_in_place`, and the reqwest driver need a worker pool.
@@ -471,7 +603,8 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
     let http = reqwest::Client::new();
 
     let label = unique_label("pub");
-    let plaintext: &[u8] = b"the fragment key must open exactly these bytes";
+    let plaintext: &[u8] = b"the key the link secret opens must open exactly these bytes";
+    let recipient = link_secret_recipient(&env).await;
     let drive = seed_drive_with_file(&env, &label, "docs/hello.txt", plaintext).await;
 
     let dir = tempfile::TempDir::new().expect("db tempdir");
@@ -495,15 +628,10 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
         .await
         .expect("public mint against the live server");
 
-    let (token, key_bytes) = split_share_url(&link.share_url, "#k=");
+    let (token, secret_bytes) = split_share_url(&link.share_url, "#s=");
     assert!(token == link.share_token, "the URL's token segment must be the minted token");
-    // `Vec<u8> -> [u8; 32]` fails with the Vec itself as its error, so an
-    // `expect` here would print the fragment key. The length is the whole
-    // diagnostic and is not secret, so carry only that.
-    let key_len = key_bytes.len();
-    let key: [u8; 32] = key_bytes
-        .try_into()
-        .unwrap_or_else(|_| panic!("#k= fragment must be exactly 32 key bytes, got {key_len}"));
+    let link_secret = secret_32(secret_bytes, "the #s= link secret");
+    let key = open_as_recipient(&recipient, &link.share_url, &token, &link_secret, &label).await;
 
     // --- Assert: the anonymous surface answers while the share is live ---
     let meta_url = format!("{}/v1/folder-shares/{token}/meta", env.server_url);
@@ -524,7 +652,7 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
         "the engine-uploaded file must appear in the share listing with its plaintext size: {browse}"
     );
 
-    // --- THE round trip: fragment key decrypts the real ciphertext ---
+    // --- THE round trip: the envelope's key decrypts the real ciphertext ---
     let blob_url = format!("{}/v1/folder-shares/{token}/blob?path=hello.txt", env.server_url);
     let blob = anon_get(&http, &blob_url).await;
     assert_eq!(blob.status().as_u16(), 200, "anonymous blob must stream for a live share");
@@ -538,37 +666,12 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
         ciphertext.len() > plaintext.len(),
         "the blob is ciphertext (nonce + auth tags), never the plaintext"
     );
-    let decrypted = hcfs_client::crypto::decrypt_small(&ciphertext, &key).expect("the #k= fragment key must decrypt the drive's real ciphertext");
+    let decrypted =
+        hcfs_client::crypto::decrypt_small(&ciphertext, &key).expect("the key the #s= link opens must decrypt the drive's real ciphertext");
     assert_eq!(decrypted, plaintext, "the decrypted bytes are the original file");
 
     // --- Badge identity: the live listing row's folder_hash is the derived one ---
-    let rows = list_folder_shares_inner(&state, &env.ss58).await.expect("list folder shares");
-    let row = rows
-        .iter()
-        .find(|r| r.token_hash == folder_share_token_hash(&token))
-        .expect("the minted share must appear in the live listing");
-    assert_eq!(
-        row.folder_hash,
-        hcfs_client::drive::keys::folder_hash(&label),
-        "the server row's folder_hash must equal the client derivation the FE badges key on"
-    );
-    assert_eq!(row.path_prefix, "docs");
-    assert!(row.resolvable, "the minting device must resolve its own row");
-    assert!(
-        row.share_token.as_deref() == Some(token.as_str()),
-        "the listing row must carry the minted plaintext token back"
-    );
-    // The rebuilt URL carries the live token in its path AND the key in its
-    // `#k=` fragment, so neither half may be printed. Splitting at the
-    // marker and comparing each side as a boolean still says WHICH half
-    // diverged — a wrong console base, a wrong token, or a wrong key.
-    let row_url = row.share_url.as_deref().expect("a resolvable row must rebuild its share URL");
-    let (row_head, row_frag) = row_url.split_once('#').expect("the rebuilt URL must carry a fragment");
-    let (mint_head, mint_frag) = link.share_url.split_once('#').expect("the minted URL must carry a fragment");
-    assert!(row_head == mint_head, "the listing must rebuild the minted URL's base and token path");
-    assert!(row_frag == mint_frag, "the listing must rebuild the minted URL's key fragment");
-    assert_eq!(row.is_private, Some(false));
-    assert_eq!(row.revoked_at, None, "the share is live before the revoke");
+    assert_listing_row(&state, &env, &link, &label, "docs").await;
 
     // --- Revoke: the anonymous surface dies, the keystore forgets ---
     revoke_folder_share_inner(&state, &env.ss58, &token).await.expect("revoke");
@@ -586,11 +689,12 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
     );
     let blob_after = anon_get(&http, &blob_url).await;
     assert_eq!(blob_after.status().as_u16(), 404, "the ciphertext must be unreachable after the revoke");
+    assert_link_key_revoked(&recipient, &token, &link_secret).await;
 
     let keystore = SqliteShareKeystore::new(pool);
-    // `ShareSecret` derives `Debug` — `Public` holds the raw key, `Private`
-    // the fragment blob — so an `assert_eq!` against `None` would print the
-    // secret on the one failure that matters: it outliving the revoke.
+    // A boolean, like every secret comparison here: `ShareSecret`'s `Debug`
+    // redacts today, but this failure (the secret outliving the revoke)
+    // must print nothing even if that ever changes.
     assert!(
         keystore.get(&token).expect("keystore get").is_none(),
         "the revoked token's secret must be forgotten"
@@ -605,12 +709,13 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
 
 // ── Scenario 2: password mint — the wrap is real, client-side ──────────────
 
-/// The `#p=` mint: the fragment blob unwraps with the password — pure
-/// client-side Argon2id, no server round trip — to exactly the drive key
-/// the sync engine encrypts with, a wrong password fails, the raw key
-/// appears nowhere in the URL, and the revoke kills the anonymous meta.
+/// The `#sp=` mint: the fragment blob unwraps with the password — pure
+/// client-side Argon2id — to a link secret, never the drive key; that
+/// secret opens the live envelope to exactly the drive key the sync engine
+/// encrypts with; a wrong password fails; the raw key appears nowhere in
+/// the URL; and the revoke kills the anonymous meta and the envelope.
 ///
-/// No file upload here: the wrap round trip is proven against
+/// No file upload here: the key round trip is proven against
 /// `derive_encryption_key` — the very function the funnel's own-drive tail
 /// calls, so what is independent is only the MNEMONIC SOURCE (this file's
 /// `MASTER` constant, versus the master the funnel recovers from the sealed
@@ -619,12 +724,13 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
 /// here would only re-test scenario 1's decrypt.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server"]
-async fn password_mint_wraps_the_drive_key_and_wrong_password_fails() {
+async fn password_mint_wraps_a_link_secret_and_wrong_password_fails() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green
     };
     let _home = &*TEST_HOME;
     let http = reqwest::Client::new();
+    let recipient = link_secret_recipient(&env).await;
 
     let label = unique_label("pw");
     let fh = hcfs_client::drive::keys::folder_hash(&label);
@@ -669,21 +775,19 @@ async fn password_mint_wraps_the_drive_key_and_wrong_password_fails() {
         "the password surfaces on the create response only"
     );
 
-    // --- Assert: the wrap round-trips client-side to the drive key ---
-    let (token, blob) = split_share_url(&link.share_url, "#p=");
+    // --- Assert: the wrap unwraps client-side to a link secret ---
+    let (token, blob) = split_share_url(&link.share_url, "#sp=");
     assert!(token == link.share_token, "the URL's token segment must be the minted token");
 
-    let drive_key = hcfs_client::drive::remote::derive_encryption_key(MASTER, &label).expect("drive-key derivation from the in-test master");
-    let unwrapped = unwrap_share_key(password, &blob).expect("the password must unwrap the fragment blob");
-    assert!(unwrapped == drive_key, "the unwrapped key must be the drive's derived file key");
+    let link_secret = unwrap_share_key(password, &blob).expect("the password must unwrap the fragment blob");
     assert!(
         unwrap_share_key("not-the-password", &blob).is_err(),
         "a wrong password must fail the unwrap"
     );
-    assert!(
-        !link.share_url.contains(&URL_SAFE_NO_PAD.encode(drive_key)),
-        "the raw drive key must not appear anywhere in a password link"
-    );
+
+    // --- ...which the live envelope trades for exactly the drive key ---
+    open_as_recipient(&recipient, &link.share_url, &token, &link_secret, &label).await;
+    assert_listing_row(&state, &env, &link, &label, "").await;
 
     // --- Act while live, then revoke, then assert the surface is dead ---
     let meta_url = format!("{}/v1/folder-shares/{token}/meta", env.server_url);
@@ -699,11 +803,12 @@ async fn password_mint_wraps_the_drive_key_and_wrong_password_fails() {
     revoke_folder_share_inner(&state, &env.ss58, &token).await.expect("revoke");
     let meta_after = anon_get(&http, &meta_url).await;
     assert_eq!(meta_after.status().as_u16(), 404, "anonymous meta must 404 after the revoke");
+    assert_link_key_revoked(&recipient, &token, &link_secret).await;
 
     let keystore = SqliteShareKeystore::new(pool);
-    // `ShareSecret` derives `Debug` — `Public` holds the raw key, `Private`
-    // the fragment blob — so an `assert_eq!` against `None` would print the
-    // secret on the one failure that matters: it outliving the revoke.
+    // A boolean, like every secret comparison here: `ShareSecret`'s `Debug`
+    // redacts today, but this failure (the secret outliving the revoke)
+    // must print nothing even if that ever changes.
     assert!(
         keystore.get(&token).expect("keystore get").is_none(),
         "the revoked token's secret must be forgotten"
@@ -713,17 +818,24 @@ async fn password_mint_wraps_the_drive_key_and_wrong_password_fails() {
     let _ = client.unregister_folder(&env.ss58, &fh).await;
 }
 
-// ── Scenario 3: member refusal against the live capability document ────────
+// ── Scenario 3: a member mint the live memberships listing refuses ─────────
 
-/// A member-drive mint refuses at the owner-only gate AFTER the live
-/// capability probe: the real server's `/v1/capabilities` advertises
-/// `folder_shares`, so the refusal provably comes from the member gate,
-/// not a capability miss — and no mint request ever leaves the process
-/// (nothing lands server-side, so there is nothing to clean up). The
-/// probe-ordering and request-count pins live in `shares_server_mock.rs`.
+/// A mint in a drive this account does not own refuses when the live
+/// memberships listing has no membership for it.
+///
+/// Since desktop #491 (hcfs #458) an Editor or Manager may share a folder
+/// from someone else's drive, so a member row no longer hits an owner-only
+/// gate: it goes to `create_member_folder_share`, which reads the live
+/// `/v1/capabilities` and, when the server advertises
+/// `member_folder_shares`, the live memberships listing. The seeded row
+/// names a foreign owner this account was never added to, so the listing
+/// has no entry and the refusal is "no longer a member". That exact message
+/// proves both live reads ran: a server without `member_folder_shares`
+/// refuses with "needs a newer server" instead. No mint request is sent and
+/// nothing is persisted, so there is nothing to clean up.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server"]
-async fn member_drive_mint_refuses_against_the_live_capability_doc() {
+async fn member_drive_mint_without_a_live_membership_refuses() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green
     };
@@ -737,13 +849,16 @@ async fn member_drive_mint_refuses_against_the_live_capability_doc() {
     let state = make_state(pool.clone(), &env.ss58);
 
     // Hours24 like the other mints. This call is expected to refuse and so
-    // creates nothing, but if the owner-only rule ever regressed it WOULD
-    // mint — and this test has no revoke to clean up after it.
+    // creates nothing, but if the membership check ever regressed it WOULD
+    // try to mint, and this test has no revoke to clean up after it.
     let err = create_folder_share_inner(&state, &env.ss58, &label, "docs", ShareTtl::Hours24, ShareChoice::Public)
         .await
-        .expect_err("a member mint must refuse");
+        .expect_err("a mint in a drive with no live membership must refuse");
     match err {
-        AppError::Validation(msg) => assert!(msg.contains("Only the owner"), "the owner-only rule must be named: {msg}"),
+        AppError::Validation(msg) => assert_eq!(
+            msg, "You are no longer a member of this drive.",
+            "the refusal must come from the live memberships listing"
+        ),
         other => panic!("expected Validation, got {other:?}"),
     }
 
@@ -793,7 +908,7 @@ async fn capture_copy(http: &reqwest::Client, env: &LiveEnv, state: &AppState, t
 /// captured first, then revoked, then asserted, so a red run leaves no
 /// live link behind.
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live-lane: needs HCFS_DESKTOP_E2E_SERVER_URL + HCFS_DESKTOP_E2E_BEARER + HCFS_DESKTOP_E2E_SS58 and a running hcfs-server with upload_folder_shares"]
+#[ignore = "live-lane: needs the three HCFS_DESKTOP_E2E_* vars and a running hcfs-server with upload_folder_shares"]
 async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
     let Some(env) = live_env() else {
         return; // hermetic default stays green
@@ -841,10 +956,7 @@ async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
     assert!(named("directories", "empty"), "the empty subfolder is listed: {browse}");
 
     assert_eq!(captured.blob_status, 200, "anonymous blob must stream for a sealed copy");
-    let key_len = key_bytes.len();
-    let key: [u8; 32] = key_bytes
-        .try_into()
-        .unwrap_or_else(|_| panic!("#k= fragment must be exactly 32 key bytes, got {key_len}"));
+    let key = secret_32(key_bytes, "the #k= fragment key");
     let mut decrypted = Vec::new();
     hcfs_client::crypto::decrypt_stream(
         &mut std::io::Cursor::new(&captured.ciphertext),

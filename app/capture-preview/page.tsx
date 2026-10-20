@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle,
@@ -44,10 +44,27 @@ import { getEngagementFeatures } from "@/app/lib/tauri/shareInsights";
 import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
+import { markedAt } from "@/app/lib/capture/rustHover";
+import { useBarTooltip } from "@/app/capture-overlay/BarTooltip";
 import { AUTO_HIDE_MS, cardView, destinationText, wantsProgress } from "./previewCard";
+import { barOffsetMs, nextCountdown, timeLeft, type Countdown } from "./autoHide";
 
 /** How long "Copied" shows before the button reads "Copy link" again. */
 const COPIED_MS = 1500;
+
+/**
+ * Focus the keyboard put there, the kind that draws the focus ring. A
+ * button's focus after a click does not hold the card, or it would stay up
+ * until the window lost focus. A WebView that cannot read the selector
+ * holds on any focus, so the keyboard is never raced.
+ */
+function isKeyboardFocus(el: Element): boolean {
+  try {
+    return el.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
 
 // Every label stays on one line (`whitespace-nowrap`): the card is 316 pt
 // wide, and "Show in folder" once broke in two beside three other buttons.
@@ -55,8 +72,14 @@ const COPIED_MS = 1500;
 // compact secondary sized to its label (`shrink-0`) and at most one 32 pt
 // icon button; the rest of the actions live in the More menu.
 const ACTION = "flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-[8px] px-2.5 text-[12px]";
-/** How often the card asks where the pointer is while its timer runs. */
-const POINTER_POLL_MS = 150;
+/** How often the card asks where the pointer is while it is up. */
+const POINTER_POLL_MS = 100;
+/**
+ * Marks what has a tooltip (or, the picture, a hover face) on the card; the
+ * value is its key. The card is never key, so its webview gets no hover on
+ * macOS: the element under Rust's pointer is found by this mark instead.
+ */
+const CARD_TIP = "data-card-tip";
 const PRIMARY_ACTION = `${ACTION} min-w-0 flex-1 ${GLASS_PRIMARY}`;
 const SECONDARY_ACTION = `${ACTION} shrink-0 bg-white/10 font-medium ${GLASS_BUTTON}`;
 const ICON_ACTION = `grid size-8 shrink-0 place-items-center rounded-[8px] bg-white/10 ${GLASS_BUTTON}`;
@@ -78,6 +101,10 @@ const MENU_ITEM = `flex h-8 w-full items-center gap-2 whitespace-nowrap rounded-
  * label ever wraps. A failed card offers Upgrade / Retry / Discard the same
  * way, Discard becoming an icon when all three are there.
  *
+ * No native `title`: the card is never the key window, so macOS showed none
+ * (and no `:hover`). The card asks Rust where the pointer is, lights what is
+ * under it and names it in the capture bar's own tooltip, inside the window.
+ *
  * Sized for Rust's 316 x 346 pt window in every state (16:9 picture, the
  * failure reason on one line with the whole of it in the tooltip, a notice on
  * two): the card sits at the window's bottom, so anything taller is cut off
@@ -90,14 +117,21 @@ export default function CapturePreviewPage() {
   const [syncFiles, setSyncFiles] = useState<FileProgress[]>([]);
   const [copied, setCopied] = useState(false);
   const [hovered, setHovered] = useState(false);
-  // Bumped each time the pointer leaves, so the timer bar starts over.
-  const [timerRun, setTimerRun] = useState(0);
+  // Keyboard focus in the card holds it the way the pointer does.
+  const [keyboardIn, setKeyboardIn] = useState(false);
+  // The settled card's countdown before it slides away (`autoHide.ts`).
+  const [countdown, setCountdown] = useState<Countdown | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   // Whether the server has link Insights: the card has no capabilities of
   // its own, so it asks Rust once. Unknown reads as no, so nothing shows
   // that cannot open.
   const [insightsAvailable, setInsightsAvailable] = useState(false);
+  // The bar's tooltip, shown for what Rust's pointer is on (and, when the
+  // window does get hover or focus, from the elements' own events).
+  const { tipProps, showAt, tooltip } = useBarTooltip();
+  // What the pointer is on, by its `data-card-tip` key.
+  const [pointed, setPointed] = useState<string | null>(null);
   const menuButton = useRef<HTMLButtonElement | null>(null);
   const menu = useRef<HTMLDivElement | null>(null);
   const cardId = useRef<number | null>(null);
@@ -197,16 +231,20 @@ export default function CapturePreviewPage() {
   const done = view?.done ?? false;
   const settled = view?.settled ?? false;
 
-  // Once in the drive with its link settled, the card slides away on its own,
-  // unless the pointer is on it. Not before the link: it would go before it
-  // could say the link was copied.
+  // Once in the drive with its link settled, the card slides away on its own
+  // after AUTO_HIDE_MS. Not before the link: it would go before it could say
+  // the link was copied. The pointer on it, or keyboard focus in it, holds
+  // the countdown, and letting go runs it on with the time it had left
+  // (`autoHide.ts`): leaving never starts the wait over.
   // macOS sends no hover to the card's window (it is never key), so while
-  // the timer runs, ask Rust where the pointer is and hold the card the same
-  // way. Leaving starts the timer over, as the pointer events do.
+  // the card is up, ask Rust where the pointer is: on the card it holds the
+  // card the same way, and what it is on is lit and named in the tooltip.
   const cardBox = useRef<HTMLDivElement | null>(null);
+  const up = card !== null;
   useEffect(() => {
-    if (!settled) return;
+    if (!up) return;
     let inside = false;
+    let on: string | null = null;
     let stopped = false;
     const poll = window.setInterval(() => {
       void getCapturePreviewPointer()
@@ -214,10 +252,16 @@ export default function CapturePreviewPage() {
           const box = cardBox.current?.getBoundingClientRect();
           if (stopped || !box) return;
           const now = !!at && at[0] >= box.left && at[0] <= box.right && at[1] >= box.top && at[1] <= box.bottom;
+          const el = at ? markedAt({ x: at[0], y: at[1] }, { left: 0, top: 0 }, CARD_TIP) : null;
+          const key = el?.getAttribute(CARD_TIP) ?? null;
+          if (key !== on) {
+            on = key;
+            setPointed(key);
+            showAt(key, el);
+          }
           if (now === inside) return;
           inside = now;
           setHovered(now);
-          if (!now) setTimerRun((n) => n + 1);
         })
         .catch(() => undefined);
     }, POINTER_POLL_MS);
@@ -225,13 +269,35 @@ export default function CapturePreviewPage() {
       stopped = true;
       window.clearInterval(poll);
     };
-  }, [settled]);
+  }, [up, showAt]);
+
+  // Focus and blur keep `keyboardIn` up to date, but a focused button that
+  // goes away (a More item closing its menu) takes the focus with it and no
+  // blur reaches React, so it is read again after every render too. Only
+  // while the card's window has focus: switching to another app lets go,
+  // though the button stays the page's active element.
+  const readKeyboard = useCallback(() => {
+    const el = document.activeElement;
+    setKeyboardIn(document.hasFocus() && !!el && !!cardBox.current?.contains(el) && isKeyboardFocus(el));
+  }, []);
+  useLayoutEffect(readKeyboard);
+
+  const held = hovered || keyboardIn;
+  const countingFor = settled && card ? card.id : null;
+  // Before paint, so the timer bar is never drawn a frame behind the hold.
+  useLayoutEffect(() => {
+    setCountdown((previous) => nextCountdown(previous, countingFor, held, AUTO_HIDE_MS, performance.now()));
+  }, [countingFor, held]);
 
   useEffect(() => {
-    if (!settled || hovered) return;
-    const t = window.setTimeout(dismiss, AUTO_HIDE_MS);
+    if (!countdown || countdown.runningSince === null) return;
+    const id = countdown.cardId;
+    const t = window.setTimeout(
+      () => void dismissCapturePreview(id).catch(() => undefined),
+      timeLeft(countdown, performance.now()),
+    );
     return () => window.clearTimeout(t);
-  }, [settled, hovered, dismiss, timerRun]);
+  }, [countdown]);
 
   if (!card || !view) return null;
   const { percent, failed, waiting } = view;
@@ -278,14 +344,15 @@ export default function CapturePreviewPage() {
         // on some WebViews, and the hold must work there as well.
         onPointerEnter={() => setHovered(true)}
         onMouseEnter={() => setHovered(true)}
-        onPointerLeave={() => {
-          setHovered(false);
-          setTimerRun((n) => n + 1);
-        }}
+        onPointerLeave={() => setHovered(false)}
         onMouseLeave={() => setHovered(false)}
+        onFocus={readKeyboard}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setKeyboardIn(false);
+        }}
       >
         <div className="mb-1.5 flex h-7 items-center gap-2 pl-0.5">
-          <p className="min-w-0 flex-1 truncate text-[13px] font-semibold" title={card.fileName}>
+          <p className="min-w-0 flex-1 truncate text-[13px] font-semibold" data-card-tip="name" {...tipProps("name", { label: card.fileName })}>
             {card.fileName}
           </p>
           <button
@@ -302,7 +369,9 @@ export default function CapturePreviewPage() {
           type="button"
           onClick={failed ? undefined : canEdit ? edit : showInFolder}
           aria-label={canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
-          title={canEdit ? "Edit" : "Show in folder"}
+          // Its hover face says what a click does; no tooltip repeats it.
+          data-card-tip="picture"
+          data-hover={pointed === "picture" ? "true" : undefined}
           className={`group relative block aspect-[16/9] w-full overflow-hidden rounded-[9px] bg-white/5 ${GLASS_FOCUS}`}
         >
           {card.thumbnail ? (
@@ -319,7 +388,7 @@ export default function CapturePreviewPage() {
             </span>
           )}
           {!failed && (
-            <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 motion-reduce:transition-none">
+            <span className="pointer-events-none absolute inset-0 grid place-items-center bg-[#000]/0 opacity-0 transition duration-150 group-hover:bg-[#000]/35 group-hover:opacity-100 group-data-[hover=true]:bg-[#000]/35 group-data-[hover=true]:opacity-100 motion-reduce:transition-none">
               <span className="flex items-center gap-1.5 whitespace-nowrap rounded-full bg-[#000]/70 px-3 py-1 text-[12px] font-medium">
                 {canEdit ? (
                   <>
@@ -354,11 +423,20 @@ export default function CapturePreviewPage() {
             // A public link says who can open it, in the destination's place
             // (still in the tooltip) so the card keeps its height. More >
             // Manage link changes it.
-            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)} data-testid="capture-link-note">
+            <p
+              className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`}
+              data-card-tip="destination"
+              {...tipProps("destination", { label: destinationText(card) })}
+              data-testid="capture-link-note"
+            >
               {card.linkNote}
             </p>
           ) : (
-            <p className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`} title={destinationText(card)}>
+            <p
+              className={`truncate text-[11.5px] leading-4 ${GLASS_MUTED}`}
+              data-card-tip="destination"
+              {...tipProps("destination", { label: destinationText(card) })}
+            >
               {destinationText(card)}
             </p>
           )}
@@ -380,18 +458,26 @@ export default function CapturePreviewPage() {
             </div>
           )}
           {settled && (
-            // Stays put while hovered, paused, so the card does not change
-            // height under the pointer; leaving starts it over.
+            // Stays put while held, paused, so the card does not change
+            // height under the pointer, and runs on from there when let go.
+            // Each pause draws it afresh where the countdown stopped (a
+            // negative delay), so the bar and the timer cannot drift apart.
             <div className="h-0.5 overflow-hidden rounded-full bg-white/10" aria-hidden data-testid="auto-hide-timer">
-              <div
-                key={timerRun}
-                className="capture-card-timer h-full bg-white/35"
-                style={{ animationDuration: `${AUTO_HIDE_MS}ms`, animationPlayState: hovered ? "paused" : "running" }}
-              />
+              {countdown && (
+                <div
+                  key={`${countdown.cardId}:${countdown.leftMs}`}
+                  className="capture-card-timer h-full bg-white/35"
+                  style={{
+                    animationDuration: `${countdown.totalMs}ms`,
+                    animationDelay: `${-barOffsetMs(countdown)}ms`,
+                    animationPlayState: countdown.runningSince === null ? "paused" : "running",
+                  }}
+                />
+              )}
             </div>
           )}
           {failure && (
-            <p className={`line-clamp-1 text-[11.5px] leading-4 ${GLASS_MUTED}`} title={failure}>
+            <p className={`line-clamp-1 text-[11.5px] leading-4 ${GLASS_MUTED}`} data-card-tip="failure" {...tipProps("failure", { label: failure })}>
               {failure}
             </p>
           )}
@@ -431,7 +517,8 @@ export default function CapturePreviewPage() {
                     type="button"
                     disabled={busy}
                     aria-label="Discard"
-                    title="Discard"
+                    data-card-tip="discard"
+                    {...tipProps("discard", { label: "Discard" })}
                     onClick={() => run(discardCapturePreview)}
                     className={ICON_ACTION}
                   >
@@ -478,7 +565,8 @@ export default function CapturePreviewPage() {
                   aria-label="More"
                   aria-haspopup="menu"
                   aria-expanded={menuOpen}
-                  title="More"
+                  data-card-tip="more"
+                  {...tipProps("more", { label: "More" })}
                   onClick={() => setMenuOpen((open) => !open)}
                   className={ICON_ACTION}
                 >
@@ -570,6 +658,8 @@ export default function CapturePreviewPage() {
           )}
         </div>
       </div>
+      {/* Not over an open More menu, which opens upward where it would go. */}
+      {!menuOpen && tooltip}
     </div>
   );
 }

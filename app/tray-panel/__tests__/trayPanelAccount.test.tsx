@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { EMPTY_SNAPSHOT } from "@/app/lib/types/syncSnapshot";
 import type { TrayMenuData } from "@/app/lib/tray/useTrayPanelData";
@@ -85,6 +85,49 @@ describe("tray popover header balance", () => {
     seed({ balance: null, credits: null });
     render(<TrayPanelPage />);
     expect(screen.getByTestId("tray-balance")).toHaveTextContent("—");
+  });
+});
+
+describe("tray popover header name", () => {
+  beforeEach(() => seed({}));
+
+  // The header showed only the logo, so the popover never said which app it was.
+  it("names the app beside the logo, on one line, before the balance", () => {
+    render(<TrayPanelPage />);
+    const header = screen.getByRole("banner");
+    const name = within(header).getByText("Hippius");
+    const logo = header.querySelector("svg");
+    expect(logo).not.toBeNull();
+    // One row: the mark and the name are siblings in the same flex line.
+    expect(name.parentElement).toBe(logo?.parentElement);
+    expect(name.parentElement).toHaveClass("flex", "items-center");
+    expect(
+      name.compareDocumentPosition(screen.getByTestId("tray-balance")) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  // The window is a fixed 460px. A long balance with the chat and bell
+  // badges must never push the balance or the menu out of it: the name is
+  // the part that gives way, and the pill never shrinks.
+  it("lets the name give way before the balance pill does", () => {
+    seed({ balance: "-12345678.91" });
+    render(<TrayPanelPage />);
+    const name = within(screen.getByRole("banner")).getByText("Hippius");
+    expect(name).toHaveClass("min-w-0", "truncate");
+    expect(name.parentElement).toHaveClass("min-w-0");
+    const pill = screen.getByTestId("tray-balance").closest(".rounded-xl");
+    expect(pill).toHaveClass("shrink-0");
+    expect(within(pill as HTMLElement).getByRole("button", { name: "More" })).toBeInTheDocument();
+  });
+
+  // Brand kit: the flat mark in blue (lighter on dark), the name in black
+  // (white on dark).
+  it("has its own colour in dark mode, not only the light one", () => {
+    render(<TrayPanelPage />);
+    const header = screen.getByRole("banner");
+    const name = within(header).getByText("Hippius");
+    expect(name).toHaveClass("text-black-700", "dark:text-white");
+    expect(header.querySelector("svg")).toHaveClass("text-primary-50", "dark:text-primary-60");
   });
 });
 

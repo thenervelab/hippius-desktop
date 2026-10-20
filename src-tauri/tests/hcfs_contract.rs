@@ -18,9 +18,11 @@
 //! goldens deliberately and document the migration.
 
 use base64::Engine;
+use hcfs_client::client::folder_link::{FolderLinkMint, mint_folder_link, open_folder_link_envelope};
 use hcfs_client::client::folder_share::{
-    CreatedFolderShare, FolderShareError, FolderShareListItem, FolderShareOptions, FolderShareSource, ShareTtl, UploadFolderEntry,
-    UploadFolderShareOptions, build_folder_share_url, build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash,
+    CreatedFolderShare, FolderLinkFormat, FolderShareError, FolderShareFragment, FolderShareListItem, FolderShareOptions, FolderShareSource,
+    ShareTtl, UploadFolderEntry, UploadFolderShareOptions, build_folder_link_url, build_folder_link_url_private, build_folder_share_url,
+    build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash, parse_folder_share_fragment,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
 use hcfs_client::crypto::{decrypt_small, encrypt_small};
@@ -796,6 +798,92 @@ fn a_private_folder_share_secret_can_never_produce_a_key_url() {
     );
 }
 
+// ── Link-secret folder links (hcfs #665) ───────────────────────────────────
+//
+// A folder link minted once the server advertises
+// `folder_share_link_envelopes` carries a per-link secret (`#s=`, or `#sp=`
+// under a password) and the server keeps the drive key sealed under it. The
+// console recipient page parses exactly these shapes.
+
+/// Exact link-secret URL vectors, the twins of
+/// `folder_share_url_builders_are_pinned`.
+#[test]
+fn folder_link_url_builders_are_pinned() {
+    let public = build_folder_link_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(
+        public,
+        format!("https://x.io/share/folder/tok#s={}", "A".repeat(43)),
+        "link-secret URL drifted"
+    );
+    let private = build_folder_link_url_private("https://x.io/", "tok", &[1, 2, 3]);
+    assert_eq!(private, "https://x.io/share/folder/tok#sp=AQID", "password link-secret URL drifted");
+}
+
+/// A link secret can only ever rebuild its `#s=` / `#sp=` link. A `#k=` /
+/// `#p=` URL built from it would hand a recipient the link secret as if it
+/// were the drive key: a link that opens nothing.
+#[test]
+fn a_link_secret_folder_share_secret_never_produces_a_key_url() {
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLink([7u8; 32]));
+    assert_eq!(url, build_folder_link_url("https://console.example.com", "tok", &[7u8; 32]));
+    assert!(!url.contains("#k="), "{url}");
+
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLinkPrivate(blob));
+    assert!(url.contains("#sp=") && !url.contains("#p="), "{url}");
+}
+
+/// The fragment parser reads back every form the builders write, which is
+/// what the Copy link on the shares page and every other device rely on.
+#[test]
+fn every_folder_link_fragment_parses_back() {
+    let fragment = |url: &str| url.split_once('#').expect("fragment").1.to_string();
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_share_url("https://x.io", "t", &[1u8; 32]))).expect("k"),
+        FolderShareFragment::LegacyKey([1u8; 32])
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_share_url_private("https://x.io", "t", &blob))).expect("p"),
+        FolderShareFragment::LegacyWrapped(blob.clone())
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_link_url("https://x.io", "t", &[2u8; 32]))).expect("s"),
+        FolderShareFragment::LinkSecret([2u8; 32])
+    );
+    assert_eq!(
+        parse_folder_share_fragment(&fragment(&build_folder_link_url_private("https://x.io", "t", &blob))).expect("sp"),
+        FolderShareFragment::LinkSecretWrapped(blob)
+    );
+}
+
+/// The member mint builds its link with `mint_folder_link`: the envelope
+/// opens to the drive key under the link secret the keystore keeps, and the
+/// envelope and digest are the sizes the server stores.
+#[test]
+fn a_minted_folder_link_opens_to_the_drive_key() {
+    let file_key = [9u8; 32];
+    let FolderLinkMint {
+        secret,
+        link_envelope,
+        link_fetch_digest,
+    } = mint_folder_link(&file_key, None).expect("mint");
+    let ShareSecret::FolderLink(link_secret) = secret else {
+        panic!("a passwordless mint keeps a public link secret, got {secret:?}");
+    };
+    assert_ne!(link_secret, file_key, "the link secret is never the drive key");
+    assert_eq!(link_envelope.len(), hcfs_shared::shares::FOLDER_LINK_ENVELOPE_LEN);
+    assert_eq!(link_fetch_digest.len(), hcfs_shared::shares::FOLDER_LINK_FETCH_DIGEST_LEN);
+    assert_eq!(*open_folder_link_envelope(&link_secret, &link_envelope).expect("open"), file_key);
+
+    let private = mint_folder_link(&file_key, Some("correct horse battery staple")).expect("mint private");
+    assert!(matches!(private.secret, ShareSecret::FolderLinkPrivate(_)), "{:?}", private.secret);
+
+    // The recipient-side open the shares page does not use, referenced so a
+    // signature change fails here.
+    let _ = hcfs_client::client::HcfsClient::open_folder_link;
+}
+
 /// Compile-time pin of the folder-share structs and owner operations the
 /// mint/list/revoke/expiry IPCs consume, mirroring
 /// `shared_drive_client_surface_is_reachable`: the exhaustive struct
@@ -825,6 +913,7 @@ fn folder_share_client_surface_is_reachable() {
         expires_at: None,
         revoked_at: Some(created_at),
         source: FolderShareSource::Drive,
+        link_format: FolderLinkFormat::Legacy,
     };
     assert_eq!(item.path_prefix, "", "whole-drive share is the empty prefix");
 
@@ -1255,4 +1344,101 @@ fn a_throwaway_manager_writes_the_empty_remote_marker() {
         .expect("an unconfigured manager has no membership to refuse");
 
     assert!(config_dir.path().join("confirm_empty_remote").is_file());
+}
+
+// =============================================================================
+// Error shapes the failure classifiers read
+// =============================================================================
+
+/// `sync/projection/events.rs` recognises a transport failure that reaches an
+/// `Other` message by `SyncError::Network`'s `Display` prefix.
+#[test]
+fn network_error_display_keeps_its_prefix() {
+    let text = hcfs_client::sync::SyncError::Network("error sending request: tcp connect error".into()).to_string();
+    assert!(text.starts_with("Network error:"), "{text}");
+}
+
+/// The payload mapping relies on hcfs typing these, not on their text: a
+/// transport failure is `Network` without a status, and a session-cap 429
+/// is `ServerError { 429 }` (the amber "will retry" copy).
+#[test]
+fn network_and_http_failures_classify_to_their_kinds() {
+    use hcfs_client::engine::events::FileFailureKind;
+    use hcfs_client::sync::SyncError;
+
+    let (kind, status) = FileFailureKind::classify(&SyncError::Network("connection refused".into()));
+    assert!(matches!(kind, FileFailureKind::Network { .. }), "{kind:?}");
+    assert_eq!(status, None);
+
+    let session_cap = SyncError::Http {
+        status: 429,
+        code: Some("session_limit".into()),
+        message: "Too many active upload sessions".into(),
+    };
+    let (kind, status) = FileFailureKind::classify(&session_cap);
+    assert_eq!(kind, FileFailureKind::ServerError { status: 429 });
+    assert_eq!(status, Some(429));
+}
+// ── Link-secret drive invites (hcfs #686) ──────────────────────────────────
+//
+// An invite minted once the server advertises `drive_invite_link_envelopes`
+// carries a per-link secret (`#i=`) derived from the drive entropy and the
+// token, and the server keeps the invite's key sealed under it. The console's
+// invite page parses exactly these shapes, and every client re-derives the
+// same secret from the listing.
+
+/// Exact `#i=` URL vector, the twin of `invite_fragment_base64url_no_pad_is_pinned`.
+#[test]
+fn invite_link_url_builder_is_pinned() {
+    let url = hcfs_client::client::invite_link::build_invite_link_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(
+        url,
+        format!("https://x.io/invite/tok#i={}", "A".repeat(43)),
+        "link-secret invite URL drifted"
+    );
+}
+
+/// The invite id the PUT addresses is `hex(blake3(token))`, the same id the
+/// desktop's sealed-token code and the server use.
+#[test]
+fn invite_link_mint_addresses_the_listed_invite_id() {
+    let mint =
+        hcfs_client::client::invite_link::mint_invite_link(&[0x11u8; 32], hcfs_client::client::invite_link::InviteLinkTarget::Drive, "tok_abc")
+            .expect("mint");
+    assert_eq!(
+        mint.invite_id_hex(),
+        tauri_project_lib::shared_drives::invite_token::invite_id_for_token("tok_abc")
+    );
+}
+
+/// The parser reads back both invite forms the console's page accepts.
+#[test]
+fn every_invite_fragment_parses_back() {
+    use hcfs_client::client::invite_link::{InviteFragment, build_invite_link_url, build_legacy_invite_url, parse_invite_fragment};
+    let fragment = |url: &str| url.split_once('#').expect("fragment").1.to_string();
+    assert_eq!(
+        parse_invite_fragment(&fragment(&build_legacy_invite_url("https://x.io", "t", &[1u8; 32]))).expect("k"),
+        InviteFragment::LegacyKey([1u8; 32])
+    );
+    assert_eq!(
+        parse_invite_fragment(&fragment(&build_invite_link_url("https://x.io", "t", &[2u8; 32]))).expect("i"),
+        InviteFragment::LinkSecret([2u8; 32])
+    );
+}
+
+/// The PUT body and answer the desktop sends and reads: standard base64 of a
+/// 73-byte envelope and a 32-byte digest, and `{"stored": bool}`.
+#[test]
+fn invite_link_envelope_wire_is_pinned() {
+    let req = hcfs_shared::network::SetInviteLinkEnvelopeRequest {
+        link_envelope: "ZW52".into(),
+        link_fetch_digest: "ZGln".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&req).expect("serialize"),
+        serde_json::json!({ "link_envelope": "ZW52", "link_fetch_digest": "ZGln" })
+    );
+    let resp: hcfs_shared::network::SetInviteLinkEnvelopeResponse = serde_json::from_str(r#"{"stored":true}"#).expect("parse");
+    assert!(resp.stored);
+    assert_eq!(hcfs_shared::shares::INVITE_LINK_ENVELOPE_LEN, 73);
 }

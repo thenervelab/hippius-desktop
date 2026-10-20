@@ -55,9 +55,25 @@ const called = (cmd: string) => tauri.core.invoke.mock.calls.filter(([c]) => c =
 const dismissed = () => tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_preview_dismiss").length;
 const listening = (event: string) => tauri.event.listen.mock.calls.filter(([e]) => e === event).length;
 
+/** Moves the fake clock on, `performance.now()` included, and lets React catch up. */
+const advance = (ms: number) =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(ms);
+  });
+
 // Where Rust says the pointer is over the card's window; null is elsewhere.
 // jsdom lays nothing out, so the card's box is 0 x 0 at the origin.
 let pointer: [number, number] | null = null;
+
+/**
+ * Rust says the pointer is on `el`: the card finds what is under Rust's point
+ * with the page's hit test, which jsdom lacks, so it is stood in for here.
+ */
+async function pointAt(el: Element | null) {
+  pointer = el ? [10, 10] : null;
+  Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => el });
+  await advance(150);
+}
 
 async function setup(first: CapturePreviewCard | null) {
   tauri.onInvoke("capture_preview_context", () => first);
@@ -88,7 +104,10 @@ beforeEach(() => {
   tauri.reset();
   vi.useFakeTimers({ shouldAdvanceTime: false });
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  delete (document as { elementFromPoint?: unknown }).elementFromPoint;
+});
 
 describe("the preview card", () => {
   it("slides away on its own once uploaded", async () => {
@@ -123,29 +142,77 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(1);
   });
 
-  // Reaching for a button must never race the card.
-  it("holds while the pointer is on it and starts the full time again on leave", async () => {
+  // Reaching for a button must never race the card, and leaving it must not
+  // start the wait over: it goes when the time it had left runs out.
+  it("holds while the pointer is on it and runs on with the time it had left", async () => {
     await setup(card({ state: "uploaded", linkCopied: true }));
     const node = screen.getByTestId("capture-card");
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS - 1000);
-    });
+    const bar = () => screen.getByTestId("auto-hide-timer").firstElementChild as HTMLElement;
+    expect(bar().style.animationPlayState).toBe("running");
+    expect(bar().style.animationDelay).toBe("0ms");
+    await advance(6_000);
     fireEvent.pointerEnter(node);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS * 2);
-    });
+    await advance(AUTO_HIDE_MS * 2);
     expect(dismissed()).toBe(0);
-    // The timer bar stays put, paused, so the card does not change height.
+    // The timer bar stays put, paused where the countdown stopped, so the
+    // card does not change height.
+    expect(bar().style.animationPlayState).toBe("paused");
+    expect(bar().style.animationDelay).toBe("-6000ms");
+    fireEvent.pointerLeave(node);
+    // And carries on from that same point.
+    expect(bar().style.animationPlayState).toBe("running");
+    expect(bar().style.animationDelay).toBe("-6000ms");
+    await advance(3_900);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
+  // Pointed at while it uploads: the countdown starts held when the link
+  // settles, and the whole time is still there once the pointer leaves.
+  it("starts held when the pointer is already on it as it settles", async () => {
+    await setup(card({ state: "uploading" }));
+    fireEvent.pointerEnter(screen.getByTestId("capture-card"));
+    await act(() => tauri.emitEvent("capture_preview_changed", card({ state: "uploaded", linkCopied: true })));
     const bar = screen.getByTestId("auto-hide-timer").firstElementChild as HTMLElement;
     expect(bar.style.animationPlayState).toBe("paused");
-    fireEvent.pointerLeave(node);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS - 1000);
-    });
+    expect(bar.style.animationDelay).toBe("0ms");
+    await advance(AUTO_HIDE_MS * 2);
     expect(dismissed()).toBe(0);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1100);
-    });
+    fireEvent.pointerLeave(screen.getByTestId("capture-card"));
+    await advance(AUTO_HIDE_MS - 100);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
+  it("adds several holds up to the whole time", async () => {
+    await setup(card({ state: "uploaded", linkCopied: true }));
+    const node = screen.getByTestId("capture-card");
+    for (const ran of [2_000, 3_000, 4_000]) {
+      await advance(ran);
+      fireEvent.pointerEnter(node);
+      await advance(AUTO_HIDE_MS * 3);
+      fireEvent.pointerLeave(node);
+    }
+    // Nine seconds ran in three goes: one is left.
+    await advance(900);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
+  it("keeps only the moment that was left after a hold near the end", async () => {
+    await setup(card({ state: "uploaded", linkCopied: true }));
+    const node = screen.getByTestId("capture-card");
+    await advance(AUTO_HIDE_MS - 250);
+    fireEvent.pointerEnter(node);
+    await advance(AUTO_HIDE_MS * 6);
+    expect(dismissed()).toBe(0);
+    fireEvent.pointerLeave(node);
+    await advance(200);
+    expect(dismissed()).toBe(0);
+    await advance(100);
     expect(dismissed()).toBe(1);
   });
 
@@ -156,21 +223,133 @@ describe("the preview card", () => {
     // A step at a time: React applies the poll's update when each act ends.
     const wait = async (ms: number) => {
       for (let t = 0; t < ms; t += 500) {
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(500);
-        });
+        await advance(500);
       }
     };
+    await wait(5_000);
     pointer = [0, 0];
     await wait(AUTO_HIDE_MS * 2);
     expect(dismissed()).toBe(0);
     pointer = [500, 500];
-    await wait(AUTO_HIDE_MS - 1000);
+    // About five seconds were left, not the whole time again.
+    await wait(4_000);
     expect(dismissed()).toBe(0);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1500);
-    });
+    await wait(1_500);
     expect(dismissed()).toBe(1);
+  });
+
+  // The card is never key, so no hover event and no native title reach it:
+  // what Rust's pointer is on is lit and named, while the card is up, not
+  // only once its timer runs.
+  it("names what Rust's pointer is on and lights the picture, with no native title", async () => {
+    await setup(linked({ state: "uploading" }, 1, { reveal: true }));
+    expect(document.querySelector("[title]")).toBeNull();
+    await pointAt(screen.getByRole("button", { name: "More" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("More");
+    const picture = screen.getByRole("button", { name: `Show ${FILE} in its folder` });
+    await pointAt(picture);
+    // The picture's own hover face says it; no tooltip repeats it.
+    expect(picture).toHaveAttribute("data-hover", "true");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    await pointAt(null);
+    expect(picture).not.toHaveAttribute("data-hover");
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  // On Windows and Linux the keyboard can reach the card's buttons; focus
+  // there holds it like the pointer, and leaving runs on with what was left.
+  it("holds while keyboard focus is in it", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true }));
+    await advance(7_000);
+    const copy = screen.getByRole("button", { name: "Copy link" });
+    act(() => copy.focus());
+    await advance(AUTO_HIDE_MS * 2);
+    // Moving to the next button keeps it held.
+    act(() => screen.getByRole("button", { name: "More" }).focus());
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    act(() => (document.activeElement as HTMLElement).blur());
+    await advance(2_900);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
+  // A clicked button keeps focus on Windows, with no focus ring: that is the
+  // pointer's business, or the card would stay until the window lost focus.
+  it("is not held by a click's focus, which draws no focus ring", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }));
+    const copy = screen.getByRole("button", { name: "Copy link" });
+    const matches = copy.matches.bind(copy);
+    vi.spyOn(copy, "matches").mockImplementation((selector: string) => selector !== ":focus-visible" && matches(selector));
+    act(() => copy.focus());
+    await advance(AUTO_HIDE_MS + 10);
+    expect(dismissed()).toBe(1);
+  });
+
+  // A WebView that cannot read `:focus-visible` holds on any focus. Switching
+  // to another app leaves the button as the page's active element, so the
+  // card must still let go then, and stay let go when it draws again.
+  it("lets go when its window loses focus, even where any focus holds it", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }));
+    await advance(3_000);
+    const copy = screen.getByRole("button", { name: "Copy link" });
+    const matches = copy.matches.bind(copy);
+    vi.spyOn(copy, "matches").mockImplementation((selector: string) => {
+      if (selector === ":focus-visible") throw new SyntaxError(`unknown selector ${selector}`);
+      return matches(selector);
+    });
+    act(() => copy.focus());
+    await advance(AUTO_HIDE_MS);
+    expect(dismissed()).toBe(0);
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      fireEvent.blur(copy);
+      expect(copy).toHaveFocus();
+      // Anything that draws the card again: here a pointer passing over it.
+      fireEvent.pointerEnter(screen.getByTestId("capture-card"));
+      fireEvent.pointerLeave(screen.getByTestId("capture-card"));
+      await advance(6_900);
+      expect(dismissed()).toBe(0);
+      await advance(200);
+      expect(dismissed()).toBe(1);
+    } finally {
+      hasFocus.mockRestore();
+    }
+  });
+
+  // The item that had the keyboard goes with its menu, and no blur reaches
+  // the card: it must still let go.
+  it("lets go once a menu item chosen from the keyboard closes the menu", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { revokeLink: true }));
+    await advance(4_000);
+    const more = screen.getByRole("button", { name: "More" });
+    act(() => more.focus());
+    fireEvent.click(more);
+    const revoke = screen.getByRole("menuitem", { name: "Revoke link" });
+    expect(revoke).toHaveFocus();
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    fireEvent.click(revoke);
+    expect(screen.queryByRole("menu")).toBeNull();
+    await advance(5_900);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+  });
+
+  it("gives a newly settled card the whole time", async () => {
+    await setup(card({ state: "uploaded", linkCopied: true }));
+    await advance(8_000);
+    fireEvent.pointerEnter(screen.getByTestId("capture-card"));
+    await act(() => tauri.emitEvent("capture_preview_changed", card({ state: "uploading" }, 2)));
+    await act(() => tauri.emitEvent("capture_preview_changed", card({ state: "uploaded", linkCopied: true }, 2)));
+    fireEvent.pointerLeave(screen.getByTestId("capture-card"));
+    await advance(AUTO_HIDE_MS - 100);
+    expect(dismissed()).toBe(0);
+    await advance(200);
+    expect(dismissed()).toBe(1);
+    expect(tauri.core.invoke.mock.calls.find(([c]) => c === "capture_preview_dismiss")?.[1]).toEqual({ id: 2 });
   });
 
   // The first capture before anyone chose a folder: nothing went wrong, so
@@ -209,8 +388,12 @@ describe("the preview card", () => {
     expect(live).toHaveLength(1);
     // Rust words the link; the card says it as it is.
     expect(live[0]).toHaveTextContent("Uploaded · Public link copied");
-    // Who can open the link has its own line, with where it went in its tooltip.
-    expect(screen.getByText("Anyone with the link can view. Never expires.")).toHaveAttribute("title", "Work › Captures");
+    // Who can open the link has its own line, with where it went in its
+    // tooltip: the card's own, from Rust's pointer, never a native title.
+    const note = screen.getByText("Anyone with the link can view. Never expires.");
+    expect(note).not.toHaveAttribute("title");
+    await pointAt(note);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Work › Captures");
   });
 
   it("keeps a long failure to one line, with the whole of it in the tooltip", async () => {
@@ -218,7 +401,8 @@ describe("the preview card", () => {
     await setup(card(failed(message), 1, { retry: true, discard: true }));
     const line = screen.getByText(message);
     expect(line).toHaveClass("line-clamp-1");
-    expect(line).toHaveAttribute("title", message);
+    await pointAt(line);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(message);
   });
 
   // The card is prewarmed hidden at every capture start; the sync engine
@@ -334,7 +518,7 @@ describe("the card's actions (Rust decides which)", () => {
     const note = screen.getByTestId("capture-link-note");
     expect(note).toHaveTextContent("Anyone with the link can view. Never expires.");
     expect(note).toHaveClass("truncate");
-    expect(note).toHaveAttribute("title", "Work › Captures");
+    expect(note).toHaveAttribute("data-card-tip", "destination");
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Manage link" }));
     await act(async () => {
@@ -404,8 +588,10 @@ describe("the card's actions (Rust decides which)", () => {
   it("turns Discard into an icon when Upgrade and Retry are there too", async () => {
     await setup(card(failed("Your storage is full.", "storageFull"), 1, { retry: true, discard: true, upgrade: true }));
     const discard = screen.getByRole("button", { name: "Discard" });
-    expect(discard).toHaveAttribute("title", "Discard");
     expect(discard).not.toHaveTextContent("Discard");
+    // Named in the card's tooltip when Rust says the pointer is on it.
+    await pointAt(discard);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Discard");
     fireEvent.click(discard);
     await act(async () => {
       await Promise.resolve();

@@ -446,6 +446,52 @@ mod tests {
         );
     }
 
+    /// hcfs's typed transport failure carries its cause chain. The user
+    /// still gets Rust's copy, and the cause does not reach the wire.
+    #[test]
+    fn typed_network_failure_shows_rust_copy_not_its_cause() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        let cause = "error sending request: client error (Connect): tcp connect error: Connection refused";
+        let payload = FileFailureKindPayload::from(&K::Network { cause: cause.to_string() });
+
+        assert!(matches!(payload, FileFailureKindPayload::Network), "{payload:?}");
+        assert_eq!(payload.display_reason(), NETWORK_DISPLAY_REASON);
+        assert!(payload.is_transient());
+        let wire = serde_json::to_value(&payload).expect("serialize");
+        assert_eq!(wire, serde_json::json!({ "kind": "network" }), "the cause stays off the wire");
+    }
+
+    /// Since hcfs #608 a transport error drops the URL and appends its cause
+    /// chain. Wrapped in another variant's text (so without the leading
+    /// `Network error:`), it must still read as a network failure.
+    #[test]
+    fn url_less_transport_shapes_are_carved_out_of_other() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        for msg in [
+            "Upload failed: error sending request: client error (SendRequest): connection closed before message completed",
+            "Download failed: error sending request: operation timed out",
+        ] {
+            let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+            assert!(matches!(payload, FileFailureKindPayload::Network), "{msg:?} → {payload:?}");
+        }
+    }
+
+    /// A file name or a local disk timeout is not a network failure: it must
+    /// stay a red `Other`, not an amber "Couldn't reach the server".
+    #[test]
+    fn a_timeout_in_a_path_or_on_local_disk_is_not_network() {
+        use hcfs_client::engine::events::FileFailureKind as K;
+        for msg in [
+            "Upload failed for notes/timed out.txt: Server returned 500 Internal Server Error",
+            "Failed to write chunk: Operation timed out (os error 60)",
+            "Upload failed for logs/error sending request.txt: Server returned 500 Internal Server Error",
+        ] {
+            let payload = FileFailureKindPayload::from(&K::Other(msg.to_string()));
+            assert!(matches!(payload, FileFailureKindPayload::Other { .. }), "{msg:?} → {payload:?}");
+            assert!(!payload.is_transient(), "{msg:?} must stay a red failure");
+        }
+    }
+
     #[test]
     fn bare_reqwest_url_display_is_carved_out_of_other() {
         use hcfs_client::engine::events::FileFailureKind as K;
@@ -1799,10 +1845,10 @@ pub fn is_gone_reason(reason: &str) -> bool {
     reason == GONE_DISPLAY_REASON
 }
 
-/// hcfs-server session cap (`error=session_limit`, HTTP 429). The current
-/// desktop pin stringifies it as the bare [`SESSION_LIMIT_MARKER`]; after
-/// the hcfs-client fix it rides `"Server returned 429: …"` and classifies
-/// as `ServerError { 429 }`. Both must present the same retry copy.
+/// hcfs-server session cap (`error=session_limit`, HTTP 429). hcfs-client
+/// types it as `SyncError::Http { 429 }` (#608), which classifies as
+/// `ServerError { 429 }`; this text match is the fallback for the marker
+/// reaching an `Other` message. Both must present the same retry copy.
 fn is_session_limit_shaped(message: &str) -> bool {
     message.contains(SESSION_LIMIT_MARKER)
 }
@@ -1812,6 +1858,20 @@ fn is_session_limit_shaped(message: &str) -> bool {
 /// or `SyncError::Network`'s Display (`"Network error: …"`). Those must
 /// classify as [`FileFailureKindPayload::Network`] so the widget never
 /// renders the origin URL (report 2026-08-26).
+///
+/// Since hcfs #608 a transport error drops the URL and appends its cause
+/// chain (`"error sending request: client error (Connect): …"`), so a
+/// `Network` wrapped in another variant's text no longer carries `for url`
+/// or the `"Network error:"` prefix at the start: `error sending request:`
+/// (with the colon hcfs puts before the cause) is matched too. A download
+/// body that broke off is typed `SyncError::Network` since hcfs #664, so it
+/// classifies as `Network` without its text being read.
+///
+/// A bare `timed out` is NOT matched: `Other` messages carry file paths
+/// (`notes/timed out.txt`) and local disk errors (`Operation timed out (os
+/// error 60)` from a NAS), and either would read as "Couldn't reach the
+/// server". A transport timeout already arrives as `Network error: …` or
+/// `error sending request: …`.
 ///
 /// The user-facing copy is [`NETWORK_DISPLAY_REASON`] ("Couldn't reach…"),
 /// so matching the upstream `"Network error:"` prefix cannot collide with it.
@@ -1825,6 +1885,7 @@ fn is_network_shaped(message: &str) -> bool {
     }
     let lower = message.to_ascii_lowercase();
     lower.contains("error sending request for url")
+        || lower.contains("error sending request:")
         || lower.contains("error trying to connect")
         || lower.contains("connection reset")
         || lower.contains("connection refused")
@@ -1854,9 +1915,11 @@ fn is_local_gone_shaped(message: &str) -> bool {
     has_os_error_2(&lower) || lower.contains("no such file or directory")
 }
 
-/// `SyncError::FileNotFound` Display is `"File not found: {id}"`. Download
-/// 404s usually classify as `ServerError { 404 }` via `"Server returned 404"`,
-/// but the full `DownloadFailed` Display can still land in `Other`.
+/// `SyncError::FileNotFound` Display is `"File not found: {id}"`. A download
+/// 404 is typed `SyncError::Http { 404 }` (hcfs #608) and classifies as
+/// `ServerError { 404 }` without its text being read; a `"Server returned
+/// 404"` that still reaches an `Other` message, wrapped by another error, is
+/// matched here.
 ///
 /// Matched anywhere in the message, not just at the start: an outer error
 /// (`SyncError::Io`, `DownloadFailed`) prefixes the inner Display, so an
@@ -1998,7 +2061,13 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // and it drives the credits banner ("Top up") — wrong CTA for
             // plan/storage overage.
             K::QuotaDenied { .. } => Self::ServerError { status: 402 },
-            K::Network => Self::Network,
+            // The `cause` (hcfs's transport cause chain, no URL) is not put
+            // on the wire: the user gets Rust's own copy, and the cause is
+            // written to the per-file debug log by the failure callback's
+            // `?kind`. "Connection refused" or "timed out" would send the
+            // user to check a connection that may be fine (an origin reset
+            // reads the same).
+            K::Network { .. } => Self::Network,
             // The transfer succeeded and the ciphertext would not open. hcfs
             // gives it one free retry and then quarantines it, so the honest
             // copy says a person has to act — not "will retry".

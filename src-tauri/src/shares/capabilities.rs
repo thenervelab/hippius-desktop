@@ -86,6 +86,19 @@ pub struct ServerCapabilities {
     /// `/v1/notification-preferences`. Absent on older servers, which show
     /// no such preferences.
     pub share_notifications: bool,
+    /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
+    /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
+    /// drive key sealed under it. Advertised only once the console can open
+    /// such links (`HCFS_FEATURE_FOLDER_LINK_ENVELOPES`), so until then every
+    /// mint, the member one included, stays on `#k=` / `#p=`.
+    pub folder_share_link_envelopes: bool,
+    /// Link-secret drive invites (thenervelab/hcfs#686): an invite link's
+    /// fragment is a per-link secret (`#i=`) and the server keeps the invite's
+    /// key sealed under it, released only to an account that could join.
+    /// Advertised only once the console can open such invites
+    /// (`HCFS_FEATURE_INVITE_LINK_ENVELOPES`), so until then every invite
+    /// mint stays on `#k=`.
+    pub drive_invite_link_envelopes: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -204,9 +217,12 @@ mod tests {
 
     #[test]
     fn full_capabilities_shape_round_trips() {
-        let caps: ServerCapabilities = serde_json::from_str(
-            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"share_preview":true,"share_insights":true,"share_comments":true,"share_notifications":true}"#,
-        )
+        let caps: ServerCapabilities = serde_json::from_str(concat!(
+            r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
+            r#""folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"#,
+            r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
+            r#""share_insights":true,"share_comments":true,"share_notifications":true}"#,
+        ))
         .expect("parse");
         assert!(caps.shares);
         assert!(caps.folder_shares);
@@ -220,6 +236,8 @@ mod tests {
         assert!(caps.share_insights);
         assert!(caps.share_comments);
         assert!(caps.share_notifications);
+        assert!(caps.folder_share_link_envelopes);
+        assert!(caps.drive_invite_link_envelopes);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -229,8 +247,10 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "drive_invite_link_envelopes",
                 "folder_grant_writes",
                 "folder_grants",
+                "folder_share_link_envelopes",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
                 "member_folder_shares",
@@ -258,6 +278,14 @@ mod tests {
         assert!(!old.share_insights, "a server without insights is sent no switches");
         assert!(!old.share_comments, "a server without comments shows none");
         assert!(!old.share_notifications, "a server without email preferences shows none");
+        assert!(
+            !old.folder_share_link_envelopes,
+            "a server without link envelopes keeps every folder mint on #k= / #p="
+        );
+        assert!(
+            !old.drive_invite_link_envelopes,
+            "a server without invite link envelopes keeps every invite mint on #k="
+        );
     }
 
     /// Uploaded-copy folder links ship after browsable folder shares, so a

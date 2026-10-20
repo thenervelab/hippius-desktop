@@ -74,6 +74,8 @@ const folderRow = (over: Partial<FolderShareSummary> = {}): FolderShareSummary =
   shareUrl: "https://console.hippius.com/shared-folder/folder-tok#k=K",
   isPrivate: false,
   source: "drive",
+  linkFormat: "legacy",
+  reshareOffered: false,
   ...over,
 });
 
@@ -149,6 +151,20 @@ describe("folderShareRowPlan", () => {
     expect(plan.revokeTooltip).toBeUndefined();
     expect(plan.canChangeExpiry).toBe(true);
     expect(plan.expiryTooltip).toBeUndefined();
+  });
+
+  it("offers a reshare only where Rust does, on a live row this device can revoke", () => {
+    expect(folderShareRowPlan(folderRow({ reshareOffered: true }), NOW).canReshare).toBe(true);
+    expect(folderShareRowPlan(folderRow(), NOW).canReshare).toBe(false);
+
+    // Rust decides on the listing it fetched; a row that has since died, or
+    // whose token this device no longer holds, cannot be replaced from here.
+    const revoked = folderRow({ reshareOffered: true, revokedAt: "2026-08-24T11:00:00Z" });
+    expect(folderShareRowPlan(revoked, NOW).canReshare).toBe(false);
+    const expired = folderRow({ reshareOffered: true, expiresAt: "2026-08-24T11:00:00Z" });
+    expect(folderShareRowPlan(expired, NOW).canReshare).toBe(false);
+    const foreign = folderRow({ reshareOffered: true, resolvable: false, shareToken: null, shareUrl: null });
+    expect(folderShareRowPlan(foreign, NOW, true).canReshare).toBe(false);
   });
 
   // Copy, revoke and expiry are keyed by the token, its hash, or the owner

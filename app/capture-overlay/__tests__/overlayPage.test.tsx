@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import type { CaptureOverlayContext } from "@/app/lib/tauri/capture";
 
@@ -301,6 +301,15 @@ describe("the capture bar's words", () => {
     expect(screen.queryByTestId("capture-free-plan")).toBeNull();
   });
 
+  // Record leads the bar, as in the tray and the toolbars: it is the
+  // capture people reach for most.
+  it("puts the Record modes before the Screenshot modes", async () => {
+    setup();
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture" });
+    const groups = within(toolbar).getAllByRole("radiogroup").map((g) => g.getAttribute("aria-label"));
+    expect(groups).toEqual(["Record", "Screenshot"]);
+  });
+
   it("shows Record disabled with Rust's reason when this build has no helper, and does not switch to it", async () => {
     tauri.onInvoke("capture_set_mode", () => null);
     setup({
@@ -311,7 +320,15 @@ describe("the capture bar's words", () => {
     });
     const record = await screen.findByRole("radio", { name: "Record an area" });
     expect(record).toHaveAttribute("aria-disabled", "true");
-    expect(record).toHaveAttribute("title", "Record an area: Screen recording isn't included in this build.");
+    // The reason is in the bar's own tooltip, at once on hover.
+    fireEvent.pointerEnter(record);
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("Record an area");
+    expect(tip).toHaveTextContent("Screen recording isn't included in this build.");
+    fireEvent.pointerLeave(record);
+    // Disabled, the Record group keeps its first place, so the bar never rearranges.
+    const groups = within(screen.getByRole("toolbar", { name: "Capture" })).getAllByRole("radiogroup");
+    expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual(["Record", "Screenshot"]);
     fireEvent.click(record);
     expect(screen.getByRole("status")).toHaveTextContent("Screen recording isn't included in this build.");
     expect(called("capture_set_mode")).toBe(false);
@@ -1451,5 +1468,94 @@ describe("the plan read before a capture", () => {
     expect(screen.queryByTestId("capture-free-plan")).not.toBeInTheDocument();
     await act(() => tauri.emitEvent("capture_plan_changed", { state: "ready", message: null, action: null }));
     expect(await screen.findByTestId("capture-free-plan")).toBeInTheDocument();
+  });
+});
+
+// Native `title` tooltips showed behind the bar on macOS (a system tooltip is
+// a window of its own, below the overlay's screen saver level) and only after
+// the system's delay. The bar draws its own, in the page.
+describe("the capture bar's tooltips", () => {
+  it("leaves no native title on the bar's buttons", async () => {
+    setup();
+    const toolbar = await screen.findByRole("toolbar", { name: "Capture" });
+    expect(toolbar.querySelectorAll("[title]")).toHaveLength(0);
+  });
+
+  it("names a mode at once on hover, above everything, and goes on leave", async () => {
+    setup();
+    const mode = await screen.findByRole("radio", { name: "Record entire screen" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.pointerEnter(mode);
+    const tip = screen.getByRole("tooltip");
+    expect(tip).toHaveTextContent("Record entire screen");
+    // Its own layer over the page, not inside the bar's glass.
+    expect(tip.parentElement).toBe(document.body);
+    expect(tip).toHaveClass("fixed", "z-[2147483647]", "pointer-events-none");
+    // Still named as before, and described by the tooltip while it shows.
+    expect(mode).toHaveAccessibleName("Record entire screen");
+    expect(mode).toHaveAttribute("aria-describedby", tip.id);
+    fireEvent.pointerLeave(mode);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(mode).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("opens on the mouse events too, for WebViews that send no pointer events", async () => {
+    setup();
+    const mode = await screen.findByRole("radio", { name: "Capture a window" });
+    fireEvent.mouseEnter(mode);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Capture a window");
+    fireEvent.mouseLeave(mode);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows for keyboard focus and moves with it", async () => {
+    setup();
+    const close = await screen.findByRole("button", { name: "Close" });
+    act(() => close.focus());
+    expect(screen.getByRole("tooltip")).toHaveTextContent("ClosePress Esc");
+    const choose = screen.getByRole("button", { name: /^Choose/ });
+    act(() => choose.focus());
+    expect(screen.getAllByRole("tooltip")).toHaveLength(1);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Pick a window or screen from a list");
+    act(() => choose.blur());
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  // The bar's window taking the keyboard focuses the last focused button
+  // again; with nobody pointing at it, that must not open its tooltip.
+  it("does not open for focus that did not come from the keyboard", async () => {
+    setup();
+    const close = await screen.findByRole("button", { name: "Close" });
+    const matches = Element.prototype.matches;
+    vi.spyOn(close, "matches").mockImplementation((selector: string) =>
+      selector === ":focus-visible" ? false : matches.call(close, selector),
+    );
+    act(() => close.focus());
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    // Pointing at it still names it.
+    fireEvent.pointerEnter(close);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("ClosePress Esc");
+  });
+
+  it("places itself above the button and inside the window at its edge", async () => {
+    setup();
+    const mode = await screen.findByRole("radio", { name: "Record entire screen" });
+    const box = (left: number, top: number, width: number, height: number) =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect;
+    const rect = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this === mode) return box(window.innerWidth - 30, 700, 40, 36);
+      if (this.getAttribute("role") === "tooltip") return box(0, 0, 200, 40);
+      return box(0, 0, 0, 0);
+    });
+    try {
+      fireEvent.pointerEnter(mode);
+      const tip = screen.getByRole("tooltip");
+      expect(tip.style.top).toBe(`${700 - 8 - 40}px`);
+      expect(tip.style.left).toBe(`${window.innerWidth - 8 - 200}px`);
+      expect(tip.dataset.side).toBe("above");
+      expect(tip.style.visibility).toBe("visible");
+    } finally {
+      rect.mockRestore();
+    }
   });
 });
