@@ -16,6 +16,13 @@
 //!   comments are end-to-end encrypted ([`super::comment_crypto`]); they are
 //!   opened here with the link's key, recovered from the keystore or the
 //!   owner wrap.
+//! - `POST` / `DELETE .../comments/{id}/block`: block or unblock the author
+//!   of a comment on this link. The server keys the block on the author
+//!   without ever naming them, and lists no block state, so whether someone
+//!   is blocked is only known to the sheet that just did it.
+//! - `GET /v1/shares/{token}/reactions`: the totals per emoji.
+//! - `GET /v1/shares/{token}/meta`: the link's switches as they stand
+//!   (`settings`), for the sheet's Link settings.
 //! - `PATCH /v1/shares/{token}/settings`: `{insights, comments, reactions}`,
 //!   partial. A new link's defaults are sent right after it is minted, in the
 //!   background and best-effort ([`spawn_apply`]), the way a chat preview is
@@ -53,6 +60,7 @@ const MAX_COMMENT_PAGES: usize = 25;
 const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
 const COMMENTS_UNAVAILABLE: &str = "Comments aren't available yet.";
 const LINK_GONE: &str = "This link isn't active any more.";
+const COMMENT_GONE: &str = "That comment isn't on this link any more.";
 
 // ─── Insights ──────────────────────────────────────────────────────────────
 
@@ -350,6 +358,64 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
     }
 }
 
+// ─── Reactions ─────────────────────────────────────────────────────────────
+
+/// The emoji a viewer can react with, in the order the share page shows
+/// them (the server's `REACTIONS`).
+pub const REACTION_EMOJI: [&str; 8] = [
+    "\u{1F44D}",
+    "\u{2764}\u{FE0F}",
+    "\u{1F602}",
+    "\u{1F62E}",
+    "\u{1F389}",
+    "\u{1F44F}",
+    "\u{1F525}",
+    "\u{1F64C}",
+];
+
+/// How many people chose one emoji.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReactionCount {
+    pub emoji: String,
+    pub count: u64,
+}
+
+/// A link's reaction totals, as the owner sees them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareReactions {
+    /// Only the emoji somebody chose, in the share page's order.
+    pub counts: Vec<ReactionCount>,
+    pub total: u64,
+}
+
+/// `{counts: {emoji: n}, mine: [..]}` to the emoji people chose, in the
+/// share page's order. A heart with or without its variation selector is
+/// one heart; an emoji the share page does not offer is left out, as the
+/// console leaves it out.
+fn parse_reactions(body: &str) -> Result<ShareReactions> {
+    #[derive(Deserialize)]
+    struct Wire {
+        #[serde(default)]
+        counts: HashMap<String, u64>,
+    }
+    let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("reactions parse failed: {e}")))?;
+    let bare = |e: &str| e.replace('\u{FE0F}', "");
+    let counts: Vec<ReactionCount> = REACTION_EMOJI
+        .iter()
+        .filter_map(|emoji| {
+            let count: u64 = wire.counts.iter().filter(|(k, _)| bare(k) == bare(emoji)).map(|(_, n)| *n).sum();
+            (count > 0).then(|| ReactionCount {
+                emoji: (*emoji).to_string(),
+                count,
+            })
+        })
+        .collect();
+    let total = counts.iter().map(|c| c.count).sum();
+    Ok(ShareReactions { counts, total })
+}
+
 // ─── Per-link switches ─────────────────────────────────────────────────────
 
 /// A link's three switches.
@@ -461,6 +527,19 @@ pub fn default_for(is_folder: bool, is_capture: bool, captures_default: bool, ca
             reactions: offered.reactions && on,
         },
     }
+}
+
+/// A link's switches as `/meta` reports them (`settings`). A server that
+/// predates them omits the field, which reads as all off, the way a new
+/// link starts.
+fn parse_meta_settings(body: &str) -> Result<LinkSettings> {
+    #[derive(Deserialize)]
+    struct Wire {
+        #[serde(default)]
+        settings: Option<LinkSettings>,
+    }
+    let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("share meta parse failed: {e}")))?;
+    Ok(wire.settings.unwrap_or_default())
 }
 
 /// What a capture's automatic link gets: everything on when Settings says
@@ -672,6 +751,50 @@ async fn delete_comment_at(http: &reqwest::Client, api: &Api, token: &str, comme
     read_ok(resp).await.map(|_| ())
 }
 
+/// Block (`true`) or unblock the author of a comment on the owner's link.
+/// The server never says who the author is; it keys the block on them, so
+/// it outlasts the comment it was made through.
+async fn set_comment_author_blocked(http: &reqwest::Client, api: &Api, token: &str, comment_id: &str, blocked: bool) -> Result<()> {
+    let url = api.share_url(token, &format!("/comments/{}/block", path_segment(comment_id)?))?;
+    let req = if blocked { http.post(url) } else { http.delete(url) };
+    let resp = req
+        .bearer_auth(&api.bearer)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| transport("comment block", &e))?;
+    // The bodiless 404 covers a link that is gone and a comment that is no
+    // longer there; the sheet re-reads the list either way, so say the one
+    // the owner can act on.
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(AppError::NotFound(COMMENT_GONE.into()));
+    }
+    read_ok(resp).await.map(|_| ())
+}
+
+async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
+    let resp = http
+        .get(api.share_url(token, "/reactions")?)
+        .bearer_auth(&api.bearer)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| transport("reactions", &e))?;
+    read_ok(resp).await
+}
+
+/// The link's anonymous `/meta`, which carries its switches. No bearer: the
+/// route is the recipient's, and it is the one that reports them per link.
+async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
+    let resp = http
+        .get(api.share_url(token, "/meta")?)
+        .timeout(REQUEST_TIMEOUT)
+        .send()
+        .await
+        .map_err(|e| transport("share meta", &e))?;
+    read_ok(resp).await
+}
+
 async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
     let resp = http
         .patch(api.share_url(token, "/settings")?)
@@ -740,7 +863,9 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
     match keys.remove(token) {
         Some(ShareSecret::Public(share_key)) => Ok(CommentKey::derive(&share_key)),
         Some(ShareSecret::Private(_)) => Err(KeyUnavailable::Password),
-        None => Err(KeyUnavailable::NotOnDevice),
+        // A folder link's secret is not a file link's key and opens no
+        // comments; a file token never holds one, so this is a stray row.
+        Some(ShareSecret::FolderLink(_) | ShareSecret::FolderLinkPrivate(_)) | None => Err(KeyUnavailable::NotOnDevice),
     }
 }
 
@@ -875,6 +1000,55 @@ pub async fn share_delete_comment(state: tauri::State<'_, AppState>, share_token
     }
     let api = Api::for_account(&state, &account_id).await?;
     delete_comment_at(&state.api_client, &api, &share_token, &comment_id).await
+}
+
+/// Block the author of a comment from commenting and reacting on this link.
+/// Their comments stay until deleted; the owner never learns who they are.
+#[tauri::command]
+pub async fn share_block_commenter(state: tauri::State<'_, AppState>, share_token: String, comment_id: String) -> Result<()> {
+    set_blocked(&state, &share_token, &comment_id, true).await
+}
+
+/// Undo [`share_block_commenter`], through any comment of the same author
+/// still on the link.
+#[tauri::command]
+pub async fn share_unblock_commenter(state: tauri::State<'_, AppState>, share_token: String, comment_id: String) -> Result<()> {
+    set_blocked(&state, &share_token, &comment_id, false).await
+}
+
+async fn set_blocked(state: &AppState, share_token: &str, comment_id: &str, blocked: bool) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_or_none(state, &account_id).await.share_comments {
+        return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
+    }
+    let api = Api::for_account(state, &account_id).await?;
+    set_comment_author_blocked(&state.api_client, &api, share_token, comment_id, blocked).await
+}
+
+/// A file link's reaction totals. Shown to the owner whatever the link's
+/// Reactions switch, and on every plan: they are not a locked insight.
+#[tauri::command]
+pub async fn share_get_reactions(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareReactions> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_or_none(&state, &account_id).await.share_comments {
+        return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
+    }
+    let api = Api::for_account(&state, &account_id).await?;
+    parse_reactions(&get_reactions_body(&state.api_client, &api, &share_token).await?)
+}
+
+/// A link's switches as they stand, and which this server takes, for the
+/// Insights sheet's Link settings.
+#[tauri::command]
+pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_token: String) -> Result<LinkSettingsDefault> {
+    let account_id = state.current_account_id()?;
+    let offered = OfferedSwitches::from_caps(&capabilities_or_none(&state, &account_id).await);
+    if !offered.insights {
+        return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
+    }
+    let api = Api::for_account(&state, &account_id).await?;
+    let on = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?;
+    Ok(LinkSettingsDefault { offered, on })
 }
 
 /// Turn a link's switches on or off (the finished-link view). Only the
@@ -1348,6 +1522,92 @@ mod tests {
         }
         assert!(matches!(get_insights_body(&http, &api, "../x").await, Err(AppError::Validation(_))));
         assert_eq!(seen.lock().unwrap().len(), 2, "nothing was sent for them");
+    }
+
+    #[tokio::test]
+    async fn blocking_posts_and_unblocking_deletes_on_the_comments_block_route() {
+        let (base, seen) = mock(|_| (204, String::new())).await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
+        set_comment_author_blocked(&http, &api, "tok", "41", true).await.unwrap();
+        set_comment_author_blocked(&http, &api, "tok", "41", false).await.unwrap();
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(
+                (seen[0].method.as_str(), seen[0].path.as_str()),
+                ("POST", "/v1/shares/tok/comments/41/block")
+            );
+            assert_eq!(
+                (seen[1].method.as_str(), seen[1].path.as_str()),
+                ("DELETE", "/v1/shares/tok/comments/41/block")
+            );
+            assert_eq!(seen[0].auth.as_deref(), Some("Bearer owner-bearer"));
+            assert!(seen[0].body.is_empty(), "the block carries no body");
+        }
+        // Unlike a delete, a block on a comment that is gone did nothing, so
+        // it is not reported as done.
+        assert!(matches!(
+            set_comment_author_blocked(&http, &api, "tok", "gone/x", true).await,
+            Err(AppError::Validation(_))
+        ));
+        let (base, _) = mock(|_| (404, String::new())).await;
+        assert!(matches!(
+            set_comment_author_blocked(&http, &Api::new(&base, "b"), "tok", "41", true).await,
+            Err(AppError::NotFound(m)) if m == COMMENT_GONE
+        ));
+        assert_eq!(seen.lock().unwrap().len(), 2, "an id that is not one segment is never sent");
+    }
+
+    #[test]
+    fn reactions_come_in_the_share_pages_order_with_one_heart() {
+        let r = parse_reactions(r#"{"counts":{"🔥":2,"👍":3,"❤️":1,"❤":1,"🤖":9,"🙌":0},"mine":["👍"]}"#).unwrap();
+        assert_eq!(
+            r.counts.iter().map(|c| (c.emoji.as_str(), c.count)).collect::<Vec<_>>(),
+            [("👍", 3), ("❤️", 2), ("🔥", 2)],
+            "page order, a bare heart counted with the full one, zero and unknown left out"
+        );
+        assert_eq!(r.total, 7);
+        assert_eq!(parse_reactions(r#"{"counts":{},"mine":[]}"#).unwrap().total, 0);
+        assert_eq!(parse_reactions("{}").unwrap().counts, []);
+        // camelCase over IPC.
+        assert_eq!(
+            serde_json::to_value(&r).unwrap()["counts"][0],
+            serde_json::json!({"emoji": "👍", "count": 3})
+        );
+    }
+
+    #[tokio::test]
+    async fn reactions_and_switches_are_read_from_the_links_routes() {
+        let (base, seen) = mock(|s| match s.path.as_str() {
+            "/v1/shares/tok/reactions" => (200, r#"{"counts":{"🎉":1},"mine":[]}"#.into()),
+            "/v1/shares/tok/meta" => (
+                200,
+                r#"{"ciphertext_size":1,"plaintext_size":1,"filename_ct":"x","filename_nonce":"y","mime_type":"video/mp4","expires_at":null,"settings":{"insights":true,"comments":false,"reactions":true}}"#.into(),
+            ),
+            "/v1/shares/old/meta" => (200, r#"{"ciphertext_size":1}"#.into()),
+            _ => (404, String::new()),
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
+        let r = parse_reactions(&get_reactions_body(&http, &api, "tok").await.unwrap()).unwrap();
+        assert_eq!(r.total, 1);
+        let on = parse_meta_settings(&get_meta_body(&http, &api, "tok").await.unwrap()).unwrap();
+        assert_eq!(
+            on,
+            LinkSettings {
+                insights: true,
+                comments: false,
+                reactions: true
+            }
+        );
+        assert_eq!(
+            parse_meta_settings(&get_meta_body(&http, &api, "old").await.unwrap()).unwrap(),
+            LinkSettings::all(false),
+            "a server without switches reads as all off"
+        );
+        assert!(matches!(get_meta_body(&http, &api, "gone").await, Err(AppError::NotFound(m)) if m == LINK_GONE));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen[0].auth.as_deref(), Some("Bearer owner-bearer"));
+        assert_eq!(seen[1].auth, None, "/meta is the recipient's route and gets no bearer");
     }
 
     #[tokio::test]

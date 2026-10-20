@@ -4,7 +4,7 @@ import { useState, type ReactNode } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Lock, Loader2, MessageSquare, Trash2 } from "lucide-react";
+import { Ban, Lock, Loader2, MessageSquare, SlidersHorizontal, SmilePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -16,13 +16,21 @@ import {
   shareCommentsEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import {
+  blockShareCommenter,
   deleteShareComment,
+  getLinkSettings,
   getShareInsights,
+  getShareReactions,
   listShareComments,
+  setLinkSettings,
+  unblockShareCommenter,
   type InsightsViewer,
+  type LinkSettings,
+  type LinkSettingsDefault,
   type ShareComment,
   type ShareInsights,
 } from "@/app/lib/tauri/shareInsights";
+import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
 import {
@@ -48,6 +56,8 @@ const VALUE = "mt-1 text-xl font-semibold tabular-nums text-grey-10 dark:text-wh
 
 export const insightsQueryKey = (shareToken: string) => ["share-insights", shareToken] as const;
 export const commentsQueryKey = (shareToken: string) => ["share-comments", shareToken] as const;
+export const reactionsQueryKey = (shareToken: string) => ["share-reactions", shareToken] as const;
+export const linkSettingsQueryKey = (shareToken: string) => ["share-link-settings", shareToken] as const;
 
 /**
  * The owner's Insights for one link, opened from Shared Links, a row on the
@@ -96,6 +106,8 @@ export function InsightsBody({ shareToken, onLeave }: { shareToken: string; onLe
         <InsightsNumbers insights={insights.data} onUpgrade={onLeave} />
       )}
       {commentsEnabled && <CommentsSection shareToken={shareToken} />}
+      {commentsEnabled && <ReactionsSection shareToken={shareToken} />}
+      <LinkSettingsSection shareToken={shareToken} />
       <HowWeCalculate />
     </div>
   );
@@ -273,6 +285,9 @@ function ViewerList({ viewers }: { viewers: InsightsViewer[] }) {
   );
 }
 
+/** Which question a comment row is asking, if any. */
+type RowQuestion = { id: string; kind: "delete" | "block" } | null;
+
 function CommentsSection({ shareToken }: { shareToken: string }) {
   const queryClient = useQueryClient();
   const comments = useQuery({
@@ -280,23 +295,48 @@ function CommentsSection({ shareToken }: { shareToken: string }) {
     queryFn: () => listShareComments(shareToken),
     retry: false,
   });
-  const [confirming, setConfirming] = useState<string | null>(null);
+  const [asking, setAsking] = useState<RowQuestion>(null);
+  // Comments whose author was blocked from this sheet. The server keeps the
+  // block but never lists it, so this is the only place it shows; it lasts
+  // while the sheet is open.
+  const [blocked, setBlocked] = useState<ReadonlySet<string>>(new Set());
   const remove = useMutation({
     mutationFn: (id: string) => deleteShareComment(shareToken, id),
     onSuccess: () => {
-      setConfirming(null);
+      setAsking(null);
       void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
       void queryClient.invalidateQueries({ queryKey: insightsQueryKey(shareToken) });
     },
     onError: (err) => toast.error(`Couldn't delete the comment. ${errorMessage(err)}`),
   });
+  const block = useMutation({
+    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
+      on ? blockShareCommenter(shareToken, id) : unblockShareCommenter(shareToken, id),
+    onSuccess: (_, { id, on }) => {
+      setAsking(null);
+      setBlocked((prev) => {
+        const next = new Set(prev);
+        if (on) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+      toast.success(on ? "Blocked. They can't comment or react on this link now." : "Unblocked.");
+    },
+    onError: (err, { on }) => {
+      toast.error(`Couldn't ${on ? "block" : "unblock"} them. ${errorMessage(err)}`);
+      // A comment that is gone takes its row with it.
+      void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
+    },
+  });
 
+  const list = comments.data?.comments ?? [];
   return (
     <section className={CARD} aria-labelledby="insights-comments">
       <div className="flex items-center gap-2">
         <MessageSquare className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
         <h3 id="insights-comments" className="text-sm font-medium text-grey-10 dark:text-white">
           Comments
+          {list.length > 0 && <span className="ml-1.5 font-normal text-grey-50 dark:text-grey-dark-600">{list.length}</span>}
         </h3>
       </div>
       {comments.isPending ? (
@@ -310,19 +350,24 @@ function CommentsSection({ shareToken }: { shareToken: string }) {
           {comments.data.unreadable && (
             <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">{comments.data.unreadable}</p>
           )}
-          {comments.data.comments.length === 0 ? (
+          {list.length === 0 ? (
             <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">No comments yet.</p>
           ) : (
             <ul className="mt-2 flex flex-col divide-y divide-grey-80 dark:divide-[#333]">
-              {comments.data.comments.map((c) => (
+              {list.map((c) => (
                 <CommentRow
                   key={c.id}
                   comment={c}
-                  confirming={confirming === c.id}
-                  deleting={remove.isPending && remove.variables === c.id}
-                  onAsk={() => setConfirming(c.id)}
-                  onCancel={() => setConfirming(null)}
+                  asking={asking?.id === c.id ? asking.kind : null}
+                  blocked={blocked.has(c.id)}
+                  busy={
+                    (remove.isPending && remove.variables === c.id) ||
+                    (block.isPending && block.variables?.id === c.id)
+                  }
+                  onAsk={(kind) => setAsking({ id: c.id, kind })}
+                  onCancel={() => setAsking(null)}
                   onDelete={() => remove.mutate(c.id)}
+                  onBlock={(on) => block.mutate({ id: c.id, on })}
                 />
               ))}
             </ul>
@@ -333,20 +378,30 @@ function CommentsSection({ shareToken }: { shareToken: string }) {
   );
 }
 
+const ROW_ICON = cn(
+  "shrink-0 rounded p-1 text-grey-50 transition-colors",
+  "hover:text-error-70 dark:text-grey-dark-600 dark:hover:text-error-70",
+  "disabled:opacity-50",
+);
+
 function CommentRow({
   comment,
-  confirming,
-  deleting,
+  asking,
+  blocked,
+  busy,
   onAsk,
   onCancel,
   onDelete,
+  onBlock,
 }: {
   comment: ShareComment;
-  confirming: boolean;
-  deleting: boolean;
-  onAsk: () => void;
+  asking: "delete" | "block" | null;
+  blocked: boolean;
+  busy: boolean;
+  onAsk: (kind: "delete" | "block") => void;
   onCancel: () => void;
   onDelete: () => void;
+  onBlock: (on: boolean) => void;
 }) {
   const meta = [formatRelative(comment.createdAt), comment.atMs !== null ? formatMoment(comment.atMs) : null]
     .filter(Boolean)
@@ -363,31 +418,204 @@ function CommentRow({
         ) : (
           <p className="mt-0.5 text-sm italic text-grey-50 dark:text-grey-dark-600">This comment couldn&apos;t be read.</p>
         )}
-        {confirming && (
+        {blocked && asking === null && (
+          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-grey-50 dark:text-grey-dark-600">
+            <span>Blocked: they can&apos;t comment or react on this link.</span>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onBlock(false)}
+              className="font-medium text-primary-50 hover:underline disabled:opacity-50 dark:text-primary-brand-dark"
+            >
+              Unblock
+            </button>
+          </p>
+        )}
+        {asking && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs text-grey-30 dark:text-grey-dark-700">Delete this comment for everyone?</span>
-            <Button variant="destructive" size="sm" disabled={deleting} onClick={onDelete} autoFocus>
-              {deleting ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
-              Delete
+            <span className="text-xs text-grey-30 dark:text-grey-dark-700">
+              {asking === "delete"
+                ? blocked
+                  ? "Delete this comment for everyone? Its author stays blocked."
+                  : "Delete this comment for everyone?"
+                : "Block them on this link? They won't be able to comment or react here. Their comments stay until you delete them."}
+            </span>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={busy}
+              onClick={asking === "delete" ? onDelete : () => onBlock(true)}
+              autoFocus
+            >
+              {busy ? <Loader2 className="size-3.5 animate-spin" aria-hidden /> : null}
+              {asking === "delete" ? "Delete" : "Block"}
             </Button>
-            <Button variant="defaultStable" size="sm" disabled={deleting} onClick={onCancel}>
+            <Button variant="defaultStable" size="sm" disabled={busy} onClick={onCancel}>
               Cancel
             </Button>
           </div>
         )}
       </div>
-      {!confirming && (
-        <button
-          type="button"
-          onClick={onAsk}
-          aria-label="Delete comment"
-          title="Delete comment"
-          className="shrink-0 rounded p-1 text-grey-50 transition-colors hover:text-error-70 dark:text-grey-dark-600 dark:hover:text-error-70"
-        >
-          <Trash2 className="size-4" aria-hidden />
-        </button>
+      {!asking && (
+        <div className="flex shrink-0 items-center gap-1">
+          {!blocked && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onAsk("block")}
+              aria-label="Block commenter"
+              title="Block commenter"
+              className={ROW_ICON}
+            >
+              <Ban className="size-4" aria-hidden />
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onAsk("delete")}
+            aria-label="Delete comment"
+            title="Delete comment"
+            className={ROW_ICON}
+          >
+            <Trash2 className="size-4" aria-hidden />
+          </button>
+        </div>
       )}
     </li>
+  );
+}
+
+/**
+ * The link's reaction totals. Shown whatever the Reactions switch says (it
+ * hides the bar from viewers, not the totals from the owner) and on every
+ * plan, since they are not a locked insight.
+ */
+function ReactionsSection({ shareToken }: { shareToken: string }) {
+  const reactions = useQuery({
+    queryKey: reactionsQueryKey(shareToken),
+    queryFn: () => getShareReactions(shareToken),
+    retry: false,
+  });
+  const switches = useQuery({
+    queryKey: linkSettingsQueryKey(shareToken),
+    queryFn: () => getLinkSettings(shareToken),
+    retry: false,
+  });
+  const total = reactions.data?.total ?? 0;
+  return (
+    <section className={CARD} aria-labelledby="insights-reactions">
+      <div className="flex items-center gap-2">
+        <SmilePlus className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
+        <h3 id="insights-reactions" className="text-sm font-medium text-grey-10 dark:text-white">
+          Reactions
+          {total > 0 && (
+            <span className="ml-1.5 font-normal text-grey-50 dark:text-grey-dark-600">
+              <span className="sr-only">, </span>
+              {total}
+              <span className="sr-only"> total</span>
+            </span>
+          )}
+        </h3>
+      </div>
+      {switches.data?.offered.reactions && !switches.data.on.reactions && (
+        <p className="mt-2 text-xs text-grey-50 dark:text-grey-dark-600">
+          Reactions are off, so viewers don&apos;t see these or add new ones.
+        </p>
+      )}
+      {reactions.isPending ? (
+        <div className="mt-3 h-8 animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+      ) : reactions.isError ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <p className="text-sm text-grey-50 dark:text-grey-dark-600">
+            Couldn&apos;t load reactions. {errorMessage(reactions.error)}
+          </p>
+          <Button variant="defaultStable" size="sm" onClick={() => void reactions.refetch()}>
+            Try again
+          </Button>
+        </div>
+      ) : reactions.data.counts.length === 0 ? (
+        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">No reactions yet.</p>
+      ) : (
+        <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Reaction totals">
+          {reactions.data.counts.map(({ emoji, count }) => (
+            <li
+              key={emoji}
+              className={cn(
+                "flex h-8 min-w-[44px] items-center justify-center gap-1 rounded-full border px-2.5 text-sm",
+                "border-grey-80 bg-grey-100 text-grey-10",
+                "dark:border-[#494949] dark:bg-[#161616] dark:text-white",
+              )}
+            >
+              <span>{emoji}</span>
+              <span className="text-xs tabular-nums">{count}</span>
+              <span className="sr-only">{count === 1 ? " reaction" : " reactions"}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The link's Insights, Comments and Reactions switches. Each change is sent
+ * at once, shows at once, and is put back if the server refuses it. Only the
+ * switches Rust says this server takes are drawn.
+ */
+function LinkSettingsSection({ shareToken }: { shareToken: string }) {
+  const queryClient = useQueryClient();
+  const key = linkSettingsQueryKey(shareToken);
+  const current = useQuery({
+    queryKey: key,
+    queryFn: () => getLinkSettings(shareToken),
+    retry: false,
+  });
+  const save = useMutation({
+    mutationFn: (next: LinkSettings) => setLinkSettings(shareToken, next),
+    onMutate: (next) => {
+      const before = queryClient.getQueryData<LinkSettingsDefault>(key);
+      if (before) queryClient.setQueryData<LinkSettingsDefault>(key, { ...before, on: next });
+      return { before };
+    },
+    onError: (err, _next, ctx) => {
+      if (ctx?.before) queryClient.setQueryData(key, ctx.before);
+      toast.error(`Couldn't change that setting. ${errorMessage(err)}`);
+    },
+  });
+
+  // Nothing to show on a server without the switches, or while unknown.
+  if (!current.data || !current.data.offered.insights) {
+    return current.isError ? (
+      <section className={CARD} aria-labelledby="insights-link-settings">
+        <LinkSettingsHeading />
+        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">
+          Couldn&apos;t load this link&apos;s settings. {errorMessage(current.error)}
+        </p>
+      </section>
+    ) : null;
+  }
+  return (
+    <section className={CARD} aria-labelledby="insights-link-settings">
+      <LinkSettingsHeading />
+      <LinkEngagementSwitches
+        offered={current.data.offered}
+        value={current.data.on}
+        disabled={save.isPending}
+        onChange={(next) => save.mutate(next)}
+      />
+    </section>
+  );
+}
+
+function LinkSettingsHeading() {
+  return (
+    <div className="flex items-center gap-2">
+      <SlidersHorizontal className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
+      <h3 id="insights-link-settings" className="text-sm font-medium text-grey-10 dark:text-white">
+        Link settings
+      </h3>
+    </div>
   );
 }
 

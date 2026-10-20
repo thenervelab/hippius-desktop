@@ -1,8 +1,9 @@
 // Typed wrappers around the share link insights commands
 // (`src-tauri/src/shares/insights.rs`): the owner's Insights for a link, its
-// comments, its Insights / Comments / Reactions switches, and the share-link
-// email preferences. Rust decides everything here, including what a free
-// plan may see; these types only describe what crosses IPC.
+// comments (delete, block), its reaction totals, its Insights / Comments /
+// Reactions switches, and the share-link email preferences. Rust decides
+// everything here, including what a free plan may see; these types only
+// describe what crosses IPC.
 
 import { invoke } from "@tauri-apps/api/core";
 
@@ -69,6 +70,18 @@ export interface ShareComments {
   unreadable: string | null;
 }
 
+/** How many people chose one emoji. */
+export interface ReactionCount {
+  emoji: string;
+  count: number;
+}
+
+/** A link's reaction totals: only the emoji somebody chose, in the share page's order. */
+export interface ShareReactions {
+  counts: ReactionCount[];
+  total: number;
+}
+
 /** Which of the new share-link features the server has. */
 export interface EngagementFeatures {
   insights: boolean;
@@ -94,6 +107,29 @@ export function listShareComments(shareToken: string): Promise<ShareComments> {
 
 export function deleteShareComment(shareToken: string, commentId: string): Promise<void> {
   return invoke<void>("share_delete_comment", { shareToken, commentId });
+}
+
+/**
+ * Block the author of a comment from commenting and reacting on this link.
+ * Their comments stay; the server never says who they are, and lists no
+ * block state, so only the sheet that blocked them knows.
+ */
+export function blockShareCommenter(shareToken: string, commentId: string): Promise<void> {
+  return invoke<void>("share_block_commenter", { shareToken, commentId });
+}
+
+/** Undo a block, through any comment of the same author still on the link. */
+export function unblockShareCommenter(shareToken: string, commentId: string): Promise<void> {
+  return invoke<void>("share_unblock_commenter", { shareToken, commentId });
+}
+
+export function getShareReactions(shareToken: string): Promise<ShareReactions> {
+  return invoke<ShareReactions>("share_get_reactions", { shareToken });
+}
+
+/** A link's switches as they stand, and which this server takes. */
+export function getLinkSettings(shareToken: string): Promise<LinkSettingsDefault> {
+  return invoke<LinkSettingsDefault>("share_get_link_settings", { shareToken });
 }
 
 export function setLinkSettings(shareToken: string, settings: LinkSettings): Promise<void> {

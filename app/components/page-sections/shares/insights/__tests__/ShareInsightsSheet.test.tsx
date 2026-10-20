@@ -155,6 +155,97 @@ describe("ShareInsightsSheet", () => {
     );
   });
 
+  it("blocks a commenter only after asking, says so in the row, and can undo it", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: COMMENTS,
+      share_block_commenter: undefined,
+      share_unblock_commenter: undefined,
+    });
+    renderSheet();
+
+    expect(await screen.findByText("Nice")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Block commenter" })[1]);
+    expect(screen.getByText(/Block them on this link\? They won't be able to comment or react here\./)).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith("share_block_commenter", expect.anything());
+
+    fireEvent.click(screen.getByRole("button", { name: "Block" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_block_commenter", { shareToken: "tok", commentId: "c2" }),
+    );
+    // The server lists no block state, so the row says it.
+    expect(await screen.findByText("Blocked: they can't comment or react on this link.")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Block commenter" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Unblock" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_unblock_commenter", { shareToken: "tok", commentId: "c2" }),
+    );
+    await waitFor(() => expect(screen.queryByText(/^Blocked:/)).toBeNull());
+    expect(screen.getAllByRole("button", { name: "Block commenter" })).toHaveLength(2);
+  });
+
+  it("shows the reaction totals, and that viewers don't see them while Reactions is off", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: { comments: [], unreadable: null },
+      share_get_reactions: {
+        counts: [
+          { emoji: "👍", count: 3 },
+          { emoji: "🔥", count: 1 },
+        ],
+        total: 4,
+      },
+      share_get_link_settings: {
+        offered: { insights: true, comments: true, reactions: true },
+        on: { insights: true, comments: true, reactions: false },
+      },
+    });
+    renderSheet();
+
+    const totals = await screen.findByRole("list", { name: "Reaction totals" });
+    expect(within(totals).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
+      "👍3 reactions",
+      "🔥1 reaction",
+    ]);
+    expect(await screen.findByText(/Reactions are off, so viewers don't see these/)).toBeInTheDocument();
+  });
+
+  it("changes a link switch at once and puts it back when the server refuses", async () => {
+    let settingsCalls = 0;
+    invokeMock.mockImplementation((cmd: string) => {
+      if (cmd === "share_get_insights") return Promise.resolve(PAID);
+      if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
+      if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
+      if (cmd === "share_get_link_settings")
+        return Promise.resolve({
+          offered: { insights: true, comments: true, reactions: true },
+          on: { insights: true, comments: false, reactions: true },
+        });
+      if (cmd === "share_set_link_settings") {
+        settingsCalls += 1;
+        return settingsCalls === 1 ? Promise.resolve() : Promise.reject({ kind: "Api", message: "nope" });
+      }
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+    renderSheet();
+
+    const comments = await screen.findByRole("switch", { name: "Comments" });
+    expect(comments).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(comments);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
+        shareToken: "tok",
+        settings: { insights: true, comments: true, reactions: true },
+      }),
+    );
+    expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "true");
+
+    fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
+    await waitFor(() => expect(settingsCalls).toBe(2));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true"));
+  });
+
   it("says why comments cannot be read, and marks one that did not open", async () => {
     answer({
       share_get_insights: PAID,
@@ -175,7 +266,9 @@ describe("ShareInsightsSheet", () => {
 
     await screen.findByText("25%");
     expect(screen.queryByText("Comments")).toBeNull();
+    expect(screen.queryByText("Reactions")).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("share_list_comments", expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith("share_get_reactions", expect.anything());
   });
 
   it("explains each number on request", async () => {
@@ -190,7 +283,11 @@ describe("ShareInsightsSheet", () => {
     invokeMock.mockImplementation((cmd: string) =>
       cmd === "share_get_insights"
         ? Promise.reject({ kind: "NotFound", message: "This link isn't active any more." })
-        : Promise.resolve({ comments: [], unreadable: null }),
+        : cmd === "share_list_comments"
+          ? Promise.resolve({ comments: [], unreadable: null })
+          : cmd === "share_get_reactions"
+            ? Promise.resolve({ counts: [], total: 0 })
+            : Promise.reject(new Error(`unexpected ${cmd}`)),
     );
     renderSheet();
     expect(await screen.findByText(/This link isn't active any more\./)).toBeInTheDocument();
