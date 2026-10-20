@@ -276,14 +276,14 @@ function Header({
     <header className="flex items-center justify-between gap-3 px-5 pt-5">
       {/* The Hippius mark with the app's name beside it, so the popover says
           which app it is: the main window's own lockup (`HippiusBrandMark`),
-          at the popover's larger logo size. The mark keeps its own blue and
-          white outline, with no badge box behind it. Only the name may give
-          way (`min-w-0`, `truncate`); the pill never shrinks, so the balance
-          and the menu stay in view whatever the balance's length. */}
+          at the popover's larger logo size and in its colours, with no badge
+          box behind it. Only the name may give way (`min-w-0`, `truncate`);
+          the pill never shrinks, so the balance and the menu stay in view
+          whatever the balance's length. */}
       <div className="flex min-w-0 items-center gap-2.5">
         <HippiusBrandMark
           logoClassName="size-11 shrink-0"
-          textClassName="min-w-0 truncate text-[20px] leading-6 dark:text-primary-brand-dark"
+          textClassName="min-w-0 truncate text-[20px] leading-6"
         />
       </div>
 
