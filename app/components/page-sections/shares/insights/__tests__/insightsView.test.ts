@@ -124,6 +124,17 @@ describe("the avatar palette", () => {
     expect(new Set(names.map((n) => avatarFor(n)!.color)).size).toBeGreaterThan(2);
   });
 
+  it("picks the same colour as the console for the same name", () => {
+    // The console's own results for these names: a person keeps one colour in both apps.
+    expect(avatarFor("Maya Chen")!.color).toBe("#D9486F");
+    expect(avatarFor("Daniel Okafor")!.color).toBe("#8B5CF6");
+    expect(avatarFor("Sofia Alvarez")!.color).toBe("#E8743B");
+    expect(avatarFor("Priya Raman")!.color).toBe("#0E8FA8");
+    expect(avatarFor("Grace Liu")!.color).toBe("#D9486F");
+    // Case does not change it.
+    expect(avatarFor("maya chen")!.color).toBe("#D9486F");
+  });
+
   it("gives someone without a name the neutral avatar", () => {
     expect(avatarFor(null)).toBeNull();
     expect(avatarFor("   ")).toBeNull();

@@ -135,21 +135,16 @@ export function countLabel(n: number, one: string, many: string): string {
 export const AVATAR_COLORS = ["#E8743B", "#2E9E6B", "#8B5CF6", "#D9486F", "#3167DD", "#0E8FA8"] as const;
 
 /**
- * FNV-1a over the UTF-16 code units, then murmur3's finaliser so names that
- * differ in one letter still spread across the palette. Small, stable, and
- * the same in the console.
+ * FNV-1a over the code points of the lowercased name, so a name keeps its
+ * colour. The console hashes names exactly this way, so a person gets the
+ * same colour in both apps.
  */
 export function nameHash(name: string): number {
   let h = 0x811c9dc5;
-  for (let i = 0; i < name.length; i++) {
-    h ^= name.charCodeAt(i);
+  for (const ch of name.toLocaleLowerCase()) {
+    h ^= ch.codePointAt(0)!;
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x85ebca6b) >>> 0;
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35) >>> 0;
-  h ^= h >>> 16;
   return h >>> 0;
 }
 
