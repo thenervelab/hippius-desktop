@@ -2,20 +2,24 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
-import LinkEngagementSwitches, { INSIGHTS_LOCKED_DESCRIPTION } from "../LinkEngagementSwitches";
+import LinkEngagementSwitches, {
+  INSIGHTS_LOCKED_DESCRIPTION,
+  LINK_SWITCHES,
+  UPGRADE_NOTICE_LABEL,
+} from "../LinkEngagementSwitches";
 import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
 
 const ALL = { insights: true, comments: true, reactions: true };
 const OFF = { insights: false, comments: false, reactions: false };
 
-function setup(insightsInPlan: boolean | null, value = OFF) {
+function setup(switchesInPlan: boolean | null, value = OFF) {
   const onChange = vi.fn();
   const onUpgrade = vi.fn();
   render(
     <LinkEngagementSwitches
       offered={ALL}
       value={value}
-      insightsInPlan={insightsInPlan}
+      switchesInPlan={switchesInPlan}
       onChange={onChange}
       onUpgrade={onUpgrade}
     />,
@@ -45,10 +49,33 @@ describe("LinkEngagementSwitches and the plan", () => {
     expect(onUpgrade).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves comments and reactions alone on a free plan", () => {
+  it.each(["Comments", "Reactions"])("shows the upgrade prompt instead of turning %s on for a free plan", (name) => {
     const { onChange } = setup(false);
+    fireEvent.click(screen.getByRole("switch", { name }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("switch", { name })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("region", { name: UPGRADE_NOTICE_LABEL })).toHaveTextContent(LOCKED_PROMPT);
+  });
+
+  it("marks every switch as a paid feature on a free plan", () => {
+    setup(false);
+    for (const s of LINK_SWITCHES) expect(screen.getByText(s.locked)).toBeInTheDocument();
+  });
+
+  it("lets a free link that already has comments and reactions turn them off", () => {
+    const on = { insights: false, comments: true, reactions: true };
+    const { onChange } = setup(false, on);
     fireEvent.click(screen.getByRole("switch", { name: "Comments" }));
-    expect(onChange).toHaveBeenCalledWith({ ...OFF, comments: true });
+    expect(onChange).toHaveBeenCalledWith({ ...on, comments: false });
+    fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
+    expect(onChange).toHaveBeenCalledWith({ ...on, reactions: false });
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
+  });
+
+  it("turns comments and reactions on for a paid plan", () => {
+    const { onChange } = setup(true);
+    fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
+    expect(onChange).toHaveBeenCalledWith({ ...OFF, reactions: true });
     expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 
@@ -64,5 +91,8 @@ describe("LinkEngagementSwitches and the plan", () => {
     expect(screen.queryByText(INSIGHTS_LOCKED_DESCRIPTION)).toBeNull();
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     expect(onChange).toHaveBeenCalledWith({ ...OFF, insights: true });
+    fireEvent.click(screen.getByRole("switch", { name: "Comments" }));
+    expect(onChange).toHaveBeenCalledWith({ ...OFF, comments: true });
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 });

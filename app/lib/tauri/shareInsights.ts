@@ -22,11 +22,12 @@ export interface LinkSettingsDefault {
   offered: OfferedSwitches;
   on: LinkSettings;
   /**
-   * Whether the plan includes Insights: `false` on the free plan, where the
-   * Insights switch leads to the upgrade prompt; `null` when Rust could not
-   * read the plan (nothing is locked, and a new link starts Insights off).
+   * Whether the plan includes the Insights, Comments and Reactions switches:
+   * `false` on the free plan, where turning any of them on leads to the
+   * upgrade prompt; `null` when Rust could not read the plan (nothing is
+   * locked, and a new link starts all three off).
    */
-  insightsInPlan: boolean | null;
+  switchesInPlan: boolean | null;
 }
 
 /**
@@ -167,6 +168,14 @@ export function getLinkSettingsDefault(
     fileName,
     isFolder,
   });
+}
+
+/**
+ * Whether the signed-in account's plan includes the link switches: `false`
+ * on the free plan, `null` when Rust could not read the plan.
+ */
+export function getSwitchesInPlan(): Promise<boolean | null> {
+  return invoke<boolean | null>("share_switches_in_plan");
 }
 
 export function getEngagementFeatures(): Promise<EngagementFeatures> {

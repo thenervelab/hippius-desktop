@@ -12,6 +12,8 @@ const tauri = await vi.hoisted(async () => {
 vi.mock("@tauri-apps/api/core", () => tauri.core);
 vi.mock("@tauri-apps/api/event", () => tauri.event);
 vi.mock("@/app/lib/featureFlags", () => ({ SCREEN_CAPTURE_ENABLED: true }));
+const push = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("@/app/lib/capture/shortcutLabel", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/capture/shortcutLabel")>()),
   isMacPlatform: () => true,
@@ -25,6 +27,7 @@ import {
   captureSurfacesAtom,
 } from "@/app/lib/capture/captureFlow";
 import type { CaptureOptions, CaptureSurfaces } from "@/app/lib/tauri/capture";
+import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
 
 const SCREENSHOT_DEFAULT = "CommandOrControl+Shift+2";
 const RECORD_DEFAULT = "CommandOrControl+Alt+Shift+2";
@@ -71,7 +74,9 @@ function setup({
   recording = true,
   surfaces = MAC,
   insights = false,
-}: { recording?: boolean; surfaces?: CaptureSurfaces; insights?: boolean } = {}) {
+  plan = true,
+}: { recording?: boolean; surfaces?: CaptureSurfaces; insights?: boolean; plan?: boolean | null } = {}) {
+  tauri.onInvoke("share_switches_in_plan", () => plan);
   tauri.onInvoke("capture_get_shortcut", (args) => {
     const kind: Kind = (args as { kind?: Kind } | undefined)?.kind ?? "screenshot";
     return {
@@ -240,6 +245,39 @@ describe("the capture bar's options, here as well", () => {
       }),
     );
     await waitFor(() => expect(stored.linkInsights).toBe(false));
+  });
+
+  it("shows tracking as a paid feature on the free plan, with the upgrade prompt instead of a switch", async () => {
+    setup({ insights: true, plan: false });
+    expect(
+      await screen.findByText(
+        "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. On paid Drive plans.",
+      ),
+    ).toBeInTheDocument();
+    const track = screen.getByRole("switch", { name: "Track views, comments and reactions" });
+    // Off whatever is stored: new links on the free plan get none of the three.
+    expect(stored.linkInsights).toBe(true);
+    expect(track).toHaveAttribute("aria-checked", "false");
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
+
+    fireEvent.click(track);
+    const prompt = screen.getByRole("region", { name: "Upgrade for Insights, comments and reactions" });
+    expect(prompt).toHaveTextContent(LOCKED_PROMPT);
+    expect(track).toHaveAttribute("aria-checked", "false");
+    expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_set_options", expect.anything());
+
+    fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
+    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+  });
+
+  it("keeps the plain switch when the plan could not be read", async () => {
+    setup({ insights: true, plan: null });
+    const track = await screen.findByRole("switch", { name: "Track views, comments and reactions" });
+    await waitFor(() => expect(tauri.core.invoke).toHaveBeenCalledWith("share_switches_in_plan"));
+    expect(track).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(track);
+    await waitFor(() => expect(stored.linkInsights).toBe(false));
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 
   it("does not offer tracking on a server without insights", async () => {

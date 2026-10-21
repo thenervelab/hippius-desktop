@@ -12,13 +12,14 @@ import type { InsightsViewer, ShareComment } from "@/app/lib/tauri/shareInsights
 export const ANONYMOUS = "Anonymous viewer";
 
 /**
- * The upgrade prompt for Insights on the free plan, where the Insights switch
- * is turned on: the same words the web app uses.
+ * The upgrade prompt on the free plan, where an Insights, Comments or
+ * Reactions switch is turned on: the same words the web app uses.
  */
-export const LOCKED_PROMPT = "Insights are available on paid Drive plans";
+export const LOCKED_PROMPT = "Insights, comments and reactions are available on paid Drive plans";
 export const LOCKED_ACTION = "Upgrade";
-/** The line under the prompt where the Insights switch was turned on. */
-export const SWITCH_UPGRADE_BODY = "Upgrade to count views and watch time on your links and see who watched.";
+/** The line under the prompt where a switch was turned on. */
+export const SWITCH_UPGRADE_BODY =
+  "Upgrade to see who watched your links and for how long, and to let viewers comment and react.";
 
 /** The free plan's lock over the blurred sample. */
 export const LOCK_TITLE = "See who watched and where they stopped";

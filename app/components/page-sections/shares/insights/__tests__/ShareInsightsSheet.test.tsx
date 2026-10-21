@@ -391,7 +391,7 @@ describe("ShareInsightsSheet", () => {
         if (cmd === "share_get_insights") return Promise.resolve({ ...FREE, totalViews: 0, uniqueViewers: 0 });
         if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
         if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
-        if (cmd === "share_get_link_settings") return Promise.resolve({ offered: ALL, on, insightsInPlan: false });
+        if (cmd === "share_get_link_settings") return Promise.resolve({ offered: ALL, on, switchesInPlan: false });
         if (cmd === "share_set_link_settings") return Promise.resolve();
         return Promise.reject(new Error(`unexpected ${cmd}`));
       });
@@ -410,30 +410,53 @@ describe("ShareInsightsSheet", () => {
       expect(within(locked).getByText(LOCK_BODY_NOT_COUNTING)).toBeInTheDocument();
     });
 
-    it("shows the upgrade prompt when Insights is switched on, and sends nothing", async () => {
-      freeLink({ insights: false, comments: true, reactions: true });
+    it("shows the upgrade prompt when a switch is turned on, and sends nothing", async () => {
+      freeLink({ insights: false, comments: false, reactions: false });
       const store = renderSheet();
 
       const insights = await screen.findByRole("switch", { name: "Insights" });
       expect(screen.getByText("Count views and watch time. On paid Drive plans.")).toBeInTheDocument();
+      expect(screen.getByText("Let viewers comment on this link. On paid Drive plans.")).toBeInTheDocument();
+      expect(screen.getByText("Let viewers react with emoji. On paid Drive plans.")).toBeInTheDocument();
       fireEvent.click(insights);
       expect(insights).toHaveAttribute("aria-checked", "false");
-      const prompt = screen.getByRole("region", { name: "Upgrade for Insights" });
+      const prompt = screen.getByRole("region", { name: "Upgrade for Insights, comments and reactions" });
       expect(within(prompt).getByText(LOCKED_PROMPT)).toBeInTheDocument();
+      expect(LOCKED_PROMPT).toBe("Insights, comments and reactions are available on paid Drive plans");
+
+      for (const name of ["Comments", "Reactions"]) {
+        fireEvent.click(screen.getByRole("switch", { name }));
+        expect(screen.getByRole("switch", { name })).toHaveAttribute("aria-checked", "false");
+      }
       expect(invokeMock).not.toHaveBeenCalledWith("share_set_link_settings", expect.anything());
 
-      // Comments still change on the free plan.
-      fireEvent.click(screen.getByRole("switch", { name: "Comments" }));
+      fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
+      expect(push).toHaveBeenCalledWith("/settings?section=billing");
+      expect(store.get(insightsSheetAtom)).toBeNull();
+    });
+
+    it("lets a link that already has comments and reactions on turn them off, but not back on", async () => {
+      freeLink({ insights: false, comments: true, reactions: true });
+      renderSheet();
+
+      const comments = await screen.findByRole("switch", { name: "Comments" });
+      expect(comments).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(comments);
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
           settings: { insights: false, comments: false, reactions: true },
         }),
       );
-
-      fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
-      expect(push).toHaveBeenCalledWith("/settings?section=billing");
-      expect(store.get(insightsSheetAtom)).toBeNull();
+      fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
+          shareToken: "tok",
+          settings: { insights: false, comments: false, reactions: false },
+        }),
+      );
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "false"));
+      expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
     });
 
     it("leaves a link that already has Insights on as it is, and lets it turn them off", async () => {

@@ -13,36 +13,55 @@ import {
   SWITCH_UPGRADE_BODY,
 } from "@/components/page-sections/shares/insights/insightsView";
 
-/** The words for each switch, in the order they are shown. */
+/**
+ * The words for each switch, in the order they are shown. `locked` is the
+ * line while the plan does not include it.
+ */
 export const LINK_SWITCHES: ReadonlyArray<{
   key: keyof LinkSettings;
   label: string;
   description: string;
+  locked: string;
 }> = [
-  { key: "insights", label: "Insights", description: "Count views and watch time. Viewers see a short note." },
-  { key: "comments", label: "Comments", description: "Let viewers comment on this link." },
-  { key: "reactions", label: "Reactions", description: "Let viewers react with emoji." },
+  {
+    key: "insights",
+    label: "Insights",
+    description: "Count views and watch time. Viewers see a short note.",
+    locked: "Count views and watch time. On paid Drive plans.",
+  },
+  {
+    key: "comments",
+    label: "Comments",
+    description: "Let viewers comment on this link.",
+    locked: "Let viewers comment on this link. On paid Drive plans.",
+  },
+  {
+    key: "reactions",
+    label: "Reactions",
+    description: "Let viewers react with emoji.",
+    locked: "Let viewers react with emoji. On paid Drive plans.",
+  },
 ];
 
 /** The Insights switch's line while the plan does not include it. */
-export const INSIGHTS_LOCKED_DESCRIPTION = "Count views and watch time. On paid Drive plans.";
+export const INSIGHTS_LOCKED_DESCRIPTION = LINK_SWITCHES[0].locked;
 
 /**
  * A link's Insights, Comments and Reactions switches, in the share dialog,
  * on the finished link and in the Insights sheet. Only the switches Rust says
  * this server takes (`offered`) are drawn; with none, nothing is.
  *
- * `insightsInPlan` is Rust's answer (`false` on the free plan). On the free
- * plan, turning Insights on shows the upgrade prompt instead of turning the
- * switch on; a link that already has Insights on keeps them and can still
- * turn them off. A plan that could not be read (`null`) locks nothing: the
- * switch works, and Rust still starts a new link's Insights off.
+ * `switchesInPlan` is Rust's answer (`false` on the free plan). On the free
+ * plan, turning any switch on shows the upgrade prompt instead of turning it
+ * on; a link that already has one on keeps it and can still turn it off. A
+ * plan that could not be read (`null`) locks nothing: the switches work, and
+ * Rust still starts a new link's switches off.
  */
 export default function LinkEngagementSwitches({
   offered,
   value,
   disabled = false,
-  insightsInPlan = null,
+  switchesInPlan = null,
   onChange,
   onUpgrade,
   layout = "stack",
@@ -55,7 +74,7 @@ export default function LinkEngagementSwitches({
   offered: OfferedSwitches;
   value: LinkSettings;
   disabled?: boolean;
-  insightsInPlan?: boolean | null;
+  switchesInPlan?: boolean | null;
   onChange: (next: LinkSettings) => void;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
@@ -63,7 +82,7 @@ export default function LinkEngagementSwitches({
   const [asking, setAsking] = useState(false);
   const shown = LINK_SWITCHES.filter((s) => offered[s.key]);
   if (shown.length === 0) return null;
-  const locked = insightsInPlan === false;
+  const locked = switchesInPlan === false;
   const list = layout === "list";
   return (
     <div className={cn("flex flex-col", !list && "mt-3 gap-2")} role="group" aria-label="Viewer activity">
@@ -75,7 +94,7 @@ export default function LinkEngagementSwitches({
             : "gap-2",
         )}
       >
-        {shown.map(({ key, label, description }) => {
+        {shown.map(({ key, label, description, locked: lockedDescription }) => {
           return (
             <div key={key} className={cn("flex items-center justify-between gap-3", list && "px-3 py-2.5")}>
               <div className="min-w-0">
@@ -88,7 +107,7 @@ export default function LinkEngagementSwitches({
                   {label}
                 </p>
                 <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-                  {key === "insights" && locked ? INSIGHTS_LOCKED_DESCRIPTION : description}
+                  {locked ? lockedDescription : description}
                 </p>
               </div>
               <SettingsToggle
@@ -96,7 +115,7 @@ export default function LinkEngagementSwitches({
                 checked={value[key]}
                 disabled={disabled}
                 onCheckedChange={(on) => {
-                  if (key === "insights" && on && locked) {
+                  if (on && locked) {
                     setAsking(true);
                     return;
                   }
@@ -108,19 +127,23 @@ export default function LinkEngagementSwitches({
         })}
       </div>
       <div aria-live="polite">
-        {asking && locked && <InsightsUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />}
+        {asking && locked && <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />}
       </div>
     </div>
   );
 }
 
+/** The upgrade card's accessible name. */
+export const UPGRADE_NOTICE_LABEL = "Upgrade for Insights, comments and reactions";
+
 /**
- * The upgrade card for Insights on the free plan, in the Insights sheet's
- * locked words (`insightsView`, the same as the web app's). A card, not a warning:
- * nothing is wrong, the plan just does not include it. Stacks on a narrow
- * container, one row on a wide one.
+ * The upgrade card for the link switches on the free plan, in the Insights
+ * sheet's locked words (`insightsView`, the same as the web app's): in the
+ * share dialog, on the finished link, in the Insights sheet and in Settings.
+ * A card, not a warning: nothing is wrong, the plan just does not include
+ * them. Stacks on a narrow container, one row on a wide one.
  */
-export function InsightsUpgradeNotice({
+export function SwitchesUpgradeNotice({
   onUpgrade,
   className,
 }: {
@@ -131,7 +154,7 @@ export function InsightsUpgradeNotice({
     <div className={cn("@container", className)}>
       <div
         role="region"
-        aria-label="Upgrade for Insights"
+        aria-label={UPGRADE_NOTICE_LABEL}
         className="flex flex-col gap-3 rounded-lg border border-primary-50/25 bg-primary-50/[0.06] p-3 @md:flex-row @md:items-center dark:border-primary-50/30 dark:bg-primary-50/10"
       >
         <div className="flex min-w-0 flex-1 items-start gap-3">

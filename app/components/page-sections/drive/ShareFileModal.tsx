@@ -111,17 +111,17 @@ type ModalState =
 
 /**
  * A link's switches as chosen, which of them this server takes, and whether
- * the plan includes Insights (Rust's `insightsInPlan`).
+ * the plan includes them (Rust's `switchesInPlan`).
  */
-type Engagement = { offered: OfferedSwitches; value: LinkSettings; insightsInPlan: boolean | null };
+type Engagement = { offered: OfferedSwitches; value: LinkSettings; switchesInPlan: boolean | null };
 
 /** What the chooser's switches were drawn from: carried into the done view. */
-type SwitchSource = Pick<LinkSettingsDefault, "offered" | "insightsInPlan">;
+type SwitchSource = Pick<LinkSettingsDefault, "offered" | "switchesInPlan">;
 
 /** The switches to carry into the done view, or `null` when none were shown. */
 function engagementOf(choice: ShareChoice, source: SwitchSource | null): Engagement | null {
   if (!source || !choice.linkSettings) return null;
-  return { offered: source.offered, value: choice.linkSettings, insightsInPlan: source.insightsInPlan };
+  return { offered: source.offered, value: choice.linkSettings, switchesInPlan: source.switchesInPlan };
 }
 
 export default function ShareFileModal() {
@@ -646,9 +646,9 @@ function ChoosingBody({
   // start (on for a capture when Settings says so), both from Rust. Hidden
   // until it answers, so a quick confirm sends nothing.
   const [offered, setOffered] = useState<OfferedSwitches | null>(null);
-  // Rust's plan answer: `false` locks the Insights switch behind the upgrade
-  // prompt; `null` (unread) locks nothing.
-  const [insightsInPlan, setInsightsInPlan] = useState<boolean | null>(null);
+  // Rust's plan answer: `false` locks turning any switch on behind the
+  // upgrade prompt; `null` (unread) locks nothing.
+  const [switchesInPlan, setSwitchesInPlan] = useState<boolean | null>(null);
   const [engagement, setEngagement] = useState<LinkSettings>({
     insights: false,
     comments: false,
@@ -661,7 +661,7 @@ function ChoosingBody({
         if (!alive || !d) return;
         setOffered(d.offered);
         setEngagement(d.on);
-        setInsightsInPlan(d.insightsInPlan ?? null);
+        setSwitchesInPlan(d.switchesInPlan ?? null);
       })
       .catch(() => undefined);
     return () => {
@@ -757,7 +757,7 @@ function ChoosingBody({
           <LinkEngagementSwitches
             offered={offered}
             value={engagement}
-            insightsInPlan={insightsInPlan}
+            switchesInPlan={switchesInPlan}
             onChange={setEngagement}
             onUpgrade={onUpgrade}
           />
@@ -822,7 +822,7 @@ function ChoosingBody({
               password: visibility === "private" ? password : undefined,
               chatPreview: previewShown && chatPreview,
               linkSettings: switchesShown ? engagement : undefined,
-            }, switchesShown ? { offered, insightsInPlan } : null)
+            }, switchesShown ? { offered, switchesInPlan } : null)
           }
           className={cn(
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
@@ -1243,7 +1243,7 @@ function DoneBody({
             offered={engagement.offered}
             value={switches}
             disabled={switchesSaving}
-            insightsInPlan={engagement.insightsInPlan}
+            switchesInPlan={engagement.switchesInPlan}
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
           />

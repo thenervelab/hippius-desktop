@@ -1206,13 +1206,12 @@ describe("ShareFileModal link switches", () => {
     expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
   });
 
-  it("on the free plan, starts Insights off and shows the upgrade prompt instead of turning it on", async () => {
-    // Rust already started Insights off for the free plan; comments and
-    // reactions keep their capture default.
+  it("on the free plan, starts every switch off and shows the upgrade prompt instead of turning one on", async () => {
+    // Rust already started all three off for the free plan.
     linkDefaultMock.mockResolvedValue({
       offered: ALL_ON,
-      on: { insights: false, comments: true, reactions: true },
-      insightsInPlan: false,
+      on: { insights: false, comments: false, reactions: false },
+      switchesInPlan: false,
     });
     invokeMock.mockResolvedValueOnce(LINK);
     render(withProvider(<ShareFileModal />, RECORDING));
@@ -1225,18 +1224,23 @@ describe("ShareFileModal link switches", () => {
     fireEvent.click(insights);
     expect(insights).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(LOCKED_PROMPT)).toBeInTheDocument();
+    for (const name of ["Comments", "Reactions"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+      expect(screen.getByRole("switch", { name })).toHaveAttribute("aria-checked", "false");
+    }
 
-    // The share still goes out, with Insights off.
+    // The share still goes out, with all three off.
     confirmChooser();
     await screen.findByDisplayValue(/tok-rec#k=KEY/);
     expect(invokeMock).toHaveBeenCalledWith(
       "hcfs_create_share",
-      expect.objectContaining({ linkSettings: { insights: false, comments: true, reactions: true } }),
+      expect.objectContaining({ linkSettings: { insights: false, comments: false, reactions: false } }),
     );
 
-    // The finished link's switch is locked the same way.
-    const done = screen.getByRole("switch", { name: "Insights" });
-    fireEvent.click(done);
+    // The finished link's switches are locked the same way.
+    for (const name of ["Insights", "Comments", "Reactions"]) {
+      fireEvent.click(screen.getByRole("switch", { name }));
+    }
     expect(setLinkMock).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: LOCKED_ACTION }));
     expect(routerPush).toHaveBeenCalledWith(BILLING_ROUTE);
@@ -1246,7 +1250,7 @@ describe("ShareFileModal link switches", () => {
     linkDefaultMock.mockResolvedValue({
       offered: ALL_ON,
       on: { insights: false, comments: true, reactions: true },
-      insightsInPlan: null,
+      switchesInPlan: null,
     });
     render(withProvider(<ShareFileModal />, RECORDING));
 

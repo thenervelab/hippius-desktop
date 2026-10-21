@@ -140,7 +140,7 @@ describe("InsightsButton", () => {
       c.setQueryData(linkSettingsQueryKey("tok"), {
         offered: { insights: true, comments: true, reactions: true },
         on: { insights: false, comments: true, reactions: true },
-        insightsInPlan: true,
+        switchesInPlan: true,
       }),
     );
     const button = screen.getByTestId("capture-insights-button");

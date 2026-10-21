@@ -544,6 +544,7 @@ fn main() {
             crate::shares::insights::share_get_link_settings,
             crate::shares::insights::share_set_link_settings,
             crate::shares::insights::share_link_settings_default,
+            crate::shares::insights::share_switches_in_plan,
             crate::shares::insights::share_get_notification_preferences,
             crate::shares::insights::share_set_notification_preferences,
             crate::shares::commands::hcfs_update_share_expiry,

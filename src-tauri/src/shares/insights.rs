@@ -481,6 +481,16 @@ impl SettingsPatch {
     const fn is_empty(self) -> bool {
         self.insights.is_none() && self.comments.is_none() && self.reactions.is_none()
     }
+
+    /// The switches this patch turns (or keeps) on; one it leaves out or
+    /// turns off reads as off.
+    const fn asked_on(self) -> LinkSettings {
+        LinkSettings {
+            insights: matches!(self.insights, Some(true)),
+            comments: matches!(self.comments, Some(true)),
+            reactions: matches!(self.reactions, Some(true)),
+        }
+    }
 }
 
 /// The PATCH for `wanted` on a server offering `offered`, or `None` when
@@ -505,25 +515,25 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
 pub struct LinkSettingsDefault {
     pub offered: OfferedSwitches,
     pub on: LinkSettings,
-    /// Whether this account's plan includes Insights ([`insights_in_plan`]):
-    /// `false` on the free plan, where turning Insights on shows the upgrade
-    /// prompt instead; `None` when the plan could not be read, which locks
-    /// nothing but starts Insights off.
-    pub insights_in_plan: Option<bool>,
+    /// Whether this account's plan includes the switches
+    /// ([`switches_in_plan`]): `false` on the free plan, where turning any of
+    /// them on shows the upgrade prompt instead; `None` when the plan could
+    /// not be read, which locks nothing but starts all three off.
+    pub switches_in_plan: Option<bool>,
 }
 
 /// The switches for a file: offered for a file (never a folder, whose links
 /// have no insights yet) on a server that takes them; on for a screenshot or
 /// recording when Settings' "Track views, comments and reactions" is on, off
-/// for every other file. Insights start on only on a plan known to include
-/// them ([`within_plan`]).
+/// for every other file. They start on only on a plan known to include them
+/// ([`within_plan`]).
 #[must_use]
 pub fn default_for(
     is_folder: bool,
     is_capture: bool,
     captures_default: bool,
     caps: &ServerCapabilities,
-    insights_in_plan: Option<bool>,
+    switches_in_plan: Option<bool>,
 ) -> LinkSettingsDefault {
     let offered = if is_folder {
         OfferedSwitches::default()
@@ -539,67 +549,71 @@ pub fn default_for(
                 comments: offered.comments && on,
                 reactions: offered.reactions && on,
             },
-            insights_in_plan,
+            switches_in_plan,
         ),
-        insights_in_plan,
+        switches_in_plan,
     }
 }
 
 // ─── The plan rule ─────────────────────────────────────────────────────────
 //
-// Insights (counting views, watch time, and the owner's numbers) come with
-// every paid Drive plan and not with the free plan. Comments and reactions
-// are not part of the rule: they work on every plan.
+// A link's three switches, Insights (counting views, watch time, and the
+// owner's numbers), Comments and Reactions, come with every paid Drive plan
+// and not with the free plan.
 //
-// This is the one place the rule lives. A new link gets Insights only on a
-// plan known to include them, so a plan that cannot be read starts them off
-// and never holds the share up. Links that already have Insights on keep
-// them whatever the plan: nothing here turns a switch off.
+// This is the one place the rule lives. A new link gets them only on a plan
+// known to include them, so a plan that cannot be read starts all three off
+// and never holds the share up. Links that already have a switch on keep it
+// whatever the plan: nothing here turns a switch off, and turning one off
+// always works.
 
-/// What the plan says about Insights, from the same plan read that decides a
-/// capture's watermark and recording limit (`capture::allowance`): `true` on
-/// a paid Drive plan, `false` on the free plan, `None` when the read could
-/// not tell.
+/// What the plan says about the switches, from the same plan read that
+/// decides a capture's watermark and recording limit (`capture::allowance`):
+/// `true` on a paid Drive plan, `false` on the free plan, `None` when the
+/// read could not tell.
 #[must_use]
-pub fn insights_in_plan(tier: Option<crate::capture::allowance::RecordingTier>) -> Option<bool> {
+pub fn switches_in_plan(tier: Option<crate::capture::allowance::RecordingTier>) -> Option<bool> {
     tier.map(|tier| tier == crate::capture::allowance::RecordingTier::Paid)
 }
 
-/// `wanted` as this plan allows it: Insights only when the plan is known to
-/// include them; Comments and Reactions untouched.
+/// `wanted` as this plan allows it on a new link: as asked on a plan known to
+/// include the switches, all off otherwise.
 #[must_use]
-pub const fn within_plan(wanted: LinkSettings, insights_in_plan: Option<bool>) -> LinkSettings {
+pub const fn within_plan(wanted: LinkSettings, switches_in_plan: Option<bool>) -> LinkSettings {
+    let in_plan = matches!(switches_in_plan, Some(true));
     LinkSettings {
-        insights: wanted.insights && matches!(insights_in_plan, Some(true)),
-        comments: wanted.comments,
-        reactions: wanted.reactions,
+        insights: wanted.insights && in_plan,
+        comments: wanted.comments && in_plan,
+        reactions: wanted.reactions && in_plan,
     }
 }
 
-/// Whether turning a link's switches to `wanted` is refused on this plan:
-/// only switching Insights ON (it was `was_on` before) on a plan known to be
-/// free. Turning it off, leaving it on, or a plan that could not be read is
-/// never refused.
+/// Whether turning a link's switches to `wanted` is refused on this plan
+/// (`was` is how they stood): only switching one ON from off on a plan known
+/// to be free. Turning one off, leaving it on, or a plan that could not be
+/// read is never refused.
 #[must_use]
-pub const fn refuses_insights_on(wanted: LinkSettings, was_on: bool, insights_in_plan: Option<bool>) -> bool {
-    wanted.insights && !was_on && matches!(insights_in_plan, Some(false))
+pub const fn refuses_switching_on(wanted: LinkSettings, was: LinkSettings, switches_in_plan: Option<bool>) -> bool {
+    let turned_on = (wanted.insights && !was.insights) || (wanted.comments && !was.comments) || (wanted.reactions && !was.reactions);
+    turned_on && matches!(switches_in_plan, Some(false))
 }
 
-/// The refusal for turning Insights on from the free plan. The app shows the
-/// upgrade prompt before asking, so only a stale screen reaches this.
-pub const INSIGHTS_NOT_IN_PLAN: &str = "Insights are available on paid Drive plans.";
+/// The refusal for turning a switch on from the free plan, in the upgrade
+/// prompt's words. The app shows that prompt before asking, so only a stale
+/// screen reaches this.
+pub const SWITCHES_NOT_IN_PLAN: &str = "Insights, comments and reactions are available on paid Drive plans.";
 
 /// How long the plan read may take for the share dialog or a new link. A
 /// read that takes longer counts as "could not tell".
 const PLAN_WITHIN: Duration = Duration::from_secs(5);
 
-/// [`insights_in_plan`] for the signed-in account, read fresh. `account_id`
+/// [`switches_in_plan`] for the signed-in account, read fresh. `account_id`
 /// must still be the session's account; anything else, a failed read or a
 /// slow one is `None`.
-pub(crate) async fn read_insights_in_plan(state: &AppState, account_id: &str) -> Option<bool> {
+pub(crate) async fn read_switches_in_plan(state: &AppState, account_id: &str) -> Option<bool> {
     let account = state.current_session_account().ok().filter(|a| a.as_str() == account_id)?;
     match tokio::time::timeout(PLAN_WITHIN, crate::billing::storage_overview::fetch_plan_reads(state, &account)).await {
-        Ok(Ok(reads)) => insights_in_plan(crate::capture::allowance::tier_from_reads(&reads)),
+        Ok(Ok(reads)) => switches_in_plan(crate::capture::allowance::tier_from_reads(&reads)),
         Ok(Err(e)) => {
             debug!(error = %e, "share insights: the plan could not be read");
             None
@@ -966,14 +980,14 @@ async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapab
 /// Send a new link's switches, if the server takes them and any is on.
 /// Never returns an error: the link is already live and copied.
 pub(crate) async fn apply_after_mint(state: &AppState, account_id: &str, share_token: &str, wanted: LinkSettings) {
+    if !wanted.any() {
+        return;
+    }
     // Every new link passes here (a capture's own link, the share dialog, a
     // Finder share), so this is where the plan rule holds for all of them.
-    let wanted = if wanted.insights {
-        within_plan(wanted, read_insights_in_plan(state, account_id).await)
-    } else {
-        wanted
-    };
+    let wanted = within_plan(wanted, read_switches_in_plan(state, account_id).await);
     if !wanted.any() {
+        debug!("share settings skipped: not on this plan, or the plan could not be read");
         return;
     }
     let caps = capabilities_or_none(state, account_id).await;
@@ -1136,15 +1150,15 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
-    let (meta, insights_in_plan) = tokio::join!(
+    let (meta, switches_in_plan) = tokio::join!(
         get_meta_body(&state.api_client, &api, &share_token),
-        read_insights_in_plan(&state, &account_id),
+        read_switches_in_plan(&state, &account_id),
     );
     let on = parse_meta_settings(&meta?)?;
     Ok(LinkSettingsDefault {
         offered,
         on,
-        insights_in_plan,
+        switches_in_plan,
     })
 }
 
@@ -1158,13 +1172,14 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
     let api = Api::for_account(&state, &account_id).await?;
-    // Insights asked for on the free plan: allowed only if this link already
-    // has them (an older link keeps what it has), so the link's switches are
-    // read only then.
-    if patch.insights == Some(true) && read_insights_in_plan(&state, &account_id).await == Some(false) {
-        let was_on = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?.insights;
-        if refuses_insights_on(settings, was_on, Some(false)) {
-            return Err(AppError::Validation(INSIGHTS_NOT_IN_PLAN.into()));
+    // A switch asked to be on, on the free plan: allowed only if this link
+    // already has it on (an older link keeps what it has), so the link's
+    // switches are read only then. Turning switches off never asks.
+    let asked_on = patch.asked_on();
+    if asked_on.any() && read_switches_in_plan(&state, &account_id).await == Some(false) {
+        let was = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?;
+        if refuses_switching_on(asked_on, was, Some(false)) {
+            return Err(AppError::Validation(SWITCHES_NOT_IN_PLAN.into()));
         }
     }
     patch_settings(&state.api_client, &api, &share_token, &patch).await
@@ -1189,14 +1204,24 @@ pub async fn share_link_settings_default(
         None => false,
     };
     let is_capture = in_captures_drive || super::preview::is_capture_name(&file_name);
-    let (caps, insights_in_plan) = tokio::join!(capabilities_or_none(&state, &account_id), read_insights_in_plan(&state, &account_id),);
+    let (caps, switches_in_plan) = tokio::join!(capabilities_or_none(&state, &account_id), read_switches_in_plan(&state, &account_id),);
     Ok(default_for(
         is_folder,
         is_capture,
         captures_default(&state).await,
         &caps,
-        insights_in_plan,
+        switches_in_plan,
     ))
+}
+
+/// Whether the signed-in account's plan includes the link switches
+/// ([`switches_in_plan`]), for Settings' "Track views, comments and
+/// reactions", which shows as a paid feature on the free plan. `None` when
+/// the plan could not be read.
+#[tauri::command]
+pub async fn share_switches_in_plan(state: tauri::State<'_, AppState>) -> Result<Option<bool>> {
+    let account_id = state.current_account_id()?;
+    Ok(read_switches_in_plan(&state, &account_id).await)
 }
 
 /// The share-link emails this account gets.
@@ -1426,37 +1451,45 @@ mod tests {
     const PLAN_UNKNOWN: Option<bool> = None;
 
     /// The plan comes from the same read as the watermark and the recording
-    /// limit: a paid Drive plan includes Insights, the free plan does not,
-    /// and a read that could not tell says so.
+    /// limit: a paid Drive plan includes the switches, the free plan does
+    /// not, and a read that could not tell says so.
     #[test]
-    fn insights_come_with_a_paid_plan_only() {
+    fn the_switches_come_with_a_paid_plan_only() {
         use crate::capture::allowance::RecordingTier;
-        assert_eq!(insights_in_plan(Some(RecordingTier::Paid)), PLAN_PAID);
-        assert_eq!(insights_in_plan(Some(RecordingTier::Free)), PLAN_FREE);
-        assert_eq!(insights_in_plan(None), PLAN_UNKNOWN);
+        assert_eq!(switches_in_plan(Some(RecordingTier::Paid)), PLAN_PAID);
+        assert_eq!(switches_in_plan(Some(RecordingTier::Free)), PLAN_FREE);
+        assert_eq!(switches_in_plan(None), PLAN_UNKNOWN);
     }
 
-    /// A new link gets Insights on a paid plan, never on the free plan, and
-    /// not when the plan could not be read. Comments and reactions are left
-    /// as they were asked for.
+    /// A new link gets Insights, Comments and Reactions on a paid plan, never
+    /// on the free plan, and not when the plan could not be read.
     #[test]
-    fn a_new_link_gets_insights_on_a_paid_plan_only() {
+    fn a_new_link_gets_its_switches_on_a_paid_plan_only() {
         let all = LinkSettings::all(true);
-        assert_eq!(within_plan(all, PLAN_PAID), all);
-        let no_insights = LinkSettings { insights: false, ..all };
-        assert_eq!(within_plan(all, PLAN_FREE), no_insights, "free: off");
-        assert_eq!(within_plan(all, PLAN_UNKNOWN), no_insights, "lookup failed: off");
-        assert_eq!(within_plan(LinkSettings::all(false), PLAN_PAID), LinkSettings::all(false));
+        let none = LinkSettings::all(false);
+        assert_eq!(within_plan(all, PLAN_PAID), all, "paid: all on");
+        assert_eq!(within_plan(all, PLAN_FREE), none, "free: all off");
+        assert_eq!(within_plan(all, PLAN_UNKNOWN), none, "lookup failed: all off");
+        assert_eq!(within_plan(none, PLAN_PAID), none);
+        for one in [
+            LinkSettings { insights: true, ..none },
+            LinkSettings { comments: true, ..none },
+            LinkSettings { reactions: true, ..none },
+        ] {
+            assert_eq!(within_plan(one, PLAN_PAID), one);
+            assert_eq!(within_plan(one, PLAN_FREE), none, "{one:?}");
+            assert_eq!(within_plan(one, PLAN_UNKNOWN), none, "{one:?}");
+        }
         // A capture's own link follows the same rule.
-        assert!(!within_plan(for_capture(true), PLAN_FREE).insights);
-        assert!(within_plan(for_capture(true), PLAN_PAID).insights);
+        assert_eq!(within_plan(for_capture(true), PLAN_FREE), none);
+        assert_eq!(within_plan(for_capture(true), PLAN_PAID), all);
     }
 
-    /// The share dialog starts a capture's Insights on only for a paid plan,
-    /// still offers the switch on the free plan (where it leads to the
-    /// upgrade prompt), and says which plan it is.
+    /// The share dialog starts a capture's switches on only for a paid plan,
+    /// still offers them on the free plan (where they lead to the upgrade
+    /// prompt), and says which plan it is.
     #[test]
-    fn the_dialog_starts_insights_off_on_the_free_plan() {
+    fn the_dialog_starts_every_switch_off_on_the_free_plan() {
         let all = ServerCapabilities {
             share_insights: true,
             share_comments: true,
@@ -1464,32 +1497,90 @@ mod tests {
         };
         let paid = default_for(false, true, true, &all, PLAN_PAID);
         assert_eq!(paid.on, LinkSettings::all(true));
-        assert_eq!(paid.insights_in_plan, PLAN_PAID);
+        assert_eq!(paid.switches_in_plan, PLAN_PAID);
         for plan in [PLAN_FREE, PLAN_UNKNOWN] {
             let d = default_for(false, true, true, &all, plan);
-            assert!(!d.on.insights, "{plan:?}");
-            assert!(d.on.comments && d.on.reactions, "{plan:?}");
-            assert!(d.offered.insights, "the switch is still shown: {plan:?}");
-            assert_eq!(d.insights_in_plan, plan);
+            assert_eq!(d.on, LinkSettings::all(false), "{plan:?}");
+            assert_eq!(
+                d.offered,
+                OfferedSwitches {
+                    insights: true,
+                    comments: true,
+                    reactions: true
+                },
+                "the switches are still shown: {plan:?}"
+            );
+            assert_eq!(d.switches_in_plan, plan);
         }
         let json = serde_json::to_value(default_for(false, true, true, &all, PLAN_FREE)).unwrap();
-        assert_eq!(json["insightsInPlan"], false);
+        assert_eq!(json["switchesInPlan"], false);
         let json = serde_json::to_value(default_for(false, true, true, &all, PLAN_UNKNOWN)).unwrap();
-        assert!(json["insightsInPlan"].is_null());
+        assert!(json["switchesInPlan"].is_null());
     }
 
-    /// Turning Insights on from the free plan is refused; a link that already
-    /// has them keeps them, turning them off is always fine, and a plan that
-    /// could not be read blocks nothing.
+    /// Turning any switch on from the free plan is refused; a plan that
+    /// could not be read, or a paid one, blocks nothing.
     #[test]
-    fn only_switching_insights_on_from_the_free_plan_is_refused() {
-        let on = LinkSettings::all(true);
+    fn switching_any_of_the_three_on_from_the_free_plan_is_refused() {
         let off = LinkSettings::all(false);
-        assert!(refuses_insights_on(on, false, PLAN_FREE));
-        assert!(!refuses_insights_on(on, true, PLAN_FREE), "an existing link keeps Insights");
-        assert!(!refuses_insights_on(off, true, PLAN_FREE), "turning them off");
-        assert!(!refuses_insights_on(on, false, PLAN_PAID));
-        assert!(!refuses_insights_on(on, false, PLAN_UNKNOWN), "a failed read never blocks");
+        for one in [
+            LinkSettings { insights: true, ..off },
+            LinkSettings { comments: true, ..off },
+            LinkSettings { reactions: true, ..off },
+        ] {
+            assert!(refuses_switching_on(one, off, PLAN_FREE), "{one:?}");
+            assert!(!refuses_switching_on(one, off, PLAN_PAID), "{one:?}");
+            assert!(!refuses_switching_on(one, off, PLAN_UNKNOWN), "a failed read never blocks: {one:?}");
+        }
+        assert!(refuses_switching_on(LinkSettings::all(true), off, PLAN_FREE));
+    }
+
+    /// An existing free link keeps the switches it has and can turn any of
+    /// them off, but not one it has off back on.
+    #[test]
+    fn an_existing_free_link_keeps_its_switches_and_can_turn_them_off() {
+        let was = LinkSettings {
+            insights: false,
+            comments: true,
+            reactions: true,
+        };
+        assert!(!refuses_switching_on(was, was, PLAN_FREE), "left as it is");
+        let comments_off = LinkSettings { comments: false, ..was };
+        assert!(!refuses_switching_on(comments_off, was, PLAN_FREE), "comments off");
+        let reactions_off = LinkSettings { reactions: false, ..was };
+        assert!(!refuses_switching_on(reactions_off, was, PLAN_FREE), "reactions off");
+        assert!(
+            !refuses_switching_on(LinkSettings::all(false), LinkSettings::all(true), PLAN_FREE),
+            "all off"
+        );
+        assert!(
+            refuses_switching_on(LinkSettings::all(true), was, PLAN_FREE),
+            "insights back on is refused"
+        );
+        assert!(
+            refuses_switching_on(was, reactions_off, PLAN_FREE),
+            "reactions back on once off is refused"
+        );
+    }
+
+    /// What `share_set_link_settings` checks against the plan: only the
+    /// switches the patch turns on, never one it turns off or leaves out.
+    #[test]
+    fn the_plan_check_looks_only_at_switches_turned_on() {
+        let patch = SettingsPatch {
+            insights: Some(false),
+            comments: Some(true),
+            reactions: None,
+        };
+        assert_eq!(
+            patch.asked_on(),
+            LinkSettings {
+                insights: false,
+                comments: true,
+                reactions: false
+            }
+        );
+        assert!(!SettingsPatch::default().asked_on().any());
     }
 
     #[test]

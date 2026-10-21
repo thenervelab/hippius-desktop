@@ -1140,7 +1140,7 @@ function OnThisLink({ shareToken, onLeave }: { shareToken: string; onLeave: () =
         offered={current.data.offered}
         value={current.data.on}
         disabled={save.isPending}
-        insightsInPlan={current.data.insightsInPlan ?? null}
+        switchesInPlan={current.data.switchesInPlan ?? null}
         onChange={(next) => save.mutate(next)}
         onUpgrade={() => {
           onLeave();
