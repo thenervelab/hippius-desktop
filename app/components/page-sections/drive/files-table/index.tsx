@@ -1549,6 +1549,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 mainReqHash={file.mainReqHash}
                 syncStatus={file.syncStatus}
                 onManageShare={(ids) => router.push(sharesPageHref(ids))}
+                file={file}
               />
             );
 

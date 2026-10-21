@@ -65,6 +65,14 @@ export interface ServerCapabilities {
   share_comments?: boolean;
   /** Emails about views and comments on links. Absent on older servers. */
   share_notifications?: boolean;
+  /** Per-link view and comment counts on the share listing (hcfs #805). Absent on older servers. */
+  share_listing_counts?: boolean;
+  /** When the owner last looked at a link's Insights (hcfs #805). Absent on older servers. */
+  share_insights_seen?: boolean;
+  /** Replies to comments and the owner's replies (hcfs #804). Absent on older servers. */
+  share_comment_replies?: boolean;
+  /** The moment of the recording each reaction was made at (hcfs #803). Absent on older servers. */
+  share_reaction_moments?: boolean;
   /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
@@ -284,6 +292,17 @@ export interface ShareSummary {
    */
   folderLabel: string | null;
   relativePath: string | null;
+  /**
+   * The link's views and comments, whether it counts views, and whether
+   * anything happened since the owner last opened its Insights. Only once
+   * the server's listing carries them (`share_listing_counts` /
+   * `share_insights_seen`, hcfs #805); Rust sends none yet, and nothing
+   * reads them without the capability.
+   */
+  views?: number;
+  comments?: number;
+  insightsOn?: boolean;
+  newSinceSeen?: boolean;
 }
 
 export async function getServerCapabilities(accountId: string): Promise<ServerCapabilities> {

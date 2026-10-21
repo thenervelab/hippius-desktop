@@ -107,11 +107,39 @@ export const shareNotificationsEnabledAtom = atom(
 );
 
 /**
+ * Parts of Insights waiting on the server. Each is `false` until the server
+ * advertises it, and its part of the UI renders nothing until then:
+ * per-link counts on the Captures row and the tables (`share_listing_counts`),
+ * the "new since you last looked" dot (`share_insights_seen`), comment replies
+ * and the Owner badge (`share_comment_replies`), and reactions at their moment
+ * (`share_reaction_moments`).
+ */
+export const shareListingCountsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_listing_counts === true,
+);
+export const shareInsightsSeenEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_insights_seen === true);
+export const shareCommentRepliesEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_comment_replies === true,
+);
+export const shareReactionMomentsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_reaction_moments === true,
+);
+
+/**
  * The link whose Insights sheet is open, or `null`. Set by Shared Links, the
  * Captures page and the capture card; read by `ShareInsightsSheet`, which is
  * mounted once in the pages layout.
  */
-export type InsightsSheetTarget = { shareToken: string; fileName: string };
+export type InsightsSheetTarget = {
+  shareToken: string;
+  fileName: string;
+  /**
+   * The capture, when the opener has it: the sheet's header shows a frame of
+   * it while it is on this device. Shared Links and the capture card have
+   * only the link, and get the file-type tile.
+   */
+  file?: FormattedUserFile;
+};
 
 export const insightsSheetAtom = atom<InsightsSheetTarget | null>(null);
 

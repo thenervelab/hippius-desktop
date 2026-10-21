@@ -50,7 +50,8 @@ describe("useCaptureInsightsItem", () => {
     expect(items).toHaveLength(1);
     expect(items[0].itemTitle).toBe("Insights");
     items[0].onItemClick?.();
-    expect(store.get(insightsSheetAtom)).toEqual({ shareToken: "new", fileName: "Screenshot.png" });
+    // The file goes too, for the sheet's thumbnail.
+    expect(store.get(insightsSheetAtom)).toEqual({ shareToken: "new", fileName: "Screenshot.png", file: FILE });
   });
 
   it("offers nothing elsewhere, without a link, for a folder, or on a server without Insights", () => {

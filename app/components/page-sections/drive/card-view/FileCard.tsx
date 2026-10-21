@@ -361,6 +361,7 @@ const FileCard: React.FC<FileCardProps> = ({
               label={file.label}
               actualName={file.actualFileName}
               fileName={file.actualFileName || file.name}
+              file={file}
               className="ml-1"
             />
           </div>

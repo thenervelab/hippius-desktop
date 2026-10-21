@@ -19,8 +19,8 @@ export const LINK_SWITCHES: ReadonlyArray<{
   label: string;
   description: string;
 }> = [
-  { key: "insights", label: "Insights", description: "See who viewed it and for how long." },
-  { key: "comments", label: "Comments", description: "Let viewers leave comments." },
+  { key: "insights", label: "Insights", description: "Count views and watch time. Viewers see a short note." },
+  { key: "comments", label: "Comments", description: "Let viewers comment on this link." },
   { key: "reactions", label: "Reactions", description: "Let viewers react with emoji." },
 ];
 
@@ -45,7 +45,13 @@ export default function LinkEngagementSwitches({
   insightsInPlan = null,
   onChange,
   onUpgrade,
+  layout = "stack",
 }: {
+  /**
+   * `stack` (the share dialog): rows one under another. `list` (the Insights
+   * sheet's "On this link"): a bordered list, one row per switch.
+   */
+  layout?: "stack" | "list";
   offered: OfferedSwitches;
   value: LinkSettings;
   disabled?: boolean;
@@ -58,34 +64,51 @@ export default function LinkEngagementSwitches({
   const shown = LINK_SWITCHES.filter((s) => offered[s.key]);
   if (shown.length === 0) return null;
   const locked = insightsInPlan === false;
+  const list = layout === "list";
   return (
-    <div className="mt-3 flex flex-col gap-2" role="group" aria-label="Viewer activity">
-      {shown.map(({ key, label, description }) => {
-        return (
-          <div key={key} className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">{label}</p>
-              <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-                {key === "insights" && locked ? INSIGHTS_LOCKED_DESCRIPTION : description}
-              </p>
+    <div className={cn("flex flex-col", !list && "mt-3 gap-2")} role="group" aria-label="Viewer activity">
+      <div
+        className={cn(
+          "flex flex-col",
+          list
+            ? "divide-y divide-grey-80 rounded-[12px] border border-grey-80 dark:divide-[#333] dark:border-[#494949]"
+            : "gap-2",
+        )}
+      >
+        {shown.map(({ key, label, description }) => {
+          return (
+            <div key={key} className={cn("flex items-center justify-between gap-3", list && "px-3 py-2.5")}>
+              <div className="min-w-0">
+                <p
+                  className={cn(
+                    "font-medium",
+                    list ? "text-[13px] text-grey-10 dark:text-white" : "text-xs text-grey-30 dark:text-grey-dark-700",
+                  )}
+                >
+                  {label}
+                </p>
+                <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+                  {key === "insights" && locked ? INSIGHTS_LOCKED_DESCRIPTION : description}
+                </p>
+              </div>
+              <SettingsToggle
+                ariaLabel={label}
+                checked={value[key]}
+                disabled={disabled}
+                onCheckedChange={(on) => {
+                  if (key === "insights" && on && locked) {
+                    setAsking(true);
+                    return;
+                  }
+                  onChange({ ...value, [key]: on });
+                }}
+              />
             </div>
-            <SettingsToggle
-              ariaLabel={label}
-              checked={value[key]}
-              disabled={disabled}
-              onCheckedChange={(on) => {
-                if (key === "insights" && on && locked) {
-                  setAsking(true);
-                  return;
-                }
-                onChange({ ...value, [key]: on });
-              }}
-            />
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
       <div aria-live="polite">
-        {asking && locked && <InsightsUpgradeNotice onUpgrade={onUpgrade} />}
+        {asking && locked && <InsightsUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />}
       </div>
     </div>
   );

@@ -1,20 +1,45 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Lock, Loader2, MessageSquare, SlidersHorizontal, SmilePlus, Trash2 } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import {
+  Ban,
+  BarChart3,
+  Eye,
+  File as FileIcon,
+  ImageIcon,
+  Loader2,
+  MessageSquare,
+  MoreHorizontal,
+  Sparkles,
+  Trash2,
+  Video,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { FramedDialog } from "@/components/ui/FramedDialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import TabList from "@/components/ui/tabs/TabList";
+import TabPanel from "@/components/ui/tabs/TabPanel";
 import { cn } from "@/lib/utils";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   insightsSheetAtom,
+  shareCommentRepliesEnabledAtom,
   shareCommentsEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { findCachedShare } from "@/app/lib/hooks/useSharedFiles";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import {
   blockShareCommenter,
   deleteShareComment,
@@ -32,35 +57,58 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { formatRelative } from "@/app/lib/utils/timeRelative";
+import { InsightsAvatar } from "./InsightsAvatar";
+import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey } from "./queryKeys";
+import { RetentionChart } from "./RetentionChart";
 import {
+  BLOCK_EXPLAINER,
+  COMPARE_PLANS,
   DEFINITIONS,
-  LOCKED_ACTION,
-  LOCKED_BODY,
-  LOCKED_PROMPT,
+  DELETE_EXPLAINER,
+  LOCK_BODY,
+  LOCK_BODY_NOT_COUNTING,
+  LOCK_TITLE,
+  OVERVIEW_COMMENTS,
+  OVERVIEW_VIEWERS,
+  PRICING_URL,
+  SAMPLE_AVERAGE_WATCH_MS,
   SAMPLE_COMPLETION,
   SAMPLE_RETENTION,
   SAMPLE_UNIQUE_VIEWERS,
   SAMPLE_VIEWERS,
   SAMPLE_VIEWS,
-  formatMoment,
+  UPGRADE_PLAN,
+  averageWatchMs,
+  biggestDrop,
+  countLabel,
+  estimateDurationMs,
+  formatAgo,
+  formatMomentAt,
   formatPercent,
+  formatWatched,
+  headerLine,
+  usesTabs,
   viewerName,
-  viewerSummary,
 } from "./insightsView";
 
-const CARD = cn(
-  "rounded-[8px] border p-3",
-  "border-grey-80 bg-white",
-  "dark:border-[#494949] dark:bg-[#1f1f1f]",
+// The sheet's tokens: the app's own greys and brand blue, one border colour
+// per theme, so every hairline in the sheet is the same.
+const MUTED = "text-grey-50 dark:text-grey-dark-600";
+const STRONG = "text-grey-10 dark:text-white";
+const HAIRLINE = "border-grey-80 dark:border-[#494949]";
+const DIVIDE = "divide-grey-80 dark:divide-[#333]";
+const SKELETON = "animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500";
+const BAR_TRACK = "h-1 overflow-hidden rounded-full bg-grey-90 dark:bg-[#333]";
+const BAR_FILL = "h-full rounded-full bg-primary-50 dark:bg-primary-brand-dark";
+const TEXT_LINK = cn(
+  "inline-flex items-center gap-1 rounded text-[12.5px] font-medium text-primary-50 hover:underline",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-primary-brand-dark",
 );
-const LABEL = "text-xs font-medium text-grey-50 dark:text-grey-dark-600";
-const VALUE = "mt-1 text-xl font-semibold tabular-nums text-grey-10 dark:text-white";
 
-export const insightsQueryKey = (shareToken: string) => ["share-insights", shareToken] as const;
-export const commentsQueryKey = (shareToken: string) => ["share-comments", shareToken] as const;
-export const reactionsQueryKey = (shareToken: string) => ["share-reactions", shareToken] as const;
-export const linkSettingsQueryKey = (shareToken: string) => ["share-link-settings", shareToken] as const;
+export { insightsQueryKey, commentsQueryKey, reactionsQueryKey, linkSettingsQueryKey };
+
+const VIDEO_NAME = /\.(mp4|mov|m4v|webm|mkv)$/i;
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|heic)$/i;
 
 /**
  * The owner's Insights for one link, opened from Shared Links, a row on the
@@ -71,40 +119,165 @@ export default function ShareInsightsSheet() {
   const [target, setTarget] = useAtom(insightsSheetAtom);
   if (!target) return null;
   return (
+    <InsightsSheetFor
+      key={target.shareToken}
+      shareToken={target.shareToken}
+      fileName={target.fileName}
+      file={target.file}
+      onClose={() => setTarget(null)}
+    />
+  );
+}
+
+function InsightsSheetFor({
+  shareToken,
+  fileName,
+  file,
+  onClose,
+}: {
+  shareToken: string;
+  fileName: string;
+  file?: FormattedUserFile;
+  onClose: () => void;
+}) {
+  // The recording's length, read off the capture itself when it is on this
+  // device; otherwise worked out from the viewers (`estimateDurationMs`).
+  const [mediaMs, setMediaMs] = useState<number | null>(null);
+  const durationMs = useDurationMs(shareToken, mediaMs);
+  const queryClient = useQueryClient();
+  const summary = useMemo(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  const subtitle = headerLine({
+    sharedAt: summary?.createdAt ?? null,
+    durationMs,
+    expiresAt: summary ? summary.expiresAt : undefined,
+  });
+  return (
     <FramedDialog
       open
-      onClose={() => setTarget(null)}
-      title="Insights"
+      onClose={onClose}
+      title={<span title={fileName}>{fileName}</span>}
+      titleClassName="text-[15px] leading-6"
       headerLayout="leading"
-      subtitle={<span className="block truncate" title={target.fileName}>{target.fileName}</span>}
-      maxWidth="max-w-[640px]"
+      leadingVisual={<HeaderThumb file={file} fileName={fileName} onDuration={setMediaMs} />}
+      subtitle={subtitle ? <span className="block truncate">{subtitle}</span> : undefined}
+      maxWidth="max-w-[560px]"
     >
-      <InsightsBody shareToken={target.shareToken} onLeave={() => setTarget(null)} />
+      <InsightsBody shareToken={shareToken} onLeave={onClose} durationMs={durationMs} />
     </FramedDialog>
   );
 }
 
-export function InsightsBody({ shareToken, onLeave }: { shareToken: string; onLeave: () => void }) {
+/** The recording's length: the capture's own, else what the viewers pin it to. */
+function useDurationMs(shareToken: string, mediaMs: number | null): number | null {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const insights = useQuery({
     queryKey: insightsQueryKey(shareToken),
     queryFn: () => getShareInsights(shareToken),
     retry: false,
   });
-  // The same query Link settings reads: whether this link counts views.
+  const comments = useQuery({
+    queryKey: commentsQueryKey(shareToken),
+    queryFn: () => listShareComments(shareToken),
+    retry: false,
+    enabled: commentsEnabled,
+  });
+  if (mediaMs !== null) return mediaMs;
+  const viewers = insights.data?.viewers;
+  if (!viewers || viewers.state !== "shown") return null;
+  return estimateDurationMs(viewers.value, comments.data?.comments ?? []);
+}
+
+/**
+ * A frame of the capture when it is on this device (a recording also gives
+ * the sheet its length), otherwise a tile with the file's kind.
+ */
+function HeaderThumb({
+  file,
+  fileName,
+  onDuration,
+}: {
+  file?: FormattedUserFile;
+  fileName: string;
+  onDuration: (ms: number) => void;
+}) {
+  const [failed, setFailed] = useState(false);
+  const local = file ? getFileUrl(file) : null;
+  const url = local?.isLocal && local.url && !failed ? local.url : null;
+  const isVideo = VIDEO_NAME.test(fileName);
+  const isImage = IMAGE_NAME.test(fileName);
+  const Icon = isVideo ? Video : isImage ? ImageIcon : FileIcon;
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "relative flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[7px] border",
+        HAIRLINE,
+        "bg-grey-90 text-grey-50 dark:bg-[#2a2a2a] dark:text-grey-dark-600",
+      )}
+    >
+      {url && isVideo ? (
+        <video
+          src={`${url}#t=0.1`}
+          muted
+          playsInline
+          preload="metadata"
+          tabIndex={-1}
+          className="size-full object-cover"
+          onLoadedMetadata={(e) => {
+            const seconds = e.currentTarget.duration;
+            if (Number.isFinite(seconds) && seconds > 0) onDuration(Math.round(seconds * 1000));
+          }}
+          onError={() => setFailed(true)}
+        />
+      ) : url && isImage ? (
+        <img src={url} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
+      ) : (
+        <Icon className="size-4" />
+      )}
+    </span>
+  );
+}
+
+type TabKey = "overview" | "viewers" | "comments";
+
+export function InsightsBody({
+  shareToken,
+  onLeave,
+  durationMs = null,
+}: {
+  shareToken: string;
+  onLeave: () => void;
+  durationMs?: number | null;
+}) {
+  const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
+  const tabsId = useId();
+  const [tab, setTab] = useState<TabKey>("overview");
+  const insights = useQuery({
+    queryKey: insightsQueryKey(shareToken),
+    queryFn: () => getShareInsights(shareToken),
+    retry: false,
+  });
+  // The same query On this link reads: whether this link counts views.
   const switches = useQuery({
     queryKey: linkSettingsQueryKey(shareToken),
     queryFn: () => getLinkSettings(shareToken),
     retry: false,
   });
+  const moderation = useCommentModeration(shareToken, commentsEnabled);
   const notCounting = switches.data?.offered.insights === true && !switches.data.on.insights;
 
-  return (
-    <div className="flex flex-col gap-4 font-geist">
+  const viewers = insights.data?.viewers.state === "shown" ? insights.data.viewers.value : null;
+  const commentList = moderation.comments.data?.comments ?? [];
+  const commentCount = commentsEnabled ? commentList.length : 0;
+  const tabbed = usesTabs(viewers?.length ?? 0, commentCount);
+  const plan = insights.data?.plan ?? null;
+
+  const overview = (
+    <div className="flex flex-col gap-6">
       {insights.isPending ? (
         <InsightsSkeleton />
       ) : insights.isError ? (
-        <div role="alert" className={cn(CARD, "flex flex-col items-start gap-2")}>
+        <div role="alert" className={cn("flex flex-col items-start gap-2 rounded-[12px] border p-3", HAIRLINE)}>
           <p className="text-sm text-grey-20 dark:text-grey-dark-800">
             Couldn&apos;t load insights. {errorMessage(insights.error)}
           </p>
@@ -113,26 +286,143 @@ export function InsightsBody({ shareToken, onLeave }: { shareToken: string; onLe
           </Button>
         </div>
       ) : (
-        <InsightsNumbers insights={insights.data} notCounting={notCounting} onUpgrade={onLeave} />
+        <InsightsNumbers
+          insights={insights.data}
+          notCounting={notCounting}
+          onUpgrade={onLeave}
+          durationMs={durationMs}
+          comments={commentsEnabled ? commentList : null}
+          commentsLoading={commentsEnabled && moderation.comments.isPending}
+          onSeeAllViewers={tabbed ? () => setTab("viewers") : null}
+        />
       )}
-      {commentsEnabled && <CommentsSection shareToken={shareToken} />}
+      {commentsEnabled && (
+        <CommentsSection
+          moderation={moderation}
+          plan={plan}
+          limit={tabbed ? OVERVIEW_COMMENTS : null}
+          onSeeAll={tabbed ? () => setTab("comments") : null}
+        />
+      )}
       {commentsEnabled && <ReactionsSection shareToken={shareToken} />}
-      <LinkSettingsSection shareToken={shareToken} onLeave={onLeave} />
-      <HowWeCalculate />
+      <OnThisLink shareToken={shareToken} onLeave={onLeave} />
+      <HowWeCountViews />
     </div>
+  );
+
+  if (!tabbed) return <div className="font-geist">{overview}</div>;
+
+  const tabs = [
+    { tabName: "Overview", tabKey: "overview" },
+    ...(viewers && viewers.length > 0 ? [{ tabName: `Viewers ${viewers.length}`, tabKey: "viewers" }] : []),
+    ...(commentCount > 0 ? [{ tabName: `Comments ${commentCount}`, tabKey: "comments" }] : []),
+  ];
+  return (
+    <div className="flex flex-col gap-4 font-geist">
+      <TabList
+        idBase={tabsId}
+        ariaLabel="Insights"
+        tabs={tabs}
+        activeTab={tab}
+        onTabChange={(key) => setTab(key as TabKey)}
+        className="flex w-full"
+        width="min-w-0 flex-1"
+        height="h-[32px]"
+        showTooltip={false}
+      />
+      <TabPanel idBase={tabsId} tabKey="overview" activeTab={tab}>
+        {overview}
+      </TabPanel>
+      {viewers && viewers.length > 0 && (
+        <TabPanel idBase={tabsId} tabKey="viewers" activeTab={tab}>
+          <Section title="Viewers" aside="Most recent first">
+            <ViewerRows viewers={viewers} />
+          </Section>
+        </TabPanel>
+      )}
+      {commentCount > 0 && (
+        <TabPanel idBase={tabsId} tabKey="comments" activeTab={tab}>
+          <CommentsSection moderation={moderation} plan={plan} limit={null} onSeeAll={null} />
+        </TabPanel>
+      )}
+    </div>
+  );
+}
+
+function Section({
+  title,
+  aside,
+  children,
+}: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  const id = useId();
+  return (
+    <section aria-labelledby={id}>
+      <div className="mb-2.5 flex items-baseline justify-between gap-3">
+        <h3 id={id} className={cn("text-[13.5px] font-semibold", STRONG)}>
+          {title}
+        </h3>
+        {aside !== undefined && aside !== null && <span className={cn("text-right text-xs", MUTED)}>{aside}</span>}
+      </div>
+      {children}
+    </section>
   );
 }
 
 function InsightsSkeleton() {
   return (
-    <div data-testid="insights-loading" className="flex flex-col gap-3" aria-busy="true">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <div data-testid="insights-loading" className="flex flex-col gap-6" aria-busy="true">
+      <div className="flex items-end justify-between">
+        <div className={cn(SKELETON, "h-10 w-32")} />
+        <div className={cn(SKELETON, "h-8 w-28")} />
+      </div>
+      <div className={cn(SKELETON, "h-[62px] rounded-[12px]")} />
+      <div className={cn(SKELETON, "h-[150px]")} />
+      <div className="flex flex-col gap-3">
         {[0, 1, 2].map((i) => (
-          <div key={i} className="h-[72px] animate-pulse rounded-[8px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+          <div key={i} className={cn(SKELETON, "h-9")} />
         ))}
       </div>
-      <div className="h-32 animate-pulse rounded-[8px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
     </div>
+  );
+}
+
+/** "47 views" on the left; who watched on the right. */
+function Hero({ views, aside }: { views: number; aside: ReactNode }) {
+  return (
+    <div className="flex items-end justify-between gap-3">
+      <p className={cn("flex items-baseline gap-1.5", STRONG)}>
+        <span className="text-[40px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{views}</span>
+        <span className={cn("text-sm font-medium", MUTED)}>{views === 1 ? "view" : "views"}</span>
+      </p>
+      <div className={cn("flex flex-col items-end gap-1.5 text-right text-xs", MUTED)}>{aside}</div>
+    </div>
+  );
+}
+
+function KpiStrip({ items }: { items: Array<{ label: string; value: ReactNode; muted?: boolean }> }) {
+  return (
+    <dl
+      className={cn("grid overflow-hidden rounded-[12px] border", HAIRLINE)}
+      style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
+    >
+      {items.map(({ label, value, muted }, i) => (
+        <div key={label} className={cn("flex min-w-0 flex-col gap-0.5 px-2.5 py-2.5 sm:px-3", i > 0 && cn("border-l", HAIRLINE))}>
+          <dt className={cn("truncate text-[11.5px]", MUTED)}>{label}</dt>
+          <dd
+            className={cn(
+              "truncate font-semibold tabular-nums tracking-[-0.01em]",
+              muted ? cn("text-sm font-medium leading-7", MUTED) : cn("text-[19px] leading-7", STRONG),
+            )}
+          >
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -140,42 +430,60 @@ function InsightsNumbers({
   insights,
   notCounting,
   onUpgrade,
+  durationMs,
+  comments,
+  commentsLoading,
+  onSeeAllViewers,
 }: {
   insights: ShareInsights;
   /** The link's Insights switch is off, so its view counts are not being kept. */
   notCounting: boolean;
   onUpgrade: () => void;
+  durationMs: number | null;
+  /** The link's comments, or `null` on a server without comments. */
+  comments: ShareComment[] | null;
+  commentsLoading: boolean;
+  /** Opens the Viewers tab; `null` lists every viewer here instead. */
+  onSeeAllViewers: (() => void) | null;
 }) {
   const { completion, retention, viewers } = insights;
   const anyLocked = completion.state === "locked" || retention.state === "locked" || viewers.state === "locked";
-
-  const views = (
-    <>
-      <Stat label="Views" value={String(insights.totalViews)} />
-      <Stat label="Unique viewers" value={String(insights.uniqueViewers)} />
-    </>
-  );
 
   if (anyLocked) {
     // Everything past the two numbers is drawn from SAMPLE data, blurred,
     // with no real value anywhere in it: Rust sends none for a locked metric.
     // A free link that is not counting views has no real numbers at all, so
-    // its two counts are samples under the prompt too, rather than a "0"
-    // that reads as nobody having opened it.
+    // its two counts are samples under the lock too, rather than a "0" that
+    // reads as nobody having opened it.
     return (
       <>
-        {!notCounting && <div className="grid grid-cols-2 gap-3">{views}</div>}
-        <Locked onUpgrade={onUpgrade}>
-          <div className="flex flex-col gap-3">
+        {!notCounting && (
+          <Hero
+            views={insights.totalViews}
+            aside={
+              <>
+                <span className={cn("text-xl font-semibold leading-none tabular-nums", STRONG)}>
+                  {insights.uniqueViewers}
+                </span>
+                <span>{insights.uniqueViewers === 1 ? "unique viewer" : "unique viewers"}</span>
+              </>
+            }
+          />
+        )}
+        <Locked notCounting={notCounting} onUpgrade={onUpgrade}>
+          <div className="flex flex-col gap-5 p-4">
             {notCounting && (
-              <div className="grid grid-cols-2 gap-3">
-                <Stat label="Views" value={String(SAMPLE_VIEWS)} />
-                <Stat label="Unique viewers" value={String(SAMPLE_UNIQUE_VIEWERS)} />
-              </div>
+              <Hero views={SAMPLE_VIEWS} aside={<span>{SAMPLE_UNIQUE_VIEWERS} people watched</span>} />
             )}
-            <Stat label="Completion" value={formatPercent(SAMPLE_COMPLETION)} />
-            <RetentionCard values={SAMPLE_RETENTION} />
-            <ViewerList viewers={SAMPLE_VIEWERS} />
+            <KpiStrip
+              items={[
+                { label: "Completion", value: formatPercent(SAMPLE_COMPLETION) },
+                { label: "Average watch", value: formatWatched(SAMPLE_AVERAGE_WATCH_MS) },
+                { label: "Comments", value: "5" },
+              ]}
+            />
+            <RetentionChart values={SAMPLE_RETENTION} durationMs={252_000} />
+            <ViewerRows viewers={SAMPLE_VIEWERS} />
           </div>
         </Locked>
       </>
@@ -185,33 +493,82 @@ function InsightsNumbers({
   const completionValue = completion.state === "shown" ? completion.value : null;
   const retentionValues = retention.state === "shown" ? retention.value : null;
   const viewerRows = viewers.state === "shown" ? viewers.value : [];
+  const average = averageWatchMs(viewerRows, insights.totalViews);
+  const drop = retentionValues ? biggestDrop(retentionValues) : null;
+
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {views}
-        <Stat
-          label="Completion"
-          value={completionValue === null ? "None yet" : formatPercent(completionValue)}
-          muted={completionValue === null}
-        />
-      </div>
-      {retentionValues && <RetentionCard values={retentionValues} />}
+      <Hero
+        views={insights.totalViews}
+        aside={
+          insights.uniqueViewers > 0 ? (
+            <>
+              <span className="flex" aria-hidden>
+                {viewerRows.slice(0, 5).map((v, i) => (
+                  <InsightsAvatar key={v.viewerId} name={v.name} size="sm" ring className={i > 0 ? "-ml-[7px]" : ""} />
+                ))}
+              </span>
+              <span>{countLabel(insights.uniqueViewers, "person watched", "people watched")}</span>
+            </>
+          ) : null
+        }
+      />
+      <KpiStrip
+        items={[
+          {
+            label: "Completion",
+            value: completionValue === null ? "None yet" : formatPercent(completionValue),
+            muted: completionValue === null,
+          },
+          {
+            label: "Average watch",
+            value: average === null ? "None yet" : formatWatched(average),
+            muted: average === null,
+          },
+          ...(comments !== null
+            ? [
+                {
+                  label: "Comments",
+                  value: commentsLoading ? <span className={cn(SKELETON, "inline-block h-5 w-6 align-middle")} /> : comments.length,
+                },
+              ]
+            : []),
+        ]}
+      />
+      {retentionValues && (
+        <Section
+          title="Where people stopped"
+          aside={drop ? `Most left at ${formatMomentAt(drop.at, durationMs)}` : undefined}
+        >
+          <RetentionChart values={retentionValues} durationMs={durationMs} comments={comments ?? []} />
+        </Section>
+      )}
       {insights.totalViews === 0 ? (
-        <p className="text-sm text-grey-50 dark:text-grey-dark-600">
-          No one has opened this link yet. Views show up here once someone does.
-        </p>
+        <EmptyState
+          icon={<Eye className="size-5" />}
+          title="No views yet"
+          body="No one has opened this link yet. Views show up here once someone does."
+        />
       ) : (
-        <ViewerList viewers={viewerRows} />
+        <Section title="Viewers" aside="Most recent first">
+          <ViewerRows viewers={viewerRows} limit={OVERVIEW_VIEWERS} onSeeAll={onSeeAllViewers} />
+        </Section>
       )}
     </>
   );
 }
 
-function Stat({ label, value, muted = false }: { label: string; value: string; muted?: boolean }) {
+function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
-    <div className={CARD}>
-      <p className={LABEL}>{label}</p>
-      <p className={cn(VALUE, muted && "text-base font-medium text-grey-50 dark:text-grey-dark-600")}>{value}</p>
+    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+      <span
+        aria-hidden
+        className="mb-1 flex size-11 items-center justify-center rounded-[14px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
+      >
+        {icon}
+      </span>
+      <p className={cn("text-sm font-semibold", STRONG)}>{title}</p>
+      <p className={cn("max-w-[32ch] text-xs leading-5", MUTED)}>{body}</p>
     </div>
   );
 }
@@ -219,117 +576,150 @@ function Stat({ label, value, muted = false }: { label: string; value: string; m
 /**
  * The locked part of the sheet: what it holds is drawn blurred, hidden from
  * assistive tech and unreachable by keyboard or pointer, under one prompt.
+ * Both sit in one grid cell, so the box is as tall as the taller of the two.
  */
-function Locked({ children, onUpgrade }: { children: ReactNode; onUpgrade: () => void }) {
+function Locked({
+  children,
+  notCounting,
+  onUpgrade,
+}: {
+  children: ReactNode;
+  notCounting: boolean;
+  onUpgrade: () => void;
+}) {
   const router = useRouter();
   return (
-    <div data-testid="insights-locked" className="relative">
-      <div aria-hidden="true" inert className="pointer-events-none select-none blur-[6px]">
+    <div data-testid="insights-locked" className={cn("relative grid overflow-hidden rounded-[12px] border", HAIRLINE)}>
+      <div aria-hidden="true" inert className="pointer-events-none col-start-1 row-start-1 select-none opacity-60 blur-[5px]">
         {children}
       </div>
-      <div className="absolute inset-0 flex items-center justify-center p-3">
-        <div
-          className={cn(
-            "flex max-w-[340px] flex-col items-center gap-3 rounded-[10px] border px-4 py-4 text-center shadow-lg",
-            "border-grey-80 bg-white/95",
-            "dark:border-[#494949] dark:bg-[#1f1f1f]/95",
-          )}
-        >
-          <span className="flex size-9 items-center justify-center rounded-full bg-primary-50/10 text-primary-50 dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
-            <Lock className="size-4" aria-hidden />
-          </span>
-          <div>
-            <p className="text-sm font-medium text-grey-10 dark:text-white">{LOCKED_PROMPT}</p>
-            <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">{LOCKED_BODY}</p>
-          </div>
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => {
-              onUpgrade();
-              router.push(BILLING_ROUTE);
-            }}
+      <div
+        className={cn(
+          "col-start-1 row-start-1 flex items-center justify-center p-5",
+          "bg-gradient-to-b from-transparent via-white/80 to-white dark:via-[#1f1f1f]/80 dark:to-[#1f1f1f]",
+        )}
+      >
+        <div className="flex max-w-[320px] flex-col items-center gap-2 text-center">
+          <span
+            aria-hidden
+            className="mb-1 flex size-[42px] items-center justify-center rounded-[12px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
           >
-            {LOCKED_ACTION}
-          </Button>
+            <BarChart3 className="size-5" />
+          </span>
+          <p className={cn("text-[14.5px] font-semibold", STRONG)}>{LOCK_TITLE}</p>
+          <p className="text-[12.5px] leading-5 text-grey-30 dark:text-grey-dark-700">
+            {notCounting ? LOCK_BODY_NOT_COUNTING : LOCK_BODY}
+          </p>
+          <div className="mt-1 flex flex-wrap justify-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => {
+                onUpgrade();
+                router.push(BILLING_ROUTE);
+              }}
+            >
+              <Sparkles className="size-3.5" aria-hidden />
+              {UPGRADE_PLAN}
+            </Button>
+            <Button
+              variant="defaultStable"
+              size="sm"
+              onClick={() => void openUrl(PRICING_URL).catch(() => toast.error("Couldn't open the plans page."))}
+            >
+              {COMPARE_PLANS}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-/** Where people stopped watching: one point per 1% of the recording. */
-function RetentionCard({ values }: { values: number[] }) {
-  const w = 300;
-  const h = 80;
-  const n = Math.max(values.length - 1, 1);
-  const points = values.map((v, i) => `${((i / n) * w).toFixed(1)},${(h - (Math.min(100, Math.max(0, v)) / 100) * h).toFixed(1)}`);
-  const end = values.length > 0 ? Math.round(values[values.length - 1]) : 0;
+function ViewerRows({
+  viewers,
+  limit = null,
+  onSeeAll = null,
+}: {
+  viewers: InsightsViewer[];
+  /** Rows shown before "See all"; `null` shows every one. */
+  limit?: number | null;
+  /** Where "See all" goes (the Viewers tab); `null` opens the rest in place. */
+  onSeeAll?: (() => void) | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const capped = limit !== null && !expanded && viewers.length > limit;
+  const shown = capped ? viewers.slice(0, limit) : viewers;
   return (
-    <div className={CARD}>
-      <div className="flex items-baseline justify-between gap-2">
-        <p className={LABEL}>Retention</p>
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">{end}% reached the end</p>
-      </div>
-      <svg
-        viewBox={`0 0 ${w} ${h}`}
-        preserveAspectRatio="none"
-        role="img"
-        aria-label={`Retention: ${end}% of visits reached the end`}
-        className="mt-2 h-24 w-full text-primary-50 dark:text-primary-brand-dark"
-      >
-        <polygon points={`0,${h} ${points.join(" ")} ${w},${h}`} className="fill-current opacity-15" />
-        <polyline points={points.join(" ")} fill="none" stroke="currentColor" strokeWidth={2} vectorEffect="non-scaling-stroke" />
-      </svg>
-      <div className="mt-1 flex justify-between text-[11px] text-grey-50 dark:text-grey-dark-600">
-        <span>Start</span>
-        <span>End</span>
-      </div>
-    </div>
+    <>
+      <ul className={cn("flex flex-col divide-y", DIVIDE)}>
+        {shown.map((v) => (
+          <ViewerRow key={v.viewerId} viewer={v} />
+        ))}
+      </ul>
+      {capped && (
+        <button
+          type="button"
+          className={cn(TEXT_LINK, "mt-2")}
+          onClick={() => (onSeeAll ? onSeeAll() : setExpanded(true))}
+        >
+          See all {viewers.length} viewers
+        </button>
+      )}
+    </>
   );
 }
 
-function ViewerList({ viewers }: { viewers: InsightsViewer[] }) {
+function ViewerRow({ viewer: v }: { viewer: InsightsViewer }) {
+  const watched = formatWatched(v.watchedMs);
   return (
-    <div className={CARD}>
-      <p className={LABEL}>Who watched</p>
-      {viewers.length === 0 ? (
-        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">No one yet.</p>
-      ) : (
-        <ul className="mt-2 flex flex-col divide-y divide-grey-80 dark:divide-[#333]">
-          {viewers.map((v) => (
-            <li key={v.viewerId} className="flex items-center justify-between gap-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-grey-10 dark:text-white">
-                  <bdi>{viewerName(v.name)}</bdi>
-                </p>
-                <p className="text-xs text-grey-50 dark:text-grey-dark-600">{viewerSummary(v)}</p>
-              </div>
-              {v.lastViewedAt && (
-                <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">{formatRelative(v.lastViewedAt)}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    <li className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-2.5 py-2">
+      <InsightsAvatar name={v.name} />
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <p className={cn("truncate text-[13px] font-semibold", STRONG)}>
+          <bdi>{viewerName(v.name)}</bdi>
+          {v.visits > 1 && <span className={cn("ml-1.5 text-xs font-normal", MUTED)}>{v.visits} visits</span>}
+        </p>
+        {v.completion !== null && (
+          <div className={BAR_TRACK} aria-hidden>
+            <div className={BAR_FILL} style={{ width: formatPercent(v.completion) }} />
+          </div>
+        )}
+      </div>
+      <div className={cn("text-right text-xs leading-[1.35]", MUTED)}>
+        {v.completion !== null && (
+          <p className={cn("text-[13px] font-semibold tabular-nums", STRONG)} title={`Watched ${watched}`}>
+            <span className="sr-only">Watched </span>
+            {watched}
+            <span className="sr-only">, {formatPercent(v.completion)} of the recording</span>
+          </p>
+        )}
+        {v.lastViewedAt && <p>{formatAgo(v.lastViewedAt)}</p>}
+      </div>
+    </li>
   );
 }
 
 /** Which question a comment row is asking, if any. */
 type RowQuestion = { id: string; kind: "delete" | "block" } | null;
 
-function CommentsSection({ shareToken }: { shareToken: string }) {
+/**
+ * The link's comments and what the owner does to them, shared by the
+ * overview and the Comments tab so a block shows in both.
+ */
+function useCommentModeration(shareToken: string, enabled: boolean) {
   const queryClient = useQueryClient();
   const comments = useQuery({
     queryKey: commentsQueryKey(shareToken),
     queryFn: () => listShareComments(shareToken),
     retry: false,
+    enabled,
   });
   const [asking, setAsking] = useState<RowQuestion>(null);
   // Comments whose author was blocked from this sheet. The server keeps the
-  // block but never lists it, so this is the only place it shows; it lasts
-  // while the sheet is open.
+  // block but never lists it (until hcfs #806), so this is the only place it
+  // shows; it lasts while the sheet is open.
   const [blocked, setBlocked] = useState<ReadonlySet<string>>(new Set());
   const remove = useMutation({
     mutationFn: (id: string) => deleteShareComment(shareToken, id),
@@ -359,36 +749,52 @@ function CommentsSection({ shareToken }: { shareToken: string }) {
       void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
     },
   });
+  return { comments, asking, setAsking, blocked, remove, block };
+}
 
+type Moderation = ReturnType<typeof useCommentModeration>;
+
+function CommentsSection({
+  moderation,
+  plan,
+  limit,
+  onSeeAll,
+}: {
+  moderation: Moderation;
+  plan: ShareInsights["plan"] | null;
+  /** Rows shown before "See all"; `null` shows every one. */
+  limit: number | null;
+  onSeeAll: (() => void) | null;
+}) {
+  const repliesEnabled = useAtomValue(shareCommentRepliesEnabledAtom);
+  const { comments, asking, setAsking, blocked, remove, block } = moderation;
   const list = comments.data?.comments ?? [];
+  const shown = limit !== null ? list.slice(0, limit) : list;
+  // On the free plan comments are not locked: say so beside the count.
+  const aside =
+    list.length === 0 ? undefined : plan === "free" ? `${list.length} · all included on your plan` : String(list.length);
   return (
-    <section className={CARD} aria-labelledby="insights-comments">
-      <div className="flex items-center gap-2">
-        <MessageSquare className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
-        <h3 id="insights-comments" className="text-sm font-medium text-grey-10 dark:text-white">
-          Comments
-          {list.length > 0 && <span className="ml-1.5 font-normal text-grey-50 dark:text-grey-dark-600">{list.length}</span>}
-        </h3>
-      </div>
+    <Section title="Comments" aside={aside}>
       {comments.isPending ? (
-        <div className="mt-3 h-10 animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+        <div className={cn(SKELETON, "h-10")} />
       ) : comments.isError ? (
-        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">
-          Couldn&apos;t load comments. {errorMessage(comments.error)}
-        </p>
+        <p className={cn("text-sm", MUTED)}>Couldn&apos;t load comments. {errorMessage(comments.error)}</p>
       ) : (
         <>
-          {comments.data.unreadable && (
-            <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">{comments.data.unreadable}</p>
-          )}
+          {comments.data.unreadable && <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>}
           {list.length === 0 ? (
-            <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">No comments yet.</p>
+            <EmptyState
+              icon={<MessageSquare className="size-5" />}
+              title="No comments yet"
+              body="Comments viewers leave show up here, pinned to their moment."
+            />
           ) : (
-            <ul className="mt-2 flex flex-col divide-y divide-grey-80 dark:divide-[#333]">
-              {list.map((c) => (
+            <ul className={cn("flex flex-col divide-y", DIVIDE)}>
+              {shown.map((c) => (
                 <CommentRow
                   key={c.id}
                   comment={c}
+                  showReplies={repliesEnabled}
                   asking={asking?.id === c.id ? asking.kind : null}
                   blocked={blocked.has(c.id)}
                   busy={
@@ -403,20 +809,34 @@ function CommentsSection({ shareToken }: { shareToken: string }) {
               ))}
             </ul>
           )}
+          {limit !== null && list.length > limit && onSeeAll && (
+            <button type="button" className={cn(TEXT_LINK, "mt-2")} onClick={onSeeAll}>
+              See all {list.length} comments
+            </button>
+          )}
         </>
       )}
-    </section>
+    </Section>
   );
 }
 
-const ROW_ICON = cn(
-  "shrink-0 rounded p-1 text-grey-50 transition-colors",
-  "hover:text-error-70 dark:text-grey-dark-600 dark:hover:text-error-70",
-  "disabled:opacity-50",
+const MENU_ITEM = cn(
+  "flex items-start gap-2.5 rounded-[8px] px-2.5 py-2 text-left",
+  "hover:bg-grey-90 focus:bg-grey-90 dark:hover:bg-[#2a2a2a] dark:focus:bg-[#2a2a2a]",
 );
+
+function MomentChip({ atMs }: { atMs: number }) {
+  return (
+    <span className="rounded-[5px] bg-primary-50/10 px-1.5 py-0.5 font-mono text-[11.5px] font-medium leading-none text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark">
+      <span className="sr-only">at </span>
+      {formatWatched(atMs)}
+    </span>
+  );
+}
 
 function CommentRow({
   comment,
+  showReplies,
   asking,
   blocked,
   busy,
@@ -426,6 +846,8 @@ function CommentRow({
   onBlock,
 }: {
   comment: ShareComment;
+  /** Replies and the Owner badge, once the server has them (`share_comment_replies`). */
+  showReplies: boolean;
   asking: "delete" | "block" | null;
   blocked: boolean;
   busy: boolean;
@@ -434,34 +856,69 @@ function CommentRow({
   onDelete: () => void;
   onBlock: (on: boolean) => void;
 }) {
-  const meta = [formatRelative(comment.createdAt), comment.atMs !== null ? formatMoment(comment.atMs) : null]
-    .filter(Boolean)
-    .join(" · ");
+  const name = viewerName(comment.name);
+  // A menu choice opens the question in the row, whose button takes focus:
+  // the menu must not pull focus back to its trigger as it closes.
+  const chose = useRef(false);
+  // When the question goes (answered or cancelled), its buttons go with it:
+  // focus returns to the row's menu button rather than falling to the page.
+  const trigger = useRef<HTMLButtonElement>(null);
+  const wasAsking = useRef(false);
+  useEffect(() => {
+    if (wasAsking.current && asking === null) trigger.current?.focus();
+    wasAsking.current = asking !== null;
+  }, [asking]);
+  const replies = showReplies ? (comment.replies ?? []) : [];
   return (
-    <li className="flex items-start justify-between gap-3 py-2">
-      <div className="min-w-0 flex-1">
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          <bdi className="font-medium text-grey-20 dark:text-grey-dark-800">{viewerName(comment.name)}</bdi>
-          {meta ? ` · ${meta}` : null}
+    <li className="grid grid-cols-[28px_minmax(0,1fr)_auto] items-start gap-2.5 py-2.5">
+      <InsightsAvatar name={comment.name} className={blocked ? "opacity-50" : undefined} />
+      <div className="min-w-0">
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <bdi className={cn("text-[13px] font-semibold", blocked ? MUTED : STRONG)}>{name}</bdi>
+          {blocked ? (
+            <span
+              title="They can't comment or react on this link."
+              className="inline-flex h-5 items-center gap-1 rounded-full bg-error-70/10 px-[7px] text-[11px] font-semibold text-error-70"
+            >
+              <Ban className="size-2.5" strokeWidth={2.5} aria-hidden />
+              Blocked
+            </span>
+          ) : (
+            <>
+              {comment.atMs !== null && <MomentChip atMs={comment.atMs} />}
+              <span className={cn("text-xs", MUTED)}>{formatAgo(comment.createdAt)}</span>
+            </>
+          )}
         </p>
         {comment.text !== null ? (
-          <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-grey-10 dark:text-white">{comment.text}</p>
-        ) : (
-          <p className="mt-0.5 text-sm italic text-grey-50 dark:text-grey-dark-600">This comment couldn&apos;t be read.</p>
-        )}
-        {blocked && asking === null && (
-          <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-grey-50 dark:text-grey-dark-600">
-            <span>Blocked: they can&apos;t comment or react on this link.</span>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onBlock(false)}
-              className="font-medium text-primary-50 hover:underline disabled:opacity-50 dark:text-primary-brand-dark"
-            >
-              Unblock
-            </button>
+          <p
+            className={cn(
+              "mt-0.5 whitespace-pre-wrap break-words text-[13px] leading-[1.45]",
+              blocked ? MUTED : STRONG,
+            )}
+          >
+            {comment.text}
           </p>
+        ) : (
+          <p className={cn("mt-0.5 text-[13px] italic", MUTED)}>This comment couldn&apos;t be read.</p>
         )}
+        {replies.map((r) => (
+          <div key={r.id} className="mt-2 grid grid-cols-[20px_minmax(0,1fr)] gap-2">
+            <InsightsAvatar name={r.name} size="sm" />
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-x-1.5">
+                <bdi className={cn("text-[13px] font-semibold", STRONG)}>{viewerName(r.name)}</bdi>
+                {r.byOwner && (
+                  <span className="text-[11px] font-semibold text-primary-50 dark:text-primary-brand-dark">Owner</span>
+                )}
+                <span className={cn("text-xs", MUTED)}>{formatAgo(r.createdAt)}</span>
+              </p>
+              {r.text !== null && (
+                <p className={cn("mt-0.5 whitespace-pre-wrap break-words text-[13px]", STRONG)}>{r.text}</p>
+              )}
+            </div>
+          </div>
+        ))}
         {asking && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="text-xs text-grey-30 dark:text-grey-dark-700">
@@ -489,28 +946,81 @@ function CommentRow({
       </div>
       {!asking && (
         <div className="flex shrink-0 items-center gap-1">
-          {!blocked && (
+          {blocked && (
             <button
               type="button"
               disabled={busy}
-              onClick={() => onAsk("block")}
-              aria-label="Block commenter"
-              title="Block commenter"
-              className={ROW_ICON}
+              onClick={() => onBlock(false)}
+              className={cn(TEXT_LINK, "h-7 px-1.5 disabled:opacity-50")}
             >
-              <Ban className="size-4" aria-hidden />
+              Unblock
             </button>
           )}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => onAsk("delete")}
-            aria-label="Delete comment"
-            title="Delete comment"
-            className={ROW_ICON}
+          <DropdownMenu
+            modal={false}
+            onOpenChange={(open) => {
+              if (open) chose.current = false;
+            }}
           >
-            <Trash2 className="size-4" aria-hidden />
-          </button>
+            <DropdownMenuTrigger asChild>
+              <button
+                ref={trigger}
+                type="button"
+                disabled={busy}
+                aria-label={`Comment actions for ${name}`}
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-[7px] transition-colors disabled:opacity-50",
+                  MUTED,
+                  "hover:bg-grey-90 data-[state=open]:bg-grey-90 data-[state=open]:text-grey-10",
+                  "dark:hover:bg-[#2a2a2a] dark:data-[state=open]:bg-[#2a2a2a] dark:data-[state=open]:text-white",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
+                )}
+              >
+                <MoreHorizontal className="size-4" aria-hidden />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="end"
+              className={cn(
+                "z-[70] w-[260px] rounded-[12px] border bg-white p-1.5 shadow-lg dark:bg-[#1f1f1f]",
+                HAIRLINE,
+              )}
+              onCloseAutoFocus={(e) => {
+                if (chose.current) e.preventDefault();
+              }}
+            >
+              {!blocked && (
+                <DropdownMenuItem
+                  className={MENU_ITEM}
+                  onSelect={() => {
+                    chose.current = true;
+                    onAsk("block");
+                  }}
+                >
+                  <Ban className={cn("mt-0.5 size-4 shrink-0", STRONG)} aria-hidden />
+                  <span className="flex min-w-0 flex-col">
+                    <span className={cn("text-[13px] font-medium", STRONG)}>
+                      Block <bdi>{name}</bdi>
+                    </span>
+                    <span className={cn("text-[11.5px] leading-4", MUTED)}>{BLOCK_EXPLAINER}</span>
+                  </span>
+                </DropdownMenuItem>
+              )}
+              <DropdownMenuItem
+                className={MENU_ITEM}
+                onSelect={() => {
+                  chose.current = true;
+                  onAsk("delete");
+                }}
+              >
+                <Trash2 className="mt-0.5 size-4 shrink-0 text-error-70" aria-hidden />
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-[13px] font-medium text-error-70">Delete comment</span>
+                  <span className={cn("text-[11.5px] leading-4", MUTED)}>{DELETE_EXPLAINER}</span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
     </li>
@@ -518,9 +1028,9 @@ function CommentRow({
 }
 
 /**
- * The link's reaction totals. Shown whatever the Reactions switch says (it
- * hides the bar from viewers, not the totals from the owner) and on every
- * plan, since they are not a locked insight.
+ * The link's reaction totals, a bar per emoji, most first. Shown whatever the
+ * Reactions switch says (it hides the bar from viewers, not the totals from
+ * the owner) and on every plan, since they are not a locked insight.
  */
 function ReactionsSection({ shareToken }: { shareToken: string }) {
   const reactions = useQuery({
@@ -534,58 +1044,57 @@ function ReactionsSection({ shareToken }: { shareToken: string }) {
     retry: false,
   });
   const total = reactions.data?.total ?? 0;
+  const sorted = useMemo(
+    () => [...(reactions.data?.counts ?? [])].sort((a, b) => b.count - a.count),
+    [reactions.data],
+  );
+  const max = sorted[0]?.count ?? 0;
   return (
-    <section className={CARD} aria-labelledby="insights-reactions">
-      <div className="flex items-center gap-2">
-        <SmilePlus className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
-        <h3 id="insights-reactions" className="text-sm font-medium text-grey-10 dark:text-white">
-          Reactions
-          {total > 0 && (
-            <span className="ml-1.5 font-normal text-grey-50 dark:text-grey-dark-600">
-              <span className="sr-only">, </span>
-              {total}
-              <span className="sr-only"> total</span>
-            </span>
-          )}
-        </h3>
-      </div>
+    <Section
+      title="Reactions"
+      aside={
+        total > 0 ? (
+          <>
+            {total}
+            <span className="sr-only"> total</span>
+          </>
+        ) : undefined
+      }
+    >
       {switches.data?.offered.reactions && !switches.data.on.reactions && (
-        <p className="mt-2 text-xs text-grey-50 dark:text-grey-dark-600">
-          Reactions are off, so viewers don&apos;t see these or add new ones.
-        </p>
+        <p className={cn("mb-2 text-xs", MUTED)}>Reactions are off, so viewers don&apos;t see these or add new ones.</p>
       )}
       {reactions.isPending ? (
-        <div className="mt-3 h-8 animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+        <div className={cn(SKELETON, "h-8")} />
       ) : reactions.isError ? (
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <p className="text-sm text-grey-50 dark:text-grey-dark-600">
-            Couldn&apos;t load reactions. {errorMessage(reactions.error)}
-          </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p className={cn("text-sm", MUTED)}>Couldn&apos;t load reactions. {errorMessage(reactions.error)}</p>
           <Button variant="defaultStable" size="sm" onClick={() => void reactions.refetch()}>
             Try again
           </Button>
         </div>
-      ) : reactions.data.counts.length === 0 ? (
-        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">No reactions yet.</p>
+      ) : sorted.length === 0 ? (
+        <p className={cn("text-sm", MUTED)}>No reactions yet.</p>
       ) : (
-        <ul className="mt-2 flex flex-wrap gap-1.5" aria-label="Reaction totals">
-          {reactions.data.counts.map(({ emoji, count }) => (
-            <li
-              key={emoji}
-              className={cn(
-                "flex h-8 min-w-[44px] items-center justify-center gap-1 rounded-full border px-2.5 text-sm",
-                "border-grey-80 bg-grey-100 text-grey-10",
-                "dark:border-[#494949] dark:bg-[#161616] dark:text-white",
-              )}
-            >
-              <span>{emoji}</span>
-              <span className="text-xs tabular-nums">{count}</span>
-              <span className="sr-only">{count === 1 ? " reaction" : " reactions"}</span>
+        <ul className="flex flex-col gap-[7px]" aria-label="Reaction totals">
+          {sorted.map(({ emoji, count }) => (
+            <li key={emoji} className="grid grid-cols-[22px_minmax(0,1fr)_28px] items-center gap-2.5">
+              <span className="text-base leading-none">{emoji}</span>
+              <span aria-hidden className="h-2 overflow-hidden rounded-[4px] bg-grey-90 dark:bg-[#333]">
+                <span
+                  className="block h-full rounded-[4px] bg-primary-50 dark:bg-primary-brand-dark"
+                  style={{ width: max > 0 ? `${(count / max) * 100}%` : 0 }}
+                />
+              </span>
+              <span className="text-right text-[12.5px] font-medium tabular-nums text-grey-30 dark:text-grey-dark-700">
+                {count}
+                <span className="sr-only">{count === 1 ? " reaction" : " reactions"}</span>
+              </span>
             </li>
           ))}
         </ul>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -594,7 +1103,7 @@ function ReactionsSection({ shareToken }: { shareToken: string }) {
  * at once, shows at once, and is put back if the server refuses it. Only the
  * switches Rust says this server takes are drawn.
  */
-function LinkSettingsSection({ shareToken, onLeave }: { shareToken: string; onLeave: () => void }) {
+function OnThisLink({ shareToken, onLeave }: { shareToken: string; onLeave: () => void }) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const key = linkSettingsQueryKey(shareToken);
@@ -619,18 +1128,15 @@ function LinkSettingsSection({ shareToken, onLeave }: { shareToken: string; onLe
   // Nothing to show on a server without the switches, or while unknown.
   if (!current.data || !current.data.offered.insights) {
     return current.isError ? (
-      <section className={CARD} aria-labelledby="insights-link-settings">
-        <LinkSettingsHeading />
-        <p className="mt-2 text-sm text-grey-50 dark:text-grey-dark-600">
-          Couldn&apos;t load this link&apos;s settings. {errorMessage(current.error)}
-        </p>
-      </section>
+      <Section title="On this link">
+        <p className={cn("text-sm", MUTED)}>Couldn&apos;t load this link&apos;s settings. {errorMessage(current.error)}</p>
+      </Section>
     ) : null;
   }
   return (
-    <section className={CARD} aria-labelledby="insights-link-settings">
-      <LinkSettingsHeading />
+    <Section title="On this link">
       <LinkEngagementSwitches
+        layout="list"
         offered={current.data.offered}
         value={current.data.on}
         disabled={save.isPending}
@@ -641,32 +1147,22 @@ function LinkSettingsSection({ shareToken, onLeave }: { shareToken: string; onLe
           router.push(BILLING_ROUTE);
         }}
       />
-    </section>
+    </Section>
   );
 }
 
-function LinkSettingsHeading() {
-  return (
-    <div className="flex items-center gap-2">
-      <SlidersHorizontal className="size-4 text-grey-50 dark:text-grey-dark-600" aria-hidden />
-      <h3 id="insights-link-settings" className="text-sm font-medium text-grey-10 dark:text-white">
-        Link settings
-      </h3>
-    </div>
-  );
-}
-
-function HowWeCalculate() {
+/** What each number means, opened in place: there is no help page for it yet. */
+function HowWeCountViews() {
   return (
     <details className="group text-sm">
-      <summary className="cursor-pointer select-none text-xs font-medium text-primary-50 hover:underline dark:text-primary-brand-dark">
-        See how we calculate this
+      <summary className={cn(TEXT_LINK, "cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden")}>
+        How we count views
       </summary>
       <dl className="mt-2 flex flex-col gap-2">
         {DEFINITIONS.map(({ term, meaning }) => (
           <div key={term}>
             <dt className="text-xs font-medium text-grey-20 dark:text-grey-dark-800">{term}</dt>
-            <dd className="text-xs text-grey-50 dark:text-grey-dark-600">{meaning}</dd>
+            <dd className={cn("text-xs", MUTED)}>{meaning}</dd>
           </div>
         ))}
       </dl>

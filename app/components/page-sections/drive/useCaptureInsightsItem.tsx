@@ -13,12 +13,16 @@ import type { ShareSummary } from "@/app/lib/tauri/shares";
 import { useDriveRoute } from "./driveRoute";
 
 /** The newest of a file's links: the one its Insights are about. */
-export function newestShareToken(rows: ShareSummary[]): string | null {
+export function newestShare(rows: ShareSummary[]): ShareSummary | null {
   let newest: ShareSummary | null = null;
   for (const row of rows) {
     if (!newest || Date.parse(row.createdAt) > Date.parse(newest.createdAt)) newest = row;
   }
-  return newest?.shareToken ?? null;
+  return newest;
+}
+
+export function newestShareToken(rows: ShareSummary[]): string | null {
+  return newestShare(rows)?.shareToken ?? null;
 }
 
 /**
@@ -27,16 +31,30 @@ export function newestShareToken(rows: ShareSummary[]): string | null {
  * Anywhere else, `null`. Shared by the row's Insights button and its menu
  * item so the two can never disagree about which rows have Insights.
  */
-export function useCaptureInsightsToken() {
+export function useCaptureInsightsShare() {
   const { basePath } = useDriveRoute();
   const enabled = useAtomValue(shareInsightsEnabledAtom);
   const { getSharesFor } = useSharedFiles();
   return useCallback(
-    (label: string | null | undefined, relativePath: string | null | undefined, isFolder: boolean): string | null => {
+    (
+      label: string | null | undefined,
+      relativePath: string | null | undefined,
+      isFolder: boolean,
+    ): ShareSummary | null => {
       if (basePath !== CAPTURES_ROUTE || !enabled || isFolder) return null;
-      return newestShareToken(getSharesFor(label, relativePath));
+      return newestShare(getSharesFor(label, relativePath));
     },
     [basePath, enabled, getSharesFor],
+  );
+}
+
+/** {@link useCaptureInsightsShare}, as the link's token. */
+export function useCaptureInsightsToken() {
+  const shareFor = useCaptureInsightsShare();
+  return useCallback(
+    (label: string | null | undefined, relativePath: string | null | undefined, isFolder: boolean): string | null =>
+      shareFor(label, relativePath, isFolder)?.shareToken ?? null,
+    [shareFor],
   );
 }
 
@@ -61,7 +79,7 @@ export function useCaptureInsightsItem() {
             e?.preventDefault();
             e?.stopPropagation();
             onOpen?.();
-            open({ shareToken, fileName: file.actualFileName || file.name });
+            open({ shareToken, fileName: file.actualFileName || file.name, file });
           },
         },
       ];

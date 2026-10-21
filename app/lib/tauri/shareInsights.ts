@@ -38,7 +38,7 @@ export type Gated<T> = { state: "locked" } | { state: "shown"; value: T };
 
 export interface InsightsViewer {
   viewerId: string;
-  /** The name they chose when they commented; `null` shows "Someone". */
+  /** The name they chose when they commented; `null` shows "Anonymous viewer". */
   name: string | null;
   visits: number;
   watchedMs: number;
@@ -64,10 +64,25 @@ export interface ShareComment {
   id: string;
   /** `null` when this comment could not be read. */
   text: string | null;
-  /** `null` shows "Someone". */
+  /** `null` shows "Anonymous viewer". */
   name: string | null;
   atMs: number | null;
   createdAt: string;
+  /**
+   * Replies under it, oldest first. Only once the server has replies
+   * (`share_comment_replies`, hcfs #804); Rust sends none yet, and the sheet
+   * draws none without the capability.
+   */
+  replies?: ShareCommentReply[];
+}
+
+/** A reply under a comment, the owner's own marked so (hcfs #804). */
+export interface ShareCommentReply {
+  id: string;
+  text: string | null;
+  name: string | null;
+  createdAt: string;
+  byOwner: boolean;
 }
 
 export interface ShareComments {
