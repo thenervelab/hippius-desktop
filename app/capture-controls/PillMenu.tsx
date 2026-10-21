@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Check } from "lucide-react";
 import {
   getCaptureCameras,
@@ -51,12 +51,12 @@ function useDevices(kind: PillMenuKind | null) {
       .then((d) => alive && setDevices(d))
       .catch(() => alive && setDevices((prev) => prev ?? []))
       .finally(() => alive && setLoading(false));
-    const unlisten = listen<CaptureDevice[]>(event, (e) => {
+    const unlisten = onTauriEvent<CaptureDevice[]>(event, (e) => {
       if (alive) setDevices(e.payload);
     });
     return () => {
       alive = false;
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, [kind]);
   return { devices, loading };
