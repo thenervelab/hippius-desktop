@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
@@ -66,7 +67,7 @@ const context = (over: Partial<CaptureOverlayContext> = {}): CaptureOverlayConte
 
 let confirm: ReturnType<typeof vi.fn>;
 
-function setup(over: Partial<CaptureOverlayContext> = {}) {
+function setup(over: Partial<CaptureOverlayContext> = {}, { strict = false } = {}) {
   tauri.onInvoke("capture_overlay_context", () => context(over));
   tauri.onInvoke("capture_camera_context", () => ({
     shape: null,
@@ -85,7 +86,11 @@ function setup(over: Partial<CaptureOverlayContext> = {}) {
   tauri.onInvoke("capture_hold_bar", () => null);
   tauri.onInvoke("capture_cancel", () => null);
   tauri.onInvoke("capture_confirm", (args) => confirm(args));
-  return render(<CaptureOverlayPage />);
+  tauri.onInvoke("capture_mic_meter_start", () => 1);
+  tauri.onInvoke("capture_mic_meter_stop", () => null);
+  // `next dev` renders every page in StrictMode: each effect mounts, cleans
+  // up and mounts again.
+  return render(strict ? <StrictMode><CaptureOverlayPage /></StrictMode> : <CaptureOverlayPage />);
 }
 
 const called = (cmd: string) => tauri.core.invoke.mock.calls.some(([c]) => c === cmd);
@@ -1556,6 +1561,32 @@ describe("the capture bar's tooltips", () => {
       expect(tip.style.visibility).toBe("visible");
     } finally {
       rect.mockRestore();
+    }
+  });
+});
+
+// Tauri's `listen()` answers before the page holds the listener's entry, and
+// an unlisten in that gap throws inside Tauri. StrictMode's mount, cleanup,
+// mount does that to every listener on the bar (the overlay, the device
+// lists, the microphone meter), which showed the dev overlay's
+// "listeners[eventId].handlerId" over the bar when Record was pressed.
+describe("Record while Tauri's listener entries land late", () => {
+  it("starts the recording with no unhandled rejection", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    try {
+      tauri.holdListenerEntries();
+      const options = { ...context().options, microphone: true };
+      setup({ kind: "recording", countdownSecs: 0, options }, { strict: true });
+      fireEvent.click(await enabledButton("Record"));
+      await waitFor(() => expect(confirm).toHaveBeenCalledWith({ displayId: 1 }));
+      // The entries land; the cleaned-up listeners are dropped on retry.
+      tauri.landListenerEntries();
+      await act(() => new Promise((r) => setTimeout(r, 150)));
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onRejection);
     }
   });
 });

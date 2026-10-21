@@ -59,6 +59,10 @@ Generic key-value store in SQLite (`user_preferences` table) accessed via `get_u
 
 `SettingsWarningNotice` is a **full-width settings card** (same chrome as `SecurityRow` / `SettingsCard`) with an amber icon chip — never a content-hugging highlighter-yellow box. Pinned by `settings/__tests__/SettingsWarningNotice.test.tsx`.
 
+## Tauri event listeners in effects
+
+**Listen through `onTauriEvent` or `registerTauriListeners` (`app/lib/utils/tauriListeners.ts`), never a bare `listen()` + `unlisten.then((fn) => fn())`.** Tauri's `listen()` answers before the page holds the listener's entry, and an unlisten in that gap throws ("listeners[eventId].handlerId") before Rust is told, so the listener stays live; StrictMode's double effect hits that gap on every mount in `next dev`. `safeUnlisten` makes an unlisten idempotent and retries a refused one; `onTauriEvent` also stops the handler at cleanup. `tauriMock.holdListenerEntries()` models the gap; pinned by `tauriListeners.test.ts` and the overlay page's StrictMode Record test.
+
 ## In-app file mutations must call `notifyFilesMutated`
 
 `app/lib/utils/fileMutationEvents.ts` is the single invalidation funnel every mutation hook uses on success. Two audiences need waking and they refresh by different mechanisms: the TanStack-cached lists (drive table, recent files) via `refetchQueries`, and the nested folder listings (`useNestedFolderListing` in `DriveContainer`'s subfolder view and in `ExpandedFolderRows`), which are plain `useState` + `invoke("list_sync_folder_grouped")` and only react to the `hippius:files-mutated` window event.
