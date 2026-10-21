@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import {
   CAPTURE_PLAN_CHANGED_EVENT,
   getCapturePlanStatus,
@@ -26,7 +26,7 @@ export function useCapturePlan(): { status: CapturePlanStatus; retry: () => void
   const [status, setStatus] = useState<CapturePlanStatus>(PLAN_UNKNOWN);
   useEffect(() => {
     let live = true;
-    const unlisten = listen<CapturePlanStatus>(CAPTURE_PLAN_CHANGED_EVENT, (e) => {
+    const unlisten = onTauriEvent<CapturePlanStatus>(CAPTURE_PLAN_CHANGED_EVENT, (e) => {
       if (live) setStatus(e.payload);
     });
     getCapturePlanStatus()
@@ -36,7 +36,7 @@ export function useCapturePlan(): { status: CapturePlanStatus; retry: () => void
       .catch(() => undefined);
     return () => {
       live = false;
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, []);
   const retry = useCallback(() => {

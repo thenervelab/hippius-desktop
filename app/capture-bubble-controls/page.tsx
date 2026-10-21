@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Pause, Play } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
@@ -75,9 +75,9 @@ export default function CaptureBubbleControlsPage() {
   const [pointedAt, setPointedAt] = useState<number | null>(null);
 
   useEffect(() => {
-    const unlisten = listen<CaptureWindowPoint | null>(BUBBLE_CONTROLS_POINTER_EVENT, (e) => setPointer(e.payload));
+    const unlisten = onTauriEvent<CaptureWindowPoint | null>(BUBBLE_CONTROLS_POINTER_EVENT, (e) => setPointer(e.payload));
     return () => {
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, []);
 
@@ -111,14 +111,14 @@ export default function CaptureBubbleControlsPage() {
       .then((c) => !heardCamera && setCamera(c))
       .catch(() => undefined);
     const unlisteners = [
-      listen<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
-      listen<CaptureCameraState>("capture_camera_state", (e) => {
+      onTauriEvent<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
+      onTauriEvent<CaptureCameraState>("capture_camera_state", (e) => {
         heardCamera = true;
         setCamera(e.payload);
       }),
     ];
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
   }, []);
 
