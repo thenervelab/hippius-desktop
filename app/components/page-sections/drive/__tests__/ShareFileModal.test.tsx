@@ -18,6 +18,8 @@ import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import ShareFileModal from "../ShareFileModal";
+import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
   finderShareAtom,
@@ -67,6 +69,9 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+// The Insights upgrade prompt's Upgrade goes to the plans page.
+const routerPush = vi.fn();
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }));
 
 // `navigator.clipboard.writeText` is invoked on the `done` transition
 // (auto-copy) and on Copy clicks. jsdom doesn't ship a clipboard, so
@@ -1199,6 +1204,56 @@ describe("ShareFileModal link switches", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The server said no."));
     expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("on the free plan, starts Insights off and shows the upgrade prompt instead of turning it on", async () => {
+    // Rust already started Insights off for the free plan; comments and
+    // reactions keep their capture default.
+    linkDefaultMock.mockResolvedValue({
+      offered: ALL_ON,
+      on: { insights: false, comments: true, reactions: true },
+      insightsInPlan: false,
+    });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+
+    const insights = await screen.findByRole("switch", { name: "Insights" });
+    expect(insights).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText("Count views and watch time. On paid Drive plans.")).toBeInTheDocument();
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
+
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByText(LOCKED_PROMPT)).toBeInTheDocument();
+
+    // The share still goes out, with Insights off.
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    expect(invokeMock).toHaveBeenCalledWith(
+      "hcfs_create_share",
+      expect.objectContaining({ linkSettings: { insights: false, comments: true, reactions: true } }),
+    );
+
+    // The finished link's switch is locked the same way.
+    const done = screen.getByRole("switch", { name: "Insights" });
+    fireEvent.click(done);
+    expect(setLinkMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: LOCKED_ACTION }));
+    expect(routerPush).toHaveBeenCalledWith(BILLING_ROUTE);
+  });
+
+  it("locks nothing when Rust could not read the plan", async () => {
+    linkDefaultMock.mockResolvedValue({
+      offered: ALL_ON,
+      on: { insights: false, comments: true, reactions: true },
+      insightsInPlan: null,
+    });
+    render(withProvider(<ShareFileModal />, RECORDING));
+
+    const insights = await screen.findByRole("switch", { name: "Insights" });
+    fireEvent.click(insights);
+    expect(insights).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 
   it("sends the Finder chooser's switches with the confirm", async () => {

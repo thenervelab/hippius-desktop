@@ -5,7 +5,14 @@ import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import ShareInsightsSheet from "../ShareInsightsSheet";
-import { LOCKED_PROMPT, SAMPLE_VIEWERS } from "../insightsView";
+import {
+  LOCKED_ACTION,
+  LOCKED_BODY,
+  LOCKED_PROMPT,
+  SAMPLE_UNIQUE_VIEWERS,
+  SAMPLE_VIEWERS,
+  SAMPLE_VIEWS,
+} from "../insightsView";
 import { insightsSheetAtom, serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import type { ShareComments, ShareInsights } from "@/app/lib/tauri/shareInsights";
@@ -105,7 +112,8 @@ describe("ShareInsightsSheet", () => {
     expect(within(blurred).getByText("68%")).toBeInTheDocument();
 
     expect(screen.getByText(LOCKED_PROMPT)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "See plans" }));
+    expect(screen.getByText(LOCKED_BODY)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: LOCKED_ACTION }));
     expect(push).toHaveBeenCalledWith("/settings?section=billing");
     expect(store.get(insightsSheetAtom)).toBeNull();
   });
@@ -244,6 +252,76 @@ describe("ShareInsightsSheet", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(settingsCalls).toBe(2));
     await waitFor(() => expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true"));
+  });
+
+  describe("on the free plan", () => {
+    const ALL = { insights: true, comments: true, reactions: true };
+    function freeLink(on: { insights: boolean; comments: boolean; reactions: boolean }) {
+      invokeMock.mockImplementation((cmd: string) => {
+        if (cmd === "share_get_insights") return Promise.resolve({ ...FREE, totalViews: 0, uniqueViewers: 0 });
+        if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
+        if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
+        if (cmd === "share_get_link_settings") return Promise.resolve({ offered: ALL, on, insightsInPlan: false });
+        if (cmd === "share_set_link_settings") return Promise.resolve();
+        return Promise.reject(new Error(`unexpected ${cmd}`));
+      });
+    }
+
+    it("draws a link that is not counting views from samples only, under the upgrade prompt", async () => {
+      freeLink({ insights: false, comments: true, reactions: true });
+      renderSheet();
+
+      const locked = await screen.findByTestId("insights-locked");
+      const blurred = locked.firstElementChild as HTMLElement;
+      await waitFor(() => expect(within(blurred).getByText(String(SAMPLE_VIEWS))).toBeInTheDocument());
+      expect(within(blurred).getByText(String(SAMPLE_UNIQUE_VIEWERS))).toBeInTheDocument();
+      // No "0 views" outside the prompt: nothing is being counted.
+      expect(screen.queryByText("0")).toBeNull();
+      expect(within(locked).getByText(LOCKED_PROMPT)).toBeInTheDocument();
+    });
+
+    it("shows the upgrade prompt when Insights is switched on, and sends nothing", async () => {
+      freeLink({ insights: false, comments: true, reactions: true });
+      const store = renderSheet();
+
+      const insights = await screen.findByRole("switch", { name: "Insights" });
+      expect(screen.getByText("Count views and watch time. On paid Drive plans.")).toBeInTheDocument();
+      fireEvent.click(insights);
+      expect(insights).toHaveAttribute("aria-checked", "false");
+      const prompt = screen.getByRole("region", { name: "Upgrade for Insights" });
+      expect(within(prompt).getByText(LOCKED_PROMPT)).toBeInTheDocument();
+      expect(invokeMock).not.toHaveBeenCalledWith("share_set_link_settings", expect.anything());
+
+      // Comments still change on the free plan.
+      fireEvent.click(screen.getByRole("switch", { name: "Comments" }));
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
+          shareToken: "tok",
+          settings: { insights: false, comments: false, reactions: true },
+        }),
+      );
+
+      fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
+      expect(push).toHaveBeenCalledWith("/settings?section=billing");
+      expect(store.get(insightsSheetAtom)).toBeNull();
+    });
+
+    it("leaves a link that already has Insights on as it is, and lets it turn them off", async () => {
+      freeLink(ALL);
+      renderSheet();
+
+      const insights = await screen.findByRole("switch", { name: "Insights" });
+      expect(insights).toHaveAttribute("aria-checked", "true");
+      // Its real counts are shown, not samples.
+      expect(await screen.findAllByText("0")).toHaveLength(2);
+      fireEvent.click(insights);
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
+          shareToken: "tok",
+          settings: { insights: false, comments: true, reactions: true },
+        }),
+      );
+    });
   });
 
   it("says why comments cannot be read, and marks one that did not open", async () => {

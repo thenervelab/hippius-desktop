@@ -36,10 +36,13 @@ import { formatRelative } from "@/app/lib/utils/timeRelative";
 import {
   DEFINITIONS,
   LOCKED_ACTION,
+  LOCKED_BODY,
   LOCKED_PROMPT,
   SAMPLE_COMPLETION,
   SAMPLE_RETENTION,
+  SAMPLE_UNIQUE_VIEWERS,
   SAMPLE_VIEWERS,
+  SAMPLE_VIEWS,
   formatMoment,
   formatPercent,
   viewerName,
@@ -88,6 +91,13 @@ export function InsightsBody({ shareToken, onLeave }: { shareToken: string; onLe
     queryFn: () => getShareInsights(shareToken),
     retry: false,
   });
+  // The same query Link settings reads: whether this link counts views.
+  const switches = useQuery({
+    queryKey: linkSettingsQueryKey(shareToken),
+    queryFn: () => getLinkSettings(shareToken),
+    retry: false,
+  });
+  const notCounting = switches.data?.offered.insights === true && !switches.data.on.insights;
 
   return (
     <div className="flex flex-col gap-4 font-geist">
@@ -103,11 +113,11 @@ export function InsightsBody({ shareToken, onLeave }: { shareToken: string; onLe
           </Button>
         </div>
       ) : (
-        <InsightsNumbers insights={insights.data} onUpgrade={onLeave} />
+        <InsightsNumbers insights={insights.data} notCounting={notCounting} onUpgrade={onLeave} />
       )}
       {commentsEnabled && <CommentsSection shareToken={shareToken} />}
       {commentsEnabled && <ReactionsSection shareToken={shareToken} />}
-      <LinkSettingsSection shareToken={shareToken} />
+      <LinkSettingsSection shareToken={shareToken} onLeave={onLeave} />
       <HowWeCalculate />
     </div>
   );
@@ -126,7 +136,16 @@ function InsightsSkeleton() {
   );
 }
 
-function InsightsNumbers({ insights, onUpgrade }: { insights: ShareInsights; onUpgrade: () => void }) {
+function InsightsNumbers({
+  insights,
+  notCounting,
+  onUpgrade,
+}: {
+  insights: ShareInsights;
+  /** The link's Insights switch is off, so its view counts are not being kept. */
+  notCounting: boolean;
+  onUpgrade: () => void;
+}) {
   const { completion, retention, viewers } = insights;
   const anyLocked = completion.state === "locked" || retention.state === "locked" || viewers.state === "locked";
 
@@ -140,11 +159,20 @@ function InsightsNumbers({ insights, onUpgrade }: { insights: ShareInsights; onU
   if (anyLocked) {
     // Everything past the two numbers is drawn from SAMPLE data, blurred,
     // with no real value anywhere in it: Rust sends none for a locked metric.
+    // A free link that is not counting views has no real numbers at all, so
+    // its two counts are samples under the prompt too, rather than a "0"
+    // that reads as nobody having opened it.
     return (
       <>
-        <div className="grid grid-cols-2 gap-3">{views}</div>
+        {!notCounting && <div className="grid grid-cols-2 gap-3">{views}</div>}
         <Locked onUpgrade={onUpgrade}>
           <div className="flex flex-col gap-3">
+            {notCounting && (
+              <div className="grid grid-cols-2 gap-3">
+                <Stat label="Views" value={String(SAMPLE_VIEWS)} />
+                <Stat label="Unique viewers" value={String(SAMPLE_UNIQUE_VIEWERS)} />
+              </div>
+            )}
             <Stat label="Completion" value={formatPercent(SAMPLE_COMPLETION)} />
             <RetentionCard values={SAMPLE_RETENTION} />
             <ViewerList viewers={SAMPLE_VIEWERS} />
@@ -210,7 +238,10 @@ function Locked({ children, onUpgrade }: { children: ReactNode; onUpgrade: () =>
           <span className="flex size-9 items-center justify-center rounded-full bg-primary-50/10 text-primary-50 dark:bg-primary-brand-dark/15 dark:text-primary-brand-dark">
             <Lock className="size-4" aria-hidden />
           </span>
-          <p className="text-sm font-medium text-grey-10 dark:text-white">{LOCKED_PROMPT}</p>
+          <div>
+            <p className="text-sm font-medium text-grey-10 dark:text-white">{LOCKED_PROMPT}</p>
+            <p className="mt-1 text-xs text-grey-50 dark:text-grey-dark-600">{LOCKED_BODY}</p>
+          </div>
           <Button
             variant="primary"
             size="sm"
@@ -563,8 +594,9 @@ function ReactionsSection({ shareToken }: { shareToken: string }) {
  * at once, shows at once, and is put back if the server refuses it. Only the
  * switches Rust says this server takes are drawn.
  */
-function LinkSettingsSection({ shareToken }: { shareToken: string }) {
+function LinkSettingsSection({ shareToken, onLeave }: { shareToken: string; onLeave: () => void }) {
   const queryClient = useQueryClient();
+  const router = useRouter();
   const key = linkSettingsQueryKey(shareToken);
   const current = useQuery({
     queryKey: key,
@@ -602,7 +634,12 @@ function LinkSettingsSection({ shareToken }: { shareToken: string }) {
         offered={current.data.offered}
         value={current.data.on}
         disabled={save.isPending}
+        insightsInPlan={current.data.insightsInPlan ?? null}
         onChange={(next) => save.mutate(next)}
+        onUpgrade={() => {
+          onLeave();
+          router.push(BILLING_ROUTE);
+        }}
       />
     </section>
   );

@@ -22,20 +22,36 @@ export function newestShareToken(rows: ShareSummary[]): string | null {
 }
 
 /**
+ * The link whose Insights a row on the Captures page opens: its newest, for
+ * a file (never a folder) with a link, on a server that has Insights.
+ * Anywhere else, `null`. Shared by the row's Insights button and its menu
+ * item so the two can never disagree about which rows have Insights.
+ */
+export function useCaptureInsightsToken() {
+  const { basePath } = useDriveRoute();
+  const enabled = useAtomValue(shareInsightsEnabledAtom);
+  const { getSharesFor } = useSharedFiles();
+  return useCallback(
+    (label: string | null | undefined, relativePath: string | null | undefined, isFolder: boolean): string | null => {
+      if (basePath !== CAPTURES_ROUTE || !enabled || isFolder) return null;
+      return newestShareToken(getSharesFor(label, relativePath));
+    },
+    [basePath, enabled, getSharesFor],
+  );
+}
+
+/**
  * The "Insights" item for a row on the Captures page: offered for a capture
  * that has a link, once the server has Insights. Elsewhere it adds nothing.
  * `relativePath` is the row's drive-relative path, resolved by the caller
  * the same way its Share item is.
  */
 export function useCaptureInsightsItem() {
-  const { basePath } = useDriveRoute();
-  const enabled = useAtomValue(shareInsightsEnabledAtom);
-  const { getSharesFor } = useSharedFiles();
+  const tokenFor = useCaptureInsightsToken();
   const open = useSetAtom(insightsSheetAtom);
   return useCallback(
     (file: FormattedUserFile, relativePath: string, onOpen?: () => void): ActionItem[] => {
-      if (basePath !== CAPTURES_ROUTE || !enabled || file.isFolder) return [];
-      const shareToken = newestShareToken(getSharesFor(file.label, relativePath));
+      const shareToken = tokenFor(file.label, relativePath, Boolean(file.isFolder));
       if (!shareToken) return [];
       return [
         {
@@ -50,6 +66,6 @@ export function useCaptureInsightsItem() {
         },
       ];
     },
-    [basePath, enabled, getSharesFor, open],
+    [tokenFor, open],
   );
 }

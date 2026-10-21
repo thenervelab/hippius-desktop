@@ -30,6 +30,7 @@ import React, {
   useState,
 } from "react";
 import { useAtom, useSetAtom } from "jotai";
+import { useRouter } from "next/navigation";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -67,9 +68,11 @@ import {
   getLinkSettingsDefault,
   setLinkSettings,
   type LinkSettings,
+  type LinkSettingsDefault,
   type OfferedSwitches,
 } from "@/app/lib/tauri/shareInsights";
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -106,13 +109,19 @@ type ModalState =
   | { kind: "done"; link: ShareLink; chatPreview: boolean; engagement: Engagement | null }
   | { kind: "error"; message: string };
 
-/** A link's switches as chosen, and which of them this server takes. */
-type Engagement = { offered: OfferedSwitches; value: LinkSettings };
+/**
+ * A link's switches as chosen, which of them this server takes, and whether
+ * the plan includes Insights (Rust's `insightsInPlan`).
+ */
+type Engagement = { offered: OfferedSwitches; value: LinkSettings; insightsInPlan: boolean | null };
+
+/** What the chooser's switches were drawn from: carried into the done view. */
+type SwitchSource = Pick<LinkSettingsDefault, "offered" | "insightsInPlan">;
 
 /** The switches to carry into the done view, or `null` when none were shown. */
-function engagementOf(choice: ShareChoice, offered: OfferedSwitches | null): Engagement | null {
-  if (!offered || !choice.linkSettings) return null;
-  return { offered, value: choice.linkSettings };
+function engagementOf(choice: ShareChoice, source: SwitchSource | null): Engagement | null {
+  if (!source || !choice.linkSettings) return null;
+  return { offered: source.offered, value: choice.linkSettings, insightsInPlan: source.insightsInPlan };
 }
 
 export default function ShareFileModal() {
@@ -141,7 +150,7 @@ export default function ShareFileModal() {
   // instead of silently falling back to a default the user never picked.
   const lastChoiceRef = useRef<ShareChoice | null>(null);
   // Which switches that choice was made from, for the done view.
-  const lastOfferedRef = useRef<OfferedSwitches | null>(null);
+  const lastOfferedRef = useRef<SwitchSource | null>(null);
   // Auto-copy fires once per `done` transition. Reopening the dialog
   // without closing must not double-copy a stale URL.
   const autoCopiedRef = useRef(false);
@@ -215,8 +224,15 @@ export default function ShareFileModal() {
     setFinderShare(null);
   }, [finderShare, setTarget, setFinderShare]);
 
+  // The Insights upgrade prompt's Upgrade: the plans page, with this closed.
+  const router = useRouter();
+  const upgrade = useCallback(() => {
+    close();
+    router.push(BILLING_ROUTE);
+  }, [close, router]);
+
   const startShare = useCallback(
-    async (choice: ShareChoice, offered: OfferedSwitches | null) => {
+    async (choice: ShareChoice, offered: SwitchSource | null) => {
     if (!target || !folderLabel) return;
     lastChoiceRef.current = choice;
     lastOfferedRef.current = offered;
@@ -272,7 +288,7 @@ export default function ShareFileModal() {
   // via `confirmFinderShare` (backend holds the resolved path — we send only the
   // id + choice), streaming progress into `running`, then land on `done`/`error`.
   const confirmFinder = useCallback(
-    async (choice: ShareChoice, offered: OfferedSwitches | null) => {
+    async (choice: ShareChoice, offered: SwitchSource | null) => {
       if (finderShare?.kind !== "choosing") return;
       const { id, name } = finderShare;
       lastChoiceRef.current = choice;
@@ -313,7 +329,7 @@ export default function ShareFileModal() {
   // One confirm handler for both entry points — the chooser does not care which
   // opened it, and routing here keeps the two flows from drifting apart.
   const onConfirmChoice = useCallback(
-    (choice: ShareChoice, offered: OfferedSwitches | null) => {
+    (choice: ShareChoice, offered: SwitchSource | null) => {
       if (finderShare?.kind === "choosing") void confirmFinder(choice, offered);
       else void startShare(choice, offered);
     },
@@ -439,6 +455,7 @@ export default function ShareFileModal() {
           modifiedSecsAgo={sourceModifiedSecsAgo}
           onConfirm={onConfirmChoice}
           onCancel={close}
+          onUpgrade={upgrade}
         />
       )}
 
@@ -462,6 +479,7 @@ export default function ShareFileModal() {
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
+          onUpgrade={upgrade}
           onRevoke={onRevoke}
         />
       )}
@@ -575,6 +593,7 @@ function ChoosingBody({
   modifiedSecsAgo,
   onConfirm,
   onCancel,
+  onUpgrade,
 }: {
   filename: string;
   previewSubject: PreviewSubject;
@@ -591,8 +610,9 @@ function ChoosingBody({
   refusal: string | null;
   /** Seconds since last modification, when known. */
   modifiedSecsAgo: number | null;
-  onConfirm: (choice: ShareChoice, offered: OfferedSwitches | null) => void;
+  onConfirm: (choice: ShareChoice, offered: SwitchSource | null) => void;
   onCancel: () => void;
+  onUpgrade: () => void;
 }) {
   const [visibility, setVisibility] = useState<ShareVisibility>("public");
   const [ttl, setTtl] = useState<ShareTtl>("24h");
@@ -626,6 +646,9 @@ function ChoosingBody({
   // start (on for a capture when Settings says so), both from Rust. Hidden
   // until it answers, so a quick confirm sends nothing.
   const [offered, setOffered] = useState<OfferedSwitches | null>(null);
+  // Rust's plan answer: `false` locks the Insights switch behind the upgrade
+  // prompt; `null` (unread) locks nothing.
+  const [insightsInPlan, setInsightsInPlan] = useState<boolean | null>(null);
   const [engagement, setEngagement] = useState<LinkSettings>({
     insights: false,
     comments: false,
@@ -638,6 +661,7 @@ function ChoosingBody({
         if (!alive || !d) return;
         setOffered(d.offered);
         setEngagement(d.on);
+        setInsightsInPlan(d.insightsInPlan ?? null);
       })
       .catch(() => undefined);
     return () => {
@@ -730,7 +754,13 @@ function ChoosingBody({
         )}
 
         {switchesShown && (
-          <LinkEngagementSwitches offered={offered} value={engagement} onChange={setEngagement} />
+          <LinkEngagementSwitches
+            offered={offered}
+            value={engagement}
+            insightsInPlan={insightsInPlan}
+            onChange={setEngagement}
+            onUpgrade={onUpgrade}
+          />
         )}
 
         <p
@@ -792,7 +822,7 @@ function ChoosingBody({
               password: visibility === "private" ? password : undefined,
               chatPreview: previewShown && chatPreview,
               linkSettings: switchesShown ? engagement : undefined,
-            }, switchesShown ? offered : null)
+            }, switchesShown ? { offered, insightsInPlan } : null)
           }
           className={cn(
             "h-[52px] w-full rounded-[6px] border text-base font-normal tracking-[-0.36px]",
@@ -1062,6 +1092,7 @@ function DoneBody({
   onCopy,
   onOpen,
   onClose,
+  onUpgrade,
   onRevoke,
 }: {
   link: ShareLink;
@@ -1073,6 +1104,7 @@ function DoneBody({
   onCopy: () => void | Promise<void>;
   onOpen: () => void | Promise<void>;
   onClose: () => void;
+  onUpgrade: () => void;
   onRevoke: () => void | Promise<void>;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1211,7 +1243,9 @@ function DoneBody({
             offered={engagement.offered}
             value={switches}
             disabled={switchesSaving}
+            insightsInPlan={engagement.insightsInPlan}
             onChange={(next) => void changeSwitches(next)}
+            onUpgrade={onUpgrade}
           />
         </div>
       )}

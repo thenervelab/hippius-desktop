@@ -11,6 +11,7 @@ import { Video } from "lucide-react";
 import { Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
+import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -464,12 +465,21 @@ const NameCell: FC<NameCellProps> = ({
                   "group-hover:text-primary-50 group-hover:underline cursor-pointer",
               )}
               suffix={
-                <SharedLinkBadge
-                  label={label}
-                  actualName={actualName}
-                  onManageShare={onManageShare}
-                  className="ml-1.5"
-                />
+                <>
+                  <SharedLinkBadge
+                    label={label}
+                    actualName={actualName}
+                    onManageShare={onManageShare}
+                    className="ml-1.5"
+                  />
+                  {/* Captures page only: opens the link's Insights. */}
+                  <CaptureInsightsButton
+                    label={label}
+                    actualName={actualName}
+                    fileName={actualName || rawName}
+                    className="ml-1"
+                  />
+                </>
               }
             />
           </div>

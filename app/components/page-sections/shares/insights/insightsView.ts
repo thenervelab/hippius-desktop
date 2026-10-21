@@ -7,9 +7,16 @@ import type { InsightsViewer } from "@/app/lib/tauri/shareInsights";
 /** What a viewer without a chosen name is called. */
 export const SOMEONE = "Someone";
 
-/** The line on a locked card, and where it leads. */
-export const LOCKED_PROMPT = "Upgrade to see who watched and for how long";
-export const LOCKED_ACTION = "See plans";
+/**
+ * The upgrade prompt for Insights on the free plan: the sheet's locked state
+ * and the Insights switch use the same words, as the web app does.
+ */
+export const LOCKED_PROMPT = "Insights are available on paid Drive plans";
+export const LOCKED_ACTION = "Upgrade";
+/** The sheet's line under the prompt: what upgrading gives this link. */
+export const LOCKED_BODY = "Count this link's views and watch time, and see who watched and where they stopped.";
+/** The line under the prompt where the Insights switch was turned on. */
+export const SWITCH_UPGRADE_BODY = "Upgrade to count views and watch time on your links and see who watched.";
 
 /** A length the way a video player shows it: `0:42`, `12:05`, `1:02:03`. */
 export function formatWatched(ms: number): string {
@@ -50,6 +57,9 @@ export function viewerSummary(v: InsightsViewer): string {
  * behind the upgrade prompt so a free plan sees the shape of what it would
  * get; no real value ever reaches a locked card (Rust sends none).
  */
+/** Sample counts for a free link that is not counting views. */
+export const SAMPLE_VIEWS = 24;
+export const SAMPLE_UNIQUE_VIEWERS = 9;
 export const SAMPLE_COMPLETION = 0.68;
 
 export const SAMPLE_RETENTION: number[] = Array.from({ length: 100 }, (_, i) =>

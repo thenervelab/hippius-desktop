@@ -21,6 +21,12 @@ export type OfferedSwitches = LinkSettings;
 export interface LinkSettingsDefault {
   offered: OfferedSwitches;
   on: LinkSettings;
+  /**
+   * Whether the plan includes Insights: `false` on the free plan, where the
+   * Insights switch leads to the upgrade prompt; `null` when Rust could not
+   * read the plan (nothing is locked, and a new link starts Insights off).
+   */
+  insightsInPlan: boolean | null;
 }
 
 /**
