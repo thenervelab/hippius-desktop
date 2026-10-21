@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, renderHook, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
+import { insightsSheetAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import React from "react";
 
 const tauri = await vi.hoisted(async () => {
@@ -157,6 +158,14 @@ describe("CaptureHost", () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_manage_link", { shareToken: "tok1" }));
     expect(h.push).toHaveBeenCalledWith("/shares?highlight=file%3Atok1");
+  });
+
+  it("opens the capture's Insights on the card's Insights", async () => {
+    const store = mountHost();
+    await act(() =>
+      tauri.emitEvent("capture_open_insights", { shareToken: "tok1", fileName: "Recording.mp4" }),
+    );
+    expect(store.get(insightsSheetAtom)).toEqual({ shareToken: "tok1", fileName: "Recording.mp4" });
   });
 
   // The shortcut is the one-step area screenshot: Rust's payload says so and

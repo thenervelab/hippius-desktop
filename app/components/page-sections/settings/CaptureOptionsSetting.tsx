@@ -1,7 +1,9 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
+import { BarChart3, ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
+import { useAtomValue } from "jotai";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
@@ -10,13 +12,24 @@ import { getCaptureOptions, setCaptureOptions, type CaptureOptions } from "@/app
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { SettingsToggle } from "./SettingsToggle";
 import { SettingIcon } from "./SettingIcon";
+import { shareInsightsEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { getSwitchesInPlan } from "@/app/lib/tauri/shareInsights";
+import { BILLING_ROUTE } from "@/app/lib/routes";
+import { SwitchesUpgradeNotice } from "@/app/components/page-sections/drive/LinkEngagementSwitches";
 
 type Choices = Pick<
   CaptureOptions,
-  "copyLink" | "openLink" | "chatPreview" | "recordCountdownSecs" | "systemAudio"
+  "copyLink" | "openLink" | "chatPreview" | "linkInsights" | "recordCountdownSecs" | "systemAudio"
 >;
 
 const COUNTDOWN_OPTIONS = RECORD_COUNTDOWN_OPTIONS.map((t) => ({ value: String(t.secs), label: t.label }));
+
+const TRACK_TITLE = "Track views, comments and reactions";
+const TRACK_DESCRIPTION =
+  "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. You can turn this off for any link.";
+/** The tracking card's line on the free plan, where Rust gives new links none of the three. */
+export const TRACK_LOCKED_DESCRIPTION =
+  "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. On paid Drive plans.";
 
 /**
  * The capture bar's own options that carry over from one capture to the
@@ -50,6 +63,23 @@ export default function CaptureOptionsSetting({
   systemAudio: boolean;
 }) {
   const [options, setOptions] = useState<Choices | null>(null);
+  // Shown once the server has link Insights; until then the choice would
+  // change nothing a user could see.
+  const insightsAvailable = useAtomValue(shareInsightsEnabledAtom);
+  // Rust's plan answer: `false` (the free plan) shows tracking as a paid
+  // feature, since new links get none of the three there; `null` (unread)
+  // keeps the plain switch.
+  const [switchesInPlan, setSwitchesInPlan] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!insightsAvailable) return;
+    let alive = true;
+    getSwitchesInPlan()
+      .then((plan) => alive && setSwitchesInPlan(plan ?? null))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [insightsAvailable]);
 
   useEffect(() => {
     let alive = true;
@@ -124,6 +154,26 @@ export default function CaptureOptionsSetting({
         />
       </OptionRow>
 
+      {insightsAvailable && switchesInPlan === false && (
+        <LockedTrackingRow rowClassName={rowClassName} layout={layout} />
+      )}
+
+      {insightsAvailable && switchesInPlan !== false && (
+        <OptionRow
+          rowClassName={rowClassName}
+          layout={layout}
+          icon={<BarChart3 className="size-[18px]" strokeWidth={2} />}
+          title={TRACK_TITLE}
+          description={TRACK_DESCRIPTION}
+        >
+          <SettingsToggle
+            ariaLabel={TRACK_TITLE}
+            checked={options.linkInsights}
+            onCheckedChange={(linkInsights) => void change({ linkInsights })}
+          />
+        </OptionRow>
+      )}
+
       {recording && recordCountdown && (
         <OptionRow
           rowClassName={rowClassName}
@@ -163,6 +213,33 @@ export default function CaptureOptionsSetting({
   );
 }
 
+/**
+ * "Track views, comments and reactions" on the free plan: a paid feature.
+ * The switch shows off, because Rust gives new links none of the three there
+ * whatever the stored choice, and turning it on shows the upgrade prompt
+ * instead of saving anything.
+ */
+function LockedTrackingRow({ rowClassName, layout }: { rowClassName: string; layout: "rows" | "cards" }) {
+  const router = useRouter();
+  const [asking, setAsking] = useState(false);
+  return (
+    <OptionRow
+      rowClassName={rowClassName}
+      layout={layout}
+      icon={<BarChart3 className="size-[18px]" strokeWidth={2} />}
+      title={TRACK_TITLE}
+      description={TRACK_LOCKED_DESCRIPTION}
+      below={
+        <div aria-live="polite">
+          {asking && <SwitchesUpgradeNotice onUpgrade={() => router.push(BILLING_ROUTE)} className="mt-3" />}
+        </div>
+      }
+    >
+      <SettingsToggle ariaLabel={TRACK_TITLE} checked={false} onCheckedChange={(on) => on && setAsking(true)} />
+    </OptionRow>
+  );
+}
+
 function OptionRow({
   rowClassName,
   layout,
@@ -170,6 +247,7 @@ function OptionRow({
   title,
   description,
   wide = false,
+  below,
   children,
 }: {
   rowClassName: string;
@@ -179,6 +257,8 @@ function OptionRow({
   description: string;
   /** The control takes the row's width on a narrow window (a segmented control). */
   wide?: boolean;
+  /** Under the description (the upgrade prompt). */
+  below?: ReactNode;
   children: ReactNode;
 }) {
   if (layout === "cards") {
@@ -193,6 +273,7 @@ function OptionRow({
         <div className="min-w-0">
           <p className="text-sm font-medium text-grey-10 dark:text-white">{title}</p>
           <p className="mt-0.5 text-[13px] leading-snug text-[#7D7D7D] dark:text-grey-dark-600">{description}</p>
+          {below}
         </div>
         {wide && <div className="mt-auto w-full">{children}</div>}
       </div>
@@ -205,6 +286,7 @@ function OptionRow({
         <div className="min-w-0">
           <p className="text-sm font-medium text-grey-10 dark:text-white">{title}</p>
           <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{description}</p>
+          {below}
         </div>
       </div>
       <div className={wide ? "w-full sm:w-auto" : "flex-shrink-0"}>{children}</div>

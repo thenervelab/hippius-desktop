@@ -4,6 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { listen } from "@tauri-apps/api/event";
 import {
   AlertCircle,
+  BarChart3,
   Check,
   FolderOpen,
   FolderPlus,
@@ -30,6 +31,7 @@ import {
   getCapturePreviewPointer,
   manageCapturePreviewLink,
   mintCapturePreviewLink,
+  openCapturePreviewInsights,
   retryCapturePreview,
   revealCapturePreview,
   revokeCapturePreviewLink,
@@ -38,6 +40,7 @@ import {
   type CapturePreviewCard,
 } from "@/app/lib/tauri/capture";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
+import { getEngagementFeatures } from "@/app/lib/tauri/shareInsights";
 import type { FileProgress, SyncSnapshot } from "@/app/lib/types/syncSnapshot";
 import { GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
@@ -120,6 +123,10 @@ export default function CapturePreviewPage() {
   const [countdown, setCountdown] = useState<Countdown | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Whether the server has link Insights: the card has no capabilities of
+  // its own, so it asks Rust once. Unknown reads as no, so nothing shows
+  // that cannot open.
+  const [insightsAvailable, setInsightsAvailable] = useState(false);
   // The bar's tooltip, shown for what Rust's pointer is on (and, when the
   // window does get hover or focus, from the elements' own events).
   const { tipProps, showAt, tooltip } = useBarTooltip();
@@ -178,6 +185,18 @@ export default function CapturePreviewPage() {
   }, [card, clearCopied]);
 
   useEffect(() => clearCopied, [clearCopied]);
+
+  const hasLinkToManage = card?.actions.manageLink ?? false;
+  useEffect(() => {
+    if (!hasLinkToManage) return;
+    let alive = true;
+    void getEngagementFeatures()
+      .then((f) => alive && setInsightsAvailable(f.insights))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [hasLinkToManage]);
 
   const dismiss = useCallback(() => {
     if (card) void dismissCapturePreview(card.id).catch(() => undefined);
@@ -603,6 +622,20 @@ export default function CapturePreviewPage() {
                       className={MENU_ITEM}
                     >
                       <Settings2 aria-hidden className="size-3.5 shrink-0" /> Manage link
+                    </button>
+                  )}
+                  {actions.manageLink && insightsAvailable && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        run(openCapturePreviewInsights);
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <BarChart3 aria-hidden className="size-3.5 shrink-0" /> Insights
                     </button>
                   )}
                   {actions.revokeLink && (

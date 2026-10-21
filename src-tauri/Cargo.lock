@@ -53,6 +53,7 @@ dependencies = [
  "rand 0.10.3",
  "regex",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "serde_yaml",
