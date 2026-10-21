@@ -47,6 +47,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **New invite links no longer contain the key to your drive.** Once Hippius turns this on, a drive or folder invite link holds a key of its own, and Hippius hands over the drive's key only to someone signed in who can still join, so a leaked invite link is useless after it is revoked or used up. Older invite links are marked "Old invite link" in Manage access, and Replace swaps one for a new link with the same access and turns the old one off.
 - **New folder links no longer contain the key to your whole drive.** Once Hippius turns this on, a folder link holds a key of its own, so a link that was forwarded or leaked stops working for good when you revoke it, unless someone had already opened it. Older folder links are marked "Old link" in Shared Links, and Reshare swaps one for a new link to the same folder (with a new password if it had one) and turns the old one off.
+- **Secure connections no longer trust distrusted emSign certificates.** Hippius now refuses connections that rely on certain emSign certificate authorities, which have been distrusted.
 
 ### Changed
 
@@ -70,6 +71,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **A tidier menu bar window.** Screenshot, Record and Upload sit side by side at the top (drop files on the window to upload them), your captures and all your files are a tab apart, sync status is one short line, and every file shows a small picture of itself with Copy link and Edit a hover away.
 
 - **The menu bar window says it is Hippius.** The name now sits next to the logo at the top, in light and dark mode, so the window is easy to tell apart from other apps'.
+
+- **The Hippius logo has a fresh look.** The app's name and logo at the top of the window, on the sign-in screens, in the menu bar window and in the update dialog use the flat Hippius mark, with the name in black, or white in dark mode.
 
 - **Record comes first.** Record now sits before Screenshot in the menu bar window, in the capture bar, among the shortcuts in Settings, and in the Record and Screenshot buttons on the Drive, Overview and Captures pages. Your keyboard shortcuts stay the same.
 
