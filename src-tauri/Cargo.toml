@@ -96,7 +96,13 @@ reqwest = { version = "0.13.1", default-features = false, features = [
     "form",
 ] }
 ed25519-dalek = "2.2"
-zip = { version = "4.2.0", default-features = false, features = ["deflate", "aes-crypto"] }
+# zip 9: upstream yanked every release before 9.0.3 over security advisories,
+# some still unpublished, and unyanked the last of each major only for a
+# while (zip-rs/zip2#1075). The app writes archives and parses one
+# user-supplied archive (wallet backup import: central directory plus one
+# size-capped entry). It never calls `extract`, which the advisories published
+# so far are about.
+zip = { version = "9.0.4", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
 base64 = "0.22"
 bs58 = "0.5"
@@ -138,6 +144,10 @@ hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
+# Share-link comments (`shares::comment_crypto`) are AES-256-GCM, the scheme
+# the web console uses. Already in the graph through rustls, so this adds no
+# crate to the build.
+ring = "0.17"
 # Emailed drive invites: a manager seals the drive key to the recipient's
 # ephemeral X25519 key (`shared_drives::invite_key`). Already in the graph
 # through the chat stack; `static_secrets` lets the KAT inject its secret.

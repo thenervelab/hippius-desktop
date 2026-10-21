@@ -3,6 +3,8 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
+import { insightsSheetAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { CAPTURE_OPEN_INSIGHTS_EVENT, type CaptureOpenInsights } from "@/app/lib/tauri/shareInsights";
 import { useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -58,6 +60,7 @@ export default function CaptureHost() {
   const setModes = useSetAtom(captureModesAtom);
   const setSurfaces = useSetAtom(captureSurfacesAtom);
   const setDialog = useSetAtom(captureDialogAtom);
+  const setInsights = useSetAtom(insightsSheetAtom);
   const startCapture = useStartCapture();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -123,6 +126,11 @@ export default function CaptureHost() {
       listen<CaptureManageLink>("capture_manage_link", (e) =>
         router.push(sharesPageHref([fileShareRowId(e.payload.shareToken)])),
       ),
+      // The card's Insights: this capture's link's Insights, over whatever
+      // page is open.
+      listen<CaptureOpenInsights>(CAPTURE_OPEN_INSIGHTS_EVENT, (e) =>
+        setInsights({ shareToken: e.payload.shareToken, fileName: e.payload.fileName }),
+      ),
     ];
     // `hippius --capture` / `--record` that started the app: Rust runs it
     // once this window listens for the start it emits.
@@ -132,7 +140,7 @@ export default function CaptureHost() {
     return () => {
       for (const u of unlisteners) void u.then((fn) => fn());
     };
-  }, [startCapture, queryClient, polkadotAddress, router, setDialog]);
+  }, [startCapture, queryClient, polkadotAddress, router, setDialog, setInsights]);
 
   if (!SCREEN_CAPTURE_ENABLED) return null;
   return (

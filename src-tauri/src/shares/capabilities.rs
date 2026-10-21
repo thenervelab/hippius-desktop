@@ -75,6 +75,30 @@ pub struct ServerCapabilities {
     /// shows for a file link (`shares::preview`). Absent on older servers,
     /// which then get no preview and no request.
     pub share_preview: bool,
+    /// Share link insights (hcfs #670): `GET /v1/shares/{token}/insights`
+    /// and `PATCH /v1/shares/{token}/settings`. Absent on older servers,
+    /// which then get no switches sent and show no Insights.
+    pub share_insights: bool,
+    /// Encrypted comments and reactions on share links (hcfs #671). Absent
+    /// on older servers: no Comments or Reactions switch, no comment list.
+    pub share_comments: bool,
+    /// Email notifications about share links (hcfs #672),
+    /// `/v1/notification-preferences`. Absent on older servers, which show
+    /// no such preferences.
+    pub share_notifications: bool,
+    /// Per-link view and comment counts on the owner's share listing
+    /// (hcfs #805). Absent on older servers: the Captures row's Insights
+    /// button carries no count and the tables no Views or Comments column.
+    pub share_listing_counts: bool,
+    /// When the owner last looked at a link's Insights (hcfs #805), for the
+    /// "new since you last looked" dot. Absent on older servers: no dot.
+    pub share_insights_seen: bool,
+    /// Replies to a comment, and the owner's own replies (hcfs #804). Absent
+    /// on older servers: comments list flat, with no Owner badge.
+    pub share_comment_replies: bool,
+    /// The moment of the recording each reaction was made at (hcfs #803).
+    /// Absent on older servers: reactions are totals only.
+    pub share_reaction_moments: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -209,7 +233,10 @@ mod tests {
         let caps: ServerCapabilities = serde_json::from_str(concat!(
             r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
             r#""folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"#,
-            r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true}"#,
+            r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
+            r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
+            r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
+            r#""share_reaction_moments":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -221,6 +248,13 @@ mod tests {
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
         assert!(caps.share_preview);
+        assert!(caps.share_insights);
+        assert!(caps.share_comments);
+        assert!(caps.share_notifications);
+        assert!(caps.share_listing_counts);
+        assert!(caps.share_insights_seen);
+        assert!(caps.share_comment_replies);
+        assert!(caps.share_reaction_moments);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
 
@@ -240,7 +274,14 @@ mod tests {
                 "folder_shares",
                 "member_folder_shares",
                 "share_owner_wrap",
+                "share_comment_replies",
+                "share_comments",
+                "share_insights",
+                "share_insights_seen",
+                "share_listing_counts",
+                "share_notifications",
                 "share_preview",
+                "share_reaction_moments",
                 "shares",
                 "upload_folder_shares"
             ]
@@ -257,6 +298,13 @@ mod tests {
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
         assert!(!old.share_preview, "a server without the preview routes is never sent one");
+        assert!(!old.share_insights, "a server without insights is sent no switches");
+        assert!(!old.share_comments, "a server without comments shows none");
+        assert!(!old.share_notifications, "a server without email preferences shows none");
+        assert!(!old.share_listing_counts, "a server without listing counts shows no counts");
+        assert!(!old.share_insights_seen, "a server without last-seen shows no new dot");
+        assert!(!old.share_comment_replies, "a server without replies lists comments flat");
+        assert!(!old.share_reaction_moments, "a server without reaction moments shows totals only");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="

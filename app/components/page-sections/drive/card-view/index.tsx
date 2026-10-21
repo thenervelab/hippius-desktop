@@ -32,6 +32,7 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
+import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { useRouter } from "next/navigation";
@@ -102,6 +103,7 @@ const CardView: FC<CardViewProps> = ({
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  const captureInsightsItem = useCaptureInsightsItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
   const { isSelectionMode, enterSelectionModeAndSelectFile } =
@@ -386,6 +388,12 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
+                          // Insights for a capture's link, on the Captures page.
+                          ...captureInsightsItem(
+                            file,
+                            shareTargetFor(file, currentSubfolderPath).relativePath,
+                            () => setOpenMenuIndex(null),
+                          ),
                           // Rename: same local-presence gating as the
                           // table-view 3-dots menu (shared `canRenameFile`),
                           // and absent where the role cannot write.

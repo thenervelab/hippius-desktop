@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "framer-motion";
 
 import { Icons } from "@/components/ui";
 import { HippiusLogo } from "@/components/ui/icons";
+import { HippiusBrandMark } from "@/components/ui/HippiusBrandMark";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -574,10 +575,7 @@ export default function UpdateDialog() {
                   )}
                 >
                   <div className="flex items-center gap-[8px] px-[4px] py-[5px] rounded-[9px] pointer-events-none">
-                    <HippiusLogo className="size-[28px] text-primary-50" />
-                    <span className="font-[557] text-[18px] leading-[18px] text-primary-50 tracking-[0px]">
-                      Hippius
-                    </span>
+                    <HippiusBrandMark />
                   </div>
                 </div>
 
@@ -635,7 +633,7 @@ export default function UpdateDialog() {
                         mode without any theme-aware classes.
 
                         The brand mark sits directly on the grid as the
-                        same blue Hippius logo the top bar uses — never on
+                        outlined blue Hippius logo, like the login tiles — never on
                         a filled blue badge. The solid-blue badge is
                         reserved for the bridge dialog and the OS tray
                         icon; every other surface shows this bare mark. */}

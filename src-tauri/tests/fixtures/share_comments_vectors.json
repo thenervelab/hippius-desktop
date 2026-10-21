@@ -1,0 +1,387 @@
+{
+  "scheme": "HKDF-SHA256(ikm=share key, salt=empty, info='hippius-share-comments-v1', L=32) -> AES-256-GCM, 12-byte nonce, 128-bit tag appended to ciphertext",
+  "share_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "share_key_b64url": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "token": "sx5QIbv8AjPlxin1kZs0jw",
+  "comment_key_hex": "bc6c6ddbd2cf2e668b7363c825f18aac130bdd2a9b76c1e531d81d35b924248a",
+  "vectors": [
+    {
+      "kind": "comment",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:comment",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"text\":\"Looks great at 1:23!\",\"name\":\"Ahmad\"}",
+      "ciphertext_b64": "vm37sBJMsORN1C4nl2iM8q3WWm40e5/GDM0LA/bs/+puAC2M9B8B6g67JlYOuI7VjR0gNSLX0ycYwilx2A8="
+    },
+    {
+      "kind": "comment-anonymous",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:comment",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"text\":\"Nice\",\"name\":null}",
+      "ciphertext_b64": "vm37sBJMsORN1igrmTmAt7HSVn82IIWTUZtEJXGMS32oB7heevGREPyKSA=="
+    },
+    {
+      "kind": "viewer-name",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:viewer-name",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"name\":\"Ahmad\"}",
+      "ciphertext_b64": "vm3htAddsORN2SklnX+O6Bxf4dXj2QevbVAeBeRoQRA="
+    }
+  ],
+  "names": {
+    "rule": "cleanName(name): replace each lone surrogate with U+FFFD (see lone_surrogates), then remove the bidi embedding, override and isolate controls (U+202A-U+202E, U+2066-U+2069; LRM, RLM and ALM stay), trim with ECMAScript String.prototype.trim, keep the first max_chars code points, trim the end, then null when only White_Space, Cc, Cf (minus the prepended concatenation marks U+0600-0605, U+06DD, U+070F, U+0890-0891, U+08E2, U+110BD, U+110CD), Default_Ignorable_Code_Point or U+2800 remain. Every blank name cleans to null. Every visible name, with a space added on each side, cleans to itself. Every cleaned entry's name cleans to its cleaned value. Visible and cleaned names contain no Cc and no line or paragraph separators: the desktop replaces those in a shown name, so only the blank list may hold them.",
+    "max_chars": 80,
+    "blank": [
+      {
+        "label": "empty",
+        "name": ""
+      },
+      {
+        "label": "spaces",
+        "name": "   "
+      },
+      {
+        "label": "tab and newline",
+        "name": "\t\n"
+      },
+      {
+        "label": "no-break space",
+        "name": "\u00a0"
+      },
+      {
+        "label": "control characters",
+        "name": "\u0001\u007f\u009b"
+      },
+      {
+        "label": "ideographic space",
+        "name": "\u3000"
+      },
+      {
+        "label": "zero-width space",
+        "name": "\u200b"
+      },
+      {
+        "label": "zero-width non-joiner",
+        "name": "\u200c"
+      },
+      {
+        "label": "zero-width joiner",
+        "name": "\u200d"
+      },
+      {
+        "label": "word joiner",
+        "name": "\u2060"
+      },
+      {
+        "label": "byte order mark",
+        "name": "\ufeff"
+      },
+      {
+        "label": "left-to-right mark",
+        "name": "\u200e"
+      },
+      {
+        "label": "right-to-left override",
+        "name": "\u202e"
+      },
+      {
+        "label": "soft hyphen",
+        "name": "\u00ad"
+      },
+      {
+        "label": "combining grapheme joiner",
+        "name": "\u034f"
+      },
+      {
+        "label": "variation selector",
+        "name": "\ufe0f"
+      },
+      {
+        "label": "Hangul filler",
+        "name": "\u3164"
+      },
+      {
+        "label": "braille blank",
+        "name": "\u2800"
+      },
+      {
+        "label": "tag character",
+        "name": "\udb40\udc41"
+      },
+      {
+        "label": "mixed",
+        "name": " \u200b\u200c \u200d\u2060\ufeff "
+      },
+      {
+        "label": "invisible up to the limit",
+        "name": "\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam"
+      },
+      {
+        "label": "next line is not trimmed, so it counts toward the limit",
+        "name": "\u0085\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam"
+      },
+      {
+        "label": "control characters up to the limit",
+        "name": "\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001Sam"
+      },
+      {
+        "label": "only overrides and isolates",
+        "name": "\u202e\u2066 \u2069\u202c"
+      },
+      {
+        "label": "only LRE",
+        "name": "\u202a\u202a\u202a"
+      },
+      {
+        "label": "only RLE",
+        "name": "\u202b\u202b\u202b"
+      },
+      {
+        "label": "only PDF",
+        "name": "\u202c\u202c\u202c"
+      },
+      {
+        "label": "only LRO",
+        "name": "\u202d\u202d\u202d"
+      },
+      {
+        "label": "only RLO",
+        "name": "\u202e\u202e\u202e"
+      },
+      {
+        "label": "only LRI",
+        "name": "\u2066\u2066\u2066"
+      },
+      {
+        "label": "only RLI",
+        "name": "\u2067\u2067\u2067"
+      },
+      {
+        "label": "only FSI",
+        "name": "\u2068\u2068\u2068"
+      },
+      {
+        "label": "only PDI",
+        "name": "\u2069\u2069\u2069"
+      }
+    ],
+    "visible": [
+      {
+        "label": "plain",
+        "name": "Sam"
+      },
+      {
+        "label": "accented",
+        "name": "Zo\u00eb"
+      },
+      {
+        "label": "CJK",
+        "name": "\u5c71\u7530"
+      },
+      {
+        "label": "emoji",
+        "name": "\ud83d\ude00"
+      },
+      {
+        "label": "ZWJ emoji sequence",
+        "name": "\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67"
+      },
+      {
+        "label": "Persian with ZWNJ",
+        "name": "\u0645\u06cc\u200c\u062e\u0648\u0627\u0647\u0645"
+      },
+      {
+        "label": "visible inside zero-width",
+        "name": "\u200bSam\u200b"
+      },
+      {
+        "label": "Arabic end of ayah",
+        "name": "\u06dd"
+      },
+      {
+        "label": "Arabic number sign",
+        "name": "\u0600"
+      },
+      {
+        "label": "Kaithi number sign",
+        "name": "\ud804\udcbd"
+      },
+      {
+        "label": "every prepended concatenation mark",
+        "name": "\u0600\u0601\u0602\u0603\u0604\u0605\u06dd\u070f\u0890\u0891\u08e2\ud804\udcbd\ud804\udccd"
+      },
+      {
+        "label": "the limit counts code points, not UTF-16 units",
+        "name": "\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41\udb40\udc41Sam"
+      },
+      {
+        "label": "Hebrew then Latin",
+        "name": "\u05d3\u05e0\u05d9 Dan"
+      },
+      {
+        "label": "Arabic with a digit and RLM",
+        "name": "\u0639\u0644\u064a\u200f 2"
+      },
+      {
+        "label": "Latin then Arabic with LRM",
+        "name": "Ali\u200e \u0639\u0644\u064a"
+      },
+      {
+        "label": "ALM is kept",
+        "name": "Sam\u061c1"
+      }
+    ],
+    "cleaned": [
+      {
+        "label": "LRE is removed",
+        "name": "\u202aSam\u202a",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLE is removed",
+        "name": "\u202bSam\u202b",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "PDF is removed",
+        "name": "\u202cSam\u202c",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "LRO is removed",
+        "name": "\u202dSam\u202d",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLO is removed",
+        "name": "\u202eSam\u202e",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "LRI is removed",
+        "name": "\u2066Sam\u2066",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "RLI is removed",
+        "name": "\u2067Sam\u2067",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "FSI is removed",
+        "name": "\u2068Sam\u2068",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "PDI is removed",
+        "name": "\u2069Sam\u2069",
+        "cleaned": "Sam"
+      },
+      {
+        "label": "an override inside a visible name is removed",
+        "name": "Ev\u202ee",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "an override cannot keep leading spaces past the trim",
+        "name": "\u202e  Eve",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "overrides do not count toward the limit",
+        "name": "\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202eEve",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "an isolated name loses its isolates",
+        "name": "\u2067Eve\u2069",
+        "cleaned": "Eve"
+      },
+      {
+        "label": "overrides inside a name do not push text past the limit",
+        "name": "a\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202e\u202eb",
+        "cleaned": "ab"
+      },
+      {
+        "label": "a cut at a space does not end in it",
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa b",
+        "cleaned": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      {
+        "label": "a byte order mark is trimmed before the cut",
+        "name": "\ufeff\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bSam",
+        "cleaned": "\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200b\u200bS"
+      }
+    ]
+  },
+  "lone_surrogates": {
+    "rule": "A lone UTF-16 surrogate (U+D800-U+DBFF not followed by U+DC00-U+DFFF, or U+DC00-U+DFFF not preceded by U+D800-U+DBFF) becomes U+FFFD, as String.prototype.toWellFormed and a lossy UTF-8 decode do. The console does this to the text and the name before sealing, so it never writes a lone surrogate escape. Plaintexts sealed before that may hold one as a \\uXXXX escape: each case's plaintext must open to its text and name, the name then cleaned as `names` says (U+FFFD draws a glyph, so it is never blank). Sealing a case's text and name again gives {\"text\":text,\"name\":name} with no lone surrogate escape.",
+    "cases": [
+      {
+        "label": "lone high surrogate in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\ud800b\"}",
+        "text": "Hi",
+        "name": "a\ufffdb"
+      },
+      {
+        "label": "lone low surrogate in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\udc00b\"}",
+        "text": "Hi",
+        "name": "a\ufffdb"
+      },
+      {
+        "label": "reversed pair in a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"a\\udc00\\ud800b\"}",
+        "text": "Hi",
+        "name": "a\ufffd\ufffdb"
+      },
+      {
+        "label": "high surrogate at the end of a name",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"Sam\\ud83d\"}",
+        "text": "Hi",
+        "name": "Sam\ufffd"
+      },
+      {
+        "label": "a pair then a lone low surrogate",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\ud83d\ude00\\ude00\"}",
+        "text": "Hi",
+        "name": "\ud83d\ude00\ufffd"
+      },
+      {
+        "label": "a valid pair is untouched",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\ud83d\ude00\"}",
+        "text": "Hi",
+        "name": "\ud83d\ude00"
+      },
+      {
+        "label": "only lone surrogates is a name, not blank",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\\udc00\\udc00\"}",
+        "text": "Hi",
+        "name": "\ufffd\ufffd"
+      },
+      {
+        "label": "spaces around a lone surrogate are trimmed",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\" \\ud800 \"}",
+        "text": "Hi",
+        "name": "\ufffd"
+      },
+      {
+        "label": "a lone surrogate counts once toward the limit",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\ud800b\"}",
+        "text": "Hi",
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ufffd"
+      },
+      {
+        "label": "a bidi control between the halves of a pair does not rejoin them",
+        "plaintext": "{\"text\":\"Hi\",\"name\":\"\\ud83d\\u202e\\ude00\"}",
+        "text": "Hi",
+        "name": "\ufffd\ufffd"
+      },
+      {
+        "label": "lone surrogate in the text",
+        "plaintext": "{\"text\":\"a\\udfffb\",\"name\":null}",
+        "text": "a\ufffdb",
+        "name": null
+      }
+    ]
+  }
+}

@@ -528,6 +528,28 @@ describe("the card's actions (Rust decides which)", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  // Insights opens in the main window, and only once the server has them.
+  it("offers Insights for a capture with a link on a server that has them", async () => {
+    tauri.onInvoke("share_engagement_features", () => ({ insights: true, comments: true, notifications: false }));
+    tauri.onInvoke("capture_preview_open_insights", () => null);
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Insights" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_open_insights")).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("offers no Insights on a server without them", async () => {
+    tauri.onInvoke("share_engagement_features", () => ({ insights: false, comments: false, notifications: false }));
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.getByRole("menuitem", { name: "Manage link" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Insights" })).toBeNull();
+  });
+
   it("offers Manage link only when Rust does", async () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { revokeLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
