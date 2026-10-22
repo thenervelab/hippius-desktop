@@ -2467,7 +2467,7 @@ fn the_shortcut_starts_the_instant_area_screenshot() {
     assert!(page.contains("context.hostsBar && !counting && !instant &&"));
     // The main window passes Rust's payload on as is.
     let host = read("../app/components/capture/CaptureHost.tsx");
-    assert!(host.contains("listen<CaptureShortcutStart>(\"capture_shortcut_pressed\""));
+    assert!(host.contains("onTauriEvent<CaptureShortcutStart>(\"capture_shortcut_pressed\""));
 }
 
 /// Hippius stays reachable during a recording (macOS): the Dock's reopen is
