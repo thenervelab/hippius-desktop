@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import "@/app/lib/capture/floating-window.css";
 import { PILL_TIP_EVENT, getCapturePillTipNow, type CapturePillTipShown } from "@/app/lib/tauri/capture";
 import { TIP_BOX, TipLines } from "@/app/capture-overlay/BarTooltip";
@@ -40,9 +40,9 @@ export default function CapturePillTipPage() {
     void getCapturePillTipNow()
       .then(take)
       .catch(() => undefined);
-    const unlisten = listen<CapturePillTipShown>(PILL_TIP_EVENT, (e) => take(e.payload));
+    const unlisten = onTauriEvent<CapturePillTipShown>(PILL_TIP_EVENT, (e) => take(e.payload));
     return () => {
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, []);
 

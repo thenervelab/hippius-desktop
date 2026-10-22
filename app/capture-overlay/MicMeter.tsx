@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { MIC_LEVEL_EVENT, startCaptureMicMeter, stopCaptureMicMeter } from "@/app/lib/tauri/capture";
 import { litBars } from "./micLevel";
 
@@ -23,7 +23,7 @@ export default function MicMeter({ deviceId }: { deviceId: string | null }) {
 
   useEffect(() => {
     let cancelled = false;
-    const unlisten = listen<number>(MIC_LEVEL_EVENT, (e) => {
+    const unlisten = onTauriEvent<number>(MIC_LEVEL_EVENT, (e) => {
       if (!cancelled) setLit(litBars(e.payload, BARS));
     });
     // Stop exactly the meter this mount started: a newer one (another
@@ -31,7 +31,7 @@ export default function MicMeter({ deviceId }: { deviceId: string | null }) {
     const started = startCaptureMicMeter(deviceId).catch(() => null);
     return () => {
       cancelled = true;
-      void unlisten.then((fn) => fn());
+      unlisten();
       void started.then((generation) => {
         if (generation !== null) void stopCaptureMicMeter(generation).catch(() => undefined);
       });

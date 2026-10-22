@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Check, ChevronDown, LayoutGrid, Mic, MicOff, Monitor, MonitorOff, Video, VideoOff, X } from "lucide-react";
 import {
   getCaptureCameras,
@@ -506,9 +506,9 @@ function useDeviceList(read: () => Promise<CaptureDevice[]>, event: string, enab
   }, [read, enabled]);
   useEffect(() => {
     if (!enabled) return;
-    const unlisten = listen<CaptureDevice[]>(event, (e) => setDevices(e.payload));
+    const unlisten = onTauriEvent<CaptureDevice[]>(event, (e) => setDevices(e.payload));
     return () => {
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, [event, enabled]);
   return { devices, loading: reading > 0, refresh };

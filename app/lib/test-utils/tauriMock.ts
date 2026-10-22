@@ -47,6 +47,16 @@ export interface TauriMock {
   setInvokeFallback(handler: (command: string, args: InvokeArgs) => unknown): void;
   /** Simulate a Rust→FE event by dispatching to every `listen` handler for `name`. */
   emitEvent(name: string, payload: unknown): Promise<void>;
+  /**
+   * Model Tauri's registration gap from now on: `listen()` answers before
+   * the page holds the listener's entry, which lands only on
+   * `landListenerEntries()`. Until then an event skips the listener, and an
+   * unlisten rejects as Tauri's does ("listeners[eventId].handlerId") and
+   * leaves it registered.
+   */
+  holdListenerEntries(): void;
+  /** Land every held entry: the listeners hear events and unlisten cleanly. */
+  landListenerEntries(): void;
   /** Clear all handlers/listeners and the spies' call records. */
   reset(): void;
 }
@@ -55,6 +65,9 @@ export function makeTauriMock(): TauriMock {
   const invokeHandlers = new Map<string, InvokeHandler>();
   let fallback: ((command: string, args: InvokeArgs) => unknown) | null = null;
   const listeners = new Map<string, Set<EventHandler>>();
+  // `holdListenerEntries`: listeners registered while held, entry not landed.
+  let holding = false;
+  const held = new Set<EventHandler>();
 
   const invoke = vi.fn(async (command: string, args?: InvokeArgs) => {
     const handler = invokeHandlers.get(command);
@@ -73,7 +86,13 @@ export function makeTauriMock(): TauriMock {
       listeners.set(name, set);
     }
     set.add(handler);
+    if (holding) held.add(handler);
     return () => {
+      if (held.has(handler)) {
+        return Promise.reject(
+          new TypeError("undefined is not an object (evaluating 'listeners[eventId].handlerId')"),
+        );
+      }
       set.delete(handler);
     };
   });
@@ -105,12 +124,20 @@ export function makeTauriMock(): TauriMock {
       if (!set) return;
       // Snapshot before iterating: a `once` handler (or any unlisten-on-fire
       // handler) mutates `set` mid-dispatch, which would corrupt a live walk.
-      for (const handler of [...set]) handler({ payload });
+      for (const handler of [...set]) if (!held.has(handler)) handler({ payload });
+    },
+    holdListenerEntries() {
+      holding = true;
+    },
+    landListenerEntries() {
+      held.clear();
     },
     reset() {
       invokeHandlers.clear();
       fallback = null;
       listeners.clear();
+      holding = false;
+      held.clear();
       invoke.mockClear();
       listen.mockClear();
       emit.mockClear();

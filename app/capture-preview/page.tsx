@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import {
   AlertCircle,
   BarChart3,
@@ -148,12 +148,12 @@ export default function CapturePreviewPage() {
     void getCapturePreview()
       .then((c) => !heard && setCard(c))
       .catch(() => undefined);
-    const unlisten = listen<CapturePreviewCard | null>("capture_preview_changed", (e) => {
+    const unlisten = onTauriEvent<CapturePreviewCard | null>("capture_preview_changed", (e) => {
       heard = true;
       setCard(e.payload);
     });
     return () => {
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, []);
 
@@ -165,11 +165,11 @@ export default function CapturePreviewPage() {
   useEffect(() => {
     if (followingId === null) return;
     const unlisteners = [
-      listen<RemoteUploadProgress>("remote_upload_progress", (e) => setRow(e.payload)),
-      listen<SyncSnapshot>("sync_progress_snapshot", (e) => setSyncFiles(e.payload.files)),
+      onTauriEvent<RemoteUploadProgress>("remote_upload_progress", (e) => setRow(e.payload)),
+      onTauriEvent<SyncSnapshot>("sync_progress_snapshot", (e) => setSyncFiles(e.payload.files)),
     ];
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
   }, [followingId]);
 
