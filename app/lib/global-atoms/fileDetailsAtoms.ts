@@ -5,8 +5,7 @@
 // below 2xl) while every consumer — table rows, card view, context menu,
 // keyboard shortcuts — flips a single source of truth.
 
-import { atom } from "jotai";
-import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { fileDetailsPanelTargetAtom } from "./sidePanelAtoms";
 
 /**
  * Selected file for the inline File Details panel. `null` means closed.
@@ -15,5 +14,8 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
  * panel opens). DriveContent re-syncs the latest copy from `filteredData`
  * via an effect so the panel keeps showing fresh data without each
  * consumer needing to know about live lookups.
+ *
+ * It shares the side panel slot with Insights and Manage access: opening it
+ * closes them (`sidePanelAtoms`).
  */
-export const fileDetailsPanelAtom = atom<FormattedUserFile | null>(null);
+export const fileDetailsPanelAtom = fileDetailsPanelTargetAtom;

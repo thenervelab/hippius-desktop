@@ -8,20 +8,23 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Ban,
   BarChart3,
+  ChevronRight,
   Eye,
+  EyeOff,
   File as FileIcon,
   ImageIcon,
   Loader2,
-  MessageSquare,
   MoreHorizontal,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   Video,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { FramedDialog } from "@/components/ui/FramedDialog";
+import { SidePanel } from "@/components/ui/SidePanel";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -81,29 +84,39 @@ import {
   averageWatchMs,
   biggestDrop,
   countLabel,
+  emptyInsightsCopy,
   estimateDurationMs,
   formatAgo,
   formatMomentAt,
   formatPercent,
   formatWatched,
   headerLine,
+  linkSwitchSummary,
   usesTabs,
   viewerName,
 } from "./insightsView";
 
-// The sheet's tokens: the app's own greys and brand blue, one border colour
-// per theme, so every hairline in the sheet is the same.
+// The panel's tokens: the app's own greys and brand blue, one border colour
+// per theme (the side panels' own hairline), so every line in it matches.
 const MUTED = "text-grey-50 dark:text-grey-dark-600";
 const STRONG = "text-grey-10 dark:text-white";
-const HAIRLINE = "border-grey-80 dark:border-[#494949]";
-const DIVIDE = "divide-grey-80 dark:divide-[#333]";
+const HAIRLINE = "border-grey-80 dark:border-white/10";
+const DIVIDE = "divide-grey-80 dark:divide-white/10";
 const SKELETON = "animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500";
 const BAR_TRACK = "h-1 overflow-hidden rounded-full bg-grey-90 dark:bg-[#333]";
 const BAR_FILL = "h-full rounded-full bg-primary-50 dark:bg-primary-brand-dark";
+// A quiet card on the panel's background, the side panels' pill tone.
+const CARD = "rounded-[12px] bg-[#0000000A] dark:bg-white/[0.04]";
 const TEXT_LINK = cn(
   "inline-flex items-center gap-1 rounded text-[12.5px] font-medium text-primary-50 hover:underline",
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-primary-brand-dark",
 );
+
+/**
+ * Wider than File Details' 305: like Manage access, this panel holds lists,
+ * a chart and a row of three numbers.
+ */
+export const INSIGHTS_PANEL_WIDTH_PX = 360;
 
 export { insightsQueryKey, commentsQueryKey, reactionsQueryKey, linkSettingsQueryKey };
 
@@ -112,58 +125,33 @@ const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|heic)$/i;
 
 /**
  * The owner's Insights for one link, opened from Shared Links, a row on the
- * Captures page or the capture card (`insightsSheetAtom`). Mounted once in
- * the pages layout. Every number, and whether it is locked, comes from Rust.
+ * Captures page or the capture card (`insightsSheetAtom`). A right-side
+ * panel in the same slot as File Details and Manage access (`SidePanel`),
+ * mounted once beside the page in `ResponsiveContent`, so it opens over
+ * whatever page is showing. Every number, and whether it is locked, comes
+ * from Rust.
  */
 export default function ShareInsightsSheet() {
   const [target, setTarget] = useAtom(insightsSheetAtom);
-  if (!target) return null;
+  const onClose = () => setTarget(null);
   return (
-    <InsightsSheetFor
-      key={target.shareToken}
-      shareToken={target.shareToken}
-      fileName={target.fileName}
-      file={target.file}
-      onClose={() => setTarget(null)}
-    />
-  );
-}
-
-function InsightsSheetFor({
-  shareToken,
-  fileName,
-  file,
-  onClose,
-}: {
-  shareToken: string;
-  fileName: string;
-  file?: FormattedUserFile;
-  onClose: () => void;
-}) {
-  // The recording's length, read off the capture itself when it is on this
-  // device; otherwise worked out from the viewers (`estimateDurationMs`).
-  const [mediaMs, setMediaMs] = useState<number | null>(null);
-  const durationMs = useDurationMs(shareToken, mediaMs);
-  const queryClient = useQueryClient();
-  const summary = useMemo(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
-  const subtitle = headerLine({
-    sharedAt: summary?.createdAt ?? null,
-    durationMs,
-    expiresAt: summary ? summary.expiresAt : undefined,
-  });
-  return (
-    <FramedDialog
-      open
+    <SidePanel
+      open={target !== null}
       onClose={onClose}
-      title={<span title={fileName}>{fileName}</span>}
-      titleClassName="text-[15px] leading-6"
-      headerLayout="leading"
-      leadingVisual={<HeaderThumb file={file} fileName={fileName} onDuration={setMediaMs} />}
-      subtitle={subtitle ? <span className="block truncate">{subtitle}</span> : undefined}
-      maxWidth="max-w-[560px]"
+      width={INSIGHTS_PANEL_WIDTH_PX}
+      label={target ? `Insights for ${target.fileName}` : "Insights"}
+      focusKey={target?.shareToken}
     >
-      <InsightsBody shareToken={shareToken} onLeave={onClose} durationMs={durationMs} />
-    </FramedDialog>
+      {target && (
+        <InsightsPanelFor
+          key={target.shareToken}
+          shareToken={target.shareToken}
+          fileName={target.fileName}
+          file={target.file}
+          onClose={onClose}
+        />
+      )}
+    </SidePanel>
   );
 }
 
@@ -189,7 +177,7 @@ function useDurationMs(shareToken: string, mediaMs: number | null): number | nul
 
 /**
  * A frame of the capture when it is on this device (a recording also gives
- * the sheet its length), otherwise a tile with the file's kind.
+ * the panel its length), otherwise a tile with the file's kind.
  */
 function HeaderThumb({
   file,
@@ -210,9 +198,8 @@ function HeaderThumb({
     <span
       aria-hidden
       className={cn(
-        "relative flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[7px] border",
-        HAIRLINE,
-        "bg-grey-90 text-grey-50 dark:bg-[#2a2a2a] dark:text-grey-dark-600",
+        "relative flex h-9 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[8px]",
+        url ? "bg-[#000]" : "bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark",
       )}
     >
       {url && isVideo ? (
@@ -232,7 +219,7 @@ function HeaderThumb({
       ) : url && isImage ? (
         <img src={url} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
       ) : (
-        <Icon className="size-4" />
+        <Icon className="size-[18px]" />
       )}
     </span>
   );
@@ -240,18 +227,41 @@ function HeaderThumb({
 
 type TabKey = "overview" | "viewers" | "comments";
 
-export function InsightsBody({
+/**
+ * The panel: a fixed header (the capture, its name, "Shared … · length ·
+ * link on", Close), the tabs once there are many viewers or comments, one
+ * scrolling body, and a footer that keeps "On this link" a click away.
+ */
+function InsightsPanelFor({
   shareToken,
-  onLeave,
-  durationMs = null,
+  fileName,
+  file,
+  onClose,
 }: {
   shareToken: string;
-  onLeave: () => void;
-  durationMs?: number | null;
+  fileName: string;
+  file?: FormattedUserFile;
+  onClose: () => void;
 }) {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const tabsId = useId();
+  const titleId = useId();
   const [tab, setTab] = useState<TabKey>("overview");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const linkSectionRef = useRef<HTMLHeadingElement>(null);
+
+  // The recording's length, read off the capture itself when it is on this
+  // device; otherwise worked out from the viewers (`estimateDurationMs`).
+  const [mediaMs, setMediaMs] = useState<number | null>(null);
+  const durationMs = useDurationMs(shareToken, mediaMs);
+  const queryClient = useQueryClient();
+  const summary = useMemo(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  const subtitle = headerLine({
+    sharedAt: summary?.createdAt ?? null,
+    durationMs,
+    expiresAt: summary ? summary.expiresAt : undefined,
+  });
+
   const insights = useQuery({
     queryKey: insightsQueryKey(shareToken),
     queryFn: () => getShareInsights(shareToken),
@@ -263,6 +273,14 @@ export function InsightsBody({
     queryFn: () => getLinkSettings(shareToken),
     retry: false,
   });
+  // The same query the Reactions section reads, to know when nothing at all
+  // has happened on the link yet.
+  const reactions = useQuery({
+    queryKey: reactionsQueryKey(shareToken),
+    queryFn: () => getShareReactions(shareToken),
+    retry: false,
+    enabled: commentsEnabled,
+  });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
   const notCounting = switches.data?.offered.insights === true && !switches.data.on.insights;
 
@@ -272,78 +290,198 @@ export function InsightsBody({
   const tabbed = usesTabs(viewers?.length ?? 0, commentCount);
   const plan = insights.data?.plan ?? null;
 
-  const overview = (
-    <div className="flex flex-col gap-6">
-      {insights.isPending ? (
-        <InsightsSkeleton />
-      ) : insights.isError ? (
-        <div role="alert" className={cn("flex flex-col items-start gap-2 rounded-[12px] border p-3", HAIRLINE)}>
-          <p className="text-sm text-grey-20 dark:text-grey-dark-800">
-            Couldn&apos;t load insights. {errorMessage(insights.error)}
-          </p>
-          <Button variant="defaultStable" size="sm" onClick={() => void insights.refetch()}>
-            Try again
-          </Button>
-        </div>
-      ) : (
-        <InsightsNumbers
-          insights={insights.data}
-          notCounting={notCounting}
-          onUpgrade={onLeave}
-          durationMs={durationMs}
-          comments={commentsEnabled ? commentList : null}
-          commentsLoading={commentsEnabled && moderation.comments.isPending}
-          onSeeAllViewers={tabbed ? () => setTab("viewers") : null}
-        />
+  // Nothing has happened on the link yet: no views, comments or reactions.
+  // Then the panel is one short block and the link's switches, instead of a
+  // zero, three empty tiles and an empty state per section.
+  const locked =
+    insights.data !== undefined &&
+    (insights.data.completion.state === "locked" ||
+      insights.data.retention.state === "locked" ||
+      insights.data.viewers.state === "locked");
+  const noViews = insights.isSuccess && !locked && insights.data.totalViews === 0;
+  const engagementSettled =
+    !commentsEnabled || (!moderation.comments.isPending && !reactions.isPending);
+  const noEngagement =
+    !commentsEnabled ||
+    (moderation.comments.isSuccess &&
+      commentList.length === 0 &&
+      !moderation.comments.data.unreadable &&
+      reactions.isSuccess &&
+      reactions.data.total === 0);
+  const quiet = noViews && engagementSettled && noEngagement;
+  // Held on the skeleton until comments and reactions answer, so the quiet
+  // block never flashes in and then gives way to sections.
+  const loading = insights.isPending || (noViews && !engagementSettled);
+
+  const footer = linkSwitchSummary(switches.data ?? null);
+  const showFooter = !quiet && !loading && footer !== null;
+
+  /** The footer's Change: back to the overview, then to On this link. */
+  const goToLinkSettings = () => {
+    setTab("overview");
+    requestAnimationFrame(() => {
+      const heading = linkSectionRef.current;
+      heading?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      heading?.focus({ preventScroll: true });
+    });
+  };
+  const goToTab = (next: TabKey) => {
+    setTab(next);
+    scrollRef.current?.scrollTo?.({ top: 0 });
+  };
+
+  const onThisLink = <OnThisLink shareToken={shareToken} onLeave={onClose} headingRef={linkSectionRef} />;
+
+  const overview = loading ? (
+    <InsightsSkeleton />
+  ) : insights.isError ? (
+    <div className="flex flex-col gap-5">
+      <div role="alert" className={cn("flex flex-col items-start gap-2 p-3", CARD)}>
+        <p className="text-sm text-grey-20 dark:text-grey-dark-800">
+          Couldn&apos;t load insights. {errorMessage(insights.error)}
+        </p>
+        <Button variant="defaultStable" size="sm" onClick={() => void insights.refetch()}>
+          Try again
+        </Button>
+      </div>
+      {commentsEnabled && (
+        <CommentsSection moderation={moderation} plan={plan} limit={null} onSeeAll={null} />
       )}
+      {commentsEnabled && <ReactionsSection shareToken={shareToken} />}
+      {onThisLink}
+      <HowWeCountViews />
+    </div>
+  ) : quiet ? (
+    <div className="flex flex-col gap-5">
+      <EmptyBlock
+        icon={notCounting ? <EyeOff className="size-[18px]" /> : <Eye className="size-[18px]" />}
+        {...emptyInsightsCopy({ notCounting, commentsEnabled })}
+      />
+      {onThisLink}
+      <HowWeCountViews />
+    </div>
+  ) : (
+    <div className="flex flex-col gap-6">
+      <InsightsNumbers
+        insights={insights.data!}
+        notCounting={notCounting}
+        onUpgrade={onClose}
+        durationMs={durationMs}
+        comments={commentsEnabled ? commentList : null}
+        commentsLoading={commentsEnabled && moderation.comments.isPending}
+        onSeeAllViewers={tabbed ? () => goToTab("viewers") : null}
+      />
       {commentsEnabled && (
         <CommentsSection
           moderation={moderation}
           plan={plan}
           limit={tabbed ? OVERVIEW_COMMENTS : null}
-          onSeeAll={tabbed ? () => setTab("comments") : null}
+          onSeeAll={tabbed ? () => goToTab("comments") : null}
         />
       )}
       {commentsEnabled && <ReactionsSection shareToken={shareToken} />}
-      <OnThisLink shareToken={shareToken} onLeave={onLeave} />
+      {onThisLink}
       <HowWeCountViews />
     </div>
   );
-
-  if (!tabbed) return <div className="font-geist">{overview}</div>;
 
   const tabs = [
     { tabName: "Overview", tabKey: "overview" },
     ...(viewers && viewers.length > 0 ? [{ tabName: `Viewers ${viewers.length}`, tabKey: "viewers" }] : []),
     ...(commentCount > 0 ? [{ tabName: `Comments ${commentCount}`, tabKey: "comments" }] : []),
   ];
+
   return (
-    <div className="flex flex-col gap-4 font-geist">
-      <TabList
-        idBase={tabsId}
-        ariaLabel="Insights"
-        tabs={tabs}
-        activeTab={tab}
-        onTabChange={(key) => setTab(key as TabKey)}
-        className="flex w-full"
-        width="min-w-0 flex-1"
-        height="h-[32px]"
-        showTooltip={false}
-      />
-      <TabPanel idBase={tabsId} tabKey="overview" activeTab={tab}>
-        {overview}
-      </TabPanel>
-      {viewers && viewers.length > 0 && (
-        <TabPanel idBase={tabsId} tabKey="viewers" activeTab={tab}>
-          <Section title="Viewers" aside="Most recent first">
-            <ViewerRows viewers={viewers} />
-          </Section>
-        </TabPanel>
+    <div className="flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel">
+      <header className={cn("shrink-0 border-b px-4 pb-3.5 pt-4", HAIRLINE)}>
+        <div className="flex items-start gap-2.5">
+          <HeaderThumb file={file} fileName={fileName} onDuration={setMediaMs} />
+          <div className="min-w-0 flex-1">
+            <h2
+              id={titleId}
+              tabIndex={-1}
+              data-panel-autofocus
+              title={fileName}
+              className={cn(
+                "line-clamp-2 break-words text-[15px] font-semibold leading-5 outline-none [overflow-wrap:anywhere]",
+                STRONG,
+              )}
+            >
+              <span className="sr-only">Insights for </span>
+              {fileName}
+            </h2>
+            {subtitle ? <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p> : null}
+          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="flex size-[30px] shrink-0 items-center justify-center rounded-lg text-grey-50 transition-colors hover:bg-grey-90 hover:text-grey-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </header>
+
+      {tabbed && (
+        <div className={cn("shrink-0 border-b px-4 py-2.5", HAIRLINE)}>
+          <TabList
+            idBase={tabsId}
+            ariaLabel="Insights"
+            tabs={tabs}
+            activeTab={tab}
+            onTabChange={(key) => goToTab(key as TabKey)}
+            className="flex w-full"
+            width="min-w-0 flex-1"
+            height="h-[30px]"
+            tabItemPaddingX="px-2"
+            showTooltip={false}
+          />
+        </div>
       )}
-      {commentCount > 0 && (
-        <TabPanel idBase={tabsId} tabKey="comments" activeTab={tab}>
-          <CommentsSection moderation={moderation} plan={plan} limit={null} onSeeAll={null} />
-        </TabPanel>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
+        {!tabbed ? (
+          overview
+        ) : (
+          <>
+            <TabPanel idBase={tabsId} tabKey="overview" activeTab={tab}>
+              {overview}
+            </TabPanel>
+            {viewers && viewers.length > 0 && (
+              <TabPanel idBase={tabsId} tabKey="viewers" activeTab={tab}>
+                <Section title="Viewers" aside="Most recent first">
+                  <ViewerRows viewers={viewers} />
+                </Section>
+              </TabPanel>
+            )}
+            {commentCount > 0 && (
+              <TabPanel idBase={tabsId} tabKey="comments" activeTab={tab}>
+                <CommentsSection moderation={moderation} plan={plan} limit={null} onSeeAll={null} />
+              </TabPanel>
+            )}
+          </>
+        )}
+      </div>
+
+      {showFooter && (
+        <footer className={cn("shrink-0 border-t px-2 py-1.5", HAIRLINE)}>
+          <button
+            type="button"
+            onClick={goToLinkSettings}
+            className={cn(
+              "flex w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left transition-colors",
+              "hover:bg-[#0000000A] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:hover:bg-white/[0.06]",
+            )}
+          >
+            <SlidersHorizontal aria-hidden className={cn("size-4 shrink-0", MUTED)} />
+            <span className="min-w-0 flex-1">
+              <span className={cn("block text-[12.5px] font-semibold leading-4", STRONG)}>On this link</span>
+              <span className={cn("block truncate text-xs leading-4", MUTED)}>{footer}</span>
+            </span>
+            <ChevronRight aria-hidden className={cn("size-4 shrink-0", MUTED)} />
+          </button>
+        </footer>
       )}
     </div>
   );
@@ -352,17 +490,24 @@ export function InsightsBody({
 function Section({
   title,
   aside,
+  headingRef,
   children,
 }: {
   title: string;
   aside?: ReactNode;
+  headingRef?: React.Ref<HTMLHeadingElement>;
   children: ReactNode;
 }) {
   const id = useId();
   return (
     <section aria-labelledby={id}>
       <div className="mb-2.5 flex items-baseline justify-between gap-3">
-        <h3 id={id} className={cn("text-[13.5px] font-semibold", STRONG)}>
+        <h3
+          id={id}
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+          className={cn("scroll-mt-4 text-[13.5px] font-semibold outline-none", STRONG)}
+        >
           {title}
         </h3>
         {aside !== undefined && aside !== null && <span className={cn("text-right text-xs", MUTED)}>{aside}</span>}
@@ -374,13 +519,13 @@ function Section({
 
 function InsightsSkeleton() {
   return (
-    <div data-testid="insights-loading" className="flex flex-col gap-6" aria-busy="true">
+    <div data-testid="insights-loading" className="flex flex-col gap-5" aria-busy="true">
       <div className="flex items-end justify-between">
-        <div className={cn(SKELETON, "h-10 w-32")} />
         <div className={cn(SKELETON, "h-8 w-28")} />
+        <div className={cn(SKELETON, "h-7 w-24")} />
       </div>
-      <div className={cn(SKELETON, "h-[62px] rounded-[12px]")} />
-      <div className={cn(SKELETON, "h-[150px]")} />
+      <div className={cn(SKELETON, "h-[58px] rounded-[12px]")} />
+      <div className={cn(SKELETON, "h-[120px]")} />
       <div className="flex flex-col gap-3">
         {[0, 1, 2].map((i) => (
           <div key={i} className={cn(SKELETON, "h-9")} />
@@ -395,10 +540,10 @@ function Hero({ views, aside }: { views: number; aside: ReactNode }) {
   return (
     <div className="flex items-end justify-between gap-3">
       <p className={cn("flex items-baseline gap-1.5", STRONG)}>
-        <span className="text-[40px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{views}</span>
+        <span className="text-[32px] font-semibold leading-none tracking-[-0.03em] tabular-nums">{views}</span>
         <span className={cn("text-sm font-medium", MUTED)}>{views === 1 ? "view" : "views"}</span>
       </p>
-      <div className={cn("flex flex-col items-end gap-1.5 text-right text-xs", MUTED)}>{aside}</div>
+      <div className={cn("flex min-w-0 flex-col items-end gap-1.5 text-right text-xs", MUTED)}>{aside}</div>
     </div>
   );
 }
@@ -410,12 +555,12 @@ function KpiStrip({ items }: { items: Array<{ label: string; value: ReactNode; m
       style={{ gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
     >
       {items.map(({ label, value, muted }, i) => (
-        <div key={label} className={cn("flex min-w-0 flex-col gap-0.5 px-2.5 py-2.5 sm:px-3", i > 0 && cn("border-l", HAIRLINE))}>
+        <div key={label} className={cn("flex min-w-0 flex-col gap-0.5 px-2.5 py-2", i > 0 && cn("border-l", HAIRLINE))}>
           <dt className={cn("truncate text-[11.5px]", MUTED)}>{label}</dt>
           <dd
             className={cn(
               "truncate font-semibold tabular-nums tracking-[-0.01em]",
-              muted ? cn("text-sm font-medium leading-7", MUTED) : cn("text-[19px] leading-7", STRONG),
+              muted ? cn("text-[13px] font-medium leading-7", MUTED) : cn("text-[18px] leading-7", STRONG),
             )}
           >
             {value}
@@ -454,7 +599,8 @@ function InsightsNumbers({
     // with no real value anywhere in it: Rust sends none for a locked metric.
     // A free link that is not counting views has no real numbers at all, so
     // its two counts are samples under the lock too, rather than a "0" that
-    // reads as nobody having opened it.
+    // reads as nobody having opened it. Two sample viewers are enough to say
+    // what the list holds, and keep the panel's switches near.
     return (
       <>
         {!notCounting && (
@@ -471,7 +617,7 @@ function InsightsNumbers({
           />
         )}
         <Locked notCounting={notCounting} onUpgrade={onUpgrade}>
-          <div className="flex flex-col gap-5 p-4">
+          <div className="flex flex-col gap-4 p-3.5">
             {notCounting && (
               <Hero views={SAMPLE_VIEWS} aside={<span>{SAMPLE_UNIQUE_VIEWERS} people watched</span>} />
             )}
@@ -483,10 +629,23 @@ function InsightsNumbers({
               ]}
             />
             <RetentionChart values={SAMPLE_RETENTION} durationMs={252_000} />
-            <ViewerRows viewers={SAMPLE_VIEWERS} />
+            <ViewerRows viewers={SAMPLE_VIEWERS.slice(0, 2)} />
           </div>
         </Locked>
       </>
+    );
+  }
+
+  // Views, comments or reactions without a single counted view (a link that
+  // stopped counting, say): one line, not a zero and three empty tiles.
+  if (insights.totalViews === 0) {
+    return (
+      <EmptyBlock
+        compact
+        icon={<Eye className="size-4" />}
+        title="No views yet"
+        body="Views show up here once someone opens the link."
+      />
     );
   }
 
@@ -543,38 +702,49 @@ function InsightsNumbers({
           <RetentionChart values={retentionValues} durationMs={durationMs} comments={comments ?? []} />
         </Section>
       )}
-      {insights.totalViews === 0 ? (
-        <EmptyState
-          icon={<Eye className="size-5" />}
-          title="No views yet"
-          body="No one has opened this link yet. Views show up here once someone does."
-        />
-      ) : (
-        <Section title="Viewers" aside="Most recent first">
-          <ViewerRows viewers={viewerRows} limit={OVERVIEW_VIEWERS} onSeeAll={onSeeAllViewers} />
-        </Section>
-      )}
+      <Section title="Viewers" aside="Most recent first">
+        <ViewerRows viewers={viewerRows} limit={OVERVIEW_VIEWERS} onSeeAll={onSeeAllViewers} />
+      </Section>
     </>
   );
 }
 
-function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+/**
+ * The panel's one empty block: an icon, a line and a sentence on a quiet
+ * card. `compact` is the one-line form a section uses inside a busier panel.
+ */
+function EmptyBlock({
+  icon,
+  title,
+  body,
+  compact = false,
+}: {
+  icon: ReactNode;
+  title: string;
+  body: string;
+  compact?: boolean;
+}) {
   return (
-    <div className="flex flex-col items-center gap-2 px-4 py-6 text-center">
+    <div className={cn("flex items-start gap-3", compact ? "px-3 py-2.5" : "p-3.5", CARD)}>
       <span
         aria-hidden
-        className="mb-1 flex size-11 items-center justify-center rounded-[14px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
+        className={cn(
+          "flex shrink-0 items-center justify-center bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark",
+          compact ? "size-7 rounded-[8px]" : "size-9 rounded-[10px]",
+        )}
       >
         {icon}
       </span>
-      <p className={cn("text-sm font-semibold", STRONG)}>{title}</p>
-      <p className={cn("max-w-[32ch] text-xs leading-5", MUTED)}>{body}</p>
+      <div className="min-w-0">
+        <p className={cn("text-[13.5px] font-semibold leading-5", STRONG)}>{title}</p>
+        <p className={cn("mt-0.5 text-xs leading-[1.45]", MUTED)}>{body}</p>
+      </div>
     </div>
   );
 }
 
 /**
- * The locked part of the sheet: what it holds is drawn blurred, hidden from
+ * The locked part of the panel: what it holds is drawn blurred, hidden from
  * assistive tech and unreachable by keyboard or pointer, under one prompt.
  * Both sit in one grid cell, so the box is as tall as the taller of the two.
  */
@@ -589,24 +759,27 @@ function Locked({
 }) {
   const router = useRouter();
   return (
-    <div data-testid="insights-locked" className={cn("relative grid overflow-hidden rounded-[12px] border", HAIRLINE)}>
+    <div
+      data-testid="insights-locked"
+      className={cn("relative grid overflow-hidden rounded-[12px] border bg-white dark:bg-[#1c1c1c]", HAIRLINE)}
+    >
       <div aria-hidden="true" inert className="pointer-events-none col-start-1 row-start-1 select-none opacity-60 blur-[5px]">
         {children}
       </div>
       <div
         className={cn(
-          "col-start-1 row-start-1 flex items-center justify-center p-5",
-          "bg-gradient-to-b from-transparent via-white/80 to-white dark:via-[#1f1f1f]/80 dark:to-[#1f1f1f]",
+          "col-start-1 row-start-1 flex items-center justify-center p-4",
+          "bg-gradient-to-b from-white/30 via-white/85 to-white dark:from-[#1c1c1c]/30 dark:via-[#1c1c1c]/85 dark:to-[#1c1c1c]",
         )}
       >
-        <div className="flex max-w-[320px] flex-col items-center gap-2 text-center">
+        <div className="flex max-w-[290px] flex-col items-center gap-2 text-center">
           <span
             aria-hidden
-            className="mb-1 flex size-[42px] items-center justify-center rounded-[12px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
+            className="mb-1 flex size-[38px] items-center justify-center rounded-[11px] bg-primary-50/10 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
           >
-            <BarChart3 className="size-5" />
+            <BarChart3 className="size-[18px]" />
           </span>
-          <p className={cn("text-[14.5px] font-semibold", STRONG)}>{LOCK_TITLE}</p>
+          <p className={cn("text-[14px] font-semibold", STRONG)}>{LOCK_TITLE}</p>
           <p className="text-[12.5px] leading-5 text-grey-30 dark:text-grey-dark-700">
             {notCounting ? LOCK_BODY_NOT_COUNTING : LOCK_BODY}
           </p>
@@ -783,11 +956,7 @@ function CommentsSection({
         <>
           {comments.data.unreadable && <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>}
           {list.length === 0 ? (
-            <EmptyState
-              icon={<MessageSquare className="size-5" />}
-              title="No comments yet"
-              body="Comments viewers leave show up here, pinned to their moment."
-            />
+            <p className={cn("text-sm", MUTED)}>No comments yet.</p>
           ) : (
             <ul className={cn("flex flex-col divide-y", DIVIDE)}>
               {shown.map((c) => (
@@ -982,7 +1151,8 @@ function CommentRow({
             <DropdownMenuContent
               align="end"
               className={cn(
-                "z-[70] w-[260px] rounded-[12px] border bg-white p-1.5 shadow-lg dark:bg-[#1f1f1f]",
+                // Above the narrow-window sheet (z-1003) the panel is there.
+                "z-[1010] w-[260px] rounded-[12px] border bg-white p-1.5 shadow-lg dark:bg-[#1f1f1f]",
                 HAIRLINE,
               )}
               onCloseAutoFocus={(e) => {
@@ -1103,7 +1273,16 @@ function ReactionsSection({ shareToken }: { shareToken: string }) {
  * at once, shows at once, and is put back if the server refuses it. Only the
  * switches Rust says this server takes are drawn.
  */
-function OnThisLink({ shareToken, onLeave }: { shareToken: string; onLeave: () => void }) {
+function OnThisLink({
+  shareToken,
+  onLeave,
+  headingRef,
+}: {
+  shareToken: string;
+  onLeave: () => void;
+  /** The section heading, which the panel footer's Change scrolls to and focuses. */
+  headingRef?: React.Ref<HTMLHeadingElement>;
+}) {
   const queryClient = useQueryClient();
   const router = useRouter();
   const key = linkSettingsQueryKey(shareToken);
@@ -1134,7 +1313,7 @@ function OnThisLink({ shareToken, onLeave }: { shareToken: string; onLeave: () =
     ) : null;
   }
   return (
-    <Section title="On this link">
+    <Section title="On this link" headingRef={headingRef}>
       <LinkEngagementSwitches
         layout="list"
         offered={current.data.offered}

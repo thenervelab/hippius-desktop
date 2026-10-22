@@ -12,6 +12,7 @@ import OfflineBanner from "@/components/ui/OfflineBanner";
 import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert";
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 import ShareDrivePanel from "../components/page-sections/drive/ShareDrivePanel";
+import ShareInsightsSheet from "../components/page-sections/shares/insights/ShareInsightsSheet";
 import ShareDialog from "../components/page-sections/drive/share-dialog/ShareDialog";
 
 /**
@@ -128,7 +129,10 @@ export default function ResponsiveContent({
           </div>
         </div>
       </main>
+      {/* The side panels share one slot: opening one closes the others
+          (`global-atoms/sidePanelAtoms`). */}
       <FileDetailsPanel />
+      <ShareInsightsSheet />
       <ShareDrivePanel />
       <ShareDialog />
     </div>
