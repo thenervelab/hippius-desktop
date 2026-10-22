@@ -1,14 +1,15 @@
 "use client";
 
-// The Shared Drives page: every drive that is shared, in one place. Two
-// cards, as the console reads it: "Shared by Me" (this account's own drives
-// with people in them or links out, marked Owner) and "Shared with Me" (the
-// drives and folders other accounts invited it into, the section the Drive
-// page already shows). Both are drawn by the Drive page's own components, so
-// a drive looks and behaves the same in either place.
+// The Shared Drives page: every drive that is shared, and the only place
+// shared drives are listed. Two cards, as the console reads it: "Shared by
+// Me" (this account's own drives with people in them or links out, marked
+// Owner) and "Shared with Me" (the drives and folders other accounts invited
+// it into). Drives are drawn by the Drive page's own folder list, so a drive
+// looks and behaves the same in either place.
 //
-// Sharing starts here too. "Share a drive" opens the Drive page's picker;
-// its "Sync a Folder" makes a new drive and goes straight on to sharing it.
+// Sharing starts here. "Share a drive" opens the picker of this account's own
+// drives; its "Sync a Folder" makes a new drive and goes straight on to
+// sharing it.
 // One dialog at a time throughout: the picker closes before the folder
 // dialog opens, and the folder dialog has closed before the Share dialog
 // opens. The Share dialog and Manage access are mounted for the whole app
@@ -35,8 +36,8 @@ import { fetchSyncFoldersWithStats } from "@/app/lib/tauri/syncFolders";
 import { shareDialogAtom, shareDriveModalAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { triggerSyncPathRefreshAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import type { RemoteFolder, SyncFolder } from "@/app/lib/types/sync-folder";
-import { SHARE_A_DRIVE_LABEL } from "@/components/page-sections/settings/multi-folder-sync/SharedWithMeEmptyState";
 
+import ShareADriveEmptyState, { SHARE_A_DRIVE_LABEL } from "./ShareADriveEmptyState";
 import {
   folderGrantRoute,
   joinedDriveRoute,
@@ -48,9 +49,6 @@ import {
 
 export const SHARED_BY_ME_LABEL = "Shared by Me";
 export const SHARED_WITH_ME_LABEL = "Shared with Me";
-export const SHARED_BY_ME_EMPTY_TITLE = "You haven't shared a drive yet";
-export const SHARED_BY_ME_EMPTY_LINE =
-  "Share a drive to work on the same encrypted files with your team. You stay its owner, and you decide who can see or change it.";
 export const SHARED_WITH_ME_EMPTY_TITLE = "Nothing shared with you yet";
 export const SHARED_WITH_ME_EMPTY_LINE = "When somebody invites you into a drive or a folder, it appears here.";
 
@@ -161,17 +159,7 @@ export default function SharedDrivesView() {
               {SHARE_A_DRIVE_LABEL}
             </Button>
           }
-          emptyState={
-            <NoEntriesFound
-              title={SHARED_BY_ME_EMPTY_TITLE}
-              description={SHARED_BY_ME_EMPTY_LINE}
-              buttonText={SHARE_A_DRIVE_LABEL}
-              onButtonClick={() => setPickerOpen(true)}
-              // The list card already draws the border and the surface.
-              cardView={false}
-              className="bg-transparent p-0 dark:bg-transparent"
-            />
-          }
+          emptyState={<ShareADriveEmptyState onShareDrive={() => setPickerOpen(true)} />}
         />
 
         <SharedWithMeSection

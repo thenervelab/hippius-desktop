@@ -107,11 +107,8 @@ vi.mock("@/components/page-sections/settings/multi-folder-sync", () => ({
   },
 }));
 
-import SharedDrivesView, {
-  SHARED_BY_ME_EMPTY_TITLE,
-  SHARED_BY_ME_LABEL,
-  SHARED_WITH_ME_LABEL,
-} from "../SharedDrivesView";
+import SharedDrivesView, { SHARED_BY_ME_LABEL, SHARED_WITH_ME_LABEL } from "../SharedDrivesView";
+import { SHARE_A_DRIVE_EMPTY_TITLE as SHARED_BY_ME_EMPTY_TITLE } from "../ShareADriveEmptyState";
 
 const local = (name: string, ownerSs58?: string) => ({
   id: name,

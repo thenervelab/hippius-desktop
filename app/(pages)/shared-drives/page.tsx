@@ -7,7 +7,7 @@ import SharedDrivesView from "@/components/page-sections/shared-drives/SharedDri
 import PageHeader from "@/components/ui/page-header";
 import InfoTooltip from "@/components/ui/info-tooltip";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { SHARED_DRIVES_DOCS_URL } from "@/components/page-sections/settings/multi-folder-sync/SharedWithMeEmptyState";
+import { SHARED_DRIVES_DOCS_URL } from "@/components/page-sections/shared-drives/ShareADriveEmptyState";
 
 /**
  * `/shared-drives`: the drives this account shared and the ones shared with

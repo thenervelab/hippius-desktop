@@ -53,7 +53,6 @@ import {
 import { RefreshCw } from "lucide-react";
 import { ArrowUpToLine } from "@/components/ui/icons";
 import {
-  SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
   SyncDestinationDialog,
@@ -68,7 +67,6 @@ import {
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import ShareDriveFlow from "./share-drive-picker/ShareDriveFlow";
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
   // is the unique label of the newly added/synced folder; the parent uses
@@ -82,22 +80,6 @@ interface DriveOnboardingProps {
   // drive in the files view (server-only browsing — no local sync needed).
   onOpenRemoteFolder?: (label: string) => void;
   /**
-   * Open a drive somebody shared with this account, without syncing it here.
-   * Browsing needs its WIRE identity, since no local row names it.
-   */
-  onOpenSharedDrive?: (identity: {
-    ownerSs58: string;
-    folderHash: string;
-    displayLabel: string;
-  }) => void;
-  /** Open a FOLDER shared with this account, rooted at that folder. */
-  onOpenFolderGrant?: (grant: {
-    ownerSs58: string;
-    folderHash: string;
-    pathPrefix: string;
-    folderName: string;
-  }) => void;
-  /**
    * Polled plan gate: uploads / sync will be refused. Clicks open the
    * upgrade dialog instead of the folder picker.
    */
@@ -108,8 +90,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
   onSelectFolder,
   onOpenRemoteFolder,
-  onOpenSharedDrive,
-  onOpenFolderGrant,
   isStorageFull = false,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -141,9 +121,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  // "Share a drive" from Shared with Me: the picker of this account's own
-  // drives. Continue hands over to the Share dialog, closing this first.
-  const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   // Remove folder dialog state. `mode: "leave"` is the member-drive
@@ -581,13 +558,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     ),
   );
 
-  // The drives the picker offers: this account's own, the same set the
-  // sharing marks are asked about.
-  const ownDriveLabels = useMemo(
-    () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
-    [folderRows],
-  );
-
   // The Sync a Folder action, wherever it is offered on this page.
   const startSyncFolder = async () => {
     if (isStorageFull) return;
@@ -756,33 +726,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             to decide. An account with folders, or one already on a plan,
             sees nothing here; the header card covers them. */}
         <FreshAccountPlans hasFolders={folderRows.length > 0} isLoading={isLoading} />
-
-        {/* Flag-gated; always shown here, with "Share a drive" when nothing
-            is shared with this account yet. onDriveAdded routes the new label
-            to the breadcrumb exactly like a freshly added local folder. */}
-        <SharedWithMeSection
-          onShareDrive={() => setSharePickerOpen(true)}
-          onOpenDrive={onOpenSharedDrive}
-          onOpenFolderGrant={onOpenFolderGrant}
-          onManageAccess={setShareDriveTarget}
-          onDriveAdded={(label) => {
-            loadFolders();
-            onSyncStarted(label);
-          }}
-        />
-
       </div>
 
       {/* ──────── Dialogs ──────── */}
-      {sharePickerOpen && (
-        <ShareDriveFlow
-          drives={ownDriveLabels}
-          sharingByLabel={ownDriveSharing}
-          loading={isLoading}
-          onClose={() => setSharePickerOpen(false)}
-          onAddDrive={() => void startSyncFolder()}
-        />
-      )}
       <FolderUploadDialog
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}

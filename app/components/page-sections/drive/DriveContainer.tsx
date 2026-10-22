@@ -78,8 +78,6 @@ import {
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
-  makeSharedDriveLabel,
-  makeFolderGrantLabel,
   parseSharedDriveLabel,
   browseNameFromUrl,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
@@ -1610,51 +1608,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setIsOnLocalView(false);
   }, []);
 
-  /**
-   * Open a drive somebody shared with this account, WITHOUT syncing it here.
-   *
-   * It browses exactly like any other server-only drive — the synthetic label
-   * carries the owner and folder hash the backend needs, and `/browse`
-   * authorises any member of the named drive.
-   */
-  const handleOpenSharedDrive = useCallback(
-    (identity: { ownerSs58: string; folderHash: string; displayLabel: string }) => {
-      const label = makeSharedDriveLabel(identity);
-      setSharedDriveNames((prev) =>
-        prev.get(label) === identity.displayLabel
-          ? prev
-          : new Map(prev).set(label, identity.displayLabel),
-      );
-      setActiveRemoteLabel(label);
-      setIsOnLocalView(false);
-    },
-    [],
-  );
-
-  /**
-   * Open a FOLDER somebody shared with this account (folder roles), rooted at
-   * that folder: its `grant:` label carries the folder, and Rust puts it in
-   * front of every path the view sends, so nothing above it is reachable.
-   */
-  const handleOpenFolderGrant = useCallback(
-    (grant: {
-      ownerSs58: string;
-      folderHash: string;
-      pathPrefix: string;
-      folderName: string;
-    }) => {
-      const label = makeFolderGrantLabel(grant);
-      setSharedDriveNames((prev) =>
-        prev.get(label) === grant.folderName
-          ? prev
-          : new Map(prev).set(label, grant.folderName),
-      );
-      setActiveRemoteLabel(label);
-      setIsOnLocalView(false);
-    },
-    [],
-  );
-
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
   //
@@ -2209,8 +2162,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2229,8 +2180,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2245,8 +2194,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );

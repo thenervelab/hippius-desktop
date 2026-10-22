@@ -175,9 +175,9 @@ export interface FolderListProps {
    */
   onManageAccess?: (row: FolderRow) => void;
   /**
-   * Drives per page. The list is paged because "Shared with me" sits BELOW
-   * it: an account with twenty drives pushed the drives other people shared
-   * off the bottom of a surface nobody scrolls.
+   * Drives per page. The list is paged so an account with twenty drives does
+   * not push whatever sits below it (the fresh account's plans, the Shared
+   * Drives page's second card) off the bottom of a surface nobody scrolls.
    */
   pageSize?: number;
   /**

@@ -245,21 +245,28 @@ A legacy copy-link invite's fragment (`#k=`) is the drive entropy, or a folder i
 
 `SHARED_DRIVES_ENABLED` gates only the ADDITIVE surfaces — the "Share drive" menu item + `ShareDriveModal` (invite mint + members tab), the "Shared with me" sections, the owner badge.
 
-**Shared with Me on the Drive page is always there** (`SharedWithMeSection` with `onShareDrive`,
-view from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`):
-skeleton rows until the membership AND folder-grant listings answer, then the rows with a
-"Share a drive" header button, or `SharedWithMeEmptyState` (the shared `NoEntriesFound` card,
-its `illustration`/`footerLink`/`titleId` props; "A place for teamwork", docs link
-`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`). A feature-off
-server still hides it; a failed fetch shows the empty state. Settings passes no `onShareDrive`
-and keeps the quiet, rows-only section. "Share a drive" opens `share-drive-picker/`
-(`ShareDriveFlow` + `ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`),
-"Shared with N" / "Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing),
-search above `PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`,
-so Free/Starter get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no
-Continue. Continue CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share
-drive..." does, so there is never a dialog over a dialog. No drives: Sync a Folder (the
-page's `startSyncFolder`). Pinned by `ShareDrivePicker.test.tsx`, `SharedWithMeSection.test.tsx`
+**Shared drives are listed only on the Shared Drives page** (`/shared-drives`, sidebar entry
+under Drive, `featureFlag: "sharedDrives"`; `shared-drives/SharedDrivesView.tsx`). The Drive
+page does not list drives shared with this account. Two cards. **Shared by Me**: own drives
+shared as a whole (`isDriveShared`), drawn by the Drive page's `FolderList` with `markOwned`
+(the Owner chip), skeleton rows until `useOwnedDriveSharingState` settles so the empty state
+never claims "nothing shared" early, and `ShareADriveEmptyState` ("A place for teamwork", docs
+link `https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`) when none is.
+**Shared with Me**: `SharedWithMeSection` with `alwaysShow` and the page's `emptyState`, view
+from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`: skeleton
+rows until the membership AND folder-grant listings answer, then the rows or the empty text; a
+feature-off server still hides it, a failed fetch shows the empty text. Settings passes neither
+and keeps the quiet, rows-only section. A row opens on the Drive page through
+`sharedDriveRoute` (browse label plus `openName`, shown in the breadcrumb only for a shared
+label, `browseNameFromUrl`). "Share a drive" opens `share-drive-picker/` (`ShareDriveFlow` +
+`ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`), "Shared with N" /
+"Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing), search above
+`PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`, so Free/Starter
+get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no Continue. Continue
+CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share drive..." does, so
+there is never a dialog over a dialog. Sync a Folder there makes a new drive, and its Share
+dialog opens only once the folder dialog has closed. Pinned by `ShareDrivePicker.test.tsx`,
+`SharedDrivesView.test.tsx`, `ShareADriveEmptyState.test.tsx`, `SharedWithMeSection.test.tsx`
 and `sharedWithMeState.test.ts`.
 
 **Added by: one rule for the column and the filter** (`lib/shared-drives/uploaderFilter.ts`:
