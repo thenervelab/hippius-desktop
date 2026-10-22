@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BILLING_ROUTE, driveFolderRoute } from "../routes";
+import { BILLING_ROUTE, driveFolderRoute, sharedDriveRoute } from "../routes";
 
 describe("driveFolderRoute", () => {
   // A capture's "Show in folder" opens the drive, then its Captures folder.
@@ -49,5 +49,15 @@ describe("driveFolderRoute", () => {
 describe("BILLING_ROUTE", () => {
   it("points at the billing section of settings", () => {
     expect(BILLING_ROUTE).toBe("/settings?section=billing");
+  });
+});
+
+describe("sharedDriveRoute", () => {
+  it("opens a shared drive as a remote drive, carrying the name to show", () => {
+    const url = new URL(`app://x${sharedDriveRoute("shared:5Abc~0123456789abcdef", "Team & co")}`);
+    expect(url.pathname).toBe("/files");
+    expect(url.searchParams.get("openLabel")).toBe("shared:5Abc~0123456789abcdef");
+    expect(url.searchParams.get("openRemote")).toBe("1");
+    expect(url.searchParams.get("openName")).toBe("Team & co");
   });
 });

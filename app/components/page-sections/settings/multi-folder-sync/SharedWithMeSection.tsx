@@ -111,6 +111,19 @@ interface SharedWithMeSectionProps {
    * shared yet: the empty state and the header button both call it.
    */
   onShareDrive?: () => void;
+  /** Card heading. "Shared with Me" unless the page names its sections otherwise. */
+  label?: string;
+  /**
+   * Keep the section on screen with nothing shared, with `emptyState` in it.
+   * Defaults to whether `onShareDrive` is given (the Drive page); the Shared
+   * Drives page sets it on its own, since sharing starts elsewhere there.
+   */
+  alwaysShow?: boolean;
+  /**
+   * What an empty section says. Defaults to the "A place for teamwork" card,
+   * which needs `onShareDrive`.
+   */
+  emptyState?: React.ReactNode;
 }
 
 export function SharedWithMeSection({
@@ -119,6 +132,9 @@ export function SharedWithMeSection({
   onManageAccess,
   onOpenFolderGrant,
   onShareDrive,
+  label = "Shared with Me",
+  alwaysShow = Boolean(onShareDrive),
+  emptyState,
 }: SharedWithMeSectionProps) {
   const queryClient = useQueryClient();
   // Folders shared with this account: only once folder roles are on (the
@@ -239,7 +255,7 @@ export function SharedWithMeSection({
   };
 
   const view = getSharedWithMeView(SHARED_DRIVES_ENABLED, data, folderGrants.length, {
-    alwaysShow: Boolean(onShareDrive),
+    alwaysShow,
     grantsSettled,
   });
   if (view === "hidden") return null;
@@ -247,8 +263,10 @@ export function SharedWithMeSection({
 
   if (view === "loading" || view === "empty") {
     return (
-      <SettingsCard label="Shared with Me" icon={<Users className="size-4" />}>
-        {view === "loading" || !onShareDrive ? (
+      <SettingsCard label={label} icon={<Users className="size-4" />}>
+        {view === "empty" && emptyState ? (
+          emptyState
+        ) : view === "loading" || !onShareDrive ? (
           <div aria-busy="true" aria-label="Loading drives shared with you">
             <FolderRowSkeleton />
             <FolderRowSkeleton />
@@ -262,7 +280,7 @@ export function SharedWithMeSection({
 
   return (
     <SettingsCard
-      label="Shared with Me"
+      label={label}
       icon={<Users className="size-4" />}
       headerAction={
         onShareDrive ? (

@@ -27,6 +27,7 @@ import {
 } from "@/app/lib/utils/restoreUtils";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { fetchSyncFoldersWithStats } from "@/app/lib/tauri/syncFolders";
 import {
   getHcfsConfig,
   saveHcfsConfig,
@@ -232,54 +233,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local + remote folders, joins data, determines status
-      const result = await invoke<{
-        local: Array<{
-          id: string;
-          folderName: string;
-          localPath: string;
-          status: string;
-          fileCount: number | null;
-          totalBytes: number | null;
-          lastModified: number | null;
-          ownerSs58: string | null;
-        }>;
-        remote: Array<{
-          folderName: string;
-          deviceName: string;
-          fileCount: number;
-          totalBytes: number;
-          lastModified: number;
-          origin: { kind: "locallyRemoved" } | { kind: "otherDevice" };
-        }>;
-      }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
-
-      // Keep all three stat fields the Rust IPC returns
-      // (`get_sync_folders_with_stats` already populates them). The
-      // shared folder list renders them inline next to the
-      // status pill, so dropping them here was the difference between
-      // the Files-page card showing "default · Syncing" and the
-      // Settings-page card showing "default · Syncing · 229.8 MB ·
-      // 351 files · May 26, 2026 at 5:50 pm".
-      const localFolders: SyncFolder[] = result.local.map((f) => ({
-        id: f.id,
-        folderName: f.folderName,
-        localPath: f.localPath,
-        isLocal: true,
-        status: f.status as "syncing" | "paused",
-        fileCount: f.fileCount ?? undefined,
-        totalBytes: f.totalBytes ?? undefined,
-        lastModified: f.lastModified ?? undefined,
-        ownerSs58: f.ownerSs58 ?? undefined,
-      }));
-
-      const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
-        folderName: f.folderName,
-        deviceName: f.deviceName,
-        fileCount: f.fileCount,
-        totalBytes: f.totalBytes,
-        lastModified: f.lastModified,
-        origin: f.origin,
-      }));
+      const { local: localFolders, remote: remoteFoldersData } =
+        await fetchSyncFoldersWithStats(polkadotAddress);
 
       setSyncFolders(localFolders);
       setRemoteFolders(remoteFoldersData);

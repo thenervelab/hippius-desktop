@@ -81,6 +81,7 @@ import {
   makeSharedDriveLabel,
   makeFolderGrantLabel,
   parseSharedDriveLabel,
+  browseNameFromUrl,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
@@ -387,6 +388,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `driveFolderRoute`.
   const urlOpenLabel = getParam("openLabel");
   const urlOpenRemote = getParam("openRemote") === "1";
+  // …and, for a shared drive, the name its browse label stands for
+  // (`sharedDriveRoute`).
+  const urlOpenName = getParam("openName");
   // …and one level into it (a capture's "Show in folder" → Captures).
   const urlOpenSubfolder = getParam("openSubfolder");
   // …and the file in it to point out ("Show in folder" on a capture's card
@@ -1701,6 +1705,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         : null,
     );
     if (urlOpenRemote) {
+      // A shared drive's browse label is not a name: show the one it came with.
+      const openName = browseNameFromUrl(urlOpenLabel, urlOpenName);
+      if (openName) {
+        setSharedDriveNames((prev) =>
+          prev.get(urlOpenLabel) === openName
+            ? prev
+            : new Map(prev).set(urlOpenLabel, openName),
+        );
+      }
       handleSelectRemoteFolderFromCards(urlOpenLabel);
     } else {
       handleSelectFolderFromCards(urlOpenLabel);
@@ -1710,6 +1723,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     basePath,
     urlOpenLabel,
     urlOpenRemote,
+    urlOpenName,
     urlOpenSubfolder,
     urlOpenFile,
     handleSelectFolderFromCards,

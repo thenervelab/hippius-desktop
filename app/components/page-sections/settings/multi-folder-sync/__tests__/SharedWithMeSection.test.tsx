@@ -194,6 +194,38 @@ describe("silent non-rows states", () => {
   });
 });
 
+// The Shared Drives page keeps the section up with nothing in it, under its
+// own heading and with its own empty text, without the Drive page's
+// "Share a drive" (sharing starts in its other card there).
+describe("on a page that keeps it up without offering to share", () => {
+  it("shows its own heading and empty text once nothing turns out to be shared", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([]);
+    render(
+      <SharedWithMeSection
+        label="Shared with Me"
+        alwaysShow
+        emptyState={<p>Nothing shared with you yet</p>}
+      />,
+    );
+    expect(await screen.findByText("Nothing shared with you yet")).toBeInTheDocument();
+    expect(screen.getByText("Shared with Me")).toBeInTheDocument();
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+  });
+
+  it("holds skeleton rows, not the empty text, while the listing is out", () => {
+    listMyDriveMembershipsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection alwaysShow emptyState={<p>Nothing shared with you yet</p>} />);
+    expect(screen.getByLabelText("Loading drives shared with you")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing shared with you yet")).not.toBeInTheDocument();
+  });
+
+  it("names its card as asked when there are rows", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection label="Shared with you" alwaysShow />);
+    expect(await screen.findByText("Shared with you")).toBeInTheDocument();
+  });
+});
+
 describe("rows", () => {
   it("shows an unsynced membership as a folder with its label, role and actions", async () => {
     listMyDriveMembershipsMock.mockResolvedValue([membership()]);
