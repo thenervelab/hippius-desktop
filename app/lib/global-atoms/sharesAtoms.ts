@@ -7,6 +7,7 @@
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities, ShareRefusal } from "@/app/lib/tauri/shares";
+import { insightsPanelTargetAtom, shareDrivePanelTargetAtom } from "./sidePanelAtoms";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -126,9 +127,9 @@ export const shareReactionMomentsEnabledAtom = atom(
 );
 
 /**
- * The link whose Insights sheet is open, or `null`. Set by Shared Links, the
- * Captures page and the capture card; read by `ShareInsightsSheet`, which is
- * mounted once in the pages layout.
+ * The link whose Insights panel is open, or `null`. Set by Shared Links, the
+ * Captures page and the capture card; read by `ShareInsightsSheet`, the right
+ * side panel mounted beside the page in `ResponsiveContent`.
  */
 export type InsightsSheetTarget = {
   shareToken: string;
@@ -141,7 +142,8 @@ export type InsightsSheetTarget = {
   file?: FormattedUserFile;
 };
 
-export const insightsSheetAtom = atom<InsightsSheetTarget | null>(null);
+/** Opening it closes File Details and Manage access (`sidePanelAtoms`). */
+export const insightsSheetAtom = insightsPanelTargetAtom;
 
 /**
  * What `ShareFileModal` is currently sharing. `null` means closed.
@@ -250,7 +252,8 @@ export type ShareDriveModalTarget = {
   openOn?: "people";
 };
 
-export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
+/** A side panel: opening it closes File Details and Insights (`sidePanelAtoms`). */
+export const shareDriveModalAtom = shareDrivePanelTargetAtom;
 
 /**
  * The drive or folder whose Share dialog is open (`share-dialog/ShareDialog`).

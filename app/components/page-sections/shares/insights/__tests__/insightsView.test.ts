@@ -8,11 +8,13 @@ import {
   averageWatchMs,
   avatarFor,
   biggestDrop,
+  emptyInsightsCopy,
   estimateDurationMs,
   formatAgo,
   formatMomentAt,
   headerLine,
   initials,
+  linkSwitchSummary,
   usesTabs,
   viewerName,
 } from "../insightsView";
@@ -187,5 +189,39 @@ describe("headerLine and formatAgo", () => {
     expect(formatAgo("2026-10-18T12:00:00Z", now)).toBe("3d");
     expect(formatAgo("2026-10-01T12:00:00Z", now)).toBe("Oct 1");
     expect(formatAgo("not a date", now)).toBe("");
+  });
+});
+
+describe("linkSwitchSummary", () => {
+  const on = { insights: true, comments: false, reactions: true };
+  const all = { insights: true, comments: true, reactions: true };
+  it("says what the link allows in a line short enough for the panel", () => {
+    expect(linkSwitchSummary({ offered: all, on })).toBe("Insights and reactions on, comments off");
+    expect(linkSwitchSummary({ offered: all, on: all })).toBe("Insights, comments and reactions on");
+    expect(linkSwitchSummary({ offered: all, on: { insights: false, comments: false, reactions: false } })).toBe(
+      "Insights, comments and reactions off",
+    );
+    expect(linkSwitchSummary({ offered: all, on: { insights: false, comments: true, reactions: false } })).toBe(
+      "Comments on, insights and reactions off",
+    );
+  });
+  it("names only the switches the server takes", () => {
+    expect(linkSwitchSummary({ offered: { insights: true, comments: false, reactions: false }, on })).toBe("Insights on");
+  });
+  it("says nothing when On this link would draw nothing", () => {
+    expect(linkSwitchSummary(null)).toBeNull();
+    expect(linkSwitchSummary({ offered: { insights: false, comments: true, reactions: true }, on })).toBeNull();
+  });
+});
+
+describe("emptyInsightsCopy", () => {
+  it("mentions comments and reactions only where the server has them", () => {
+    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: true }).body).toMatch(/comments and reactions/);
+    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: false }).body).not.toMatch(/comments/);
+  });
+  it("says a link that is not counting views is not, rather than that nobody came", () => {
+    const copy = emptyInsightsCopy({ notCounting: true, commentsEnabled: false });
+    expect(copy.title).toBe("Not counting views");
+    expect(copy.body).not.toMatch(/Nobody/);
   });
 });

@@ -52,6 +52,12 @@ a fresh look too.
   window, on the sign-in screens, in the menu bar window and in the update
   dialog use the flat Hippius mark, with the name in black, or white in dark
   mode.
+- **Insights open in a side panel.** A share link's Insights open in a panel
+  on the right, like file details, instead of a window over the page, so the
+  page stays in view. A link nobody has opened yet shows one short note with
+  its Insights, Comments and Reactions switches right below it, and once a
+  link has views those switches stay one click away at the bottom of the
+  panel. Press Escape to close it.
 
 ### Security
 
