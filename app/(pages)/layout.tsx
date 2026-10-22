@@ -12,7 +12,6 @@ import FinderShareListener from "./FinderShareListener";
 import InviteAutoSealListener from "./InviteAutoSealListener";
 import FailedFilesModal from "@/components/page-sections/drive/FailedFilesModal";
 import ShareFileModal from "@/components/page-sections/drive/ShareFileModal";
-import ShareInsightsSheet from "@/components/page-sections/shares/insights/ShareInsightsSheet";
 import RenameDialog from "@/components/page-sections/drive/RenameDialog";
 import NewFolderDialog from "@/components/page-sections/drive/NewFolderDialog";
 import CaptureHost from "@/components/capture/CaptureHost";
@@ -46,7 +45,6 @@ export default function ProtectedLayout({
           <InsufficientCreditsDialog />
           <FailedFilesModal />
           <ShareFileModal />
-          <ShareInsightsSheet />
           {/* Renders nothing while SHARED_DRIVES_ENABLED is off. */}
           <RenameDialog />
           <NewFolderDialog />

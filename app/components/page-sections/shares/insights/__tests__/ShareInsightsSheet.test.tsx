@@ -4,6 +4,8 @@ import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { MotionGlobalConfig } from "framer-motion";
+
 import ShareInsightsSheet from "../ShareInsightsSheet";
 import {
   LOCKED_ACTION,
@@ -16,7 +18,13 @@ import {
   SAMPLE_VIEWERS,
   SAMPLE_VIEWS,
 } from "../insightsView";
-import { insightsSheetAtom, serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  insightsSheetAtom,
+  serverCapabilitiesAtom,
+  shareDriveModalAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
+import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import type { ShareComments, ShareInsights } from "@/app/lib/tauri/shareInsights";
 
@@ -29,6 +37,26 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const openUrl = vi.fn(() => Promise.resolve());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...a: unknown[]) => openUrl(...(a as [])) }));
+
+// jsdom has no matchMedia: the panel is inline (a wide window) unless a test
+// asks for the narrow one, where it is a sheet over the page.
+const viewport = vi.hoisted(() => ({ wide: true }));
+vi.mock("@/app/lib/hooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/lib/hooks")>();
+  return {
+    ...actual,
+    useBreakpoint: () => ({
+      breakpoint: viewport.wide ? "xl" : "md",
+      isMobile: false,
+      isTablet: !viewport.wide,
+      isLaptop: false,
+      isDesktop: viewport.wide,
+      isLargeDesktop: false,
+    }),
+  };
+});
+// The panel's open and close are instant, so a closed panel is gone at once.
+MotionGlobalConfig.skipAnimations = true;
 
 const FREE: ShareInsights = {
   plan: "free",
@@ -72,6 +100,11 @@ const CAPS: ServerCapabilities = {
   share_comments: true,
 };
 
+const NAME = "Recording 2026-10-13.mp4";
+const NO_COMMENTS = { comments: [], unreadable: null };
+const NO_REACTIONS = { counts: [], total: 0 };
+const ALL_ON = { insights: true, comments: true, reactions: true };
+
 function answer(map: Record<string, unknown>) {
   invokeMock.mockImplementation((cmd: string) =>
     cmd in map ? Promise.resolve(map[cmd]) : Promise.reject(new Error(`unexpected ${cmd}`)),
@@ -81,7 +114,7 @@ function answer(map: Record<string, unknown>) {
 function renderSheet(caps: ServerCapabilities = CAPS, seed?: (client: QueryClient) => void) {
   const store = createStore();
   store.set(serverCapabilitiesAtom, caps);
-  store.set(insightsSheetAtom, { shareToken: "tok", fileName: "Recording 2026-10-13.mp4" });
+  store.set(insightsSheetAtom, { shareToken: "tok", fileName: NAME });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   seed?.(client);
   render(
@@ -107,6 +140,7 @@ describe("ShareInsightsSheet", () => {
     invokeMock.mockReset();
     push.mockReset();
     openUrl.mockClear();
+    viewport.wide = true;
   });
 
   it("gives a free plan its two numbers and only sample data, blurred, behind the lock", async () => {
@@ -510,14 +544,94 @@ describe("ShareInsightsSheet", () => {
     expect(screen.getByText("Each time the link is opened.")).toBeInTheDocument();
   });
 
-  it("says when there are no views or comments yet", async () => {
+  describe("a link nothing has happened on yet", () => {
+    const EMPTY = { ...PAID, totalViews: 0, uniqueViewers: 0, viewers: { state: "shown" as const, value: [] } };
+
+    it("is one short block with the link's switches right under it, not an empty state per section", async () => {
+      answer({
+        share_get_insights: EMPTY,
+        share_list_comments: NO_COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      });
+      renderSheet();
+
+      expect(await screen.findByText("No views yet")).toBeInTheDocument();
+      expect(
+        screen.getByText("Nobody has opened this link yet. Views, comments and reactions show up here once they do."),
+      ).toBeInTheDocument();
+      expect(await screen.findByRole("heading", { name: "On this link" })).toBeInTheDocument();
+      // No zero, no tiles, no per-section empty states, no footer.
+      expect(screen.queryByText("views")).toBeNull();
+      expect(screen.queryByText("None yet")).toBeNull();
+      expect(screen.queryByText("No comments yet.")).toBeNull();
+      expect(screen.queryByText("No reactions yet.")).toBeNull();
+      expect(screen.queryByRole("contentinfo")).toBeNull();
+    });
+
+    it("says the link is not counting views when its Insights switch is off", async () => {
+      answer({
+        share_get_insights: EMPTY,
+        share_list_comments: NO_COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: { offered: ALL_ON, on: { ...ALL_ON, insights: false }, switchesInPlan: true },
+      });
+      renderSheet();
+      expect(await screen.findByText("Not counting views")).toBeInTheDocument();
+    });
+
+    it("waits for comments and reactions before deciding, so the block never flashes", async () => {
+      invokeMock.mockImplementation((cmd: string) =>
+        cmd === "share_get_insights" ? Promise.resolve(EMPTY) : new Promise(() => {}),
+      );
+      renderSheet();
+      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_insights", { shareToken: "tok" }));
+      expect(screen.getByTestId("insights-loading")).toBeInTheDocument();
+      expect(screen.queryByText("No views yet")).toBeNull();
+    });
+
+    it("keeps one line for no views once there are comments", async () => {
+      answer({
+        share_get_insights: EMPTY,
+        share_list_comments: COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+      });
+      renderSheet();
+      expect(await screen.findByText("Looks great at 1:23!")).toBeInTheDocument();
+      expect(screen.getByText("No views yet")).toBeInTheDocument();
+      expect(screen.getByText("Views show up here once someone opens the link.")).toBeInTheDocument();
+      expect(screen.queryByText("None yet")).toBeNull();
+      expect(screen.getByText("No reactions yet.")).toBeInTheDocument();
+    });
+  });
+
+  it("keeps On this link one click away in the footer, from any tab", async () => {
+    const many = Array.from({ length: 11 }, (_, i) => ({
+      viewerId: `v${i}`,
+      name: `Viewer ${i}`,
+      visits: 1,
+      watchedMs: 10_000,
+      completion: 0.5,
+      lastViewedAt: null,
+      comments: 0,
+      reactions: 0,
+    }));
     answer({
-      share_get_insights: { ...PAID, totalViews: 0, uniqueViewers: 0, viewers: { state: "shown", value: [] } },
-      share_list_comments: { comments: [], unreadable: null },
+      share_get_insights: { ...PAID, viewers: { state: "shown", value: many } },
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: { ...ALL_ON, comments: false }, switchesInPlan: true },
     });
     renderSheet();
-    expect(await screen.findByText("No views yet")).toBeInTheDocument();
-    expect(await screen.findByText("No comments yet")).toBeInTheDocument();
+
+    const footer = await screen.findByRole("contentinfo");
+    expect(footer).toHaveTextContent("On this linkInsights and reactions on, comments off");
+    fireEvent.click(await screen.findByRole("tab", { name: "Viewers 11" }));
+    expect(screen.getByRole("tab", { name: "Viewers 11" })).toHaveAttribute("aria-selected", "true");
+
+    fireEvent.click(within(footer).getByRole("button", { name: /^On this link/ }));
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "On this link" })).toHaveFocus());
   });
 
   it("holds the layout with a skeleton while loading", () => {
@@ -550,5 +664,118 @@ describe("ShareInsightsSheet", () => {
     renderSheet();
     expect(await screen.findByText(/This link isn't active any more\./)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+});
+
+describe("the Insights side panel", () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    viewport.wide = true;
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+    });
+  });
+
+  /** A page with an opener button, as a Captures row or Shared Links has. */
+  function renderWithOpener() {
+    const store = createStore();
+    store.set(serverCapabilitiesAtom, CAPS);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    function Opener() {
+      return (
+        <button type="button" onClick={() => store.set(insightsSheetAtom, { shareToken: "tok", fileName: NAME })}>
+          Open insights
+        </button>
+      );
+    }
+    render(
+      <QueryClientProvider client={client}>
+        <Provider store={store}>
+          <Opener />
+          <ShareInsightsSheet />
+        </Provider>
+      </QueryClientProvider>,
+    );
+    const opener = screen.getByRole("button", { name: "Open insights" });
+    opener.focus();
+    fireEvent.click(opener);
+    return { store, opener };
+  }
+
+  it("opens beside the page as a labelled side panel, not a dialog, on a wide window", async () => {
+    renderSheet();
+    expect(await screen.findByRole("complementary", { name: `Insights for ${NAME}` })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // The header: the name (whole, as a tooltip, for a long one) and Close.
+    expect(screen.getByRole("heading", { level: 2, name: `Insights for ${NAME}` })).toHaveAttribute("title", NAME);
+  });
+
+  it("is a sheet over the page on a narrow window", async () => {
+    viewport.wide = false;
+    renderSheet();
+    const sheet = await screen.findByRole("dialog", { name: `Insights for ${NAME}` });
+    expect(within(sheet).getByRole("button", { name: "Close" })).toBeInTheDocument();
+    // Focus starts on the panel's heading, as in the inline panel.
+    await waitFor(() => expect(within(sheet).getByRole("heading", { level: 2 })).toHaveFocus());
+    expect(screen.queryByRole("complementary")).toBeNull();
+  });
+
+  it("moves focus into the panel, closes on Escape and gives focus back to the opener", async () => {
+    const { store, opener } = renderWithOpener();
+    const heading = await screen.findByRole("heading", { level: 2, name: `Insights for ${NAME}` });
+    await waitFor(() => expect(heading).toHaveFocus());
+
+    fireEvent.keyDown(heading, { key: "Escape" });
+    expect(store.get(insightsSheetAtom)).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it("closes from its Close button and gives focus back to the opener", async () => {
+    const { store, opener } = renderWithOpener();
+    fireEvent.click(await screen.findByRole("button", { name: "Close" }));
+    expect(store.get(insightsSheetAtom)).toBeNull();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it("leaves Escape to a comment's menu while it is open", async () => {
+    const { store } = renderWithOpener();
+    await screen.findByText("Looks great at 1:23!");
+    await openMenu("Ahmad");
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    expect(store.get(insightsSheetAtom)).not.toBeNull();
+  });
+
+  it("ignores Escape pressed somewhere else on the page", async () => {
+    const { store, opener } = renderWithOpener();
+    await screen.findByRole("complementary");
+    // The user clicks back on the page.
+    fireEvent.pointerDown(opener);
+    opener.focus();
+    fireEvent.keyDown(opener, { key: "Escape" });
+    expect(store.get(insightsSheetAtom)).not.toBeNull();
+  });
+
+  it("takes the place of File Details or Manage access rather than opening beside them", () => {
+    const store = createStore();
+    const file = { name: "Recording.mp4" } as FormattedUserFile;
+    store.set(fileDetailsPanelAtom, file);
+    store.set(insightsSheetAtom, { shareToken: "tok", fileName: NAME });
+    expect(store.get(fileDetailsPanelAtom)).toBeNull();
+
+    store.set(shareDriveModalAtom, { label: "Captures", folderName: "Captures" });
+    expect(store.get(insightsSheetAtom)).toBeNull();
+
+    store.set(insightsSheetAtom, { shareToken: "tok", fileName: NAME });
+    expect(store.get(shareDriveModalAtom)).toBeNull();
+    store.set(fileDetailsPanelAtom, file);
+    expect(store.get(insightsSheetAtom)).toBeNull();
+    // Closing one opens nothing else.
+    store.set(fileDetailsPanelAtom, null);
+    expect(store.get(insightsSheetAtom)).toBeNull();
   });
 });
