@@ -80,9 +80,16 @@ pub async fn login_with_mnemonic(
 
     // Run the challenge-response BEFORE writing AuthInfo, so a failed
     // login leaves the previous session intact.
-    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
-    let (token, user_id, username, is_new, token_expiry) =
-        challenge_response(&state.api_client, &eth_signer, &eth_address, &substrate_address, referral_code.as_deref()).await?;
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(&mnemonic)?;
+    let (token, user_id, username, is_new, token_expiry) = challenge_response(
+        &state.api_client,
+        &sr25519_pair,
+        &eth_signer,
+        &eth_address,
+        &substrate_address,
+        referral_code.as_deref(),
+    )
+    .await?;
 
     // Now write the full AuthInfo via the shared rehydrate helper.
     rehydrate_full_session(&state, mnemonic.clone())?;

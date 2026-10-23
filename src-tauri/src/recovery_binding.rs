@@ -200,13 +200,14 @@ fn to_recoverable(namespaces: Vec<ServerOwnedNamespace>) -> Vec<RecoverableAccou
 #[tauri::command]
 pub async fn list_recoverable_accounts(state: tauri::State<'_, AppState>, mnemonic: String) -> Result<Vec<RecoverableAccount>> {
     let mnemonic = Zeroizing::new(mnemonic);
-    // Only the public address + eth signer are needed to mint the bearer; the
-    // sr25519 keypair (`.0`) is not used for discovery, so it is not bound.
-    let (_keypair, recovery_ss58, eth_signer, eth_address) = derive_keys(&mnemonic).map_err(AppError::Crypto)?;
+    // Both keys sign the login challenge that mints the bearer (the sr25519
+    // one proves the recovery address to the API).
+    let (keypair, recovery_ss58, eth_signer, eth_address) = derive_keys(&mnemonic).map_err(AppError::Crypto)?;
 
     // Mint a bearer scoped to the recovery identity. No referral code; we never
     // want a recovery probe to create a referral relationship.
-    let (token, _user, _username, _is_new, _expiry) = challenge_response(&state.api_client, &eth_signer, &eth_address, &recovery_ss58, None).await?;
+    let (token, _user, _username, _is_new, _expiry) =
+        challenge_response(&state.api_client, &keypair, &eth_signer, &eth_address, &recovery_ss58, None).await?;
 
     let base_url = hcfs_client::client::pick_fastest(&state.api_client)
         .await
@@ -414,9 +415,10 @@ pub async fn recover_account_files(
     state.recovery_cancel.store(false, Ordering::SeqCst);
 
     let mnemonic = Zeroizing::new(mnemonic);
-    let (_keypair, recovery_ss58, eth_signer, eth_address) = derive_keys(&mnemonic).map_err(AppError::Crypto)?;
+    let (keypair, recovery_ss58, eth_signer, eth_address) = derive_keys(&mnemonic).map_err(AppError::Crypto)?;
 
-    let (token, _user, _username, _is_new, _expiry) = challenge_response(&state.api_client, &eth_signer, &eth_address, &recovery_ss58, None).await?;
+    let (token, _user, _username, _is_new, _expiry) =
+        challenge_response(&state.api_client, &keypair, &eth_signer, &eth_address, &recovery_ss58, None).await?;
     let base_url = hcfs_client::client::pick_fastest(&state.api_client)
         .await
         .map_err(|e| AppError::Hcfs(e.to_string()))?;
