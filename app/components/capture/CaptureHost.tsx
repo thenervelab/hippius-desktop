@@ -3,8 +3,10 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useSetAtom } from "jotai";
+import { insightsSheetAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { CAPTURE_OPEN_INSIGHTS_EVENT, type CaptureOpenInsights } from "@/app/lib/tauri/shareInsights";
 import { useQueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { toast } from "sonner";
 
 import { SCREEN_CAPTURE_ENABLED } from "@/app/lib/featureFlags";
@@ -58,6 +60,7 @@ export default function CaptureHost() {
   const setModes = useSetAtom(captureModesAtom);
   const setSurfaces = useSetAtom(captureSurfacesAtom);
   const setDialog = useSetAtom(captureDialogAtom);
+  const setInsights = useSetAtom(insightsSheetAtom);
   const startCapture = useStartCapture();
   const queryClient = useQueryClient();
   const router = useRouter();
@@ -88,27 +91,27 @@ export default function CaptureHost() {
   useEffect(() => {
     if (!SCREEN_CAPTURE_ENABLED) return;
     const unlisteners = [
-      listen("capture_delivered", () => void notifyFilesMutated(queryClient, polkadotAddress)),
+      onTauriEvent("capture_delivered", () => void notifyFilesMutated(queryClient, polkadotAddress)),
       // The preview card already shows a failure it is showing; a toast would say it twice.
-      listen<CaptureFailed>("capture_failed", (e) => {
+      onTauriEvent<CaptureFailed>("capture_failed", (e) => {
         if (!e.payload.cardShowing) toast.error(e.payload.message);
       }),
-      listen<{ kind?: CaptureKind; mode?: CaptureMode }>(TRAY_CAPTURE_EVENT, (e) => {
+      onTauriEvent<{ kind?: CaptureKind; mode?: CaptureMode }>(TRAY_CAPTURE_EVENT, (e) => {
         void startCapture(e.payload.kind, e.payload.mode);
       }),
       // The popover's "Captures folder…": the dialog is this window's.
-      listen(TRAY_CAPTURE_DRIVE_EVENT, () => {
+      onTauriEvent(TRAY_CAPTURE_DRIVE_EVENT, () => {
         void openAppWindow().then(() => setDialog({ kind: "captureDrive" }));
       }),
       // A capture is waiting for the user to say where captures go. Rust has
       // brought this window forward and kept the capture safe meanwhile.
-      listen(CAPTURE_DRIVE_SETUP_NEEDED_EVENT, () => setDialog({ kind: "captureDrive" })),
+      onTauriEvent(CAPTURE_DRIVE_SETUP_NEEDED_EVENT, () => setDialog({ kind: "captureDrive" })),
       // The system-wide shortcuts: what Rust says each starts (the one-step
       // area screenshot, or the capture bar on Record).
-      listen<CaptureShortcutStart>("capture_shortcut_pressed", (e) =>
+      onTauriEvent<CaptureShortcutStart>("capture_shortcut_pressed", (e) =>
         void startCapture(e.payload?.kind, undefined, e.payload?.instant ?? false),
       ),
-      listen<CaptureShowInFolder>("capture_show_in_folder", (e) => {
+      onTauriEvent<CaptureShowInFolder>("capture_show_in_folder", (e) => {
         const file = e.payload.fileName || undefined;
         router.push(
           e.payload.capturesDrive
@@ -117,22 +120,27 @@ export default function CaptureHost() {
         );
       }),
       // The card's Upgrade (the plan is full): the plans, where every upgrade prompt goes.
-      listen("capture_open_plans", () => router.push(BILLING_ROUTE)),
+      onTauriEvent("capture_open_plans", () => router.push(BILLING_ROUTE)),
       // The card's Manage link: Shared Links, with this capture's link
       // pointed out, where who can open it and when it expires are changed.
-      listen<CaptureManageLink>("capture_manage_link", (e) =>
+      onTauriEvent<CaptureManageLink>("capture_manage_link", (e) =>
         router.push(sharesPageHref([fileShareRowId(e.payload.shareToken)])),
+      ),
+      // The card's Insights: this capture's link's Insights, over whatever
+      // page is open.
+      onTauriEvent<CaptureOpenInsights>(CAPTURE_OPEN_INSIGHTS_EVENT, (e) =>
+        setInsights({ shareToken: e.payload.shareToken, fileName: e.payload.fileName }),
       ),
     ];
     // `hippius --capture` / `--record` that started the app: Rust runs it
     // once this window listens for the start it emits.
-    void Promise.all(unlisteners)
+    void Promise.all(unlisteners.map((u) => u.ready))
       .then(() => takeCaptureLaunchShortcut())
       .catch(() => undefined);
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
-  }, [startCapture, queryClient, polkadotAddress, router, setDialog]);
+  }, [startCapture, queryClient, polkadotAddress, router, setDialog, setInsights]);
 
   if (!SCREEN_CAPTURE_ENABLED) return null;
   return (

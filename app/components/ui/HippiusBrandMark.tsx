@@ -1,4 +1,4 @@
-import { HippiusLogo } from "@/components/ui/icons";
+import { HippiusFlatLogo } from "@/components/ui/icons";
 import { cn } from "@/app/lib/utils";
 
 type HippiusBrandMarkProps = {
@@ -12,12 +12,16 @@ export function HippiusBrandMark({
 }: HippiusBrandMarkProps) {
   return (
     <>
-      <HippiusLogo
-        className={cn("size-[28px] text-primary-50", logoClassName)}
+      {/* Brand kit: flat mark, lighter blue on dark; never on a blue surface. */}
+      <HippiusFlatLogo
+        className={cn(
+          "size-[28px] text-primary-50 dark:text-primary-60",
+          logoClassName,
+        )}
       />
       <span
         className={cn(
-          "font-[557] text-[18px] leading-[18px] tracking-[0px] text-primary-50",
+          "font-[557] text-[18px] leading-[18px] tracking-[0px] text-black-700 dark:text-white",
           textClassName,
         )}
       >

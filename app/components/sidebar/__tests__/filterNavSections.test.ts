@@ -103,15 +103,31 @@ describe("filterNavSections", () => {
     expect(infra?.items.find((i) => i.label === "Chat")?.path).toBe("/chat");
   });
 
-  // Captures is a view of Drive: it sits directly under Drive and follows the
-  // capture feature flag like every other capture surface.
-  it("puts Captures right under Drive, behind the capture flag", () => {
+  // Captures is a view of Drive: it sits under Drive (after Shared Drives, as
+  // the console orders them) and follows the capture feature flag like every
+  // other capture surface.
+  it("puts Captures under Drive and Shared Drives, behind the capture flag", () => {
     const infra = (captureEnabled: boolean) =>
       filterNavSections(navSections, { shareEnabled: true, chatEnabled: true, captureEnabled })
         .find((s) => s.label === "INFRASTRUCTURE")
         ?.items.map((i) => `${i.label} ${i.path}`);
-    expect(infra(true)?.slice(0, 2)).toEqual(["Drive /files", "Captures /captures"]);
+    expect(infra(true)?.slice(0, 3)).toEqual([
+      "Drive /files",
+      "Shared Drives /shared-drives",
+      "Captures /captures",
+    ]);
     expect(infra(false)).not.toContain("Captures /captures");
+  });
+
+  // Shared drives have a page of their own, right under Drive, and follow the
+  // shared drives flag.
+  it("puts Shared Drives right under Drive, behind the shared drives flag", () => {
+    const infra = (sharedDrivesEnabled: boolean) =>
+      filterNavSections(navSections, { shareEnabled: true, sharedDrivesEnabled })
+        .find((s) => s.label === "INFRASTRUCTURE")
+        ?.items.map((i) => `${i.label} ${i.path}`);
+    expect(infra(true)?.slice(0, 2)).toEqual(["Drive /files", "Shared Drives /shared-drives"]);
+    expect(infra(false)).not.toContain("Shared Drives /shared-drives");
   });
 
   // The flag is on in production for every platform, but Rust turns capture

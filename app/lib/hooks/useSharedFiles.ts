@@ -22,7 +22,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 
 import { listShares, type ShareSummary } from "@/app/lib/tauri/shares";
@@ -97,4 +97,19 @@ export function useSharedFiles(): UseSharedFilesResult {
   }, [index]);
 
   return { getSharesFor, isLoading: isLoading && shareEnabled };
+}
+
+/**
+ * One link from the share listing already in the cache, by its token, or
+ * `null`. Reads only what is cached (any account's entry), so it never asks
+ * the server: the Insights sheet's header uses it for the date the link was
+ * made, and leaves the date out when the listing has not been loaded.
+ */
+export function findCachedShare(client: QueryClient, shareToken: string): ShareSummary | null {
+  for (const [, data] of client.getQueriesData<unknown>({ queryKey: [SHARES_QUERY_KEY] })) {
+    if (!Array.isArray(data)) continue;
+    const row = (data as ShareSummary[]).find((r) => r?.shareToken === shareToken);
+    if (row) return row;
+  }
+  return null;
 }

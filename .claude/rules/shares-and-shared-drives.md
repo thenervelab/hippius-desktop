@@ -31,6 +31,8 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 **Chat previews (`shares/preview.rs`)** are a plaintext picture plus the file name as title, `PUT /v1/shares/{token}/preview` after the mint (`DELETE` to turn off; the server deletes it on revoke). Rules: never for a password link (`preview::allowed`, the server cannot tell them apart; pinned by `no_password_share_sends_a_chat_preview`); only when `/v1/capabilities` has `share_preview`, otherwise nothing is sent; always a re-encoded JPEG (fit 1200 px, under 300 KB, no EXIF/ICC, orientation applied), never the file's bytes; best-effort in a spawned task, so a failure never fails or slows the share. The dialog's switch default comes from Rust (`hcfs_share_preview_default`: offered for png/jpg/bmp/mp4/mov/m4v, on for a capture by drive or name when `CaptureOptions.chat_preview`), and captures delivered with an automatic link follow that same stored option (`deliver_and_announce` reads the preview while the link is minted and removes the temp copy only after; `spawn_preview_then_cleanup`). The tray's one-click Copy link sends none.
 
+**Share link insights (`shares/insights.rs`, `shares/comment_crypto.rs`)** are the owner's side only; viewers track, comment and react on the console's share page. Every route is gated on its own `/v1/capabilities` flag and nothing is sent without it: `share_insights` (`GET .../insights`, `PATCH .../settings`), `share_comments` (comments list, owner delete, block and unblock of a comment's author, reaction totals; the Comments and Reactions switches), `share_notifications` (`/v1/notification-preferences`). Rules: a free plan's locked metric crosses IPC as `Gated::Locked` with NO value, and anything the server sends for a metric it calls locked (or on any non-paid plan) is dropped in `parse_insights`, so the sheet's locked cards can only be drawn from the FE's sample numbers (pinned by `a_locked_metric_crosses_ipc_with_no_value`, `values_sent_for_a_locked_metric_are_dropped`, `ShareInsightsSheet.test.tsx`). Comments and viewer names are AES-256-GCM under `HKDF-SHA256(share key, empty salt, "hippius-share-comments-v1")` with AAD `<token>:comment` / `<token>:viewer-name`, a cross-client contract with the console: `tests/fixtures/share_comments_vectors.json` is shared verbatim and both decrypt and fixed-nonce encrypt are asserted. The share key comes from the keystore, else `owner_wrap::sync_file_wraps`; a password link's key is never recoverable, so its comments list unread with Rust's sentence. A new link's switches are a `PATCH` after the mint through `insights::spawn_apply` (best-effort, spawned, only the keys the server advertises, nothing for an all-off new link): the dialog's and Finder chooser's `link_settings`, and captures from `CaptureOptions.link_insights` (`for_capture`) on the automatic link, the card's Create link and the editor's new link. Defaults come from Rust (`share_link_settings_default`: never for folders; on for a capture by drive or name when the option is on). Pinned by `a_captures_link_settings_follow_the_settings_default` and `the_share_dialogs_switches_are_sent_after_the_mint`. The tray's one-click Copy link sends none, as for previews. The sheet's Link settings read a link's switches from its `/meta` `settings` (the owner listing in hcfs-client does not carry them). Block (`POST`/`DELETE .../comments/{id}/block`) is per link and keyed on the author, who the server never names; the server lists no block state, so the sheet only shows "Blocked" with Unblock for comments blocked while it is open. Viewer ids in insights are per-link pseudonyms (hcfs #738), used only as row keys. **Plan rule**: all three link switches, Insights (view counting, watch time, the owner's numbers), Comments and Reactions, come with paid Drive plans only, decided once in `insights::switches_in_plan` from the same plan read as the capture watermark (`capture::allowance::tier_from_reads`). `apply_after_mint` passes every new link through `within_plan`, so a free plan or a plan that cannot be read mints all three off and never holds the share up; `LinkSettingsDefault.switches_in_plan` (and `share_switches_in_plan` for Settings) lets the FE show the upgrade prompt on the free plan instead of turning any switch on (`LinkEngagementSwitches`, and Settings' "Track views, comments and reactions" shown locked, since it has no effect there); an unread plan locks nothing. `share_set_link_settings` refuses only switching one ON from off on a known free plan (`refuses_switching_on`, checking only the keys the patch turns on), so older links keep what they have and turning any switch off always works. The prompt's sentence (`LOCKED_PROMPT`) is the console's verbatim. **Waiting on the server**: `share_listing_counts` / `share_insights_seen` (per-link counts, Insights switch and last-seen on the listing), `share_comment_replies` (replies, Owner badge) and `share_reaction_moments` are parsed (default `false`) and their UI renders nothing without them; the Captures row button never fetches insights or settings per row (it reads only the sheet's cached `share-link-settings` for "Insights off"). The sheet's words and avatar palette (`insightsView.ts`, FNV-1a over the lowercased name's code points, mod 6, exactly as the console hashes it, pinned by known colours) are shared with the console. Pinned by `ShareInsightsSheet.test.tsx`, `CaptureInsightsButton.test.tsx`, `insightsView.test.ts`.
+
 ## Shared drives (cross-account member drives)
 
 An owner invites another account into ONE drive via a link; the member syncs it locally as a first-class drive that lives in the OWNER's server namespace. Server half = hcfs PR #348 (`drive_members`/`drive_invites`, all routes dark unless the server runs `HCFS_FEATURE_SHARED_DRIVES=1`); desktop plan `docs/plans/2026-08-20-shared-drives-phase2-desktop.md`; UI gated on `SHARED_DRIVES_ENABLED` (`app/lib/featureFlags.ts`), which is `true` on **every lane, production included**, as is `FOLDER_ROLES_ENABLED`. Keep them literals, never `enabledFrom(...)`: the feature ships to everyone, and creating shares is held back by the plan gate below, not by the lane. The console splits create vs use (`SHARED_DRIVES` on in production for joining, `SHARED_DRIVES_CREATE` a separate console launch switch); the desktop has one flag for both. A SECOND gate sits in front of it: the plan (see "Sharing needs Plus, Max or Scale" below). Backend module `src-tauri/src/shared_drives/` (grant crypto + invite/membership IPCs), resolver `src-tauri/src/sync/drive/identity.rs`.
@@ -243,21 +245,28 @@ A legacy copy-link invite's fragment (`#k=`) is the drive entropy, or a folder i
 
 `SHARED_DRIVES_ENABLED` gates only the ADDITIVE surfaces — the "Share drive" menu item + `ShareDriveModal` (invite mint + members tab), the "Shared with me" sections, the owner badge.
 
-**Shared with Me on the Drive page is always there** (`SharedWithMeSection` with `onShareDrive`,
-view from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`):
-skeleton rows until the membership AND folder-grant listings answer, then the rows with a
-"Share a drive" header button, or `SharedWithMeEmptyState` (the shared `NoEntriesFound` card,
-its `illustration`/`footerLink`/`titleId` props; "A place for teamwork", docs link
-`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`). A feature-off
-server still hides it; a failed fetch shows the empty state. Settings passes no `onShareDrive`
-and keeps the quiet, rows-only section. "Share a drive" opens `share-drive-picker/`
-(`ShareDriveFlow` + `ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`),
-"Shared with N" / "Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing),
-search above `PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`,
-so Free/Starter get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no
-Continue. Continue CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share
-drive..." does, so there is never a dialog over a dialog. No drives: Sync a Folder (the
-page's `startSyncFolder`). Pinned by `ShareDrivePicker.test.tsx`, `SharedWithMeSection.test.tsx`
+**Shared drives are listed only on the Shared Drives page** (`/shared-drives`, sidebar entry
+under Drive, `featureFlag: "sharedDrives"`; `shared-drives/SharedDrivesView.tsx`). The Drive
+page does not list drives shared with this account. Two cards. **Shared by Me**: own drives
+shared as a whole (`isDriveShared`), drawn by the Drive page's `FolderList` with `markOwned`
+(the Owner chip), skeleton rows until `useOwnedDriveSharingState` settles so the empty state
+never claims "nothing shared" early, and `ShareADriveEmptyState` ("A place for teamwork", docs
+link `https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`) when none is.
+**Shared with Me**: `SharedWithMeSection` with `alwaysShow` and the page's `emptyState`, view
+from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`: skeleton
+rows until the membership AND folder-grant listings answer, then the rows or the empty text; a
+feature-off server still hides it, a failed fetch shows the empty text. Settings passes neither
+and keeps the quiet, rows-only section. A row opens on the Drive page through
+`sharedDriveRoute` (browse label plus `openName`, shown in the breadcrumb only for a shared
+label, `browseNameFromUrl`). "Share a drive" opens `share-drive-picker/` (`ShareDriveFlow` +
+`ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`), "Shared with N" /
+"Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing), search above
+`PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`, so Free/Starter
+get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no Continue. Continue
+CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share drive..." does, so
+there is never a dialog over a dialog. Sync a Folder there makes a new drive, and its Share
+dialog opens only once the folder dialog has closed. Pinned by `ShareDrivePicker.test.tsx`,
+`SharedDrivesView.test.tsx`, `ShareADriveEmptyState.test.tsx`, `SharedWithMeSection.test.tsx`
 and `sharedWithMeState.test.ts`.
 
 **Added by: one rule for the column and the filter** (`lib/shared-drives/uploaderFilter.ts`:

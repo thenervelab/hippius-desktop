@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.15"
+version = "0.6.16"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -144,6 +144,10 @@ hostname = "0.4"
 zeroize = "1"
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
+# Share-link comments (`shares::comment_crypto`) are AES-256-GCM, the scheme
+# the web console uses. Already in the graph through rustls, so this adds no
+# crate to the build.
+ring = "0.17"
 # Emailed drive invites: a manager seals the drive key to the recipient's
 # ephemeral X25519 key (`shared_drives::invite_key`). Already in the graph
 # through the chat stack; `static_secrets` lets the KAT inject its secret.

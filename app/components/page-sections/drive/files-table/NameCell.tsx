@@ -10,7 +10,9 @@ import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import { Video } from "lucide-react";
 import { Icons } from "@/components/ui";
 import MiddleTruncatedName from "@/components/ui/MiddleTruncatedName";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
+import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -73,6 +75,8 @@ type NameCellProps = {
   /** Opens share-link management for this row. Passed through to the
    *  shared-link badge so clicking the link icon manages the share
    *  instead of opening the file preview. Gets the row's share ids. */
+  /** The row's file, handed to the Captures page's Insights button for its sheet's thumbnail. */
+  file?: FormattedUserFile;
   onManageShare?: (shareRowIds: string[]) => void;
 };
 
@@ -330,6 +334,7 @@ const NameCell: FC<NameCellProps> = ({
   parentSubFolderPath,
   syncedBadgeMs = 5000,
   onManageShare,
+  file,
 }) => {
   const { icon: Icon, color } = getFileIcon(fileType, isFolder);
   const { getParam } = useUrlParams();
@@ -464,12 +469,22 @@ const NameCell: FC<NameCellProps> = ({
                   "group-hover:text-primary-50 group-hover:underline cursor-pointer",
               )}
               suffix={
-                <SharedLinkBadge
-                  label={label}
-                  actualName={actualName}
-                  onManageShare={onManageShare}
-                  className="ml-1.5"
-                />
+                <>
+                  <SharedLinkBadge
+                    label={label}
+                    actualName={actualName}
+                    onManageShare={onManageShare}
+                    className="ml-1.5"
+                  />
+                  {/* Captures page only: opens the link's Insights. */}
+                  <CaptureInsightsButton
+                    label={label}
+                    actualName={actualName}
+                    fileName={actualName || rawName}
+                    file={file}
+                    className="ml-1"
+                  />
+                </>
               }
             />
           </div>

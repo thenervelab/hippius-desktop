@@ -15,6 +15,60 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-10-23
+
+See who watched the screenshots, recordings and files you share, read what
+they say about them, and choose what each link collects. The Hippius logo has
+a fresh look too.
+
+### Added
+
+- **See who watched your links.** A share link's Insights show how many times
+  it was opened and by how many people. For a recording they also show how
+  much each viewer watched, the average watch time, how many watched to the
+  end, and a chart of where people stopped, with the moment most people left.
+  Open Insights from Shared Links, from the Insights button on a capture on the
+  Captures page, or from the card that appears after a screenshot or recording.
+- **Comments and reactions.** People who open your link can leave a comment
+  and react to it. Comments are end-to-end encrypted and are listed in the
+  link's Insights, with its reactions shown as bars. You can delete any
+  comment, or block the person who wrote it from commenting and reacting on
+  that link.
+- **Choose what each link collects.** The share dialog has Insights, Comments
+  and Reactions switches for every file link. On paid Drive plans, new
+  screenshot and recording links start with all three on, and other files
+  start with them off. On the free plan new links start with all three off,
+  and turning one on asks you to upgrade; on the free plan Insights still show
+  a link's views and viewers. Links that already have one on keep it, and you
+  can always turn it off. For new captures, use "Track views, comments and
+  reactions" in Settings, Screenshots & Recording.
+- **Emails about your links.** Settings, Notifications lets you get an email
+  when one of your links is opened for the first time, when people comment,
+  and a daily or weekly summary of views and comments.
+- **Shared Drives has its own place in the sidebar.** One page lists the
+  drives you've shared, marked as yours with who they're shared with, and the
+  drives and folders other people invited you into. Share one of your drives
+  from there, or make a new drive and go straight on to sharing it, and manage
+  who has access or leave a drive from its row. Drives shared with you are no
+  longer listed on the Drive page; find them on Shared Drives.
+
+### Changed
+
+- **The Hippius logo has a fresh look.** The name and logo at the top of the
+  window, on the sign-in screens, in the menu bar window and in the update
+  dialog use the flat Hippius mark, with the name in black, or white in dark
+  mode.
+- **Insights open in a side panel.** A share link's Insights open in a panel
+  on the right, like file details, instead of a window over the page, so the
+  page stays in view. Views, completion and how many comments and reactions a
+  link has stay at the top, with Comments, Viewers and Reactions tabs below, so
+  a link with twenty or more comments stays easy to read: long comments and
+  replies fold away until you open them, comments sort newest or oldest first,
+  and more load as you go. The link's Insights, Comments and Reactions switches
+  sit behind the gear at the top, and long generated names, like those of
+  people who signed in with an access key, are shortened in the middle with the
+  full name on hover. Press Escape to close it.
+
 ## [0.6.15] - 2026-10-23
 
 The free plan's recording count now includes every recording in your
