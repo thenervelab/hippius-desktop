@@ -11,7 +11,7 @@
 //! Every video in ALL of the account's own captures drives, read from the
 //! HCFS SERVER's listing of each, the same listing the remote-folder browser
 //! reads (`list_remote_folder_files_inner`). A captures drive is one the
-//! server holds that is either named like the default ("Hippius Captures",
+//! server holds whose key label is the default's ("Hippius Captures",
 //! `naming::CAPTURES_DIR_NAME`, or "Hippius Captures-2" and so on, as moving
 //! the folder or another computer names it), or one this machine has ever
 //! kept captures in (`destination::own_capture_labels`). So moving the
@@ -19,9 +19,25 @@
 //! the web console, another computer or an older build counts, and one
 //! deleted anywhere stops counting.
 //!
+//! # Found by folder hash, never by the listed name
+//!
+//! A drive has two names. Its key label is fixed when the drive is made: the
+//! server keeps the drive under `folder_hash(label)` and its files are
+//! encrypted with a key derived from that label. The name the server's
+//! folder list shows is the drive's folder name on the computer that
+//! registered it (`spawn_folder_registration`), so a captures drive keyed
+//! "Hippius Captures" is listed as `hippius-captures` by default, or as any
+//! folder the user picked. A drive is therefore matched by its folder hash
+//! against the hashes of the key labels a captures drive can have
+//! ([`captures_drives`]), and listed by that key label. Matching the listed
+//! name missed every captures drive in a folder not literally called
+//! "Hippius Captures", and a drive merely named like one was counted.
+//!
 //! Captures filed in a folder of another drive (the user picked a folder in
 //! their main drive, `destination::own_capture_folders`) count only the
-//! videos under that folder, never the rest of that drive.
+//! videos under that folder, never the rest of that drive. That drive is
+//! found the same way, by the hash of the key label this machine filed the
+//! captures under ([`captures_folders`]).
 //!
 //! A recording is ANY video file ([`is_video_name`]: `.mp4`, `.webm`,
 //! `.mov`), whatever its name and in any folder of the drive, so renaming a
@@ -97,7 +113,12 @@ pub fn is_video_name(name: &str) -> bool {
         .is_some_and(|(stem, ext)| !stem.is_empty() && RECORDING_EXTENSIONS.iter().any(|v| ext.eq_ignore_ascii_case(v)))
 }
 
-/// Whether `label` is named the way a captures drive is by default:
+/// The highest numbered default key label looked for by hash: "Hippius
+/// Captures-2" through "Hippius Captures-99". A drive past it still counts
+/// when the folder list shows its key label ([`captures_drives`]).
+pub const NUMBERED_CAPTURES_LABELS: u32 = 99;
+
+/// Whether `label` is a key label a captures drive has by default:
 /// `Hippius Captures`, or `Hippius Captures-N` when that label was taken
 /// (`sync::drive::paths::generate_unique_label_internal`).
 #[must_use]
@@ -110,15 +131,45 @@ pub fn is_default_captures_label(label: &str) -> bool {
             .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// The captures drives among the drives the server holds (`on_server`):
-/// the ones named like the default, and the ones this machine kept captures
-/// in (`known`). Sorted, each once.
+/// A drive's folder hash as the server lists it, in the form
+/// `mnemonic::folder_hash` derives it (lowercase hex).
+fn listed_hash(hash: &str) -> String {
+    hash.trim().to_ascii_lowercase()
+}
+
+/// Folder hash to key label for every default captures key label
+/// ([`NUMBERED_CAPTURES_LABELS`]), computed once.
+fn default_captures_hashes() -> &'static HashMap<String, String> {
+    static HASHES: std::sync::OnceLock<HashMap<String, String>> = std::sync::OnceLock::new();
+    HASHES.get_or_init(|| {
+        let base = super::naming::CAPTURES_DIR_NAME;
+        std::iter::once(base.to_string())
+            .chain((2..=NUMBERED_CAPTURES_LABELS).map(|n| format!("{base}-{n}")))
+            .map(|label| (crate::sync::mnemonic::folder_hash(&label), label))
+            .collect()
+    })
+}
+
+/// The captures drives among the drives the server holds (`on_server`, each
+/// as `(listed name, folder hash)`), by KEY label: a drive whose folder hash
+/// is a default captures key label's, or the hash of a drive this machine
+/// kept captures in (`known`, key labels). The listed name never decides it
+/// (see the module docs), except that a drive listed under a default key
+/// label past [`NUMBERED_CAPTURES_LABELS`] counts when its hash is that
+/// label's. Sorted, each once.
 #[must_use]
-pub fn captures_drives<'a>(known: &[String], on_server: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+pub fn captures_drives<'a>(known: &[String], on_server: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<String> {
+    let defaults = default_captures_hashes();
+    let known: HashMap<String, &String> = known.iter().map(|label| (crate::sync::mnemonic::folder_hash(label), label)).collect();
     let mut labels: Vec<String> = on_server
         .into_iter()
-        .filter(|label| is_default_captures_label(label) || known.iter().any(|k| k == label))
-        .map(str::to_string)
+        .filter_map(|(name, hash)| {
+            let hash = listed_hash(hash);
+            if let Some(label) = defaults.get(&hash).or_else(|| known.get(&hash).copied()) {
+                return Some(label.clone());
+            }
+            (is_default_captures_label(name) && crate::sync::mnemonic::folder_hash(name) == hash).then(|| name.to_string())
+        })
         .collect();
     labels.sort();
     labels.dedup();
@@ -126,18 +177,21 @@ pub fn captures_drives<'a>(known: &[String], on_server: impl IntoIterator<Item =
 }
 
 /// The folders inside other drives captures were filed in, among the drives
-/// the server holds (`on_server`), leaving out any drive already counted
-/// whole (`whole`, from [`captures_drives`]). Sorted, each once.
+/// the server holds (`on_server`, each as `(listed name, folder hash)`),
+/// leaving out any drive already counted whole (`whole`, from
+/// [`captures_drives`]). A folder's drive is found by the hash of the key
+/// label it was filed under, never by the name the drive is listed as.
+/// Sorted, each once.
 #[must_use]
 pub fn captures_folders<'a>(
     whole: &[String],
     folders: &[super::destination::CaptureFolder],
-    on_server: impl IntoIterator<Item = &'a str>,
+    on_server: impl IntoIterator<Item = (&'a str, &'a str)>,
 ) -> Vec<super::destination::CaptureFolder> {
-    let on_server: HashSet<&str> = on_server.into_iter().collect();
+    let on_server: HashSet<String> = on_server.into_iter().map(|(_, hash)| listed_hash(hash)).collect();
     let mut kept: Vec<super::destination::CaptureFolder> = folders
         .iter()
-        .filter(|f| on_server.contains(f.label.as_str()) && !whole.contains(&f.label))
+        .filter(|f| on_server.contains(&crate::sync::mnemonic::folder_hash(&f.label)) && !whole.contains(&f.label))
         .cloned()
         .collect();
     kept.sort_by(|a, b| (&a.label, &a.folder).cmp(&(&b.label, &b.folder)));
@@ -280,14 +334,17 @@ fn account_key(account_id: &str) -> String {
 }
 
 /// The account's own captures drives on the server ([`captures_drives`]),
-/// and the captures folders inside its other drives ([`captures_folders`]).
+/// and the captures folders inside its other drives ([`captures_folders`]),
+/// both by key label, which is what `list_remote_folder_files_inner` derives
+/// the drive's hash and key from.
 async fn captures_labels(state: &AppState, account_id: &str) -> Result<(Vec<String>, Vec<super::destination::CaptureFolder>)> {
     let pool = state.pool()?;
     let known = super::destination::own_capture_labels(pool, account_id).await?;
     let folders = super::destination::own_capture_folders(pool, account_id).await?;
     let on_server = crate::sync::folders::list_remote_folders_internal(pool, account_id).await?;
-    let whole = captures_drives(&known, on_server.iter().map(|f| f.label.as_str()));
-    let folders = captures_folders(&whole, &folders, on_server.iter().map(|f| f.label.as_str()));
+    let listed = || on_server.iter().map(|f| (f.label.as_str(), f.folder_hash.as_str()));
+    let whole = captures_drives(&known, listed());
+    let folders = captures_folders(&whole, &folders, listed());
     Ok((whole, folders))
 }
 
@@ -563,11 +620,30 @@ mod tests {
         assert_eq!(both.len(), 12);
     }
 
-    /// A moved captures folder makes "Hippius Captures-2", and the old drive
-    /// still counts: every drive named like the default, and every one this
-    /// machine kept captures in, as long as the server holds it.
+    /// A drive as the server's folder list gives it: the name it is listed
+    /// under and the folder hash of the key label it was made with.
+    fn on_server(name: &'static str, key_label: &str) -> (&'static str, String) {
+        (name, crate::sync::mnemonic::folder_hash(key_label))
+    }
+
+    fn listed_drives<'a>(drives: &'a [(&'static str, String)]) -> impl Iterator<Item = (&'a str, &'a str)> {
+        drives.iter().map(|(name, hash)| (*name, hash.as_str()))
+    }
+
+    /// The hash is hcfs-client's rule, and the web console looks the
+    /// captures drive up by the same value.
     #[test]
-    fn every_captures_drive_counts() {
+    fn the_captures_drive_hash_is_the_one_the_console_looks_for() {
+        assert_eq!(crate::sync::mnemonic::folder_hash("Hippius Captures"), "4a1c1de2d7c3ef04");
+        assert_eq!(
+            default_captures_hashes().get("4a1c1de2d7c3ef04").map(String::as_str),
+            Some("Hippius Captures")
+        );
+        assert_eq!(default_captures_hashes().len(), 99, "Hippius Captures, then -2 to -99");
+    }
+
+    #[test]
+    fn default_captures_labels_are_the_base_and_its_numbers() {
         for label in ["Hippius Captures", "Hippius Captures-2", "Hippius Captures-13"] {
             assert!(is_default_captures_label(label), "{label}");
         }
@@ -577,22 +653,81 @@ mod tests {
             "Hippius Captures 2",
             "Work",
             "My Hippius Captures",
+            "hippius-captures",
         ] {
             assert!(!is_default_captures_label(label), "{label}");
         }
-        let known = vec!["Screens".to_string(), "Gone".to_string()];
-        let on_server = ["Work", "Hippius Captures", "Screens", "Hippius Captures-2", "Hippius Captures"];
+    }
+
+    /// The desktop's default: a drive keyed "Hippius Captures" whose folder
+    /// is `hippius-captures`, which is the name the server lists. It counts,
+    /// under its key label, which is what its files are listed by.
+    #[test]
+    fn a_drive_listed_as_hippius_captures_is_counted() {
+        let drives = [
+            on_server(super::super::naming::CAPTURES_FOLDER_NAME, "Hippius Captures"),
+            on_server("Work", "Work"),
+        ];
+        assert_eq!(captures_drives(&[], listed_drives(&drives)), vec!["Hippius Captures".to_string()]);
+        // Also when this machine remembers it (the usual case), still once.
         assert_eq!(
-            captures_drives(&known, on_server),
-            vec!["Hippius Captures".to_string(), "Hippius Captures-2".to_string(), "Screens".to_string()],
+            captures_drives(&["Hippius Captures".to_string()], listed_drives(&drives)),
+            vec!["Hippius Captures".to_string()]
+        );
+    }
+
+    /// The user picked a folder of their own: the drive is listed under that
+    /// folder's name. A moved captures folder ("Hippius Captures-2") and a
+    /// drive this machine kept captures in count the same way.
+    #[test]
+    fn a_drive_listed_under_a_user_picked_name_is_counted() {
+        let drives = [
+            on_server("hippius-recording", "Hippius Captures"),
+            on_server("Screen recordings", "Hippius Captures-2"),
+            on_server("Old moves", "Hippius Captures-99"),
+            on_server("clips", "Screens"),
+            on_server("Work", "Work"),
+        ];
+        let known = vec!["Screens".to_string(), "Gone".to_string()];
+        assert_eq!(
+            captures_drives(&known, listed_drives(&drives)),
+            vec![
+                "Hippius Captures".to_string(),
+                "Hippius Captures-2".to_string(),
+                "Hippius Captures-99".to_string(),
+                "Screens".to_string(),
+            ],
             "a remembered drive the server no longer holds is not listed"
         );
-        assert!(captures_drives(&known, ["Work"]).is_empty());
+        // Past the numbers looked for by hash, the listed key label counts
+        // only when the hash is that label's.
+        let far = [on_server("Hippius Captures-100", "Hippius Captures-100")];
+        assert_eq!(captures_drives(&[], listed_drives(&far)), vec!["Hippius Captures-100".to_string()]);
+        // The server's hash case does not matter.
+        let upper = [("hippius-captures", crate::sync::mnemonic::folder_hash("Hippius Captures").to_uppercase())];
+        assert_eq!(captures_drives(&[], listed_drives(&upper)), vec!["Hippius Captures".to_string()]);
+    }
+
+    /// A normal drive is never counted for its name, however much it looks
+    /// like a recordings or captures folder: only its hash decides.
+    #[test]
+    fn a_normal_drive_named_like_a_recordings_folder_is_not_counted() {
+        let drives = [
+            on_server("hippius-captures", "Work"),
+            on_server("Recordings", "Recordings"),
+            on_server("Screen recordings", "Documents"),
+            // Listed under the captures key label but made with another key.
+            on_server("Hippius Captures", "Photos"),
+            on_server("Hippius Captures-2", "Photos-2"),
+        ];
+        assert!(captures_drives(&[], listed_drives(&drives)).is_empty());
+        assert!(captures_drives(&["Screens".to_string()], listed_drives(&drives)).is_empty());
     }
 
     /// Captures filed in a folder of the main drive count only the videos
     /// under that folder, never the rest of the drive; a drive already
-    /// counted whole is not counted again by folder.
+    /// counted whole is not counted again by folder. The drive is found by
+    /// the hash of its key label, whatever it is listed as.
     #[test]
     fn a_captures_folder_inside_another_drive_counts_only_that_folder() {
         use super::super::destination::CaptureFolder;
@@ -614,11 +749,16 @@ mod tests {
         };
         let remembered = [folder("Main", "hippius-captures"), folder("Gone", "x"), folder("Hippius Captures", "sub")];
         let whole = vec!["Hippius Captures".to_string()];
+        // The main drive keyed "Main" is listed as its folder, "Documents".
+        let drives = [on_server("Documents", "Main"), on_server("hippius-captures", "Hippius Captures")];
         assert_eq!(
-            captures_folders(&whole, &remembered, ["Main", "Hippius Captures"]),
+            captures_folders(&whole, &remembered, listed_drives(&drives)),
             vec![folder("Main", "hippius-captures")],
             "a drive the server no longer holds, or one counted whole, is left out"
         );
+        // A drive merely LISTED as "Main" is not the one the folder is in.
+        let lookalike = [on_server("Main", "Other")];
+        assert!(captures_folders(&[], &remembered, listed_drives(&lookalike)).is_empty());
     }
 
     fn captures() -> Vec<String> {
