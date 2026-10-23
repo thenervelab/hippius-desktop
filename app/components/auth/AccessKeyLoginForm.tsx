@@ -10,6 +10,7 @@
 import React, { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Input } from "@/components/ui/input";
+import { walletLoginErrorText } from "@/app/lib/auth/walletLoginError";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { Loader2 } from "lucide-react";
 import { ArrowRight, Eye, EyeOff, Key } from "@/components/ui/icons";
@@ -58,11 +59,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
       router.replace(redirectPath);
     } catch (error) {
       console.error("Failed to login with access key:", error);
-      setError(
-        error instanceof Error
-          ? error.message
-          : "Invalid access key. Please ensure you've entered a valid 12-word mnemonic phrase.",
-      );
+      setError(walletLoginErrorText(error));
       setLoggingIn(false);
     }
   };

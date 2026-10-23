@@ -61,6 +61,10 @@ a fresh look too.
 
 ### Security
 
+- **Signing in with your recovery phrase now proves the whole wallet is
+  yours.** Hippius checks this so nobody else can claim your wallet's account,
+  and will soon require it, so update before then to keep signing in from the
+  app.
 - **Secure connections no longer trust distrusted emSign certificates.**
   Hippius now refuses connections that rely on certain emSign certificate
   authorities, which have been distrusted.
