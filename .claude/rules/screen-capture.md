@@ -1179,11 +1179,18 @@ count is EVERY video file (`.mp4`/`.webm`/`.mov`, any name, any subfolder:
 `is_video_name`, so a rename never frees a slot) in ALL of the account's own
 captures drives, each read from the server (`list_remote_folder_files_inner`),
 keyed `label/path`. A captures drive is one the server's folder list
-(`list_remote_folders_internal`) holds whose label is `CAPTURES_DIR_NAME` or
-`CAPTURES_DIR_NAME-N` (`is_default_captures_label`), or that this machine ever
-kept captures in (`destination::own_capture_labels`, appended by every own
+(`list_remote_folders_internal`) holds whose FOLDER HASH is the hash of a key
+label `CAPTURES_DIR_NAME` or `CAPTURES_DIR_NAME-2` to `-99`
+(`default_captures_hashes`), or of a drive this machine ever kept captures in
+(`destination::own_capture_labels`, appended by every own
 `destination::save`), so moving the captures folder ("Hippius Captures-2")
-does not reset the count, and console uploads and other devices count. Client
+does not reset the count, and console uploads and other devices count.
+**Never match the listed name**: the server lists a drive under its folder's
+name (`spawn_folder_registration`), `hippius-captures` by default or whatever
+the user picked, so a name match missed every new captures drive and counted
+lookalikes. A captures folder inside another drive finds that drive by the
+hash of its remembered key label the same way. Pinned by
+`recording_allowance::tests`. Client
 side only; the server keeps no count. Cached per account on
 `CaptureState.recording_counts` for `COUNT_TTL` (30 s), warmed when the bar
 opens; a delivered recording counts at once (`note_delivered`, until listed
