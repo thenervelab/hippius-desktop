@@ -49,13 +49,38 @@ async fn challenge_ok() -> Json<Value> {
     Json(json!({ "challenge": "challenge-token-abc", "message": "Sign this to log in" }))
 }
 
-async fn verify_ok() -> Json<Value> {
-    Json(json!({
-        "token": "test-bearer-token",
-        "user_id": 42,
-        "username": "tester",
-        "is_new": true,
-    }))
+/// Answers like the API: refuses a body without a valid `substrate_signature`
+/// (sr25519 over the challenge message by the key of the `substrate_address`
+/// it sends), which the API requires of an account that never proved its
+/// Substrate key.
+async fn verify_ok(Json(body): Json<Value>) -> impl IntoResponse {
+    let public_key = body["substrate_address"]
+        .as_str()
+        .and_then(|a| a.parse::<subxt::utils::AccountId32>().ok())
+        .map(|account| subxt_signer::sr25519::PublicKey(account.0));
+    let signature = body["substrate_signature"]
+        .as_str()
+        .and_then(|s| s.strip_prefix("0x"))
+        .and_then(|s| hex::decode(s).ok())
+        .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
+        .map(subxt_signer::sr25519::Signature);
+    let proved = matches!((signature, public_key), (Some(sig), Some(key))
+        if subxt_signer::sr25519::verify(&sig, b"Sign this to log in", &key));
+    if !proved {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Invalid signature", "code": "substrate_signature_required" })),
+        );
+    }
+    (
+        StatusCode::OK,
+        Json(json!({
+            "token": "test-bearer-token",
+            "user_id": 42,
+            "username": "tester",
+            "is_new": true,
+        })),
+    )
 }
 
 async fn challenge_unauthorized() -> impl IntoResponse {

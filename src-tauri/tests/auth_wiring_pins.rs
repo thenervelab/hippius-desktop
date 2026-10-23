@@ -33,6 +33,35 @@ fn slice_between<'a>(src: &'a str, start: &str, end: &str) -> &'a str {
     }
 }
 
+/// The access-key form shows the "verify this wallet" refusal by matching
+/// the start of the Rust message (`app/lib/auth/walletLoginError.ts`); a
+/// reworded message would silently fall back to the generic error.
+#[test]
+fn wallet_verification_message_matches_the_login_form() {
+    let rust = source("src/auth/service.rs");
+    let ts = source("../app/lib/auth/walletLoginError.ts");
+    let prefix = "This wallet must be verified once";
+    assert!(
+        rust.contains(&format!("\"{prefix}:")),
+        "verify_failure_message must start with {prefix:?}"
+    );
+    assert!(ts.contains(&format!("\"{prefix}\"")), "walletLoginError.ts must match on {prefix:?}");
+}
+
+/// `billing_auth.rs` builds its own `/api/auth/verify/` body (the
+/// orchestration test in `tests/auth_commands.rs` covers only
+/// `challenge_response`): both must carry the Substrate proof, or the API
+/// refuses an unproved account.
+#[test]
+fn every_wallet_verify_body_carries_the_substrate_proof() {
+    for path in ["src/auth/service.rs", "src/auth/billing_auth.rs"] {
+        assert!(
+            source(path).contains("\"substrate_signature\": sign_challenge_sr25519("),
+            "{path} must send substrate_signature on /api/auth/verify/"
+        );
+    }
+}
+
 #[test]
 fn token_refresh_routes_through_verified_derive() {
     let src = source("src/auth/service.rs");
