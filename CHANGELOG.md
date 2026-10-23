@@ -15,7 +15,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
-## [0.6.14] - 2026-10-21
+## [0.6.16] - 2026-10-23
 
 See who watched the screenshots, recordings and files you share, read what
 they say about them, and choose what each link collects. The Hippius logo has
@@ -60,10 +60,32 @@ a fresh look too.
   mode.
 - **Insights open in a side panel.** A share link's Insights open in a panel
   on the right, like file details, instead of a window over the page, so the
-  page stays in view. A link nobody has opened yet shows one short note with
-  its Insights, Comments and Reactions switches right below it, and once a
-  link has views those switches stay one click away at the bottom of the
-  panel. Press Escape to close it.
+  page stays in view. Views, completion and how many comments and reactions a
+  link has stay at the top, with Comments, Viewers and Reactions tabs below, so
+  a link with twenty or more comments stays easy to read: long comments and
+  replies fold away until you open them, comments sort newest or oldest first,
+  and more load as you go. The link's Insights, Comments and Reactions switches
+  sit behind the gear at the top, and long generated names, like those of
+  people who signed in with an access key, are shortened in the middle with the
+  full name on hover. Press Escape to close it.
+
+## [0.6.15] - 2026-10-23
+
+The free plan's recording count now includes every recording in your
+captures folder, whatever the folder is called.
+
+### Fixed
+
+- **The free plan's recording count includes every recording in your captures
+  folder, whatever the folder is called.** Recordings in the default
+  hippius-captures folder, in a folder you picked, or in a folder inside
+  another drive were left out, so the count could say you had used fewer of
+  your 25 free recordings than you had.
+
+## [0.6.14] - 2026-10-23
+
+Signing in with your recovery phrase keeps working when Hippius starts
+checking the whole wallet.
 
 ### Security
 

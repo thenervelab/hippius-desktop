@@ -4,7 +4,7 @@ import type { InsightsViewer } from "@/app/lib/tauri/shareInsights";
 import {
   ANONYMOUS,
   AVATAR_COLORS,
-  TABS_THRESHOLD,
+  REPLIES_SHOWN,
   averageWatchMs,
   avatarFor,
   biggestDrop,
@@ -13,10 +13,14 @@ import {
   formatAgo,
   formatMomentAt,
   headerLine,
+  defaultInsightsTab,
   initials,
-  linkSwitchSummary,
-  usesTabs,
+  sortThreads,
+  switchOffLine,
+  switchPills,
+  tabLabel,
   viewerName,
+  visibleReplies,
 } from "../insightsView";
 
 const viewer = (over: Partial<InsightsViewer>): InsightsViewer => ({
@@ -157,12 +161,73 @@ describe("the avatar palette", () => {
   });
 });
 
-describe("usesTabs", () => {
-  it("splits into tabs only past ten viewers or comments", () => {
-    expect(TABS_THRESHOLD).toBe(10);
-    expect(usesTabs(10, 10)).toBe(false);
-    expect(usesTabs(11, 0)).toBe(true);
-    expect(usesTabs(0, 11)).toBe(true);
+describe("the tabs", () => {
+  it("opens on Comments when there are any, otherwise Viewers", () => {
+    expect(defaultInsightsTab(3)).toBe("comments");
+    expect(defaultInsightsTab(0)).toBe("viewers");
+  });
+  it("puts the count in the label once it is known", () => {
+    expect(tabLabel("Comments", 20)).toBe("Comments (20)");
+    expect(tabLabel("Viewers", 0)).toBe("Viewers (0)");
+    expect(tabLabel("Viewers", null)).toBe("Viewers");
+  });
+});
+
+describe("sortThreads", () => {
+  const threads = [
+    { id: "b", createdAt: "2026-10-13T10:00:00Z" },
+    { id: "late", createdAt: "2026-10-14T10:00:00Z" },
+    { id: "bad", createdAt: "not a date" },
+    { id: "a", createdAt: "2026-10-13T10:00:00Z" },
+    { id: "early", createdAt: "2026-10-01T10:00:00Z" },
+  ];
+  it("puts the newest first, a time that does not parse last, and keeps ties in the server's order", () => {
+    expect(sortThreads(threads, "newest").map((t) => t.id)).toEqual(["late", "b", "a", "early", "bad"]);
+  });
+  it("puts the oldest first the other way round", () => {
+    expect(sortThreads(threads, "oldest").map((t) => t.id)).toEqual(["bad", "early", "b", "a", "late"]);
+  });
+  it("leaves the list it was given alone", () => {
+    const copy = [...threads];
+    sortThreads(threads, "newest");
+    expect(threads).toEqual(copy);
+  });
+});
+
+describe("visibleReplies", () => {
+  it("shows the first two and folds the rest until opened", () => {
+    expect(REPLIES_SHOWN).toBe(2);
+    expect(visibleReplies([1, 2, 3, 4, 5], false)).toEqual({ shown: [1, 2], hidden: 3 });
+    expect(visibleReplies([1, 2, 3, 4, 5], true)).toEqual({ shown: [1, 2, 3, 4, 5], hidden: 0 });
+    expect(visibleReplies([1, 2], false)).toEqual({ shown: [1, 2], hidden: 0 });
+    expect(visibleReplies([], false)).toEqual({ shown: [], hidden: 0 });
+  });
+});
+
+describe("the switches' status row", () => {
+  const all = { insights: true, comments: true, reactions: true };
+  const on = { insights: true, comments: false, reactions: true };
+  it("draws a pill per switch the server takes, on or off, in order", () => {
+    expect(switchPills({ offered: all, on })).toEqual([
+      { key: "insights", label: "Insights", on: true },
+      { key: "comments", label: "Comments", on: false },
+      { key: "reactions", label: "Reactions", on: true },
+    ]);
+    expect(switchPills({ offered: { insights: true, comments: false, reactions: false }, on }).map((p) => p.key)).toEqual([
+      "insights",
+    ]);
+  });
+  it("draws none when Link settings would draw no switches", () => {
+    expect(switchPills(null)).toEqual([]);
+    expect(switchPills({ offered: { insights: false, comments: true, reactions: true }, on })).toEqual([]);
+  });
+  it("gives a tab its one line only while its switch is off", () => {
+    expect(switchOffLine({ offered: all, on }, "comments")).toBe("Comments are off, so viewers can't add new ones.");
+    expect(switchOffLine({ offered: all, on }, "insights")).toBeNull();
+    expect(switchOffLine({ offered: all, on: { ...on, insights: false } }, "insights")).toMatch(/Insights are off/);
+    expect(switchOffLine({ offered: all, on: { ...on, reactions: false } }, "reactions")).toMatch(/Reactions are off/);
+    expect(switchOffLine({ offered: { ...all, comments: false }, on }, "comments")).toBeNull();
+    expect(switchOffLine(null, "comments")).toBeNull();
   });
 });
 
@@ -189,28 +254,6 @@ describe("headerLine and formatAgo", () => {
     expect(formatAgo("2026-10-18T12:00:00Z", now)).toBe("3d");
     expect(formatAgo("2026-10-01T12:00:00Z", now)).toBe("Oct 1");
     expect(formatAgo("not a date", now)).toBe("");
-  });
-});
-
-describe("linkSwitchSummary", () => {
-  const on = { insights: true, comments: false, reactions: true };
-  const all = { insights: true, comments: true, reactions: true };
-  it("says what the link allows in a line short enough for the panel", () => {
-    expect(linkSwitchSummary({ offered: all, on })).toBe("Insights and reactions on, comments off");
-    expect(linkSwitchSummary({ offered: all, on: all })).toBe("Insights, comments and reactions on");
-    expect(linkSwitchSummary({ offered: all, on: { insights: false, comments: false, reactions: false } })).toBe(
-      "Insights, comments and reactions off",
-    );
-    expect(linkSwitchSummary({ offered: all, on: { insights: false, comments: true, reactions: false } })).toBe(
-      "Comments on, insights and reactions off",
-    );
-  });
-  it("names only the switches the server takes", () => {
-    expect(linkSwitchSummary({ offered: { insights: true, comments: false, reactions: false }, on })).toBe("Insights on");
-  });
-  it("says nothing when On this link would draw nothing", () => {
-    expect(linkSwitchSummary(null)).toBeNull();
-    expect(linkSwitchSummary({ offered: { insights: false, comments: true, reactions: true }, on })).toBeNull();
   });
 });
 
