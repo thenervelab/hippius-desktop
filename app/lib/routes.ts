@@ -51,3 +51,19 @@ export function capturesRoute(label: string, remote: boolean, openFile?: string)
   if (openFile) params.set("openFile", openFile);
   return `${CAPTURES_ROUTE}?${params.toString()}`;
 }
+
+/** The Shared Drives page: drives shared with this account, and the ones it shared. */
+export const SHARED_DRIVES_ROUTE = "/shared-drives";
+
+/**
+ * Open a drive somebody shared with this account, or a folder of one, on the
+ * Drive page without syncing it here. `label` is its browse label
+ * (`makeSharedDriveLabel` / `makeFolderGrantLabel`), which browses like any
+ * server-only drive; `name` is what the breadcrumb shows instead of that
+ * label, which names the owner and a hash rather than anything a person
+ * would recognise.
+ */
+export function sharedDriveRoute(label: string, name: string): string {
+  const params = new URLSearchParams({ openLabel: label, openRemote: "1", openName: name });
+  return `/files?${params.toString()}`;
+}
