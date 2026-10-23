@@ -129,6 +129,20 @@ pub(crate) fn sign_challenge_sr25519(sr25519_pair: &subxt_signer::sr25519::Keypa
     format!("0x{}", hex::encode(sr25519_pair.sign(message.as_bytes()).0))
 }
 
+/// The user-facing error of a refused `/api/auth/verify/`. A 401 carries a
+/// `code`; `substrate_signature_required` (the account never proved its
+/// Substrate key) is not fixed by retrying, so it says what does.
+pub(crate) fn verify_failure_message(status: reqwest::StatusCode, body: &str) -> String {
+    let code = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("code").and_then(|c| c.as_str()).map(str::to_owned));
+    if status == reqwest::StatusCode::UNAUTHORIZED && code.as_deref() == Some("substrate_signature_required") {
+        return "This wallet must be verified once: update Hippius, or sign in at console.hippius.com with the same recovery phrase, then try again."
+            .to_string();
+    }
+    format!("Authentication failed (HTTP {status}). Please try again.")
+}
+
 /// Execute the two-step challenge-response authentication against the Hippius API.
 ///
 /// 1. POST to `/api/auth/mnemonic/` with addresses to receive a challenge
@@ -197,7 +211,7 @@ pub(crate) async fn challenge_response(
         let status = verify_res.status();
         let body = verify_res.text().await.unwrap_or_default();
         warn!(status = %status, "Verify request failed: {body}");
-        return Err(format!("Authentication failed (HTTP {status}). Please try again."));
+        return Err(verify_failure_message(status, &body));
     }
 
     let vr: VerifyResponse = verify_res.json().await.map_err(|e| format!("Failed to parse verify response: {e}"))?;
@@ -363,6 +377,26 @@ mod tests {
         let sig = Signature(hex::decode(hex_sig).expect("hex").try_into().expect("64 bytes"));
         assert!(verify(&sig, message.as_bytes(), &pair.public_key()));
         assert!(!verify(&sig, b"another message", &pair.public_key()));
+    }
+
+    #[test]
+    fn verify_failure_message_explains_a_missing_substrate_proof() {
+        use super::verify_failure_message;
+        use reqwest::StatusCode;
+
+        let required = r#"{"error": "Invalid signature", "code": "substrate_signature_required"}"#;
+        assert!(verify_failure_message(StatusCode::UNAUTHORIZED, required).contains("console.hippius.com"));
+        let mismatch = r#"{"error": "Invalid signature", "code": "evm_key_mismatch"}"#;
+        for (status, body) in [
+            (StatusCode::UNAUTHORIZED, mismatch),
+            (StatusCode::UNAUTHORIZED, "not json"),
+            (StatusCode::BAD_REQUEST, required),
+        ] {
+            assert_eq!(
+                verify_failure_message(status, body),
+                format!("Authentication failed (HTTP {status}). Please try again.")
+            );
+        }
     }
 
     // ─── Identity guard (audit H-3/H-4) ────────────────────────────
