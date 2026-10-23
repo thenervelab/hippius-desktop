@@ -26,7 +26,7 @@ use std::sync::LazyLock;
 use std::time::SystemTime;
 use tracing::info;
 use zip::CompressionMethod;
-use zip::write::{FileOptions, ZipWriter};
+use zip::write::ZipWriter;
 
 /// Newest log files to include. Matches the appender's `max_log_files(7)` so a
 /// week of daily rotations is the natural upper bound.
@@ -332,7 +332,7 @@ fn build_log_bundle(dir: &Path, system_info: &str) -> Result<Option<TempZip>, Ap
 
     let file = std::fs::File::create(&zip_path)?;
     let mut zip = ZipWriter::new(file);
-    let options: FileOptions<'_, ()> = FileOptions::default().compression_method(CompressionMethod::Deflated);
+    let options = crate::utils::zip_entry::options().compression_method(CompressionMethod::Deflated);
 
     let mut total: u64 = 0;
     let mut wrote_any = false;
@@ -778,12 +778,22 @@ mod tests {
         assert!(archive.len() >= 2, "expected both log files zipped, got {}", archive.len());
 
         let mut combined = String::new();
+        let mut names = Vec::new();
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
+            // Support reads these bundles with stock tools: entries keep the
+            // log file's own name, are Deflated, and carry Unix modes on
+            // every platform (see `utils::zip_entry`).
+            let name = entry.name().expect("entry name").into_owned();
+            assert_eq!(entry.compression(), zip::CompressionMethod::Deflated, "{name}");
+            assert_eq!(entry.unix_mode(), Some(0o100_644), "{name}");
+            names.push(name);
             let mut contents = String::new();
             entry.read_to_string(&mut contents).expect("read entry");
             combined.push_str(&contents);
         }
+        assert!(names.iter().any(|n| n == "hippius.2026-06-08.log"), "names: {names:?}");
+        assert!(names.iter().any(|n| n == "hippius.2026-06-07.log"), "names: {names:?}");
         assert!(!combined.contains("abandon"), "mnemonic leaked into zip: {combined}");
         assert!(combined.contains("[REDACTED_MNEMONIC]"), "redaction missing from zip: {combined}");
     }
@@ -869,7 +879,7 @@ mod tests {
         // independently of the system-info entry — a raw `len() <= MAX + 1`
         // would let an eighth log file pass whenever system-info went missing.
         let log_entries = (0..archive.len())
-            .filter(|&i| archive.by_index(i).expect("entry").name() != "system-info.txt")
+            .filter(|&i| archive.by_index(i).expect("entry").name().expect("entry name") != "system-info.txt")
             .count();
         assert!(log_entries <= MAX_FILES, "must never ship more than MAX_FILES log entries");
         assert!(log_entries > 0, "small files must all fit");
