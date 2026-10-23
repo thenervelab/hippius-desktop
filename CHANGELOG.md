@@ -15,6 +15,21 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.14] - 2026-10-23
+
+Signing in with your recovery phrase keeps working when Hippius starts
+checking the whole wallet.
+
+### Security
+
+- **Signing in with your recovery phrase now proves the whole wallet is
+  yours.** Hippius checks this so nobody else can claim your wallet's account,
+  and will soon require it, so update before then to keep signing in from the
+  app.
+- **Secure connections no longer trust distrusted emSign certificates.**
+  Hippius now refuses connections that rely on certain emSign certificate
+  authorities, which have been distrusted.
+
 ## [0.6.13] - 2026-10-15
 
 The capture bar and the recording controls now show what each button does

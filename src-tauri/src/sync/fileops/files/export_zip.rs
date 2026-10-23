@@ -122,7 +122,7 @@ fn is_skipped_entry(name: Option<&str>) -> bool {
 }
 
 fn stored_options() -> SimpleFileOptions {
-    SimpleFileOptions::default()
+    crate::utils::zip_entry::options()
         .compression_method(CompressionMethod::Stored)
         // Per-file ZIP64. Default `large_file: false` aborts a single
         // entry past 4 GiB with an opaque Io ("Large file option has not
@@ -333,7 +333,7 @@ mod tests {
         for i in 0..archive.len() {
             let mut entry = archive.by_index(i).expect("entry");
             methods.push(entry.compression());
-            let name = entry.name().to_owned();
+            let name = entry.name().expect("entry name").into_owned();
             if entry.is_dir() {
                 dirs.push(name);
             } else {
@@ -462,6 +462,38 @@ mod tests {
             methods.iter().all(|m| *m == CompressionMethod::Stored),
             "every entry must be Stored, got {methods:?}"
         );
+    }
+
+    /// Entries carry the crate's default modes, not the source file's: the
+    /// pack never copies on-disk permissions, so a setuid or world-writable
+    /// file cannot hand those bits to whoever extracts the download.
+    #[test]
+    fn entries_carry_default_unix_modes() {
+        let dir = TempDir::new().expect("tempdir");
+        fs::write(dir.path().join("a.txt"), b"alpha").expect("write a");
+        fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir.path().join("a.txt"), fs::Permissions::from_mode(0o4777)).expect("chmod a");
+            fs::set_permissions(dir.path().join("sub"), fs::Permissions::from_mode(0o777)).expect("chmod sub");
+        }
+
+        let out = TempDir::new().expect("out tempdir");
+        let zip_path = out.path().join("out.zip");
+        zip_folder_store_only(dir.path(), &zip_path).expect("zip");
+        let file = fs::File::open(&zip_path).expect("open zip");
+        let mut archive = ZipArchive::new(file).expect("read archive");
+
+        let modes: BTreeMap<String, Option<u32>> = (0..archive.len())
+            .map(|i| {
+                let entry = archive.by_index(i).expect("entry");
+                (entry.name().expect("entry name").into_owned(), entry.unix_mode())
+            })
+            .collect();
+
+        assert_eq!(modes["a.txt"], Some(0o100_644), "{modes:?}");
+        assert_eq!(modes["sub/"], Some(0o040_755), "{modes:?}");
     }
 
     /// A symlink must be skipped: its target could be outside the zipped
@@ -673,8 +705,8 @@ mod tests {
             let mut entry = archive.by_index(i).expect("entry");
             assert_eq!(entry.compression(), CompressionMethod::Stored);
             if entry.is_file() {
-                names.push(entry.name().to_owned());
-                if entry.name() == "a.txt" {
+                names.push(entry.name().expect("entry name").into_owned());
+                if entry.name().expect("entry name") == "a.txt" {
                     let mut buf = Vec::new();
                     entry.read_to_end(&mut buf).expect("read");
                     assert_eq!(buf, b"alpha");
