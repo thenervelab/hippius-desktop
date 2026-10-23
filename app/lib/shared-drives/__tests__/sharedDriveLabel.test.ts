@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  browseNameFromUrl,
   isFolderGrantLabel,
   isSharedDriveLabel,
   makeFolderGrantLabel,
@@ -122,5 +123,27 @@ describe("the folder grant browse label", () => {
     ]) {
       expect(parseFolderGrantLabel(label)).toBeNull();
     }
+  });
+});
+
+describe("browseNameFromUrl", () => {
+  const OWNER_SS58 = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+  const shared = makeSharedDriveLabel({ ownerSs58: OWNER_SS58, folderHash: "0123456789abcdef" });
+  const grant = makeFolderGrantLabel({
+    ownerSs58: OWNER_SS58,
+    folderHash: "0123456789abcdef",
+    pathPrefix: "Clients/ACME",
+  });
+
+  it("names a shared drive or folder opened from a link", () => {
+    expect(browseNameFromUrl(shared, "Design team")).toBe("Design team");
+    expect(browseNameFromUrl(grant, "ACME")).toBe("ACME");
+  });
+
+  it("never renames an ordinary drive, and needs a name to give", () => {
+    expect(browseNameFromUrl("Photos", "Something else")).toBeNull();
+    expect(browseNameFromUrl(shared, "")).toBeNull();
+    expect(browseNameFromUrl(shared, null)).toBeNull();
+    expect(browseNameFromUrl(null, "Design team")).toBeNull();
   });
 });

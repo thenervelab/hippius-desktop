@@ -1,4 +1,5 @@
 export { default as HippiusLogo } from "./HippiusLogo";
+export { default as HippiusFlatLogo } from "./HippiusFlatLogo";
 export { default as AlphaCoinLogo } from "./AlphaCoinLogo";
 export { default as HAlphaCoinLogo } from "./HAlphaCoinLogo";
 export { default as ReferralGrip } from "./ReferralGrip";

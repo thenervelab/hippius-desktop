@@ -120,10 +120,14 @@ describe("tray popover header name", () => {
     expect(within(pill as HTMLElement).getByRole("button", { name: "More" })).toBeInTheDocument();
   });
 
+  // Brand kit: the flat mark in blue (lighter on dark), the name in black
+  // (white on dark).
   it("has its own colour in dark mode, not only the light one", () => {
     render(<TrayPanelPage />);
-    const name = within(screen.getByRole("banner")).getByText("Hippius");
-    expect(name).toHaveClass("text-primary-50", "dark:text-primary-brand-dark");
+    const header = screen.getByRole("banner");
+    const name = within(header).getByText("Hippius");
+    expect(name).toHaveClass("text-black-700", "dark:text-white");
+    expect(header.querySelector("svg")).toHaveClass("text-primary-50", "dark:text-primary-60");
   });
 });
 
