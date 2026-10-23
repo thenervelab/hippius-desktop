@@ -38,20 +38,56 @@ export const PRICING_URL = "https://hippius.com/pricing";
 export const BLOCK_EXPLAINER = "They can no longer comment or react on this link.";
 export const DELETE_EXPLAINER = "Removes it for everyone.";
 
-/** Above this many viewers or comments, the sheet splits into tabs. */
-export const TABS_THRESHOLD = 10;
-/** How many viewers the overview lists before "See all". */
-export const OVERVIEW_VIEWERS = 5;
-/** How many comments the overview lists when the Comments tab holds the rest. */
-export const OVERVIEW_COMMENTS = 3;
+/** Comment threads listed before "Show more comments", and how many each press adds. */
+export const COMMENTS_PAGE = 10;
+/** Replies shown under a comment before "Show N more replies". */
+export const REPLIES_SHOWN = 2;
+/** Viewers listed before "Show more viewers", and how many each press adds. */
+export const VIEWERS_PAGE = 20;
+/** Reaction chips in the summary before the rest fold into "+N". */
+export const SUMMARY_REACTIONS = 4;
+
+/** The panel's tabs, in the order they are shown. */
+export type InsightsTab = "comments" | "viewers" | "reactions";
 
 /**
- * Whether the sheet splits into Overview, Viewers and Comments tabs: once a
- * link has more than about ten viewers or comments. Below that a single
- * scroll reads better.
+ * The tab the panel opens on: Comments when there are any (that is what an
+ * owner comes back for), otherwise Viewers.
  */
-export function usesTabs(viewers: number, comments: number): boolean {
-  return viewers > TABS_THRESHOLD || comments > TABS_THRESHOLD;
+export function defaultInsightsTab(commentCount: number): InsightsTab {
+  return commentCount > 0 ? "comments" : "viewers";
+}
+
+/** A tab's label: `Comments (20)`, or the name alone when the count is not known. */
+export function tabLabel(name: string, count: number | null): string {
+  return count === null ? name : `${name} (${count})`;
+}
+
+export type CommentOrder = "newest" | "oldest";
+
+/**
+ * Comment threads newest or oldest first, by when each was written. A time
+ * that does not parse sorts as the oldest; ties keep the server's order.
+ */
+export function sortThreads<T extends { createdAt: string }>(threads: readonly T[], order: CommentOrder): T[] {
+  const at = (c: T) => {
+    const ms = Date.parse(c.createdAt);
+    return Number.isNaN(ms) ? -Infinity : ms;
+  };
+  const sign = order === "newest" ? -1 : 1;
+  return threads
+    .map((c, i) => ({ c, i, t: at(c) }))
+    .sort((a, b) => (a.t === b.t ? a.i - b.i : a.t < b.t ? -sign : sign))
+    .map(({ c }) => c);
+}
+
+/**
+ * The replies a thread shows: the first `REPLIES_SHOWN`, the rest behind
+ * "Show N more replies" until it is opened.
+ */
+export function visibleReplies<T>(replies: readonly T[], expanded: boolean): { shown: T[]; hidden: number } {
+  if (expanded || replies.length <= REPLIES_SHOWN) return { shown: [...replies], hidden: 0 };
+  return { shown: replies.slice(0, REPLIES_SHOWN), hidden: replies.length - REPLIES_SHOWN };
 }
 
 /** A length the way a video player shows it: `0:42`, `12:05`, `1:02:03`. */
@@ -136,8 +172,8 @@ export function emptyInsightsCopy({
     return {
       title: "Not counting views",
       body: commentsEnabled
-        ? "Insights are off for this link. Turn them on below to see who watches. Comments and reactions show up here either way."
-        : "Insights are off for this link. Turn them on below to see who watches.",
+        ? "Insights are off for this link. Turn them on to see who watches. Comments and reactions show up here either way."
+        : "Insights are off for this link. Turn them on to see who watches.",
     };
   }
   return {
@@ -148,24 +184,46 @@ export function emptyInsightsCopy({
   };
 }
 
+/** The link switches, in the order the status row and Link settings show them. */
+export const SWITCH_NAMES: ReadonlyArray<{ key: keyof LinkSettingsDefault["on"]; label: string }> = [
+  { key: "insights", label: "Insights" },
+  { key: "comments", label: "Comments" },
+  { key: "reactions", label: "Reactions" },
+];
+
 /**
- * One line for the panel footer: what this link allows ("Insights and
- * comments on, reactions off"), short enough for the panel's width. Only the
- * switches Rust says the server takes; `null` when there are none, which is
- * also when "On this link" draws nothing.
+ * The status row under the panel header: one pill per switch this server
+ * takes, on or off. Empty when Link settings would draw no switches (the
+ * server has no Insights switch, or the settings are not known yet).
  */
-export function linkSwitchSummary(settings: Pick<LinkSettingsDefault, "offered" | "on"> | null): string | null {
-  if (!settings || !settings.offered.insights) return null;
-  const names: Array<[string, boolean]> = [["insights", settings.on.insights]];
-  if (settings.offered.comments) names.push(["comments", settings.on.comments]);
-  if (settings.offered.reactions) names.push(["reactions", settings.on.reactions]);
-  const list = (words: string[]) =>
-    words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
-  const on = names.filter(([, v]) => v).map(([n]) => n);
-  const off = names.filter(([, v]) => !v).map(([n]) => n);
-  const parts = [on.length ? `${list(on)} on` : null, off.length ? `${list(off)} off` : null].filter(Boolean);
-  const text = parts.join(", ");
-  return text.charAt(0).toUpperCase() + text.slice(1);
+export function switchPills(
+  settings: Pick<LinkSettingsDefault, "offered" | "on"> | null,
+): Array<{ key: keyof LinkSettingsDefault["on"]; label: string; on: boolean }> {
+  if (!settings || !settings.offered.insights) return [];
+  return SWITCH_NAMES.filter(({ key }) => settings.offered[key]).map(({ key, label }) => ({
+    key,
+    label,
+    on: settings.on[key],
+  }));
+}
+
+/**
+ * The line a tab shows while its switch is off, above whatever the link
+ * already has. `null` while it is on, or when the server has no such switch.
+ */
+export function switchOffLine(
+  settings: Pick<LinkSettingsDefault, "offered" | "on"> | null,
+  key: keyof LinkSettingsDefault["on"],
+): string | null {
+  if (!settings || !settings.offered.insights || !settings.offered[key] || settings.on[key]) return null;
+  switch (key) {
+    case "insights":
+      return "Insights are off, so new views aren't counted.";
+    case "comments":
+      return "Comments are off, so viewers can't add new ones.";
+    case "reactions":
+      return "Reactions are off, so viewers don't see these or add new ones.";
+  }
 }
 
 export function viewerName(name: string | null): string {
