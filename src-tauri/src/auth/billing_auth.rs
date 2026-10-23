@@ -13,7 +13,7 @@ use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use zeroize::Zeroize;
 
-use crate::auth::service::{CHALLENGE_PATH, VERIFY_PATH, base_url};
+use crate::auth::service::{CHALLENGE_PATH, VERIFY_PATH, base_url, sign_challenge_sr25519};
 use crate::auth::tokens::{get_api_token, save_api_token};
 use crate::sync::mnemonic::get_mnemonic_for_account;
 use tracing::{info, warn};
@@ -49,7 +49,7 @@ struct VerifyResponse {
 /// 1. Retrieves the mnemonic from the encrypted Drive (or uses the one provided)
 /// 2. Derives sr25519 (Substrate) and secp256k1 (Ethereum) keypairs
 /// 3. Zeroizes the mnemonic
-/// 4. Requests a challenge, signs it with the Ethereum key
+/// 4. Requests a challenge, signs it with the Ethereum and the sr25519 key
 /// 5. Verifies the signature and returns the auth token
 ///
 /// `mnemonic` — optional plaintext mnemonic for use during initial login
@@ -60,6 +60,7 @@ async fn attempt(
     client: &reqwest::Client,
     challenge_url: &str,
     verify_url: &str,
+    sr25519_pair: &subxt_signer::sr25519::Keypair,
     eth_signer: &PrivateKeySigner,
     eth_address: &str,
     substrate_address: &str,
@@ -100,6 +101,7 @@ async fn attempt(
         .header("X-Requested-With", "XMLHttpRequest")
         .json(&serde_json::json!({
             "signature": formatted_sig,
+            "substrate_signature": sign_challenge_sr25519(sr25519_pair, &cr.message),
             "address": eth_address,
             "substrate_address": substrate_address,
             "challenge": cr.challenge,
@@ -187,7 +189,7 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     // surfaced as a session-expired toast — see service.rs).
     let derive_result = crate::auth::service::derive_verified_keys(&mnemonic, &account_id);
     mnemonic.zeroize();
-    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = match derive_result {
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = match derive_result {
         Ok(keys) => keys,
         Err(crate::auth::service::IdentityError::Mismatch { derived }) => {
             warn!(
@@ -210,7 +212,17 @@ pub async fn ensure_billing_auth(state: tauri::State<'_, crate::app_state::AppSt
     let mut last_err = crate::error::AppError::Auth("Billing auth failed".into());
     let mut result = None;
     for _ in 0..MAX_ATTEMPTS {
-        match attempt(&client, &challenge_url, &verify_url, &eth_signer, &eth_address, &substrate_address).await {
+        match attempt(
+            &client,
+            &challenge_url,
+            &verify_url,
+            &sr25519_pair,
+            &eth_signer,
+            &eth_address,
+            &substrate_address,
+        )
+        .await
+        {
             Ok(r) => {
                 result = Some(r);
                 break;

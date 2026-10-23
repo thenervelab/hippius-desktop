@@ -120,13 +120,24 @@ pub(crate) fn derive_verified_keys(
     Ok((sr25519_pair, substrate_address, eth_signer, eth_address))
 }
 
+/// The `substrate_signature` of a wallet login: an sr25519 signature of the
+/// challenge message's raw bytes by the account's own key, `0x` + hex. The
+/// EVM signature alone proves only the EVM key, so the API needs this to
+/// prove the account's Substrate address; it refuses an account that never
+/// proved it (`substrate_signature_required`). The console sends the same.
+pub(crate) fn sign_challenge_sr25519(sr25519_pair: &subxt_signer::sr25519::Keypair, message: &str) -> String {
+    format!("0x{}", hex::encode(sr25519_pair.sign(message.as_bytes()).0))
+}
+
 /// Execute the two-step challenge-response authentication against the Hippius API.
 ///
 /// 1. POST to `/api/auth/mnemonic/` with addresses to receive a challenge
 /// 2. Sign the challenge message with the Ethereum key (EIP-191 personal_sign)
-/// 3. POST to `/api/auth/verify/` with the signature to receive a session token
+///    and with the sr25519 key ([`sign_challenge_sr25519`])
+/// 3. POST to `/api/auth/verify/` with both signatures to receive a session token
 pub(crate) async fn challenge_response(
     client: &reqwest::Client,
+    sr25519_pair: &subxt_signer::sr25519::Keypair,
     eth_signer: &PrivateKeySigner,
     eth_address: &str,
     substrate_address: &str,
@@ -168,6 +179,7 @@ pub(crate) async fn challenge_response(
         .header("X-Requested-With", "XMLHttpRequest")
         .json(&serde_json::json!({
             "signature": formatted_sig,
+            "substrate_signature": sign_challenge_sr25519(sr25519_pair, &cr.message),
             "address": eth_address,
             "substrate_address": substrate_address,
             "challenge": cr.challenge,
@@ -244,13 +256,13 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     // on this refusal the engine's 401 path emits AUTH_RELOGIN_REQUIRED —
     // surfaced by `useSyncEvents` as a persistent session-expired toast —
     // and the boot-time expiry check bounces to the login screen.
-    let (_sr25519_pair, substrate_address, eth_signer, eth_address) = derive_verified_keys(&mnemonic, account_id).map_err(|e| {
+    let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_verified_keys(&mnemonic, account_id).map_err(|e| {
         warn!(account_id = %account_id, error = %e, "Refusing token refresh: mnemonic does not derive this account's identity");
         format!("token refresh refused: {e}")
     })?;
 
     let (token, user_id, username, _is_new, token_expiry) =
-        challenge_response(&app_state.api_client, &eth_signer, &eth_address, &substrate_address, None).await?;
+        challenge_response(&app_state.api_client, &sr25519_pair, &eth_signer, &eth_address, &substrate_address, None).await?;
 
     crate::auth::auth_session_repo::upsert(
         pool,
@@ -330,6 +342,27 @@ mod tests {
     #[test]
     fn derive_keys_rejects_invalid_mnemonic() {
         assert!(derive_keys("not a valid bip39 mnemonic at all").is_err());
+    }
+
+    /// The API verifies `substrate_signature` as sr25519 over the challenge
+    /// message's raw bytes by the login address's key (py-substrate-interface
+    /// `Keypair.verify`, the same "substrate" signing context). sr25519
+    /// signatures are randomized, so this asserts verification, never bytes.
+    #[test]
+    fn substrate_signature_verifies_over_the_challenge_message() {
+        use super::sign_challenge_sr25519;
+        use subxt_signer::sr25519::{Signature, verify};
+
+        let (pair, _substrate, _eth_signer, _eth) =
+            derive_keys("test test test test test test test test test test test junk").expect("valid mnemonic derives");
+        let message = "Please sign this message to verify your ownership: abc123";
+
+        let encoded = sign_challenge_sr25519(&pair, message);
+        let hex_sig = encoded.strip_prefix("0x").expect("0x-prefixed");
+        assert_eq!(hex_sig.len(), 128, "64-byte signature");
+        let sig = Signature(hex::decode(hex_sig).expect("hex").try_into().expect("64 bytes"));
+        assert!(verify(&sig, message.as_bytes(), &pair.public_key()));
+        assert!(!verify(&sig, b"another message", &pair.public_key()));
     }
 
     // ─── Identity guard (audit H-3/H-4) ────────────────────────────
