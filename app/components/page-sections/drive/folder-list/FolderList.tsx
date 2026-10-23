@@ -17,7 +17,7 @@ import {
 } from "./folderListPaging";
 import { SettingsCard } from "@/components/page-sections/settings/SettingsCard";
 import { driveRowSharing } from "@/app/lib/shared-drives/driveRowSharing";
-import DriveRoleChip from "../DriveRoleChip";
+import DriveRoleChip, { driveChipVariants } from "../DriveRoleChip";
 import {
   isDriveShared,
   type DriveSharing,
@@ -175,12 +175,29 @@ export interface FolderListProps {
    */
   onManageAccess?: (row: FolderRow) => void;
   /**
-   * Drives per page. The list is paged because "Shared with me" sits BELOW
-   * it: an account with twenty drives pushed the drives other people shared
-   * off the bottom of a surface nobody scrolls.
+   * Drives per page. The list is paged so an account with twenty drives does
+   * not push whatever sits below it (the fresh account's plans, the Shared
+   * Drives page's second card) off the bottom of a surface nobody scrolls.
    */
   pageSize?: number;
+  /**
+   * Mark this account's OWN drives with an "Owner" chip. For a list that
+   * mixes nothing but shared drives (the Shared Drives page), where who owns
+   * a drive is the first thing to read; on the drive page every unmarked
+   * drive is the reader's own, so it stays off.
+   */
+  markOwned?: boolean;
 }
+
+/** The chip on an own drive where ownership needs saying. Same pill as the role chips. */
+const OwnerChip: React.FC = () => (
+  <span
+    title="You own this drive"
+    className={cn(driveChipVariants({ tone: "neutral" }), "uppercase tracking-[0.04em]")}
+  >
+    Owner
+  </span>
+);
 
 /**
  * Every folder on the account, in one list.
@@ -207,6 +224,7 @@ const FolderList: React.FC<FolderListProps> = ({
   sharingByLabel,
   onManageAccess,
   pageSize = FOLDER_LIST_PAGE_SIZE,
+  markOwned = false,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -273,6 +291,7 @@ const FolderList: React.FC<FolderListProps> = ({
                   <span className="truncate font-geist text-[14px] font-medium text-[#0A0A0A] dark:text-white">
                     {row.folderName}
                   </span>
+                  {markOwned && !row.ownerSs58 && <OwnerChip />}
                   <SharedMark
                     row={row}
                     role={rolesByLabel?.get(row.folderName)}

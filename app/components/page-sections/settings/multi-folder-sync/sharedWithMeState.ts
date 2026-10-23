@@ -24,13 +24,12 @@ export type SharedWithMeView = "hidden" | "loading" | "empty" | "rows";
  * a failed passive fetch) renders NOTHING rather than a headline with a
  * skeleton or an error under it.
  *
- * On the Drive page (`alwaysShow`), the section is how people find shared
- * drives, so it is there whenever the flag is on: skeleton rows until both
- * listings have answered, then the rows, or the empty state that offers
- * "Share a drive". A feature-off server still hides it (the quiet degrade
- * the feature-off rule requires). A failed fetch shows the empty state:
- * sharing a drive is still possible, and the rows come back on the next
- * visit.
+ * On the Shared Drives page (`alwaysShow`), the section is how people find
+ * shared drives, so it is there whenever the flag is on: skeleton rows until
+ * both listings have answered, then the rows, or the page's empty text. A
+ * feature-off server still hides it (the quiet degrade the feature-off rule
+ * requires). A failed fetch shows the empty state: the rows come back on the
+ * next visit.
  */
 export function getSharedWithMeView(
   enabled: boolean,
@@ -38,7 +37,7 @@ export function getSharedWithMeView(
   /** Folders shared with this account (folder roles). Rows of their own. */
   folderGrantCount = 0,
   options: {
-    /** Show the section even with nothing shared (the Drive page). */
+    /** Show the section even with nothing shared (the Shared Drives page). */
     alwaysShow?: boolean;
     /** Whether the folder-grant listing has answered. */
     grantsSettled?: boolean;

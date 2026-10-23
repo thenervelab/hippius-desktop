@@ -1,10 +1,10 @@
 // "Shared with me" — drives other accounts invited this one into, fed by
 // `list_my_drive_memberships`. Rendered in BOTH MultiFolderSyncManager
-// (settings) and DriveOnboarding (files page), flag-gated. In Settings it is
-// silent in every non-rows state; on the Drive page (`onShareDrive` given)
-// it is always there, with skeleton rows while loading and the "A place for
-// teamwork" empty state offering "Share a drive" when nothing is shared
-// (see `sharedWithMeState.ts::getSharedWithMeView`). Never a toast.
+// (settings) and the Shared Drives page, flag-gated. In Settings it is
+// silent in every non-rows state; on the Shared Drives page (`alwaysShow`)
+// it is always there, with skeleton rows while loading and the page's empty
+// text when nothing is shared (see `sharedWithMeState.ts::getSharedWithMeView`).
+// Never a toast.
 //
 // An unsynced row's "Sync locally" runs: folder picker (last-browse-dir
 // chain) → `add_shared_drive` → the drive lands in the NORMAL lists,
@@ -15,7 +15,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Users } from "lucide-react";
+import { Users } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 
@@ -27,7 +27,6 @@ import ConfirmationDialog from "@/components/ConfirmationDialog";
 import { buildSharedDriveActions } from "./sharedDriveRowActions";
 import { SettingsCard } from "../SettingsCard";
 import FolderRowSkeleton from "./FolderRowSkeleton";
-import SharedWithMeEmptyState, { SHARE_A_DRIVE_LABEL } from "./SharedWithMeEmptyState";
 import AccountLabel from "@/components/page-sections/drive/AccountLabel";
 import { frozenNotice } from "@/app/lib/shared-drives/writeRefusal";
 import { formatBytes } from "@/lib/utils/formatBytes";
@@ -105,12 +104,15 @@ interface SharedWithMeSectionProps {
    * the new drive).
    */
   onDriveAdded?: (label: string) => void;
+  /** Card heading. "Shared with Me" unless the page names its sections otherwise. */
+  label?: string;
   /**
-   * Start sharing one of this account's own drives (the picker). Given on
-   * the Drive page, where it also keeps the section on screen with nothing
-   * shared yet: the empty state and the header button both call it.
+   * Keep the section on screen with nothing shared, with `emptyState` in it
+   * (the Shared Drives page). Off, the section shows only rows (Settings).
    */
-  onShareDrive?: () => void;
+  alwaysShow?: boolean;
+  /** What an empty section says, on a page that keeps it up. */
+  emptyState?: React.ReactNode;
 }
 
 export function SharedWithMeSection({
@@ -118,7 +120,9 @@ export function SharedWithMeSection({
   onOpenDrive,
   onManageAccess,
   onOpenFolderGrant,
-  onShareDrive,
+  label = "Shared with Me",
+  alwaysShow = false,
+  emptyState,
 }: SharedWithMeSectionProps) {
   const queryClient = useQueryClient();
   // Folders shared with this account: only once folder roles are on (the
@@ -239,7 +243,7 @@ export function SharedWithMeSection({
   };
 
   const view = getSharedWithMeView(SHARED_DRIVES_ENABLED, data, folderGrants.length, {
-    alwaysShow: Boolean(onShareDrive),
+    alwaysShow,
     grantsSettled,
   });
   if (view === "hidden") return null;
@@ -247,37 +251,21 @@ export function SharedWithMeSection({
 
   if (view === "loading" || view === "empty") {
     return (
-      <SettingsCard label="Shared with Me" icon={<Users className="size-4" />}>
-        {view === "loading" || !onShareDrive ? (
+      <SettingsCard label={label} icon={<Users className="size-4" />}>
+        {view === "empty" ? (
+          emptyState
+        ) : (
           <div aria-busy="true" aria-label="Loading drives shared with you">
             <FolderRowSkeleton />
             <FolderRowSkeleton />
           </div>
-        ) : (
-          <SharedWithMeEmptyState onShareDrive={onShareDrive} />
         )}
       </SettingsCard>
     );
   }
 
   return (
-    <SettingsCard
-      label="Shared with Me"
-      icon={<Users className="size-4" />}
-      headerAction={
-        onShareDrive ? (
-          <Button
-            variant="defaultStable"
-            size="auto"
-            onClick={onShareDrive}
-            className="h-[26px] gap-1.5 rounded-[6px] px-2.5 text-[12px] font-medium"
-          >
-            <Plus className="size-3.5" aria-hidden />
-            {SHARE_A_DRIVE_LABEL}
-          </Button>
-        ) : undefined
-      }
-    >
+    <SettingsCard label={label} icon={<Users className="size-4" />}>
       <div className="max-h-[420px] overflow-y-auto">
         {memberships.map((membership) => {
           const key = `${membership.ownerSs58}:${membership.folderHash}`;
