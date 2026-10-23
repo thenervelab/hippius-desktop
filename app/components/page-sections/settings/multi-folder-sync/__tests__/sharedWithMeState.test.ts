@@ -115,7 +115,7 @@ describe("shared folders (folder roles)", () => {
   });
 });
 
-describe("on the Drive page (alwaysShow)", () => {
+describe("on the Shared Drives page (alwaysShow)", () => {
   const always = { alwaysShow: true };
 
   it("is there whenever the flag is on: skeleton, then rows or the empty state", () => {

@@ -1,9 +1,10 @@
 import { Icons } from "@/components/ui";
-import { Camera, MessagesSquare, Share2Icon } from "lucide-react";
+import { Camera, MessagesSquare, Share2Icon, Users } from "lucide-react";
 import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
+  SHARED_DRIVES_ENABLED,
 } from "@/app/lib/featureFlags";
 
 export interface SubMenuItemData {
@@ -31,10 +32,11 @@ export interface NavItemData {
   // while `REFERRALS_FEATURE_ENABLED` is off; `"chat"` hides it until Rust's
   // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`);
   // `"capture"` hides it unless the caller says capture is on for this
-  // computer (`SCREEN_CAPTURE_ENABLED` and Rust's `capture_support`).
+  // computer (`SCREEN_CAPTURE_ENABLED` and Rust's `capture_support`);
+  // `"sharedDrives"` hides it while `SHARED_DRIVES_ENABLED` is off.
   // Adding a new gate is one entry here plus one branch in
   // `filterNavSections`.
-  featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture";
+  featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture" | "sharedDrives";
 }
 
 export interface NavSection {
@@ -63,6 +65,15 @@ export const navSections: NavSection[] = [
         label: "Drive",
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
+      },
+      // Right under Drive, as the console orders them: the drives shared
+      // with this account and the ones it shared, in one place. Its own row
+      // for the same reason Captures is one.
+      {
+        label: "Shared Drives",
+        path: "/shared-drives",
+        icon: <Users className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "sharedDrives",
       },
       // Right under Drive, as its own row rather than a Drive submenu: a
       // submenu would turn Drive into a toggle, and every capture is a file
@@ -153,9 +164,11 @@ export function filterNavSections(
     walletEnabled?: boolean;
     referralsEnabled?: boolean;
     captureEnabled?: boolean;
+    sharedDrivesEnabled?: boolean;
   },
 ): NavSection[] {
   const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
+  const sharedDrivesEnabled = gates.sharedDrivesEnabled ?? SHARED_DRIVES_ENABLED;
   const referralsEnabled =
     gates.referralsEnabled ?? REFERRALS_FEATURE_ENABLED;
   const captureEnabled = gates.captureEnabled === true;
@@ -168,6 +181,7 @@ export function filterNavSections(
         if (item.featureFlag === "referrals") return referralsEnabled;
         if (item.featureFlag === "chat") return gates.chatEnabled === true;
         if (item.featureFlag === "capture") return captureEnabled;
+        if (item.featureFlag === "sharedDrives") return sharedDrivesEnabled;
         return true;
       }),
     }))

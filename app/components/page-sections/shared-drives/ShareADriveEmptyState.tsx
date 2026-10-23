@@ -1,8 +1,8 @@
 "use client";
 
-// "Shared with Me" with nothing in it yet: what a shared drive is for, the
-// way to share one, and the docs. The app's framed empty-state card, the
-// same one an empty drive list uses, with the teamwork picture above it.
+// "Shared by Me" with nothing in it yet: what a shared drive is for, the way
+// to share one, and the docs. The app's framed empty-state card, the same one
+// an empty drive list uses, with the teamwork picture above it.
 
 import React from "react";
 import { ArrowUpRight, Plus } from "lucide-react";
@@ -10,8 +10,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
 
-export const SHARED_WITH_ME_EMPTY_TITLE = "A place for teamwork";
-export const SHARED_WITH_ME_EMPTY_LINE =
+export const SHARE_A_DRIVE_EMPTY_TITLE = "A place for teamwork";
+export const SHARE_A_DRIVE_EMPTY_LINE =
   "Share a drive to work on the same encrypted files with your team.";
 export const SHARE_A_DRIVE_LABEL = "Share a drive";
 export const SHARED_DRIVES_DOCS_URL = "https://docs.hippius.com/use/desktop/shared-drives";
@@ -80,18 +80,18 @@ function TeamworkIllustration() {
   );
 }
 
-export default function SharedWithMeEmptyState({ onShareDrive }: { onShareDrive: () => void }) {
+export default function ShareADriveEmptyState({ onShareDrive }: { onShareDrive: () => void }) {
   return (
-    <section aria-labelledby="shared-with-me-empty-title" className="p-3">
+    <section aria-labelledby="share-a-drive-empty-title" className="p-3">
       <NoEntriesFound
         cardView
         // The page's own padding scales up to 80px on wide screens; inside a
         // section card that is a lot of frame around one short line.
         className="p-4 sm:p-8 2xl:p-10"
-        titleId="shared-with-me-empty-title"
+        titleId="share-a-drive-empty-title"
         illustration={<TeamworkIllustration />}
-        title={SHARED_WITH_ME_EMPTY_TITLE}
-        description={SHARED_WITH_ME_EMPTY_LINE}
+        title={SHARE_A_DRIVE_EMPTY_TITLE}
+        description={SHARE_A_DRIVE_EMPTY_LINE}
         buttonText={SHARE_A_DRIVE_LABEL}
         buttonIcon={<Plus className="size-4" aria-hidden />}
         onButtonClick={onShareDrive}

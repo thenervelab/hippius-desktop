@@ -45,6 +45,12 @@ a fresh look too.
 - **Emails about your links.** Settings, Notifications lets you get an email
   when one of your links is opened for the first time, when people comment,
   and a daily or weekly summary of views and comments.
+- **Shared Drives has its own place in the sidebar.** One page lists the
+  drives you've shared, marked as yours with who they're shared with, and the
+  drives and folders other people invited you into. Share one of your drives
+  from there, or make a new drive and go straight on to sharing it, and manage
+  who has access or leave a drive from its row. Drives shared with you are no
+  longer listed on the Drive page; find them on Shared Drives.
 
 ### Changed
 

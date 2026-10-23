@@ -161,3 +161,17 @@ export function parseFolderGrantLabel(
 export function isFolderGrantLabel(label: string | null | undefined): boolean {
   return parseFolderGrantLabel(label) !== null;
 }
+
+/**
+ * The name to show for a drive opened from a link (`sharedDriveRoute`), or
+ * `null` to keep the label. Only a shared drive's or folder's browse label
+ * takes one: on any other drive the label already is the name, and a stray
+ * `openName` must not rename it.
+ */
+export function browseNameFromUrl(
+  label: string | null | undefined,
+  name: string | null | undefined,
+): string | null {
+  if (!name || !parseSharedDriveLabel(label)) return null;
+  return name;
+}
