@@ -6,10 +6,12 @@ import { avatarFor } from "./insightsView";
 const SIZE = {
   xs: "size-4 text-[7px]",
   sm: "size-5 text-[8.5px]",
+  /** A compact list row's: comments and viewers. */
+  row: "size-6 text-[9.5px]",
   md: "size-7 text-[10.5px]",
 } as const;
 
-const ICON = { xs: "size-2.5", sm: "size-3", md: "size-3.5" } as const;
+const ICON = { xs: "size-2.5", sm: "size-3", row: "size-3", md: "size-3.5" } as const;
 
 /**
  * A viewer's or commenter's avatar: initials on a colour picked from their
