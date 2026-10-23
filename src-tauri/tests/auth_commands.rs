@@ -50,18 +50,22 @@ async fn challenge_ok() -> Json<Value> {
 }
 
 /// Answers like the API: refuses a body without a valid `substrate_signature`
-/// (sr25519 over the challenge message by the login address's key), which
-/// the API requires of an account that never proved its Substrate key.
+/// (sr25519 over the challenge message by the key of the `substrate_address`
+/// it sends), which the API requires of an account that never proved its
+/// Substrate key.
 async fn verify_ok(Json(body): Json<Value>) -> impl IntoResponse {
-    let proved = body["substrate_signature"]
+    let public_key = body["substrate_address"]
+        .as_str()
+        .and_then(|a| a.parse::<subxt::utils::AccountId32>().ok())
+        .map(|account| subxt_signer::sr25519::PublicKey(account.0));
+    let signature = body["substrate_signature"]
         .as_str()
         .and_then(|s| s.strip_prefix("0x"))
         .and_then(|s| hex::decode(s).ok())
         .and_then(|bytes| <[u8; 64]>::try_from(bytes).ok())
-        .is_some_and(|bytes| {
-            let pair = subxt_signer::sr25519::Keypair::from_phrase(&subxt_signer::bip39::Mnemonic::parse(MNEMONIC).unwrap(), None).unwrap();
-            subxt_signer::sr25519::verify(&subxt_signer::sr25519::Signature(bytes), b"Sign this to log in", &pair.public_key())
-        });
+        .map(subxt_signer::sr25519::Signature);
+    let proved = matches!((signature, public_key), (Some(sig), Some(key))
+        if subxt_signer::sr25519::verify(&sig, b"Sign this to log in", &key));
     if !proved {
         return (
             StatusCode::UNAUTHORIZED,
