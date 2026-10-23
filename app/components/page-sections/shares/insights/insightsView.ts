@@ -6,7 +6,7 @@
 // The web console draws the same sheet, so the words and the avatar palette
 // here are the console's too: change them in both places or neither.
 
-import type { InsightsViewer, ShareComment } from "@/app/lib/tauri/shareInsights";
+import type { InsightsViewer, LinkSettingsDefault, ShareComment } from "@/app/lib/tauri/shareInsights";
 
 /** What a viewer or commenter without a chosen name is called. */
 export const ANONYMOUS = "Anonymous viewer";
@@ -118,6 +118,54 @@ export function headerLine({
     parts.push(expired ? "link expired" : "link on");
   }
   return parts.join(" · ");
+}
+
+/**
+ * The panel's one empty block, for a link nothing has happened on yet: no
+ * views and, where the server has them, no comments or reactions.
+ */
+export function emptyInsightsCopy({
+  notCounting,
+  commentsEnabled,
+}: {
+  /** The link's Insights switch is off, so views are not being counted. */
+  notCounting: boolean;
+  commentsEnabled: boolean;
+}): { title: string; body: string } {
+  if (notCounting) {
+    return {
+      title: "Not counting views",
+      body: commentsEnabled
+        ? "Insights are off for this link. Turn them on below to see who watches. Comments and reactions show up here either way."
+        : "Insights are off for this link. Turn them on below to see who watches.",
+    };
+  }
+  return {
+    title: "No views yet",
+    body: commentsEnabled
+      ? "Nobody has opened this link yet. Views, comments and reactions show up here once they do."
+      : "Nobody has opened this link yet. Views show up here once they do.",
+  };
+}
+
+/**
+ * One line for the panel footer: what this link allows ("Insights and
+ * comments on, reactions off"), short enough for the panel's width. Only the
+ * switches Rust says the server takes; `null` when there are none, which is
+ * also when "On this link" draws nothing.
+ */
+export function linkSwitchSummary(settings: Pick<LinkSettingsDefault, "offered" | "on"> | null): string | null {
+  if (!settings || !settings.offered.insights) return null;
+  const names: Array<[string, boolean]> = [["insights", settings.on.insights]];
+  if (settings.offered.comments) names.push(["comments", settings.on.comments]);
+  if (settings.offered.reactions) names.push(["reactions", settings.on.reactions]);
+  const list = (words: string[]) =>
+    words.length <= 1 ? words.join("") : `${words.slice(0, -1).join(", ")} and ${words[words.length - 1]}`;
+  const on = names.filter(([, v]) => v).map(([n]) => n);
+  const off = names.filter(([, v]) => !v).map(([n]) => n);
+  const parts = [on.length ? `${list(on)} on` : null, off.length ? `${list(off)} off` : null].filter(Boolean);
+  const text = parts.join(", ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 export function viewerName(name: string | null): string {

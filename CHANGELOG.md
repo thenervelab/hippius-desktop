@@ -51,6 +51,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Insights open in a side panel.** A share link's Insights now open in a panel on the right, like file details, instead of a window over the page, so the page stays in view. A link nobody has opened yet shows one short note with its Insights, Comments and Reactions switches right below it, and once a link has views those switches stay one click away at the bottom of the panel. Press Escape to close it.
 - **Your captures go in the folder you pick.** When you choose where screenshots and recordings are saved, Hippius uses that folder as it is instead of making a "Hippius Captures" folder inside it, and a folder inside your main drive works too: captures are then saved there, in that drive. The suggested folder is now called hippius-captures. If you pick your home folder, Documents, Desktop or the top of a drive, Hippius makes a hippius-captures folder inside it and shows you the exact folder before you confirm.
 - **Captures check your plan before they start.** The capture bar says "Checking your plan…" for a moment, and if your plan can't be checked (you're offline, say) it tells you and offers Retry instead of capturing. An account with no Drive storage is told straight away and offered a plan.
 - **On Linux, installing Hippius brings the video plugins every recording needs.** The .deb now installs GStreamer's base, good and bad plugins with Hippius, so screen recording works even when the package is installed on its own or without recommended packages.
