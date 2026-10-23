@@ -15,6 +15,19 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.15] - 2026-10-23
+
+The free plan's recording count now includes every recording in your
+captures folder, whatever the folder is called.
+
+### Fixed
+
+- **The free plan's recording count includes every recording in your captures
+  folder, whatever the folder is called.** Recordings in the default
+  hippius-captures folder, in a folder you picked, or in a folder inside
+  another drive were left out, so the count could say you had used fewer of
+  your 25 free recordings than you had.
+
 ## [0.6.14] - 2026-10-23
 
 Signing in with your recovery phrase keeps working when Hippius starts
