@@ -187,6 +187,13 @@ export interface FolderListProps {
    * drive is the reader's own, so it stays off.
    */
   markOwned?: boolean;
+  /**
+   * Only the rows: no card, no heading and no pager. For a list the page
+   * frames and pages itself (the Shared Drives page, where these rows share
+   * one list and one pager with the drives shared with you), so it passes
+   * just the page's rows.
+   */
+  bare?: boolean;
 }
 
 /** The chip on an own drive where ownership needs saying. Same pill as the role chips. */
@@ -225,6 +232,7 @@ const FolderList: React.FC<FolderListProps> = ({
   onManageAccess,
   pageSize = FOLDER_LIST_PAGE_SIZE,
   markOwned = false,
+  bare = false,
 }) => {
   // Right-click opens the SAME menu as the three dots. The sectioned list
   // it replaced offered both, and they were built from one resolver so
@@ -243,16 +251,13 @@ const FolderList: React.FC<FolderListProps> = ({
   const pageView = resolveFolderListPage({
     total: rows.length,
     page,
-    pageSize,
+    // Bare rows are already the page the caller chose.
+    pageSize: bare ? Math.max(1, rows.length) : pageSize,
   });
   const visibleRows = rows.slice(pageView.start, pageView.end);
 
-  return (
-    <SettingsCard
-      label={label}
-      icon={<Icons.Folder className="size-3.5" />}
-      headerAction={headerAction}
-    >
+  const body = (
+    <>
       {isLoading ? (
         <div className="flex flex-col">
           {/* Five, not three: three left a short stub of a card that read as
@@ -409,6 +414,18 @@ const FolderList: React.FC<FolderListProps> = ({
           }))}
         />
       )}
+    </>
+  );
+
+  if (bare) return body;
+
+  return (
+    <SettingsCard
+      label={label}
+      icon={<Icons.Folder className="size-3.5" />}
+      headerAction={headerAction}
+    >
+      {body}
     </SettingsCard>
   );
 };
