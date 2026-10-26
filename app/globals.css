@@ -217,6 +217,45 @@ html {
   }
 }
 
+/* A scrolling list whose scrollbar keeps a lane of its own beside the rows.
+   A system scrollbar draws OVER the content on macOS (overlay scrollbars)
+   and beside it on Windows and Linux, so a list of full-width rows had its
+   scrollbar sitting on top of them on a Mac. A styled WebKit scrollbar is
+   never an overlay on any of the three engines the app runs in (WKWebView,
+   WebView2, WebKitGTK), so the lane is the same everywhere, and
+   `scrollbar-gutter: stable` keeps it reserved before the list overflows so
+   the rows do not shift when it appears. Width 8px: callers that pull the
+   lane into their padding (`-mr-3.5 pr-1.5`) rely on it. Do not add
+   `scrollbar-width`/`scrollbar-color` here: Chromium then ignores every
+   `::-webkit-scrollbar` rule below. */
+.scroll-gutter {
+  scrollbar-gutter: stable;
+  &::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  &::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background-color: rgb(0 0 0 / 0.18);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+    border-radius: 9999px;
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(0 0 0 / 0.32);
+  }
+}
+.dark .scroll-gutter {
+  &::-webkit-scrollbar-thumb {
+    background-color: rgb(255 255 255 / 0.2);
+  }
+  &::-webkit-scrollbar-thumb:hover {
+    background-color: rgb(255 255 255 / 0.34);
+  }
+}
+
 .custom-scrollbar-ultra-thin {
   &::-webkit-scrollbar {
     padding: 0 5px;
