@@ -7,6 +7,7 @@ pub mod account_key;
 pub mod auth_session_repo;
 pub mod billing_auth;
 pub mod contacts;
+pub(crate) mod evm_signer;
 pub mod keychain;
 pub mod login;
 pub mod logout;
