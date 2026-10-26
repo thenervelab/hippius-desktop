@@ -58,24 +58,7 @@ unmaintained = "workspace"
 #      bundle Info.plist / config, never attacker-controlled XML, so the
 #      quadratic-parse / allocation vectors don't apply.
 # Re-check and remove once tauri/plist ship a quick-xml >= 0.41 tree.
-#
-# crypto-bigint 0.5.5 - RUSTSEC-2026-0387 (timing variability in operations
-# meant to be constant-time). Chain: crypto-bigint 0.5.5 <- elliptic-curve
-# 0.13.8 <- alloy-signer / alloy-signer-local 0.8 (and k256 0.13 under them),
-# which sign the wallet login challenge. Ignored because:
-#   1. No upgrade path. Only crypto-bigint >= 0.7.6 is patched; there is no
-#      fixed 0.5.x. The newest alloy (2.5.0) still depends on k256 0.13 /
-#      elliptic-curve 0.13, so bumping alloy does not remove 0.5.5 (upstream:
-#      https://github.com/alloy-rs/alloy/issues/4445). alloy's own cargo-deny
-#      gate ignores the 0.5.5 entry for the same reason.
-#   2. Temporary. A follow-up change replaces alloy with direct k256 0.14
-#      signing (crypto-bigint 0.7.6) and deletes this entry.
-# Review by 2026-11-09: if this entry is still here, chase the replacement.
-ignore = [
-    "RUSTSEC-2026-0194",
-    "RUSTSEC-2026-0195",
-    "RUSTSEC-2026-0387",
-]
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
 
 [bans]
 # Lenient on purpose for the first gate. The graph has many legitimately
