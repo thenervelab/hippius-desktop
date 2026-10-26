@@ -151,4 +151,58 @@ describe("Share a drive picker", () => {
     expect(onClose).toHaveBeenCalled();
     expect(store.get(shareDialogAtom)).toBeNull();
   });
+
+  it("offers New drive beside the search, after it in tab order, and before the list", () => {
+    const drives = ["A1", "A2", "A3", "A4", "A5", "A6", "Budget"];
+    const { onAddDrive, onClose, store } = renderFlow({ drives, sharingByLabel: new Map() });
+    const toolbar = screen.getByTestId("picker-toolbar");
+    const search = within(toolbar).getByPlaceholderText("Search your drives");
+    const newDrive = within(toolbar).getByRole("button", { name: "New drive" });
+    // One row from `sm`, stacked full width below it.
+    expect(toolbar).toHaveClass("flex-col", "sm:flex-row");
+    expect(newDrive).toHaveClass("w-full", "sm:w-auto", "h-8");
+    // The field, then the button, then the drives.
+    expect(search.compareDocumentPosition(newDrive) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const group = screen.getByRole("radiogroup", { name: "Your drives" });
+    expect(newDrive.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(newDrive);
+    // The picker closes, then the new drive is made: one dialog at a time.
+    expect(onClose).toHaveBeenCalled();
+    expect(onAddDrive).toHaveBeenCalled();
+    expect(store.get(shareDialogAtom)).toBeNull();
+  });
+
+  it("keeps New drive on its own at the right of the row when there is no search", () => {
+    renderFlow();
+    expect(screen.queryByPlaceholderText("Search your drives")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "New drive" })).toHaveClass("sm:ml-auto");
+  });
+
+  it("offers no New drive on a plan that cannot share", () => {
+    plan.allows = false;
+    renderFlow();
+    expect(screen.queryByRole("button", { name: "New drive" })).not.toBeInTheDocument();
+  });
+
+  it("offers no New drive before the drives load", () => {
+    renderFlow({ loading: true });
+    expect(screen.queryByRole("button", { name: "New drive" })).not.toBeInTheDocument();
+  });
+
+  it("leaves Sync a Folder as the only way to make a drive when there are none", () => {
+    renderFlow({ drives: [], sharingByLabel: new Map() });
+    expect(screen.queryByRole("button", { name: "New drive" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sync a Folder" })).toBeInTheDocument();
+  });
+
+  it("gives the list's scrollbar a lane of its own beside the rows", () => {
+    renderFlow();
+    const group = screen.getByRole("radiogroup", { name: "Your drives" });
+    // `scroll-gutter` styles the scrollbar so it is never an overlay, and the
+    // padding plus the negative margin put that lane in the dialog's side
+    // padding, so the rows line up with the field above and never sit under it.
+    expect(group).toHaveClass("scroll-gutter", "overflow-y-auto", "pr-1.5", "-mr-3.5");
+  });
 });
+
