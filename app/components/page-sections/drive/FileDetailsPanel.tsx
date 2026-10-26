@@ -1,8 +1,6 @@
 "use client";
 
 import React, { useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { useAtom } from "jotai";
 import { X, FolderOpen, ArrowUpRight } from "lucide-react";
@@ -11,7 +9,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
-import { useBreakpoint } from "@/app/lib/hooks";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
 import { FormattedTimestamp, Icons } from "@/app/components/ui";
@@ -32,6 +29,7 @@ import { arionContentHash, fileTrackerUrl } from "@/lib/utils/arionContentHash";
 import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
 import UploaderCell from "@/app/components/page-sections/drive/files-table/UploaderCell";
+import { SidePanel } from "@/app/components/ui/SidePanel";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -270,58 +268,24 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
 
 const FileDetailsPanel: React.FC = () => {
   const [file, setFile] = useAtom(fileDetailsPanelAtom);
-  const isOpen = file !== null;
-  const { isDesktop, isLargeDesktop } = useBreakpoint();
 
   const onClose = useCallback(() => {
     setFile(null);
   }, [setFile]);
 
-  // Inline panel — animated width slide from `xl` up (xl AND 2xl). Sits as a
-  // sibling of <main> (in ResponsiveContent) so it stays pinned to the
-  // available screen height and never scrolls with page content. Below `xl`
-  // it falls through to the slide-in overlay Dialog. `isDesktop` alone matched
-  // only the `xl` range, so on large monitors (`2xl`) the panel wrongly
-  // rendered as the overlay instead of inline.
-  if (isDesktop || isLargeDesktop) {
-    return (
-      <AnimatePresence initial={false}>
-        {isOpen && file && (
-          <motion.aside
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: PANEL_WIDTH_PX, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="shrink-0 overflow-hidden h-full"
-          >
-            <div
-              className="h-full overflow-y-auto"
-              style={{ width: PANEL_WIDTH_PX }}
-            >
-              <PanelBody file={file} onClose={onClose} />
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-    );
-  }
-
-  // Below 2xl — Radix Dialog with frosted overlay + slide-in from right.
+  // The shared side panel: inline beside the page from `xl` up (xl AND 2xl),
+  // pinned to the window's height so it never scrolls with page content; a
+  // slide-in sheet over the page below that.
   return (
-    <Dialog.Root open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[1002] bg-white/72 backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px] animate-fade-in-0.2" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="fixed top-0 right-0 bottom-0 w-full max-w-[305px] z-[1003] font-geist animate-panel-in overflow-y-auto pt-4 bg-cover bg-center bg-no-repeat bg-fixed bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
-        >
-          <Dialog.Title className="sr-only">
-            {file?.isFolder ? "Folder" : "File"} Details
-          </Dialog.Title>
-          {file && <PanelBody file={file} onClose={onClose} />}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <SidePanel
+      open={file !== null}
+      onClose={onClose}
+      width={PANEL_WIDTH_PX}
+      label={`${file?.isFolder ? "Folder" : "File"} Details`}
+      sheetClassName="pt-4"
+    >
+      <div className="h-full overflow-y-auto">{file && <PanelBody file={file} onClose={onClose} />}</div>
+    </SidePanel>
   );
 };
 

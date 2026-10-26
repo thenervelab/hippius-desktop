@@ -34,8 +34,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import * as Dialog from "@radix-ui/react-dialog";
+import { useReducedMotion } from "framer-motion";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
@@ -43,7 +42,7 @@ import { Folder, HardDrive, LogOut, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button, Icons, Skeleton } from "@/components/ui";
-import { useBreakpoint } from "@/app/lib/hooks";
+import { SidePanel } from "@/components/ui/SidePanel";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import {
   MY_FOLDER_GRANTS_QUERY_KEY,
@@ -159,7 +158,6 @@ export async function replacedInviteMessage(outcome: InviteReplaceOutcome): Prom
 
 export default function ShareDrivePanel() {
   const [target, setTarget] = useAtom(shareDriveModalAtom);
-  const { isDesktop, isLargeDesktop } = useBreakpoint();
   const onClose = useCallback(() => setTarget(null), [setTarget]);
   const open = Boolean(SHARED_DRIVES_ENABLED && target);
 
@@ -172,43 +170,14 @@ export default function ShareDrivePanel() {
     </RowConfirmProvider>
   ) : null;
 
-  // Same shell as File Details: an inline width-slide on large screens so the
-  // drive list stays visible beside it -- managing access is something you do
-  // WHILE looking at your drives -- and a slide-in overlay below that, where
-  // there is no room for both.
-  if (isDesktop || isLargeDesktop) {
-    return (
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.aside
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: PANEL_WIDTH_PX, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="h-full shrink-0 overflow-hidden"
-          >
-            <div className="flex h-full min-h-0 flex-col overflow-hidden" style={{ width: PANEL_WIDTH_PX }}>
-              {body}
-            </div>
-          </motion.aside>
-        )}
-      </AnimatePresence>
-    );
-  }
-
+  // Same shell as File Details: inline beside the page on large screens so
+  // the drive list stays visible beside it -- managing access is something
+  // you do WHILE looking at your drives -- and a slide-in sheet below that,
+  // where there is no room for both.
   return (
-    <Dialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-[1002] bg-white/72 backdrop-blur-[5.75px] dark:bg-[rgba(4,4,4,0.4)] dark:backdrop-blur-[11.5px] animate-fade-in-0.2" />
-        <Dialog.Content
-          aria-describedby={undefined}
-          className="fixed bottom-0 right-0 top-0 z-[1003] flex w-full max-w-[360px] flex-col overflow-hidden bg-cover bg-fixed bg-center bg-no-repeat font-geist animate-panel-in bg-[url('/logged-in-app-background.png')] dark:bg-[url('/logged-in-app-background-dark.png')]"
-        >
-          <Dialog.Title className="sr-only">Manage access</Dialog.Title>
-          {body}
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <SidePanel open={open} onClose={onClose} width={PANEL_WIDTH_PX} label="Manage access">
+      {body}
+    </SidePanel>
   );
 }
 

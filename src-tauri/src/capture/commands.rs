@@ -57,6 +57,8 @@ pub const PLAN_CHANGED_EVENT: &str = "capture_plan_changed";
 const RESTART_REFUSED_TITLE: &str = "The recording was not restarted";
 /// The card's Manage link: the main window opens Shared Links at this link.
 pub const MANAGE_LINK_EVENT: &str = "capture_manage_link";
+/// The card's Insights: the main window opens this link's Insights.
+pub const OPEN_INSIGHTS_EVENT: &str = "capture_open_insights";
 /// The camera window's shape or device changed (`camera::CameraState`); the
 /// camera page and the recording pill both read it.
 pub const CAMERA_STATE_EVENT: &str = "capture_camera_state";
@@ -4458,9 +4460,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             },
         };
         sent_to = Some(destination.clone());
-        let (mint_link, open_link, chat_preview) = bar::load_options(pool)
+        let (mint_link, open_link, chat_preview, link_insights) = bar::load_options(pool)
             .await
-            .map_or((true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview));
+            .map_or((true, true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview, o.link_insights));
         let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
@@ -4468,6 +4470,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             mint_link,
             open_link,
             chat_preview,
+            link_insights,
             placed,
         })
     }
@@ -4488,6 +4491,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             mint_link,
             open_link,
             chat_preview,
+            link_insights,
             placed,
         }) => {
             announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
@@ -4507,6 +4511,12 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
                 super::deliver::Minted::default()
             };
             let delivered = super::deliver::Delivered::from_parts(&placed, &minted, &destination);
+            // Insights, Comments and Reactions (Settings, "Track views,
+            // comments and reactions"), sent in the background once the
+            // link exists; a failure never touches the link.
+            if let Some(token) = delivered.share_token.as_deref() {
+                crate::shares::insights::spawn_apply(app, &account_id, token, crate::shares::insights::for_capture(link_insights));
+            }
             let copied = copy_link_to_clipboard(app, delivered.share_url.as_deref());
             if open_link {
                 open_link_in_browser(app, delivered.share_url.as_deref());
@@ -4680,6 +4690,9 @@ enum Delivery {
         open_link: bool,
         /// Send a chat preview with the link (`CaptureOptions::chat_preview`).
         chat_preview: bool,
+        /// Turn on the link's Insights, Comments and Reactions
+        /// (`CaptureOptions::link_insights`).
+        link_insights: bool,
         placed: super::deliver::Placed,
     },
     /// No captures drive yet: keep it on this computer.
@@ -5835,6 +5848,7 @@ pub async fn capture_preview_mint_link(state: tauri::State<'_, AppState>, app: A
         Ok(link) => {
             let copied = app.clipboard().write_text(link.share_url.clone()).is_ok();
             super::deliver::spawn_preview_if_wanted(&app, &state, &account_id, &source, &link.share_token).await;
+            super::deliver::spawn_link_settings(&app, &state, &account_id, &link.share_token).await;
             update_card(&app, &state.capture, card.id, |c| {
                 c.share_url = Some(link.share_url);
                 c.share_token = Some(link.share_token);
@@ -5901,6 +5915,27 @@ pub async fn capture_preview_manage_link(state: tauri::State<'_, AppState>, app:
     show_main_window(&app);
     let _ = app.emit_to(MAIN_WINDOW_LABEL, MANAGE_LINK_EVENT, ManageLink { share_token });
     Ok(())
+}
+
+/// The capture card's Insights: the main window comes forward with this
+/// capture's link's Insights open. The card stays as it is.
+#[tauri::command]
+pub async fn capture_preview_open_insights(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = card_for(&state.capture, |c| c.actions.manage_link, "This capture has no link yet.")?;
+    let share_token = card
+        .share_token
+        .ok_or_else(|| AppError::Validation("This capture has no link yet.".into()))?;
+    let file_name = card.rel_path.rsplit('/').next().unwrap_or_default().to_string();
+    show_main_window(&app);
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, OPEN_INSIGHTS_EVENT, OpenInsights { share_token, file_name });
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenInsights {
+    share_token: String,
+    file_name: String,
 }
 
 /// Reveal in Finder / Show in Explorer: the capture's file in the drive's

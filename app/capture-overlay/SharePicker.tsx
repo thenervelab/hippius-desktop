@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Loader2, Monitor } from "lucide-react";
 import {
   finishCaptureShare,
@@ -134,7 +134,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
   useEffect(() => {
     let token: number | null = null;
     let closed = false;
-    const unlisten = listen<ShareArt>("capture_share_art", (e) =>
+    const unlisten = onTauriEvent<ShareArt>("capture_share_art", (e) =>
       setTargets((t) => (t ? mergeShareArt(t, e.payload) : t)),
     );
     getCaptureShareTargets(firstTab)
@@ -152,7 +152,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
       });
     return () => {
       closed = true;
-      void unlisten.then((fn) => fn());
+      unlisten();
       if (token !== null) void finishCaptureShare(token).catch(() => undefined);
     };
   }, [firstTab, barDisplayId]);

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Video, VideoOff, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
@@ -171,14 +171,14 @@ export default function CaptureCameraPage() {
       .then((c) => !heardCamera && setCamera(c))
       .catch(() => undefined);
     const unlisteners = [
-      listen<CaptureCameraState>("capture_camera_state", (e) => {
+      onTauriEvent<CaptureCameraState>("capture_camera_state", (e) => {
         heardCamera = true;
         setCamera(e.payload);
       }),
-      listen<boolean>("capture_camera_hover", (e) => setHoverRust(e.payload)),
+      onTauriEvent<boolean>("capture_camera_hover", (e) => setHoverRust(e.payload)),
     ];
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
   }, []);
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { Camera, Video } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
@@ -248,19 +248,19 @@ export default function CaptureOverlayPage() {
   // mode needs this display's window list). The drawn area survives.
   useEffect(() => {
     const unlisteners = [
-      listen<CapturePhase>("capture_state_changed", (e) => {
+      onTauriEvent<CapturePhase>("capture_state_changed", (e) => {
         if (e.payload.phase === "selecting") {
           setHovered(null);
           void load().catch(() => undefined);
         }
       }),
-      listen<CaptureCameraState>("capture_camera_state", (e) => setCameraShape(e.payload.shape)),
+      onTauriEvent<CaptureCameraState>("capture_camera_state", (e) => setCameraShape(e.payload.shape)),
       // The camera's own size strip or its × saved the options: keep the
       // bar's copy current, or its next save would write the old one back.
-      listen<CaptureOptions>("capture_options_changed", (e) =>
+      onTauriEvent<CaptureOptions>("capture_options_changed", (e) =>
         setContext((c) => (c ? { ...c, options: e.payload } : c)),
       ),
-      listen<PendingChange>("capture_pending_changed", (e) => {
+      onTauriEvent<PendingChange>("capture_pending_changed", (e) => {
         if (displayId === null) return;
         const next = applyPending(displayId, e.payload, handedOver.current);
         setAreaElsewhere(next.elsewhere);
@@ -268,7 +268,7 @@ export default function CaptureOverlayPage() {
       }),
     ];
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
   }, [displayId, load]);
 

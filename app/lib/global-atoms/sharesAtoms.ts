@@ -7,6 +7,7 @@
 import { atom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities, ShareRefusal } from "@/app/lib/tauri/shares";
+import { insightsPanelTargetAtom, shareDrivePanelTargetAtom } from "./sidePanelAtoms";
 
 /**
  * Cached server capabilities. Populated once after login by
@@ -90,6 +91,59 @@ export const memberFolderSharesEnabledAtom = atom((get) => {
   const caps = get(serverCapabilitiesAtom);
   return caps?.member_folder_shares === true;
 });
+
+/**
+ * Whether the server has share link Insights (`share_insights`). `null`
+ * capabilities collapse to `false`: nothing about Insights shows until the
+ * server says it has them.
+ */
+export const shareInsightsEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_insights === true);
+
+/** Whether the server has comments on links (`share_comments`). */
+export const shareCommentsEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_comments === true);
+
+/** Whether the server sends emails about links (`share_notifications`). */
+export const shareNotificationsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_notifications === true,
+);
+
+/**
+ * Parts of Insights waiting on the server. Each is `false` until the server
+ * advertises it, and its part of the UI renders nothing until then:
+ * per-link counts on the Captures row and the tables (`share_listing_counts`),
+ * the "new since you last looked" dot (`share_insights_seen`), comment replies
+ * and the Owner badge (`share_comment_replies`), and reactions at their moment
+ * (`share_reaction_moments`).
+ */
+export const shareListingCountsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_listing_counts === true,
+);
+export const shareInsightsSeenEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.share_insights_seen === true);
+export const shareCommentRepliesEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_comment_replies === true,
+);
+export const shareReactionMomentsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_reaction_moments === true,
+);
+
+/**
+ * The link whose Insights panel is open, or `null`. Set by Shared Links, the
+ * Captures page and the capture card; read by `ShareInsightsSheet`, the right
+ * side panel mounted beside the page in `ResponsiveContent`.
+ */
+export type InsightsSheetTarget = {
+  shareToken: string;
+  fileName: string;
+  /**
+   * The capture, when the opener has it: the sheet's header shows a frame of
+   * it while it is on this device. Shared Links and the capture card have
+   * only the link, and get the file-type tile.
+   */
+  file?: FormattedUserFile;
+};
+
+/** Opening it closes File Details and Manage access (`sidePanelAtoms`). */
+export const insightsSheetAtom = insightsPanelTargetAtom;
 
 /**
  * What `ShareFileModal` is currently sharing. `null` means closed.
@@ -198,7 +252,8 @@ export type ShareDriveModalTarget = {
   openOn?: "people";
 };
 
-export const shareDriveModalAtom = atom<ShareDriveModalTarget | null>(null);
+/** A side panel: opening it closes File Details and Insights (`sidePanelAtoms`). */
+export const shareDriveModalAtom = shareDrivePanelTargetAtom;
 
 /**
  * The drive or folder whose Share dialog is open (`share-dialog/ShareDialog`).
