@@ -1,15 +1,25 @@
 /**
  * Paging for the drive list.
  *
- * The list grew without bound, and "Shared with me" sits BELOW it — so an
- * account with twenty drives pushed the drives other people shared with them
- * off the bottom of a surface they never scrolled. Paging the list is what
- * keeps that section reachable, which is the reason it exists rather than a
- * tidiness preference.
+ * The list grew without bound, and in Settings "Shared with me" sits BELOW
+ * it, so an account with twenty drives pushed the drives other people shared
+ * with them off the bottom of a surface they never scrolled. Paging the list
+ * is what keeps that section reachable, which is the reason it exists rather
+ * than a tidiness preference.
  */
 
-/** Drives per page. Enough that a typical account never sees a pager at all. */
+/**
+ * Drives per page by default (Settings, where "Shared with me" sits under
+ * the list). Enough that a typical account never sees a pager at all.
+ */
 export const FOLDER_LIST_PAGE_SIZE = 8;
+
+/**
+ * Drives per page where the list has the page to itself: the Drive page
+ * (since drives shared with you moved to Shared Drives) and Shared Drives.
+ * Ten, the console's list page size; with ten or fewer there is no pager.
+ */
+export const DRIVE_LIST_PAGE_SIZE = 10;
 
 export interface FolderListPage {
   /** The page actually shown, clamped into range. */
