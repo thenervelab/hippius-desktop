@@ -264,16 +264,19 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
     setPage(1);
   };
 
-  // Ask every listing again. Only what failed or may have changed is
-  // fetched: the drive listing, the sharing of own drives, the memberships
-  // and the folder grants.
+  // Ask again. The drive listing is reloaded only when it failed: reloading
+  // it marks "Shared by you" loading, which would blank rows already on
+  // screen while only the other half is being retried. The rest keep their
+  // rows while they refetch.
   const retry = useCallback(() => {
-    setFoldersLoading(true);
-    void loadFolders();
+    if (foldersFailed) {
+      setFoldersLoading(true);
+      void loadFolders();
+    }
     refetchSharing();
     void memberships.reload();
     refetchGrants();
-  }, [loadFolders, refetchSharing, memberships, refetchGrants]);
+  }, [foldersFailed, loadFolders, refetchSharing, memberships, refetchGrants]);
 
   // Back online with a list that failed: load it again without a click.
   const online = useIsOnline();

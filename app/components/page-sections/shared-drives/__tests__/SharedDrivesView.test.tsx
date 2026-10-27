@@ -626,13 +626,24 @@ describe("a list that could not load", () => {
     expect(withMe.reload).toHaveBeenCalled();
     expect(sharing.refetch).toHaveBeenCalled();
     expect(refetchGrants).toHaveBeenCalled();
-    await waitFor(() => expect(fetchFolders.mock.calls.length).toBeGreaterThan(1));
+    // The drive listing answered, so it is not asked again: reloading it
+    // would blank rows already on screen.
+    expect(fetchFolders).toHaveBeenCalledTimes(1);
   });
 
-  it("says so when the drive listing failed", async () => {
+  it("says so when the drive listing failed, and lists the drives once Try again gets an answer", async () => {
     foldersFail.value = true;
     renderPage();
-    expect(await screen.findByTestId("shared-drives-error")).toBeInTheDocument();
+    const alert = await screen.findByTestId("shared-drives-error");
+
+    foldersFail.value = false;
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: /Try again/ }));
+    });
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    expect(screen.queryByTestId("shared-drives-error")).not.toBeInTheDocument();
   });
 
   it("says so when no own drive's sharing could be read", async () => {
