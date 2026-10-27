@@ -12,8 +12,11 @@ import {
   LOCKED_PROMPT,
   LOCK_BODY,
   LOCK_BODY_NOT_COUNTING,
+  LOCK_BODY_STILL,
   LOCK_TITLE,
+  LOCK_TITLE_STILL,
   PRICING_URL,
+  SAMPLE_LABEL,
   SAMPLE_UNIQUE_VIEWERS,
   SAMPLE_VIEWERS,
   SAMPLE_VIEWS,
@@ -111,10 +114,10 @@ function answer(map: Record<string, unknown>) {
   );
 }
 
-function renderSheet(caps: ServerCapabilities = CAPS, seed?: (client: QueryClient) => void) {
+function renderSheet(caps: ServerCapabilities = CAPS, seed?: (client: QueryClient) => void, fileName: string = NAME) {
   const store = createStore();
   store.set(serverCapabilitiesAtom, caps);
-  store.set(insightsSheetAtom, { shareToken: "tok", fileName: NAME });
+  store.set(insightsSheetAtom, { shareToken: "tok", fileName });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   seed?.(client);
   render(
@@ -183,11 +186,32 @@ describe("ShareInsightsSheet", () => {
 
     expect(within(locked).getByText(LOCK_TITLE)).toBeInTheDocument();
     expect(within(locked).getByText(LOCK_BODY)).toBeInTheDocument();
+    // Labelled as a sample, outside the blur, so it is never read as the link's.
+    const label = within(locked).getByTestId("insights-sample-label");
+    expect(label).toHaveTextContent(SAMPLE_LABEL);
+    expect(blurred.contains(label)).toBe(false);
     fireEvent.click(within(locked).getByRole("button", { name: "Compare plans" }));
     expect(openUrl).toHaveBeenCalledWith(PRICING_URL);
     fireEvent.click(within(locked).getByRole("button", { name: "Upgrade plan" }));
     expect(push).toHaveBeenCalledWith("/settings?section=billing");
     expect(store.get(insightsSheetAtom)).toBeNull();
+  });
+
+  it("gives a picture's lock picture words and a sample with no watch time", async () => {
+    answer({ share_get_insights: FREE, share_list_comments: NO_COMMENTS });
+    renderSheet(CAPS, undefined, "Screenshot 2026-10-13.png");
+
+    const locked = await screen.findByTestId("insights-locked");
+    const blurred = locked.firstElementChild as HTMLElement;
+    expect(within(locked).getByText(LOCK_TITLE_STILL)).toBeInTheDocument();
+    expect(within(locked).getByText(LOCK_BODY_STILL)).toBeInTheDocument();
+    expect(within(locked).queryByText(LOCK_TITLE)).toBeNull();
+    expect(within(locked).getByTestId("insights-sample-label")).toHaveTextContent(SAMPLE_LABEL);
+    // Who viewed, under sample names, and nothing about watching.
+    expect(within(blurred).getByText(SAMPLE_VIEWERS[0].name!)).toBeInTheDocument();
+    expect(within(blurred).queryByText("68%")).toBeNull();
+    expect(within(blurred).queryByText("Average watch")).toBeNull();
+    expect(within(blurred).queryByText("1:42")).toBeNull();
   });
 
   it("says comments are all included on the free plan", async () => {
@@ -691,7 +715,7 @@ describe("ShareInsightsSheet", () => {
   });
 
   describe("a link with many comments", () => {
-    const LONG_NAME = "user_5dsqamf3jvb3vyuxwqwux3tj6ax6ex9f5p1udjyh5tmdsk63";
+    const LONG_NAME = "Maximiliana Wolfeschlegelsteinhausenbergerdorff-Rivers";
     /** Comment i was written i hours after the first, so "Comment 21" is the newest. */
     const many = (n: number): ShareComments => ({
       comments: Array.from({ length: n }, (_, i) => ({
@@ -796,7 +820,7 @@ describe("ShareInsightsSheet", () => {
       }
     });
 
-    it("cuts a long access-key name in the middle, keeping its start and end, with the full name in its title", async () => {
+    it("cuts a long name in the middle, keeping its start and end, with the full name in its title", async () => {
       // jsdom has no layout or canvas: every character 8px, every name 120px wide.
       vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
         return this.hasAttribute("data-middle-truncate") ? 120 : 0;
@@ -829,7 +853,7 @@ describe("ShareInsightsSheet", () => {
           const line = box.firstElementChild!.textContent!;
           expect(line).toContain("…");
           expect(line.length).toBeLessThanOrEqual(15);
-          expect(line.startsWith("user_")).toBe(true);
+          expect(line.startsWith("Maxi")).toBe(true);
           expect(line.endsWith(LONG_NAME.slice(-3))).toBe(true);
           expect(box).toHaveAttribute("data-shortened");
           // A screen reader hears the whole name.
