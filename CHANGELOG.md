@@ -40,7 +40,8 @@ carries security updates.
   screenshot and recording links start with all three on, and other files
   start with them off. On the free plan new links start with all three off,
   and turning one on asks you to upgrade; on the free plan Insights still show
-  a link's views and viewers. Links that already have one on keep it, and you
+  a link's views and viewers, and the blurred preview behind the upgrade prompt
+  is labelled Sample data. Links that already have one on keep it, and you
   can always turn it off. For new captures, use "Track views, comments and
   reactions" in Settings, Screenshots & Recording.
 - **Emails about your links.** Settings, Notifications lets you get an email
@@ -69,9 +70,10 @@ carries security updates.
   a link with twenty or more comments stays easy to read: long comments and
   replies fold away until you open them, comments sort newest or oldest first,
   and more load as you go. The link's Insights, Comments and Reactions switches
-  sit behind the gear at the top, and long generated names, like those of
-  people who signed in with an access key, are shortened in the middle with the
-  full name on hover. Press Escape to close it.
+  sit behind the gear at the top, and long names are shortened in the middle
+  with the full name on hover. Someone who signed in with an access key shows
+  as a short address, like 5dsqam…sk63, instead of the whole wallet address.
+  Press Escape to close it.
 
 ### Security
 
