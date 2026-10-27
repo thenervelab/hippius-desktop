@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -58,11 +58,18 @@ export function useOwnedDriveSharing(
 export function useOwnedDriveSharingState(ownLabels: readonly string[]): {
   byLabel: ReadonlyMap<string, DriveSharing>;
   isPending: boolean;
+  /**
+   * The query gave up without an answer (and is not trying again). Not the
+   * same as "no drive shared": the Shared Drives page shows a Retry for it.
+   */
+  isError: boolean;
+  /** Ask again; a retry with no answer yet reads as pending. */
+  refetch: () => void;
 } {
   const key = useMemo(() => [...ownLabels].sort(), [ownLabels]);
   const enabled = SHARED_DRIVES_ENABLED && key.length > 0;
 
-  const { data, isPending } = useQuery({
+  const { data, isPending, isError, isFetching, refetch } = useQuery({
     queryKey: [OWNED_DRIVE_SHARING_QUERY_KEY, ...key],
     queryFn: () => listOwnedDriveSharing(key),
     enabled,
@@ -82,8 +89,19 @@ export function useOwnedDriveSharingState(ownLabels: readonly string[]): {
       data.map(({ label, ...sharing }) => [label, sharing] as const),
     );
   }, [data]);
+  const retry = useCallback(() => {
+    void refetch();
+  }, [refetch]);
   // A disabled query reports pending for ever; nothing is on its way then.
-  return { byLabel, isPending: enabled && isPending };
+  // A retry after a failure keeps the error status until it lands, so it
+  // counts as pending while it runs, or the page would hold its error card
+  // over a request already on its way.
+  return {
+    byLabel,
+    isPending: enabled && (isPending || (isFetching && !data)),
+    isError: enabled && isError && !isFetching,
+    refetch: retry,
+  };
 }
 
 /**
