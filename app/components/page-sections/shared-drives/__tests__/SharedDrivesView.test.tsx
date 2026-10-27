@@ -264,13 +264,13 @@ describe("your own shared drives", () => {
     expect(screen.queryByTestId("shared-drives-totals")).not.toBeInTheDocument();
   });
 
-  it("opens a shared drive on the Drive page, and its access from the row", async () => {
+  it("opens a shared drive on this page, and its access from the row", async () => {
     folders.value = { local: [local("Team")], remote: [] };
     sharing.byLabel = new Map([["Team", shared(2)]]);
     const { store } = renderPage();
 
     fireEvent.click(await screen.findByText("Team"));
-    expect(push).toHaveBeenCalledWith("/files?openLabel=Team");
+    expect(push).toHaveBeenCalledWith("/shared-drives?openLabel=Team");
 
     // The inline button and the menu item open the same panel.
     fireEvent.click(screen.getAllByRole("button", { name: "Manage access" })[0]!);

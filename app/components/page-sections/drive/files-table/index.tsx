@@ -94,6 +94,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
@@ -773,6 +774,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       return activeSort.desc ? "desc" : "asc";
     }, [sorting]);
     const { getParam } = useUrlParams();
+    const { basePath: drivePagePath } = useDriveRoute();
     const router = useRouter();
     const {
       isSelectionMode,
@@ -993,6 +995,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             file,
             getParam,
             parentSubFolderPath,
+            drivePagePath,
           );
           folderUrl = url;
         }
@@ -1347,6 +1350,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         localHandleShowFileDetails,
         handleDeleteFile,
         getParam,
+        drivePagePath,
         router,
         polkadotAddress,
         shareEnabled,
@@ -2167,7 +2171,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       createTableItems,
       onSelectFile: handleSetSelectedFile,
       onOpenFolder: (childFile, parentPath) => {
-        const { url } = generateFolderUrl(childFile, getParam, parentPath);
+        const { url } = generateFolderUrl(childFile, getParam, parentPath, drivePagePath);
         router.push(url);
       },
       accountId: polkadotAddress,

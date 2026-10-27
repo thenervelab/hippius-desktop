@@ -194,6 +194,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Back inside a shared drive takes you back to Shared Drives.** A drive you open from Shared Drives now stays there: the path at the top reads Shared Drives, then the drive, then each folder you open, and every step takes you back to that level. Back from the drive returns to the Shared Drives list, on the tab you left it on, instead of the Drive page. Shared Drives stays selected in the sidebar, and the path stays right after the window reloads.
 - **Comments from people who signed in with an access key show a short address, not the whole wallet address.** Insights used to show their name as "user_" followed by the full address; it now reads as the address's first and last characters, like 5dsqam…sk63. Names people chose are shown as they are.
 - **The free plan's Insights preview says it is sample data.** The blurred preview behind the upgrade prompt is labelled Sample data and uses sample names, and for a screenshot or other picture it talks about who viewed it, without watch time or a chart of where people stopped.
 - **The free plan's recording count includes every recording in your captures folder, whatever the folder is called.** Recordings in the default hippius-captures folder, in a folder you picked, or in a folder inside another drive were left out, so the count could say you had used fewer of your 25 free recordings than you had.
