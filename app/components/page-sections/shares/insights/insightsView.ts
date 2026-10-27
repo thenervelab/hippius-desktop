@@ -21,7 +21,7 @@ export const LOCKED_ACTION = "Upgrade";
 export const SWITCH_UPGRADE_BODY =
   "Upgrade to see who watched your links and for how long, and to let viewers comment and react.";
 
-/** The free plan's lock over the blurred sample. */
+/** The free plan's lock over the blurred sample, for a recording. */
 export const LOCK_TITLE = "See who watched and where they stopped";
 /** Under the lock while the link is counting views. */
 export const LOCK_BODY =
@@ -29,6 +29,21 @@ export const LOCK_BODY =
 /** Under the lock while the link's Insights switch is off: nothing is counted. */
 export const LOCK_BODY_NOT_COUNTING =
   "Count this link's views and watch time, and see who watched and where they stopped.";
+/** The lock's words for a picture or any other file, which has no watch time. */
+export const LOCK_TITLE_STILL = "See who viewed it";
+export const LOCK_BODY_STILL = "Your views are being counted. The viewer list comes with paid Drive plans.";
+export const LOCK_BODY_STILL_NOT_COUNTING = "Count this link's views and see who viewed it.";
+/**
+ * The label on the blurred part, so nobody takes its made-up numbers and
+ * names for their link's.
+ */
+export const SAMPLE_LABEL = "Sample data";
+
+/** The lock's title and line for a recording (`video`) or anything else. */
+export function lockCopy({ video, notCounting }: { video: boolean; notCounting: boolean }): { title: string; body: string } {
+  if (video) return { title: LOCK_TITLE, body: notCounting ? LOCK_BODY_NOT_COUNTING : LOCK_BODY };
+  return { title: LOCK_TITLE_STILL, body: notCounting ? LOCK_BODY_STILL_NOT_COUNTING : LOCK_BODY_STILL };
+}
 export const UPGRADE_PLAN = "Upgrade plan";
 export const COMPARE_PLANS = "Compare plans";
 /** Where Compare plans goes: the plans side by side on the website. */
@@ -357,8 +372,10 @@ export function retentionAt(retention: readonly number[], fraction: number): num
 
 /**
  * SAMPLE numbers for the locked part. They are made up and drawn blurred
- * behind the lock so a free plan sees the shape of what it would get; no real
- * value ever reaches a locked part (Rust sends none).
+ * behind the lock, under `SAMPLE_LABEL`, so a free plan sees the shape of
+ * what it would get; no real value ever reaches a locked part (Rust sends
+ * none). The names say they are samples, so they never pass for a real
+ * person. A picture's sample has no watch time, as a picture has none.
  */
 /** Sample counts for a free link that is not counting views. */
 export const SAMPLE_VIEWS = 24;
@@ -372,8 +389,11 @@ export const SAMPLE_RETENTION: number[] = Array.from({ length: 100 }, (_, i) =>
 
 export const SAMPLE_VIEWERS: InsightsViewer[] = [
   { viewerId: "sample-1", name: "Sample viewer", visits: 2, watchedMs: 102_000, completion: 0.92, lastViewedAt: null, comments: 1, reactions: 0 },
-  { viewerId: "sample-2", name: null, visits: 1, watchedMs: 47_000, completion: 0.41, lastViewedAt: null, comments: 0, reactions: 1 },
+  { viewerId: "sample-2", name: "Example viewer", visits: 1, watchedMs: 47_000, completion: 0.41, lastViewedAt: null, comments: 0, reactions: 1 },
 ];
+
+/** The sample viewers for a picture or any other file: who viewed, nothing watched. */
+export const SAMPLE_STILL_VIEWERS: InsightsViewer[] = SAMPLE_VIEWERS.map((v) => ({ ...v, watchedMs: 0, completion: null }));
 
 /** "How we count views": what each number means. */
 export const DEFINITIONS: ReadonlyArray<{ term: string; meaning: string }> = [

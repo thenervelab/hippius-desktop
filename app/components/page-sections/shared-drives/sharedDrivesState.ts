@@ -6,7 +6,7 @@ import {
   makeFolderGrantLabel,
   makeSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
-import { driveFolderRoute, sharedDriveRoute } from "@/app/lib/routes";
+import { sharedDrivesDriveRoute } from "@/app/lib/routes";
 import type { FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 
 /**
@@ -30,12 +30,18 @@ export function sharedByMeRows(
   return ownDriveRows(rows).filter((r) => isDriveShared(sharingByLabel.get(r.folderName)));
 }
 
+// Every row opens its drive on this page (`sharedDrivesDriveRoute`), not on
+// the Drive page, so the trail reads "Shared Drives › drive" and Back from
+// the drive's root comes back to this list.
+
 /**
- * Where opening an own drive goes: the Drive page with it open, synced here
- * or not, the way its row on the drive page opens it.
+ * Where opening an own drive goes: the drive open, synced here or not, the
+ * way its row on the drive page opens it.
  */
 export function ownDriveRoute(row: FolderRow): string {
-  return row.local ? driveFolderRoute(row.local.id, false) : driveFolderRoute(row.folderName, true);
+  return row.local
+    ? sharedDrivesDriveRoute({ label: row.local.id, remote: false })
+    : sharedDrivesDriveRoute({ label: row.folderName, remote: true });
 }
 
 /** Where opening a drive shared with this account goes, without syncing it here. */
@@ -44,7 +50,11 @@ export function joinedDriveRoute(identity: {
   folderHash: string;
   displayLabel: string;
 }): string {
-  return sharedDriveRoute(makeSharedDriveLabel(identity), identity.displayLabel);
+  return sharedDrivesDriveRoute({
+    label: makeSharedDriveLabel(identity),
+    remote: true,
+    name: identity.displayLabel,
+  });
 }
 
 /** Where opening a folder shared with this account goes, rooted at that folder. */
@@ -54,7 +64,11 @@ export function folderGrantRoute(grant: {
   pathPrefix: string;
   folderName: string;
 }): string {
-  return sharedDriveRoute(makeFolderGrantLabel(grant), grant.folderName);
+  return sharedDrivesDriveRoute({
+    label: makeFolderGrantLabel(grant),
+    remote: true,
+    name: grant.folderName,
+  });
 }
 
 // The tabs, the totals and the pages.

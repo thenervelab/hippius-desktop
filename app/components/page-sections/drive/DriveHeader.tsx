@@ -127,6 +127,8 @@ interface DriveHeaderProps {
   onBreadcrumbLocalClick?: () => void;
   /** No "Drive" root crumb: the page is pinned to one drive (Captures). */
   hideBreadcrumbRoot?: boolean;
+  /** The root crumb's words when the drive was opened from another page ("Shared Drives"). */
+  breadcrumbRootLabel?: string;
   /**
    * The drive currently open, by local label. Drives the header's shared
    * badge and its way in to managing access, so standing inside a drive says
@@ -214,6 +216,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
   browsedSharedDrive = null,
   onBreadcrumbLocalClick,
   hideBreadcrumbRoot = false,
+  breadcrumbRootLabel,
   isNested = false,
   nestedFolderName = null,
   nestedSubfolderPath = null,
@@ -515,6 +518,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                 segments={breadcrumbSegments}
                 onLocalClick={onBreadcrumbLocalClick ?? (() => {})}
                 hideRoot={hideBreadcrumbRoot}
+                rootLabel={breadcrumbRootLabel}
                 className="mt-0 mb-0"
               />
               <DriveSharingHeaderMark
