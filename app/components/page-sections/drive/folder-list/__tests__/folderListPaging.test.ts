@@ -3,9 +3,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import {
+  DRIVE_LIST_PAGE_SIZE,
   FOLDER_LIST_PAGE_SIZE,
   resolveFolderListPage,
 } from "../folderListPaging";
+import { SHARED_DRIVES_PAGE_SIZE } from "../../../shared-drives/sharedDrivesState";
 
 describe("resolveFolderListPage", () => {
   it("draws no pager while everything fits on one page", () => {
@@ -52,6 +54,34 @@ describe("resolveFolderListPage", () => {
     const view = resolveFolderListPage({ total: 5, page: 1, pageSize: 0 });
     expect(Number.isFinite(view.totalPages)).toBe(true);
     expect(view.end).toBe(1);
+  });
+});
+
+// The Drive page and Shared Drives both list ten drives a page, the
+// console's size, and draw no pager while ten or fewer fit.
+describe("ten drives a page", () => {
+  it("is one size for the Drive page and Shared Drives", () => {
+    expect(DRIVE_LIST_PAGE_SIZE).toBe(10);
+    expect(SHARED_DRIVES_PAGE_SIZE).toBe(DRIVE_LIST_PAGE_SIZE);
+  });
+
+  it("draws no pager for ten drives", () => {
+    const view = resolveFolderListPage({ total: 10, page: 1, pageSize: DRIVE_LIST_PAGE_SIZE });
+    expect(view).toMatchObject({ showPager: false, totalPages: 1, start: 0, end: 10 });
+  });
+
+  it("puts the eleventh drive on a second page", () => {
+    const view = resolveFolderListPage({ total: 11, page: 2, pageSize: DRIVE_LIST_PAGE_SIZE });
+    expect(view).toMatchObject({ showPager: true, totalPages: 2, start: 10, end: 11 });
+  });
+
+  it("falls back to the first page when the eleventh drive goes away", () => {
+    const view = resolveFolderListPage({ total: 10, page: 2, pageSize: DRIVE_LIST_PAGE_SIZE });
+    expect(view).toMatchObject({ page: 1, showPager: false, start: 0, end: 10 });
+  });
+
+  it("keeps eight for Settings, where Shared with me sits under the list", () => {
+    expect(FOLDER_LIST_PAGE_SIZE).toBe(8);
   });
 });
 

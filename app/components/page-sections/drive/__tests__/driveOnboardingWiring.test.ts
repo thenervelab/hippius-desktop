@@ -169,3 +169,22 @@ describe("Sync a Folder opens the picker, not Settings", () => {
   });
 });
 
+
+/**
+ * Drives shared with you moved to their own Shared Drives page, so the Drive
+ * page's list pages by ten like that page does. Settings keeps the default
+ * of eight, since "Shared with me" still sits under its list.
+ */
+describe("the Drive page lists ten drives a page", () => {
+  const settings = read("../../settings/MultiFolderSyncManager.tsx");
+
+  it("passes the shared ten-a-page size to its list", () => {
+    const list = onboarding.match(/<FolderList[\s\S]*?\/>/)?.[0] ?? "";
+    expect(list).toContain("pageSize={DRIVE_LIST_PAGE_SIZE}");
+  });
+
+  it("leaves Settings on the default size", () => {
+    const list = settings.match(/<FolderList[\s\S]*?\/>/)?.[0] ?? "";
+    expect(list).not.toContain("pageSize=");
+  });
+});

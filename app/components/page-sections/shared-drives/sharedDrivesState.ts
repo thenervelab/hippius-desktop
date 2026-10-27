@@ -7,6 +7,7 @@ import {
   makeSharedDriveLabel,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { sharedDrivesDriveRoute } from "@/app/lib/routes";
+import { DRIVE_LIST_PAGE_SIZE } from "@/components/page-sections/drive/folder-list/folderListPaging";
 import type { FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 
 /**
@@ -266,9 +267,10 @@ export function formatSharedDriveListTotals(
 
 /**
  * Drives per page on the Shared Drives page. Ten, the console's list page
- * size; with ten or fewer in the tab there is no pager at all.
+ * size and the Drive page's (`DRIVE_LIST_PAGE_SIZE`); with ten or fewer in
+ * the tab there is no pager at all.
  */
-export const SHARED_DRIVES_PAGE_SIZE = 10;
+export const SHARED_DRIVES_PAGE_SIZE = DRIVE_LIST_PAGE_SIZE;
 
 /** A half-open slice of one kind's rows. */
 export interface RowSlice {
