@@ -15,11 +15,12 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
-## [0.6.16] - 2026-10-23
+## [0.6.16] - 2026-10-27
 
 See who watched the screenshots, recordings and files you share, read what
-they say about them, and choose what each link collects. The Hippius logo has
-a fresh look too.
+they say about them, and choose what each link collects. Shared drives
+have a page of their own, the Hippius logo has a fresh look, and this release
+carries security updates.
 
 ### Added
 
@@ -45,12 +46,15 @@ a fresh look too.
 - **Emails about your links.** Settings, Notifications lets you get an email
   when one of your links is opened for the first time, when people comment,
   and a daily or weekly summary of views and comments.
-- **Shared Drives has its own place in the sidebar.** One page lists the
+- **Shared Drives has its own place in the sidebar.** One list shows the
   drives you've shared, marked as yours with who they're shared with, and the
-  drives and folders other people invited you into. Share one of your drives
-  from there, or make a new drive and go straight on to sharing it, and manage
-  who has access or leave a drive from its row. Drives shared with you are no
-  longer listed on the Drive page; find them on Shared Drives.
+  drives and folders other people invited you into, with tabs to show just one
+  kind when you have both and the total size and number of files for what you
+  are looking at. "Share a drive" sits at the top of the page; pick one of
+  your drives, or choose "New drive" beside the search to make one and go
+  straight on to sharing it. Manage who has access or leave a drive from its
+  row. Drives shared with you are no longer listed on the Drive page; find
+  them on Shared Drives.
 
 ### Changed
 
@@ -68,6 +72,14 @@ a fresh look too.
   sit behind the gear at the top, and long generated names, like those of
   people who signed in with an access key, are shortened in the middle with the
   full name on hover. Press Escape to close it.
+
+### Security
+
+- **Signing in with your recovery phrase uses an updated signing library.** It
+  fixes a timing weakness found in the library Hippius used before. Nothing
+  changes in how you sign in.
+- **A compression library Hippius uses is updated.** It fixes four security
+  issues reported in it.
 
 ## [0.6.15] - 2026-10-23
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
 import {
   folderGrantStats,
@@ -24,13 +24,37 @@ export type FolderGrantStatsState =
 export function useFolderGrantStats(
   grant: Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix">,
 ): FolderGrantStatsState {
-  const { data, isError } = useQuery({
+  const { data, isError } = useQuery(folderGrantStatsQuery(grant));
+  return toState(data, isError);
+}
+
+/**
+ * The same answer for several folders at once (the Shared Drives page's
+ * totals). Same query keys as the rows' own hook, so the two share one
+ * cache entry per folder and never ask twice.
+ */
+export function useFolderGrantStatsList(
+  grants: readonly Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix">[],
+): FolderGrantStatsState[] {
+  return useQueries({
+    queries: grants.map((grant) => folderGrantStatsQuery(grant)),
+    combine: (results) => results.map((r) => toState(r.data, r.isError)),
+  });
+}
+
+function folderGrantStatsQuery(
+  grant: Pick<MyFolderGrantInfo, "ownerSs58" | "folderHash" | "pathPrefix">,
+) {
+  return {
     queryKey: [FOLDER_GRANT_STATS_QUERY_KEY, grant.ownerSs58, grant.folderHash, grant.pathPrefix],
     queryFn: () => folderGrantStats(grant.ownerSs58, grant.folderHash, grant.pathPrefix),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     retry: 1,
-  });
+  };
+}
+
+function toState(data: FolderGrantStats | undefined, isError: boolean): FolderGrantStatsState {
   if (data) return { kind: "ready", stats: data };
   if (isError) return { kind: "failed" };
   return { kind: "loading" };

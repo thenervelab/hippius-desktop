@@ -620,3 +620,124 @@ describe("folders shared with me (folder roles)", () => {
     );
   });
 });
+
+// The Shared Drives page draws these rows inside its own list: it holds the
+// memberships fetch (for its tab counts), frames the list, draws the loading
+// and empty states, and pages drives and folders as one sequence.
+describe("as rows of the Shared Drives page's list", () => {
+  const controller = (memberships: DriveMembershipInfo[]) => ({
+    data: { kind: "ready" as const, memberships },
+    reload: vi.fn(async () => {}),
+    markUnavailable: vi.fn(),
+  });
+
+  it("uses the page's fetch and never asks again", async () => {
+    render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={controller([membership({ displayLabel: "Design" })])}
+      />,
+    );
+    expect(await screen.findByText("Design")).toBeInTheDocument();
+    expect(listMyDriveMembershipsMock).not.toHaveBeenCalled();
+  });
+
+  it("draws only the rows, with no card heading", async () => {
+    render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        label="Shared with Me"
+        memberships={controller([membership({ displayLabel: "Design" })])}
+      />,
+    );
+    await screen.findByText("Design");
+    expect(screen.queryByText("Shared with Me")).not.toBeInTheDocument();
+  });
+
+  it("draws nothing while loading or empty: the page owns those states", () => {
+    const { container, rerender } = render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={{ data: { kind: "loading" }, reload: vi.fn(), markUnavailable: vi.fn() }}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <SharedWithMeSection variant="rows" alwaysShow memberships={controller([])} />
+      </QueryClientProvider>,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("draws the slice of drives the page's pager asks for", async () => {
+    const drives = ["One", "Two", "Three"].map((displayLabel, i) =>
+      membership({ displayLabel, folderHash: `${i}`.repeat(16) }),
+    );
+    render(
+      <SharedWithMeSection variant="rows" alwaysShow memberships={controller(drives)} slice={{ start: 1, end: 3 }} />,
+    );
+    expect(await screen.findByText("Two")).toBeInTheDocument();
+    expect(screen.getByText("Three")).toBeInTheDocument();
+    expect(screen.queryByText("One")).not.toBeInTheDocument();
+  });
+
+  it("draws nothing for an empty slice", () => {
+    const { container } = render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={controller([membership({ displayLabel: "Design" })])}
+        slice={{ start: 0, end: 0 }}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("reloads through the page's fetch after leaving a drive", async () => {
+    const ctl = controller([membership({ displayLabel: "Design" })]);
+    leaveSharedDriveByIdentityMock.mockResolvedValue(undefined);
+    render(<SharedWithMeSection variant="rows" alwaysShow memberships={ctl} />);
+    // The row menu's item, then the confirmation's button of the same name.
+    fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    const buttons = screen.getAllByRole("button", { name: "Leave drive" });
+    fireEvent.click(buttons[buttons.length - 1]!);
+    await waitFor(() => expect(ctl.reload).toHaveBeenCalled());
+  });
+});
+
+describe("folders after drives, in the page's slice", () => {
+  beforeEach(() => {
+    folderRolesFlag.on = true;
+    listMyFolderGrantsMock.mockResolvedValue([
+      {
+        ownerSs58: OWNER,
+        folderHash: "0123456789abcdef",
+        displayLabel: "team-docs",
+        pathPrefix: "Clients/ACME",
+        role: "reader",
+        createdAt: "2026-08-20T00:00:00Z",
+      },
+    ]);
+    folderGrantStatsMock.mockResolvedValue({ totalBytes: 1, fileCount: 1, truncated: false });
+  });
+
+  afterEach(() => {
+    folderRolesFlag.on = false;
+  });
+
+  it("counts a folder after every drive", async () => {
+    const memberships = {
+      data: { kind: "ready" as const, memberships: [membership({ displayLabel: "Design" })] },
+      reload: vi.fn(async () => {}),
+      markUnavailable: vi.fn(),
+    };
+    render(<SharedWithMeSection variant="rows" alwaysShow memberships={memberships} slice={{ start: 1, end: 2 }} />);
+    expect(await screen.findByText("ACME")).toBeInTheDocument();
+    expect(screen.queryByText("Design")).not.toBeInTheDocument();
+  });
+});
