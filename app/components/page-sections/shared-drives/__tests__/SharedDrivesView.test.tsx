@@ -341,6 +341,13 @@ describe("the tabs", () => {
     expect(screen.getByText(copy.description)).toBeInTheDocument();
     // Nothing for this account to do there: no button in the card.
     expect(within(screen.getByTestId("shared-drives-empty-with-you")).queryByRole("button")).not.toBeInTheDocument();
+    // No totals over an empty tab, in either place they are drawn.
+    expect(screen.queryByTestId("shared-drives-totals")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total size:")).not.toBeInTheDocument();
+
+    // Back on a tab with rows, they return.
+    fireEvent.click(screen.getByRole("tab", { name: "Shared by you (1)" }));
+    expect(within(totals()).getByText("Total size:")).toBeInTheDocument();
   });
 
   it("are drawn with only drives shared with you, and an empty Shared by you offers Share a drive", async () => {
@@ -673,6 +680,8 @@ describe("a list that could not load", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Shared with you" }));
     expect(screen.getByTestId("shared-drives-error")).toHaveTextContent(sharedDrivesErrorCopy("with-you", false).title);
+    // A tab that could not load has no totals: "0 B" there would be wrong.
+    expect(screen.queryByText("Total size:")).not.toBeInTheDocument();
 
     await act(async () => {
       fireEvent.click(within(screen.getByTestId("shared-drives-error")).getByRole("button", { name: /Try again/ }));

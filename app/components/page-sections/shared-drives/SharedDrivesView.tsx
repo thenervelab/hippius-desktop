@@ -332,7 +332,10 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
   const upgrade = () => router.push(BILLING_ROUTE);
   const shareButton = <ShareADriveButton gate={gate} onShare={openPicker} onUpgrade={upgrade} />;
 
-  const listed = content.kind === "rows";
+  // The totals add up the rows the tab shows, so they show only with rows:
+  // over an empty tab's card (or a failed one) "0 B" says nothing the card
+  // does not, and over a failed tab it would be wrong.
+  const totalsShown = content.kind === "rows";
   const stats =
     byYou.status !== "loading" && withYou.status !== "loading" ? (
       <StorageStateList storageLabel={TOTAL_SIZE_LABEL} storageUsed={totals.size} numberOfFiles={totals.files} />
@@ -353,7 +356,7 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
             column, and the right end of the tabs row from @2xl. Without
             tabs there is nothing to share a row with, so they keep this
             line at every width. */}
-        {(listed || tabsShown) && (
+        {totalsShown && (
           <div
             data-testid="shared-drives-totals"
             className={cn("flex min-h-5 items-center", tabsShown ? "@2xl:hidden" : "@2xl:justify-end")}
@@ -366,7 +369,7 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
             ariaLabel={SHARED_DRIVES_TABS_LABEL}
             value={applied}
             onChange={changeFilter}
-            trailing={<div className="hidden @2xl:block">{stats}</div>}
+            trailing={totalsShown ? <div className="hidden @2xl:block">{stats}</div> : undefined}
             tabs={[
               { key: "all", label: "All", count: sharedDrivesTabCount([byYou, withYou]) },
               {
