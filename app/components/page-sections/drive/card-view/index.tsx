@@ -44,6 +44,7 @@ import { useSetAtom } from "jotai";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -106,6 +107,7 @@ const CardView: FC<CardViewProps> = ({
   const captureInsightsItem = useCaptureInsightsItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
+  const { basePath } = useDriveRoute();
   const { isSelectionMode, enterSelectionModeAndSelectFile } =
     useFileSelection();
 
@@ -192,7 +194,7 @@ const CardView: FC<CardViewProps> = ({
               // Get folder URL if file is a folder
               let folderUrl = "";
               if (file.isFolder) {
-                const { url } = generateFolderUrl(file, getParam);
+                const { url } = generateFolderUrl(file, getParam, undefined, basePath);
                 folderUrl = url;
               }
 

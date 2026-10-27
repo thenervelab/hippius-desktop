@@ -59,3 +59,22 @@ export async function fetchSyncFoldersWithStats(
     })),
   };
 }
+
+/** A drive made on Hippius by {@link createCloudDrive}. */
+export interface CreatedCloudDrive {
+  /** The drive's name, which is also its label everywhere. */
+  label: string;
+  folderHash: string;
+}
+
+/**
+ * Make a drive on Hippius with no folder on this computer, as the console's
+ * New drive does. It lists as "Not synced here" and can be shared at once;
+ * "Sync to this computer" in its menu binds it to a folder later.
+ *
+ * Rust checks the name (and that no drive already answers to it) and words
+ * every refusal, so a rejection's `message` is shown as is.
+ */
+export async function createCloudDrive(accountId: string, name: string): Promise<CreatedCloudDrive> {
+  return invoke<CreatedCloudDrive>("create_cloud_drive", { accountId, name });
+}

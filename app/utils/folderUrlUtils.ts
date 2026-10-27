@@ -18,12 +18,17 @@ type ParamGetter = (name: string, defaultValue?: string) => string;
  * @param parentSubFolderPath Optional parent path inside the sync drive
  *   (e.g. "MyDrive/Photos/2024"). When provided, its first segment is
  *   also used as `mainFolderActualName`, replacing the URL value.
+ * @param basePath The page the folder opens on: the Drive page, or the page
+ *   hosting the drive container (`useDriveRoute().basePath`: Captures, or
+ *   Shared Drives for a drive opened there). A hardcoded `/files` sent a
+ *   folder opened on those pages to the Drive page and lost their trail.
  * @returns An object containing the URL string and the query parameters
  */
 export function generateFolderUrl(
     file: FormattedUserFile,
     getParam: ParamGetter,
     parentSubFolderPath?: string,
+    basePath = "/files",
 ) {
     // Get current path information for folder navigation
     const folderActualName = file.isFolder ? file.actualFileName || "" : "";
@@ -64,7 +69,7 @@ export function generateFolderUrl(
     };
 
     const query = new URLSearchParams(queryParams).toString();
-    const url = `/files?${query}`;
+    const url = `${basePath}?${query}`;
 
     return {
         url,
