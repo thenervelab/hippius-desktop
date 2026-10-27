@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Cloud, CloudOff, Users } from "lucide-react";
 
 import { Icons } from "@/components/ui";
@@ -255,6 +255,13 @@ const FolderList: React.FC<FolderListProps> = ({
     pageSize: bare ? Math.max(1, rows.length) : pageSize,
   });
   const visibleRows = rows.slice(pageView.start, pageView.end);
+  // The view is already clamped; this keeps the state with it, so a drive
+  // coming back later does not jump the list to a page nobody asked for.
+  // Not while loading: an empty list mid-load is not drives going away.
+  const shownPage = pageView.page;
+  useEffect(() => {
+    if (!isLoading && shownPage !== page) setPage(shownPage);
+  }, [isLoading, shownPage, page]);
 
   const body = (
     <>

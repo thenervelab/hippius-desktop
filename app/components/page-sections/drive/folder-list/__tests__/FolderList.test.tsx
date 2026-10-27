@@ -293,3 +293,52 @@ describe("bare rows", () => {
     expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
   });
 });
+
+// The Drive page lists ten drives a page, with no pager while ten or fewer
+// fit, and follows the list when drives go away.
+describe("ten drives a page", () => {
+  const drives = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      localRow({ id: `d${i}`, folderName: `Drive ${String(i).padStart(2, "0")}` }),
+    );
+
+  it("shows ten drives with no pager", () => {
+    render(<FolderList rows={drives(10)} pageSize={10} />);
+    expect(screen.getByText("Drive 00")).toBeInTheDocument();
+    expect(screen.getByText("Drive 09")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+  });
+
+  it("pages the eleventh drive onto page two", () => {
+    render(<FolderList rows={drives(11)} pageSize={10} />);
+    expect(screen.getByText("Drive 09")).toBeInTheDocument();
+    expect(screen.queryByText("Drive 10")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "2" }));
+    expect(screen.getByText("Drive 10")).toBeInTheDocument();
+    expect(screen.queryByText("Drive 00")).not.toBeInTheDocument();
+  });
+
+  // Removing the last drive on the last page clamps the list to page one,
+  // and a drive added afterwards does not jump it back to page two.
+  it("stays on the page it fell back to when drives go away", () => {
+    const { rerender } = render(<FolderList rows={drives(11)} pageSize={10} />);
+    fireEvent.click(screen.getByRole("button", { name: "2" }));
+    expect(screen.getByText("Drive 10")).toBeInTheDocument();
+
+    rerender(<FolderList rows={drives(10)} pageSize={10} />);
+    expect(screen.getByText("Drive 00")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+
+    rerender(<FolderList rows={drives(11)} pageSize={10} />);
+    expect(screen.getByText("Drive 00")).toBeInTheDocument();
+    expect(screen.queryByText("Drive 10")).not.toBeInTheDocument();
+  });
+
+  it("keeps its page while the list reloads", () => {
+    const { rerender } = render(<FolderList rows={drives(11)} pageSize={10} />);
+    fireEvent.click(screen.getByRole("button", { name: "2" }));
+    rerender(<FolderList rows={[]} isLoading pageSize={10} />);
+    rerender(<FolderList rows={drives(11)} pageSize={10} />);
+    expect(screen.getByText("Drive 10")).toBeInTheDocument();
+  });
+});

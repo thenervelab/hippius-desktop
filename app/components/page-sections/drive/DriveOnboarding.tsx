@@ -35,6 +35,7 @@ import {
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
+import { DRIVE_LIST_PAGE_SIZE } from "./folder-list/folderListPaging";
 import CaptureButtons from "@/app/components/capture/CaptureButtons";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import DriveStatusBanner from "./service-status/DriveStatusBanner";
@@ -645,6 +646,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           }
           rows={folderRows}
           isLoading={isLoading}
+          // Ten a page, like Shared Drives: drives shared with you moved
+          // there, so this list no longer makes room for them below it. The
+          // default of eight stays for Settings, where they still sit below.
+          pageSize={DRIVE_LIST_PAGE_SIZE}
           headerAction={
             /* Two kinds of action, told apart by where they sit rather
                than by wording alone. Left of the divider adds CONTENT to a
