@@ -51,6 +51,12 @@ export interface FramedDialogProps {
    * reader hears more than the title when the dialog opens.
    */
   describedBy?: string;
+  /**
+   * Escape, when it should do something other than close: a step inside the
+   * dialog uses it to go back a step. Call `preventDefault()` on the event
+   * to keep the dialog open. Ignored while `preventClose` is set.
+   */
+  onEscapeKeyDown?: (_event: KeyboardEvent) => void;
 }
 
 export function FramedDialog({
@@ -71,6 +77,7 @@ export function FramedDialog({
   subtitle,
   leadingVisual,
   describedBy,
+  onEscapeKeyDown,
 }: FramedDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const bodyId = useId();
@@ -114,7 +121,7 @@ export function FramedDialog({
           aria-describedby={describedBy ?? bodyId}
           className="fixed top-0 left-0 right-0 h-screen z-[61] flex items-center justify-center p-3 sm:p-6"
           onClick={preventClose ? undefined : onClose}
-          onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : undefined}
+          onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : onEscapeKeyDown}
           onPointerDownOutside={
             preventClose ? (e) => e.preventDefault() : undefined
           }

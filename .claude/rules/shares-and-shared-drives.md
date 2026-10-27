@@ -13,6 +13,8 @@ paths:
   - "src-tauri/src/sync/fileops/remote.rs"
   - "src-tauri/src/sync/fileops/folders.rs"
   - "src-tauri/src/sync/fileops/recent_uploads.rs"
+  # Share a drive's New drive creates through it.
+  - "src-tauri/src/sync/fileops/cloud_drive.rs"
   - "src-tauri/src/sync/migrate/**"
   - "src-tauri/src/sync/projection/tauri_bridge.rs"
   - "app/lib/tauri/sharedDrives.ts"
@@ -254,37 +256,84 @@ shared as a whole (`isDriveShared`, drawn by the Drive page's `FolderList` with 
 the tab counts and the rows read one answer). Quiet underline tabs (`ui/tabs/UnderlineTabs`,
 the console's: All / Shared with you / Shared by you, count pills, roving tabindex with
 Left/Right/Home/End, short labels "With you" / "By you" below `@2xl` of the scroll area's
-container while the accessible name keeps the full label and count) show ONLY when both kinds
-exist (`showSharedDrivesTabs`); a filter left on a kind that emptied falls back to All
-(`effectiveSharedDrivesFilter`). "Total size:" / "File No:" sum the drives the current tab
+container while the accessible name keeps the full label and count) show once BOTH kinds have
+answered and anything is listed, even with one kind, so an empty tab can say what goes there
+(`showSharedDrivesTabs`); with nothing either way they hide and the filter reads as All
+(`effectiveSharedDrivesFilter`). A kind that failed has no count pill, and neither does All
+(`sharedDrivesTabCount`): a "0" there would claim nothing is shared. "Total size:" / "File No:" sum the drives the current tab
 shows (`sharedDriveListTotals`: a drive nobody could size is left out, never counted as zero;
 all unknown is a dash; own drives from the drive listing, joined drives from
 `useSharedDriveStats`, folders from `useFolderGrantStatsList`, which shares the rows' cache
 keys); they sit on the right of the tabs row from `@2xl` and on their own line above it
-below that. One pager (`FOLDER_LIST_PAGE_SIZE`) windows the sequence own-then-joined
-(`sharedDrivesPageSlices`) on every tab and resets to page 1 on a tab change. Nothing is
-claimed until BOTH kinds have answered: skeleton rows until then (and placeholder rows for a
-kind still loading under rows already shown), and `ShareADriveEmptyState` ("A place for
-teamwork", docs link `https://docs.hippius.com/use/desktop/shared-drives` opened with
-`openUrl`) only when neither kind has anything. A feature-off server hides the joined half; a
-failed fetch counts as none. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
-A row opens on the Drive page through `sharedDriveRoute` (browse label plus `openName`, shown
-in the breadcrumb only for a shared label, `browseNameFromUrl`). "Share a drive" is a filled
-primary button on the right of the page header (`renderHeader` hands it to `PageHeader`'s
-`actions`) and opens `share-drive-picker/` (`ShareDriveFlow` + `ShareDrivePicker`): own drives
+below that, and show only while the tab has rows (an empty or failed tab has none). One pager (`SHARED_DRIVES_PAGE_SIZE`, 10, the console's; the Drive page keeps
+`FOLDER_LIST_PAGE_SIZE`) windows the sequence own-then-joined (`sharedDrivesPageSlices`) on
+every tab, is drawn only when the tab holds more than a page, resets to page 1 on a tab
+change, and the page state follows the clamped page when drives go away (leaving the last
+drive on the last page). The list area is ONE pure decision, `resolveSharedDrivesContent`
+over each kind's `{status, count}` (`sharedByYouStatus`, `sharedWithYouStatus`): rows win
+(placeholder rows for a kind still loading, a `role="alert"` line with Try again for a kind
+that failed); no rows and a kind loading is the skeleton; no rows and a kind failed is
+`SharedDrivesLoadError` (Try again; offline copy from `useIsOnline`, and the page retries by
+itself on reconnect), NEVER an empty state; only then `ShareADriveEmptyState` for the scope
+(nothing either way: "A place for teamwork"; "Shared with you": where invites land, no
+button; "Shared by you": Share a drive), docs link
+`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`. An empty state
+also waits for the plan, since it words its button by plan. "Shared by you" is an error, not
+none, when the drive listing threw, the sharing query failed, or own drives exist and not one
+got an answer (`list_owned_drive_sharing` drops a drive whose listings both failed and still
+answers OK, and own-drive resolution is local and lenient, so only the network drops all).
+"Shared with you" is an error on a failed memberships fetch; a feature-off server is a quiet
+none. Copy lives in `sharedDrivesCopy.ts`. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
+A row opens its drive ON THIS PAGE, never on `/files` (`sharedDrivesDriveRoute`: browse label,
+`openRemote`, plus `openName`, shown in the breadcrumb only for a shared label,
+`browseNameFromUrl`): the page renders `SharedDriveOpenView` (the Drive container under
+`SHARED_DRIVES_DRIVE_ROUTE`, `basePath` `/shared-drives`, `parent` "Shared Drives") while
+`isDriveOpenInUrl` says a drive is open, keeping the list mounted but hidden (attribute AND
+class) so Back returns to the same tab and page. With a `parent` the container keeps the drive
+in the URL at its root too (`urlAfterOpen`, `driveRootHref`) and starts in it
+(`initialDriveView`), so a reload keeps the drive and the trail; the root crumb and Back from
+the drive's root push `parent.href`; every folder link builds on `useDriveRoute().basePath`
+(`generateFolderUrl`'s `basePath`), since one hardcoded `/files` drops the user onto the Drive
+page. The drive crumb's name falls back to the membership's `displayLabel` or the grant's
+folder name when the URL no longer carries `openName` (a reload inside a folder). Opening from
+Settings still uses `sharedDriveRoute` (`/files`). Pinned by `driveTrail.test.ts`,
+`sharedDrivesPage.test.tsx`, `breadcrumbRoot.test.tsx`, `breadcrumbBack.test.ts`. "Share a drive"
+(`ShareADriveButton`) sits on the right of the page header (`renderHeader` hands it to
+`PageHeader`'s `actions`) and follows `sharingGate({ owner: true })`: a placeholder while the
+plan loads; on Free/Starter the same words with a "Plus" pill, a hover naming Plus, Max and
+Scale, and a click to `BILLING_ROUTE` (never the picker); on a plan that shares, a filled
+primary button that opens `share-drive-picker/` (`ShareDriveFlow` + `ShareDrivePicker`): own drives
 only (`folderRows` without `ownerSs58`), "Shared with N" / "Shared" / "Not shared" from
 `useOwnedDriveSharing` (unknown says nothing), search above `PICKER_SEARCH_THRESHOLD` (6), and a
 `+ New drive` `primaryOutline` button on the search row (full width under it below `sm`),
-offered only when the plan shares and drives exist; with none, the footer's Sync a Folder is
-the way. The list's scrollbar has its own lane (`.scroll-gutter` in `globals.css`: a styled,
+offered only when the plan shares; with no drives it is the footer's main action instead, and
+on a plan that does not share the empty state shows `NotEntitledNotice` rather than any way to
+make a drive. The list's scrollbar has its own lane (`.scroll-gutter` in `globals.css`: a styled,
 never-overlay WebKit scrollbar plus `scrollbar-gutter: stable`, pulled into the dialog's side
 padding by `-mr-3.5 pr-1.5`), because a macOS overlay scrollbar drew over the rows. The plan
 gate is `sharingGate({ owner: true })`, so Free/Starter get `NotEntitledNotice` (its Upgrade
 plan goes to `BILLING_ROUTE`) and no Continue. Continue CLOSES the picker, then sets
 `shareDialogAtom` exactly as the row's "Share drive..." does, so there is never a dialog over
-a dialog. New drive (or Sync a Folder) closes the picker and makes a drive through
-`AddLocalFolderDialog`, and its Share dialog opens only once the folder dialog has closed.
-Pinned by `ShareDrivePicker.test.tsx`, `SharedDrivesView.test.tsx`, `sharedDrivesState.test.ts`,
+a dialog. **New drive never asks for a local folder**: it is a name step inside the same
+dialog (`useNewDriveStep`; Back or Escape returns to the list, nothing closes while it
+creates), and Create drive calls `create_cloud_drive` (`sync/fileops/cloud_drive.rs`), which
+registers the drive the way the console's New drive does: `register_folder` with
+`folder_hash(name)`, the name verbatim as the label, and this computer's device name, so the
+console, mobile and desktop all see one drive and its key derives from the master and the
+label on first use. Then the picker closes, every drive list is refreshed
+(`triggerSyncPathRefreshAtom`) and the Share dialog opens for it like Continue. It lists as
+"Not synced here"; "Sync to this computer" in its menu binds it to a folder later. Registering
+is an upsert keyed on the hash, so Rust refuses a name any drive already answers to (local
+label or folder name, server label or hash, NFC and case-insensitive) against a FRESH server
+listing, and an unreadable listing stops the create rather than guessing. Rust also owns the
+name rules (the console's, plus a name `sanitize_label` cannot empty, so the drive can be
+synced later) and every refusal's sentence (offline, read-only or suspended account, 402),
+shown under the field. The command itself has no plan gate (making a drive is open to every
+plan, as on the console); the picker only offers it on a plan that shares, and the invite
+mint stays the server's call. Pinned by the `cloud_drive` unit and stand-in-server tests.
+Joining is open on every plan (the owner pays), so drives shared WITH a Free account list and
+open as usual. Pinned by `ShareDrivePicker.test.tsx`, `SharedDrivesView.test.tsx`,
+`sharedDrivesState.test.ts`, `sharedDrivesCopy.test.ts`, `ShareADriveButton.test.tsx`,
 `underlineTabs.test.tsx`, `scrollGutter.test.ts`, `ShareADriveEmptyState.test.tsx`,
 `SharedWithMeSection.test.tsx` and `sharedWithMeState.test.ts`.
 

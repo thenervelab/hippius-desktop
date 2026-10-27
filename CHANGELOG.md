@@ -51,11 +51,26 @@ carries security updates.
   drives you've shared, marked as yours with who they're shared with, and the
   drives and folders other people invited you into, with tabs to show just one
   kind when you have both and the total size and number of files for what you
-  are looking at. "Share a drive" sits at the top of the page; pick one of
-  your drives, or choose "New drive" beside the search to make one and go
-  straight on to sharing it. Manage who has access or leave a drive from its
-  row. Drives shared with you are no longer listed on the Drive page; find
-  them on Shared Drives.
+  are looking at. The list shows 10 drives a page. Manage who has access or
+  leave a drive from its row. Drives shared with you are no longer listed on
+  the Drive page; find them on Shared Drives.
+- **Share a drive, or make a new one to share.** "Share a drive" sits at the
+  top of the Shared Drives page; pick one of your drives, or choose "New
+  drive" beside the search. Name it and it is made on Hippius straight away,
+  without syncing a folder, and you go straight on to choosing who to share
+  it with. It shows as not synced on this computer, and you can sync it to a
+  folder later from its menu. On a plan without sharing, Share a drive says it
+  comes with Plus and takes you to upgrade; drives other people share with you
+  open as usual on any plan.
+- **Drives open right on Shared Drives.** A drive you open from Shared Drives
+  stays there: the path at the top reads Shared Drives, then the drive, then
+  each folder you open, and every step takes you back to that level. Back
+  from the drive returns to the list, on the tab you left it on.
+- **Shared Drives says what's going on when the list is empty.** An empty tab
+  says what belongs there: drives other people invite you into, or a way to
+  share one of your own. If the list can't load, for example while you're
+  offline, it says so with Try again instead of saying nothing is shared, and
+  loads again by itself once you're back online.
 
 ### Changed
 
