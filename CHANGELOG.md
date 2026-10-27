@@ -46,7 +46,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Security
 
-- **Signing in with your recovery phrase uses an updated signing library that fixes a timing weakness.**
+- **Signing in with your recovery phrase uses an updated signing library.** It fixes a timing weakness found in the library Hippius used before. Nothing changes in how you sign in.
+- **A compression library Hippius uses is updated.** It fixes four security issues reported in it.
 - **Signing in with your recovery phrase now proves the whole wallet is yours.** Hippius checks this so nobody else can claim your wallet's account, and will soon require it, so update before then to keep signing in from the app.
 - **New invite links no longer contain the key to your drive.** Once Hippius turns this on, a drive or folder invite link holds a key of its own, and Hippius hands over the drive's key only to someone signed in who can still join, so a leaked invite link is useless after it is revoked or used up. Older invite links are marked "Old invite link" in Manage access, and Replace swaps one for a new link with the same access and turns the old one off.
 - **New folder links no longer contain the key to your whole drive.** Once Hippius turns this on, a folder link holds a key of its own, so a link that was forwarded or leaked stops working for good when you revoke it, unless someone had already opened it. Older folder links are marked "Old link" in Shared Links, and Reshare swaps one for a new link to the same folder (with a new password if it had one) and turns the old one off.
