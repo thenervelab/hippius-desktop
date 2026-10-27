@@ -198,7 +198,7 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
             .into_iter()
             .map(|v| {
                 let name = match (v.name_ct.as_deref(), v.name_nonce.as_deref()) {
-                    (Some(ct), Some(nonce)) => names(nonce, ct),
+                    (Some(ct), Some(nonce)) => names(nonce, ct).map(readable_name),
                     _ => None,
                 };
                 InsightsViewer {
@@ -226,6 +226,31 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
         retention,
         viewers,
     })
+}
+
+/// The shortest address an access-key account's generated name can hold.
+const GENERATED_NAME_MIN_ADDRESS: usize = 40;
+/// The longest; an SS58 address is 47 or 48 characters.
+const GENERATED_NAME_MAX_ADDRESS: usize = 64;
+
+/// A viewer's or commenter's name as the owner reads it. An account signed in
+/// with an access key has no name of its own, so the share page signs its
+/// comments with the account's generated username, `user_` and the whole
+/// wallet address in lower case. That reads as noise and puts the full
+/// address on screen, so it is shown as the address shortened to its first 6
+/// and last 4 characters (`5dsqam…sk63`). A name the person chose is kept as
+/// it is.
+fn readable_name(name: String) -> String {
+    let Some(address) = name.strip_prefix("user_") else {
+        return name;
+    };
+    let generated =
+        (GENERATED_NAME_MIN_ADDRESS..=GENERATED_NAME_MAX_ADDRESS).contains(&address.len()) && address.bytes().all(|b| b.is_ascii_alphanumeric());
+    if !generated {
+        return name;
+    }
+    // ASCII only (checked above), so byte offsets are character offsets.
+    format!("{}\u{2026}{}", &address[..6], &address[address.len() - 4..])
 }
 
 // ─── Comments ──────────────────────────────────────────────────────────────
@@ -340,7 +365,7 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
             let (text, name) = match opened {
                 // An anonymous comment never shows a name, whatever its
                 // ciphertext carries.
-                Some(p) => (Some(p.text), if c.anonymous { None } else { p.name }),
+                Some(p) => (Some(p.text), if c.anonymous { None } else { p.name.map(readable_name) }),
                 None => (None, None),
             };
             ShareComment {
@@ -1323,6 +1348,25 @@ mod tests {
         assert_eq!(rows[0].completion, Some(1.0), "capped at 1");
         assert_eq!(rows[1].name, None, "no name: the screen says Someone");
         assert_eq!((rows[0].comments, rows[0].reactions), (1, 2));
+    }
+
+    #[test]
+    fn an_access_key_accounts_generated_name_reads_as_a_short_address() {
+        let generated = "user_5dsqamf3jvb3vyuxwqwux3tj6ax6ex9f5p1udjyh5tmdsk63".to_string();
+        assert_eq!(readable_name(generated.clone()), "5dsqam\u{2026}sk63");
+        let i = parse_insights(PAID, |_, _| Some(generated.clone())).unwrap();
+        let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
+        assert_eq!(rows[0].name.as_deref(), Some("5dsqam\u{2026}sk63"));
+        // Names people chose stay as they are, even ones that start the same way.
+        for kept in [
+            "Ahmad",
+            "user_",
+            "user_maya",
+            "user_5dsq amf3jvb3vyuxwqwux3tj6ax6ex9f5p1udjyh5tmdsk63",
+            "User_5dsqamf3jvb3vyuxwqwux3tj6ax6ex9f5p1udjyh5tmdsk63",
+        ] {
+            assert_eq!(readable_name(kept.to_string()), kept);
+        }
     }
 
     #[test]
