@@ -74,19 +74,21 @@ describe("sharedByMeLoading", () => {
   });
 });
 
-describe("routes out of the page", () => {
+describe("routes into a drive", () => {
+  // On this page, not the Drive page: the trail then starts at Shared
+  // Drives and Back from the drive's root returns to this list.
   it("opens a drive synced here by its label, and a cloud-only one as remote", () => {
     const local = row("Team", { local: { id: "team-1" } as FolderRow["local"] });
-    expect(ownDriveRoute(local)).toBe("/files?openLabel=team-1");
+    expect(ownDriveRoute(local)).toBe("/shared-drives?openLabel=team-1");
     const remote = row("Archive", { presence: "other-device" });
-    expect(ownDriveRoute(remote)).toBe("/files?openLabel=Archive&openRemote=1");
+    expect(ownDriveRoute(remote)).toBe("/shared-drives?openLabel=Archive&openRemote=1");
   });
 
   it("opens a joined drive by its browse label, with its name for the breadcrumb", () => {
     const url = new URL(
       `app://x${joinedDriveRoute({ ownerSs58: OWNER, folderHash: HASH, displayLabel: "Design team" })}`,
     );
-    expect(url.pathname).toBe("/files");
+    expect(url.pathname).toBe("/shared-drives");
     expect(url.searchParams.get("openRemote")).toBe("1");
     expect(url.searchParams.get("openName")).toBe("Design team");
     expect(parseSharedDriveLabel(url.searchParams.get("openLabel"))).toEqual({
@@ -99,6 +101,7 @@ describe("routes out of the page", () => {
     const url = new URL(
       `app://x${folderGrantRoute({ ownerSs58: OWNER, folderHash: HASH, pathPrefix: "Clients/ACME", folderName: "ACME" })}`,
     );
+    expect(url.pathname).toBe("/shared-drives");
     expect(url.searchParams.get("openName")).toBe("ACME");
     expect(parseFolderGrantLabel(url.searchParams.get("openLabel"))?.pathPrefix).toBe("Clients/ACME");
   });

@@ -268,8 +268,20 @@ kind still loading under rows already shown), and `ShareADriveEmptyState` ("A pl
 teamwork", docs link `https://docs.hippius.com/use/desktop/shared-drives` opened with
 `openUrl`) only when neither kind has anything. A feature-off server hides the joined half; a
 failed fetch counts as none. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
-A row opens on the Drive page through `sharedDriveRoute` (browse label plus `openName`, shown
-in the breadcrumb only for a shared label, `browseNameFromUrl`). "Share a drive" is a filled
+A row opens its drive ON THIS PAGE, never on `/files` (`sharedDrivesDriveRoute`: browse label,
+`openRemote`, plus `openName`, shown in the breadcrumb only for a shared label,
+`browseNameFromUrl`): the page renders `SharedDriveOpenView` (the Drive container under
+`SHARED_DRIVES_DRIVE_ROUTE`, `basePath` `/shared-drives`, `parent` "Shared Drives") while
+`isDriveOpenInUrl` says a drive is open, keeping the list mounted but hidden (attribute AND
+class) so Back returns to the same tab and page. With a `parent` the container keeps the drive
+in the URL at its root too (`urlAfterOpen`, `driveRootHref`) and starts in it
+(`initialDriveView`), so a reload keeps the drive and the trail; the root crumb and Back from
+the drive's root push `parent.href`; every folder link builds on `useDriveRoute().basePath`
+(`generateFolderUrl`'s `basePath`), since one hardcoded `/files` drops the user onto the Drive
+page. The drive crumb's name falls back to the membership's `displayLabel` or the grant's
+folder name when the URL no longer carries `openName` (a reload inside a folder). Opening from
+Settings still uses `sharedDriveRoute` (`/files`). Pinned by `driveTrail.test.ts`,
+`sharedDrivesPage.test.tsx`, `breadcrumbRoot.test.tsx`, `breadcrumbBack.test.ts`. "Share a drive" is a filled
 primary button on the right of the page header (`renderHeader` hands it to `PageHeader`'s
 `actions`) and opens `share-drive-picker/` (`ShareDriveFlow` + `ShareDrivePicker`): own drives
 only (`folderRows` without `ownerSs58`), "Shared with N" / "Shared" / "Not shared" from
