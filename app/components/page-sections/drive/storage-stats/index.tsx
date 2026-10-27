@@ -4,7 +4,9 @@ import StorageStateItem from "./StorageStateItem";
 
 interface StorageStateListProps {
   storageUsed: string;
-  numberOfFiles: number;
+  /** A count, or a dash when the count could not be read: a 0 would claim
+   *  the list is empty. */
+  numberOfFiles: number | string;
   /**
    * Console parity: "Drive size:" inside someone else's drive, "Total size:"
    * on a Shared with me list, "Storage Used:" on own drives. Never the old
