@@ -30,15 +30,6 @@ export function sharedByMeRows(
   return ownDriveRows(rows).filter((r) => isDriveShared(sharingByLabel.get(r.folderName)));
 }
 
-/**
- * Whether "Shared by Me" cannot answer yet: the drives are still loading, or
- * their sharing has not come back. The list holds only shared drives, so
- * before the sharing is known an empty list would claim "nothing shared".
- */
-export function sharedByMeLoading(input: { foldersLoading: boolean; sharingPending: boolean }): boolean {
-  return input.foldersLoading || input.sharingPending;
-}
-
 // Every row opens its drive on this page (`sharedDrivesDriveRoute`), not on
 // the Drive page, so the trail reads "Shared Drives › drive" and Back from
 // the drive's root comes back to this list.
@@ -85,24 +76,131 @@ export function folderGrantRoute(grant: {
 /** Which kind of shared drive the list shows. */
 export type SharedDrivesFilter = "all" | "with-you" | "by-you";
 
-/**
- * The filter actually applied. The tabs show only when both kinds exist
- * (with one kind they would offer a choice of the same list), so a filter
- * left on a kind that has since emptied falls back to all rather than
- * showing an empty list with no tab to leave it by. The web console's
- * `effectiveSharedListFilter`.
- */
-export function effectiveSharedDrivesFilter(
-  filter: SharedDrivesFilter,
-  counts: { withYou: number; byYou: number },
-): SharedDrivesFilter {
-  if (counts.withYou === 0 || counts.byYou === 0) return "all";
-  return filter;
+/** Whether one kind of shared drive has answered. */
+export type SharedKindStatus = "loading" | "error" | "ready";
+
+/** One kind's answer: its status, and how many rows it has to show. */
+export interface SharedKind {
+  status: SharedKindStatus;
+  count: number;
 }
 
-/** Whether the tabs are worth drawing: only when both kinds exist. */
-export function showSharedDrivesTabs(counts: { withYou: number; byYou: number }): boolean {
-  return counts.withYou > 0 && counts.byYou > 0;
+/**
+ * Where "Shared by you" stands.
+ *
+ * The list holds only SHARED own drives, so it has two questions to ask:
+ * which drives there are, and which of them are shared. Either failing
+ * means the page cannot say, so it is an error and never "none". The
+ * sharing IPC leaves out a drive whose listings both failed and still
+ * answers OK, so own drives with not one answer between them is a failure
+ * too (resolving an own drive is local and lenient, so only the network
+ * drops every one of them). A drive that simply is not shared still has an
+ * answer, with zero people.
+ */
+export function sharedByYouStatus(input: {
+  foldersLoading: boolean;
+  foldersFailed: boolean;
+  ownDriveCount: number;
+  sharingPending: boolean;
+  sharingFailed: boolean;
+  sharingAnswered: number;
+}): SharedKindStatus {
+  if (input.foldersLoading) return "loading";
+  if (input.foldersFailed) return "error";
+  if (input.ownDriveCount === 0) return "ready";
+  if (input.sharingPending) return "loading";
+  if (input.sharingFailed || input.sharingAnswered === 0) return "error";
+  return "ready";
+}
+
+/**
+ * Where "Shared with you" stands. A server with shared drives switched off
+ * is a real "none" (the quiet degrade), not an error; a fetch that failed
+ * is an error, never folded into "none" the way Settings folds it.
+ */
+export function sharedWithYouStatus(input: {
+  memberships: "idle" | "loading" | "ready" | "unavailable" | "error";
+  grantsSettled: boolean;
+}): SharedKindStatus {
+  if (input.memberships === "idle" || input.memberships === "loading") return "loading";
+  if (input.memberships === "error") return "error";
+  return input.grantsSettled ? "ready" : "loading";
+}
+
+/**
+ * Whether the tabs are worth drawing: once both kinds have answered (so they
+ * appear once, not one by one) and the list has anything in it. Shown with
+ * only one kind too, so the empty one can say what would go there; with
+ * nothing either way the page's own empty state says it instead.
+ */
+export function showSharedDrivesTabs(kinds: { byYou: SharedKind; withYou: SharedKind }): boolean {
+  const { byYou, withYou } = kinds;
+  if (byYou.status === "loading" || withYou.status === "loading") return false;
+  return byYou.count + withYou.count > 0;
+}
+
+/**
+ * The filter actually applied. Without the tabs there is no tab to leave a
+ * filter by, so the list is all of it.
+ */
+export function effectiveSharedDrivesFilter(filter: SharedDrivesFilter, tabsShown: boolean): SharedDrivesFilter {
+  return tabsShown ? filter : "all";
+}
+
+/**
+ * A tab's count pill. A kind that failed has no count (a "0" there would be
+ * a confident lie), and neither does All while one of its halves failed.
+ */
+export function sharedDrivesTabCount(kinds: SharedKind[]): number | undefined {
+  if (kinds.some((k) => k.status === "error")) return undefined;
+  return kinds.reduce((sum, k) => sum + k.count, 0);
+}
+
+/** What the list area shows. */
+export type SharedDrivesContent =
+  /** Nothing to show yet: skeleton rows, never an early "nothing shared". */
+  | { kind: "loading" }
+  /** The tab's drives could not be loaded, and there are none to show. */
+  | { kind: "error"; scope: SharedDrivesFilter }
+  /** Everything in scope answered, and there is nothing in it. */
+  | { kind: "empty"; scope: SharedDrivesFilter }
+  /**
+   * Rows. `pending`: a kind in scope is still loading under them.
+   * `failed`: kinds in scope that could not be loaded, said in a line
+   * above the rows that are there.
+   */
+  | { kind: "rows"; pending: boolean; failed: Array<"by-you" | "with-you"> };
+
+/**
+ * Decide the list area for the applied filter.
+ *
+ * Rows win: whatever has arrived is shown, with a placeholder for a kind
+ * still on its way and a line for one that failed. With no rows, a kind
+ * still loading holds the skeleton, a failed one means the page cannot say
+ * the tab is empty, and only then is it empty. The empty states word their
+ * action by plan ("Share a drive" or "Upgrade plan"), so an empty list also
+ * waits for the plan rather than flashing one and swapping to the other.
+ */
+export function resolveSharedDrivesContent(input: {
+  filter: SharedDrivesFilter;
+  byYou: SharedKind;
+  withYou: SharedKind;
+  planKnown: boolean;
+}): SharedDrivesContent {
+  const { filter, byYou, withYou, planKnown } = input;
+  const inScope: Array<["by-you" | "with-you", SharedKind]> = [];
+  if (filter !== "with-you") inScope.push(["by-you", byYou]);
+  if (filter !== "by-you") inScope.push(["with-you", withYou]);
+
+  const rows = inScope.reduce((sum, [, k]) => sum + k.count, 0);
+  const pending = inScope.some(([, k]) => k.status === "loading");
+  const failed = inScope.filter(([, k]) => k.status === "error").map(([key]) => key);
+
+  if (rows > 0) return { kind: "rows", pending, failed };
+  if (pending) return { kind: "loading" };
+  if (failed.length > 0) return { kind: "error", scope: filter };
+  if (!planKnown) return { kind: "loading" };
+  return { kind: "empty", scope: filter };
 }
 
 /**
@@ -165,6 +263,12 @@ export function formatSharedDriveListTotals(
   if (totals.isUnknown) return { size: UNKNOWN_FIGURE, files: UNKNOWN_FIGURE };
   return { size: formatBytes(totals.totalBytes), files: totals.fileCount };
 }
+
+/**
+ * Drives per page on the Shared Drives page. Ten, the console's list page
+ * size; with ten or fewer in the tab there is no pager at all.
+ */
+export const SHARED_DRIVES_PAGE_SIZE = 10;
 
 /** A half-open slice of one kind's rows. */
 export interface RowSlice {

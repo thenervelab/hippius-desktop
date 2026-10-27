@@ -1,19 +1,38 @@
 "use client";
 
-// The Shared Drives page with nothing shared either way yet: what a shared drive is for, the way
-// to share one, and the docs. The app's framed empty-state card, the same one
-// an empty drive list uses, with the teamwork picture above it.
+// The Shared Drives page's empty and error states, in the app's framed
+// empty-state card (the one an empty drive list uses):
+//
+// - nothing shared either way: what a shared drive is for, the way to share
+//   one (or, on a plan without sharing, the plan that includes it), and the
+//   docs, with the teamwork picture above it;
+// - one tab empty: what would go there and, where it is this account's move,
+//   the way to start;
+// - a list that could not load: what happened and Try again, never an empty
+//   state, because the page does not know.
+//
+// The words are in `sharedDrivesCopy.ts`.
 
 import React from "react";
-import { ArrowUpRight, Plus } from "lucide-react";
+import { ArrowUpRight, CloudOff, Plus, RotateCw, Sparkles } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import NoEntriesFound from "@/components/ui/NoEntriesFound";
 
-export const SHARE_A_DRIVE_EMPTY_TITLE = "A place for teamwork";
-export const SHARE_A_DRIVE_EMPTY_LINE =
-  "Share a drive to work on the same encrypted files with your team.";
-export const SHARE_A_DRIVE_LABEL = "Share a drive";
+import {
+  SHARE_A_DRIVE_LABEL,
+  TRY_AGAIN_LABEL,
+  UPGRADE_PLAN_LABEL,
+  sharedDrivesEmptyCopy,
+  sharedDrivesErrorCopy,
+} from "./sharedDrivesCopy";
+import type { SharedDrivesFilter } from "./sharedDrivesState";
+
+export {
+  SHARE_A_DRIVE_EMPTY_LINE,
+  SHARE_A_DRIVE_EMPTY_TITLE,
+  SHARE_A_DRIVE_LABEL,
+} from "./sharedDrivesCopy";
 export const SHARED_DRIVES_DOCS_URL = "https://docs.hippius.com/use/desktop/shared-drives";
 
 /** Two drives' worth of files side by side over a shared ground. */
@@ -80,39 +99,118 @@ function TeamworkIllustration() {
   );
 }
 
-export default function ShareADriveEmptyState({ onShareDrive }: { onShareDrive: () => void }) {
+/** A cloud with a line through it, on the same tinted ground. */
+function LoadErrorIllustration() {
   return (
-    <section aria-labelledby="share-a-drive-empty-title" className="p-3">
+    <span
+      aria-hidden
+      data-testid="load-error-illustration"
+      className="flex size-12 items-center justify-center rounded-xl bg-grey-90 text-grey-50 dark:bg-white/[0.06] dark:text-grey-dark-700"
+    >
+      <CloudOff className="size-6" />
+    </span>
+  );
+}
+
+function DocsLink() {
+  return (
+    <a
+      href={SHARED_DRIVES_DOCS_URL}
+      // Docs open in the browser, never in the app's own webview.
+      onClick={(e) => {
+        e.preventDefault();
+        void openUrl(SHARED_DRIVES_DOCS_URL).catch((err) =>
+          console.error("Failed to open the shared drives docs:", err),
+        );
+      }}
+      className="text-center text-primary-50 hover:underline dark:text-primary-brand-dark"
+    >
+      How shared drives work
+      {/* Inline, so on a narrow window the arrow wraps with the last
+          word instead of standing apart from it. */}
+      <ArrowUpRight className="ml-1 inline size-3.5 align-[-2px]" aria-hidden />
+    </a>
+  );
+}
+
+// The page's own padding scales up to 80px on wide screens; inside a section
+// card that is a lot of frame around one short line.
+const CARD_PADDING = "p-4 sm:p-8 2xl:p-10";
+
+export interface ShareADriveEmptyStateProps {
+  /** Which list is empty: everything, or one tab. */
+  scope?: SharedDrivesFilter;
+  /**
+   * Whether this account's plan shares drives. False words the card for
+   * Free and Starter: the plan that includes sharing, and Upgrade plan in
+   * place of Share a drive.
+   */
+  canShare?: boolean;
+  onShareDrive: () => void;
+  onUpgrade?: () => void;
+}
+
+export default function ShareADriveEmptyState({
+  scope = "all",
+  canShare = true,
+  onShareDrive,
+  onUpgrade,
+}: ShareADriveEmptyStateProps) {
+  const copy = sharedDrivesEmptyCopy(scope, canShare);
+  const titleId = `shared-drives-empty-${scope}-title`;
+  const action =
+    copy.action === "share"
+      ? { text: SHARE_A_DRIVE_LABEL, icon: <Plus className="size-4" aria-hidden />, onClick: onShareDrive }
+      : copy.action === "upgrade" && onUpgrade
+        ? { text: UPGRADE_PLAN_LABEL, icon: <Sparkles className="size-4" aria-hidden />, onClick: onUpgrade }
+        : null;
+
+  return (
+    <section aria-labelledby={titleId} data-testid={`shared-drives-empty-${scope}`} className="p-3">
       <NoEntriesFound
         cardView
-        // The page's own padding scales up to 80px on wide screens; inside a
-        // section card that is a lot of frame around one short line.
-        className="p-4 sm:p-8 2xl:p-10"
-        titleId="share-a-drive-empty-title"
+        className={CARD_PADDING}
+        titleId={titleId}
         illustration={<TeamworkIllustration />}
-        title={SHARE_A_DRIVE_EMPTY_TITLE}
-        description={SHARE_A_DRIVE_EMPTY_LINE}
-        buttonText={SHARE_A_DRIVE_LABEL}
-        buttonIcon={<Plus className="size-4" aria-hidden />}
-        onButtonClick={onShareDrive}
-        footerLink={
-          <a
-            href={SHARED_DRIVES_DOCS_URL}
-            // Docs open in the browser, never in the app's own webview.
-            onClick={(e) => {
-              e.preventDefault();
-              void openUrl(SHARED_DRIVES_DOCS_URL).catch((err) =>
-                console.error("Failed to open the shared drives docs:", err),
-              );
-            }}
-            className="text-center text-primary-50 hover:underline dark:text-primary-brand-dark"
-          >
-            How shared drives work
-            {/* Inline, so on a narrow window the arrow wraps with the last
-                word instead of standing apart from it. */}
-            <ArrowUpRight className="ml-1 inline size-3.5 align-[-2px]" aria-hidden />
-          </a>
-        }
+        title={copy.title}
+        description={copy.description}
+        buttonText={action?.text}
+        buttonIcon={action?.icon}
+        onButtonClick={action?.onClick}
+        footerLink={<DocsLink />}
+      />
+    </section>
+  );
+}
+
+/**
+ * The list could not be loaded. Says what happened in plain words and
+ * offers Try again; the page also retries by itself when the connection
+ * comes back.
+ */
+export function SharedDrivesLoadError({
+  scope = "all",
+  offline,
+  onRetry,
+}: {
+  scope?: SharedDrivesFilter;
+  offline: boolean;
+  onRetry: () => void;
+}) {
+  const copy = sharedDrivesErrorCopy(scope, offline);
+  const titleId = `shared-drives-error-${scope}-title`;
+  return (
+    <section aria-labelledby={titleId} role="alert" data-testid="shared-drives-error" className="p-3">
+      <NoEntriesFound
+        cardView
+        className={CARD_PADDING}
+        titleId={titleId}
+        illustration={<LoadErrorIllustration />}
+        title={copy.title}
+        description={copy.description}
+        buttonText={TRY_AGAIN_LABEL}
+        buttonIcon={<RotateCw className="size-4" aria-hidden />}
+        onButtonClick={onRetry}
       />
     </section>
   );

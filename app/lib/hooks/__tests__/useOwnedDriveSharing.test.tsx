@@ -24,6 +24,7 @@ import {
   invalidateOwnedDriveSharing,
   isDriveShared,
   useOwnedDriveSharing,
+  useOwnedDriveSharingState,
 } from "@/app/lib/hooks/useOwnedDriveSharing";
 
 const shared = {
@@ -35,7 +36,8 @@ const shared = {
 
 function makeClient() {
   return new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    // The hook asks for two retries of its own; no delay between them here.
+    defaultOptions: { queries: { retry: false, retryDelay: 0 } },
   });
 }
 
@@ -174,6 +176,47 @@ describe("useOwnedDriveSharing", () => {
       wrapper: wrapperFor(makeClient()),
     });
     expect(listOwnedDriveSharingMock).not.toHaveBeenCalled();
+  });
+});
+
+// The Shared Drives page tells "none shared" from "could not ask": a
+// failed query is an error with a Retry, and the Retry reads as pending
+// while it runs rather than leaving the error card over a request in flight.
+describe("useOwnedDriveSharingState", () => {
+  it("reports a failure once the retries give up, and pending again while a refetch runs", async () => {
+    listOwnedDriveSharingMock.mockRejectedValue(new Error("offline"));
+    const { result } = renderHook(() => useOwnedDriveSharingState(["team-docs"]), {
+      wrapper: wrapperFor(makeClient()),
+    });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.byLabel.size).toBe(0);
+
+    let release: (rows: unknown) => void = () => {};
+    listOwnedDriveSharingMock.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.isPending).toBe(true));
+    expect(result.current.isError).toBe(false);
+
+    await act(async () => {
+      release([shared]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.byLabel.size).toBe(1));
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.isError).toBe(false);
+  });
+
+  it("is neither pending nor failed with no drives to ask about", () => {
+    const { result } = renderHook(() => useOwnedDriveSharingState([]), {
+      wrapper: wrapperFor(makeClient()),
+    });
+    expect(result.current.isPending).toBe(false);
+    expect(result.current.isError).toBe(false);
   });
 });
 

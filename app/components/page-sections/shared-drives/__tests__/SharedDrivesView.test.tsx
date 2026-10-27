@@ -1,9 +1,13 @@
 // The Shared Drives page: one list of your own shared drives and the ones
-// shared with you, narrowed by underline tabs when there are both, with the
-// total size and file count of what the list shows; it never claims
-// "nothing shared" before both kinds are known; it pages the list as one;
-// and "Share a drive" in the page header takes the one-dialog-at-a-time path
-// from the picker through a new drive to its Share dialog. The picker, the
+// shared with you, narrowed by underline tabs once anything is listed, with
+// the total size and file count of what the list shows; it never claims
+// "nothing shared" before both kinds are known, nor about a list that
+// failed to load (an error with Try again instead); each empty tab says what
+// goes there; it pages the list as one, ten to a page; "Share a drive" in
+// the page header takes the one-dialog-at-a-time path from the picker
+// through a new drive to its Share dialog, and on a plan without sharing
+// names the plan and goes to the upgrade instead, while drives shared with
+// the account still list. The picker, the
 // folder dialog and "Shared with me"'s rows are stubbed: each has its own
 // tests, and here only the page's wiring of them is the question.
 
@@ -40,13 +44,22 @@ vi.mock("@/lib/hooks/useCreditCheck", () => ({
 const folders = vi.hoisted(() => ({
   value: { local: [] as unknown[], remote: [] as unknown[] },
 }));
+const foldersFail = vi.hoisted(() => ({ value: false }));
+const fetchFolders = vi.hoisted(() =>
+  vi.fn(async () => {
+    if (foldersFail.value) throw new Error("offline");
+    return folders.value;
+  }),
+);
 vi.mock("@/app/lib/tauri/syncFolders", () => ({
-  fetchSyncFoldersWithStats: vi.fn(async () => folders.value),
+  fetchSyncFoldersWithStats: fetchFolders,
 }));
 
 const sharing = vi.hoisted(() => ({
   byLabel: new Map<string, DriveSharing>(),
   isPending: false,
+  isError: false,
+  refetch: vi.fn(),
 }));
 vi.mock("@/app/lib/hooks/useOwnedDriveSharing", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/hooks/useOwnedDriveSharing")>()),
@@ -65,8 +78,16 @@ const withMe = vi.hoisted(() => ({
 vi.mock("@/components/page-sections/settings/multi-folder-sync/useDriveMemberships", () => ({
   useDriveMemberships: () => ({ data: withMe.data, reload: withMe.reload, markUnavailable: vi.fn() }),
 }));
+const refetchGrants = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({
-  useMyFolderGrants: () => ({ grants: withMe.grants, isSettled: withMe.grantsSettled }),
+  useMyFolderGrants: () => ({ grants: withMe.grants, isSettled: withMe.grantsSettled, refetch: refetchGrants }),
+}));
+
+// This account's plan: true shares, false is Free or Starter, undefined is
+// still loading.
+const plan = vi.hoisted(() => ({ allows: true as boolean | undefined }));
+vi.mock("@/app/lib/hooks/useSharedDrivesInPlan", () => ({
+  useSharedDrivesInPlan: () => plan.allows,
 }));
 vi.mock("@/app/lib/hooks/useSharedDriveStats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/lib/hooks/useSharedDriveStats")>()),
@@ -153,6 +174,7 @@ vi.mock("@/components/page-sections/settings/multi-folder-sync", () => ({
 
 import SharedDrivesView, { SHARED_DRIVES_TABS_LABEL } from "../SharedDrivesView";
 import { SHARE_A_DRIVE_EMPTY_TITLE } from "../ShareADriveEmptyState";
+import { sharedDrivesEmptyCopy, sharedDrivesErrorCopy } from "../sharedDrivesCopy";
 
 const local = (name: string, extra: Record<string, unknown> = {}) => ({
   id: name,
@@ -214,6 +236,13 @@ beforeEach(() => {
   folders.value = { local: [], remote: [] };
   sharing.byLabel = new Map();
   sharing.isPending = false;
+  sharing.isError = false;
+  sharing.refetch.mockClear();
+  refetchGrants.mockClear();
+  withMe.reload.mockClear();
+  fetchFolders.mockClear();
+  foldersFail.value = false;
+  plan.allows = true;
   withMe.data = { kind: "ready", memberships: [] };
   withMe.grants = [];
   withMe.grantsSettled = true;
@@ -251,6 +280,7 @@ describe("your own shared drives", () => {
 
   it("does not say nothing is shared while the drives shared with you are on their way", async () => {
     folders.value = { local: [local("Private")], remote: [] };
+    sharing.byLabel = new Map([["Private", shared(0)]]);
     withMe.data = { kind: "loading" };
     renderPage();
     await waitFor(() => expect(screen.getByLabelText("Loading shared drives")).toBeInTheDocument());
@@ -259,6 +289,7 @@ describe("your own shared drives", () => {
 
   it("says so, with Share a drive and no totals, once nothing turns out to be shared either way", async () => {
     folders.value = { local: [local("Private")], remote: [] };
+    sharing.byLabel = new Map([["Private", shared(0)]]);
     renderPage();
     expect(await screen.findByText(SHARE_A_DRIVE_EMPTY_TITLE)).toBeInTheDocument();
     expect(screen.queryByTestId("shared-drives-totals")).not.toBeInTheDocument();
@@ -296,19 +327,54 @@ describe("the tabs", () => {
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   });
 
-  it("are not drawn with only drives you shared", async () => {
+  it("are drawn with only drives you shared, and the empty tab says what goes there", async () => {
     folders.value = { local: [local("Team")], remote: [] };
     sharing.byLabel = new Map([["Team", shared(2)]]);
     renderPage();
     await screen.findByText("Team");
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Shared with you (0)" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shared with you (0)" }));
+    expect(screen.queryByText("Team")).not.toBeInTheDocument();
+    const copy = sharedDrivesEmptyCopy("with-you", true);
+    expect(screen.getByRole("region", { name: copy.title })).toBeInTheDocument();
+    expect(screen.getByText(copy.description)).toBeInTheDocument();
+    // Nothing for this account to do there: no button in the card.
+    expect(within(screen.getByTestId("shared-drives-empty-with-you")).queryByRole("button")).not.toBeInTheDocument();
+    // No totals over an empty tab, in either place they are drawn.
+    expect(screen.queryByTestId("shared-drives-totals")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total size:")).not.toBeInTheDocument();
+
+    // Back on a tab with rows, they return.
+    fireEvent.click(screen.getByRole("tab", { name: "Shared by you (1)" }));
+    expect(within(totals()).getByText("Total size:")).toBeInTheDocument();
   });
 
-  it("are not drawn with only drives shared with you", async () => {
+  it("are drawn with only drives shared with you, and an empty Shared by you offers Share a drive", async () => {
     withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
     renderPage();
     await screen.findByText("Design");
-    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Shared by you (0)" }));
+    const card = screen.getByTestId("shared-drives-empty-by-you");
+    expect(within(card).getByText(sharedDrivesEmptyCopy("by-you", true).title)).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Share a drive/ }));
+    expect(screen.getByRole("dialog", { name: "Share a drive picker" })).toBeInTheDocument();
+  });
+
+  it("stay on an emptied tab after leaving its last drive, saying so", async () => {
+    bothKinds();
+    const { rerender } = renderPage();
+    await screen.findByRole("tablist");
+    fireEvent.click(screen.getByRole("tab", { name: "Shared with you (2)" }));
+    withMe.data = { kind: "ready", memberships: [] };
+    withMe.stats = new Map();
+    rerender(
+      <Provider store={createStore()}>
+        <SharedDrivesView />
+      </Provider>,
+    );
+    expect(await screen.findByTestId("shared-drives-empty-with-you")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Shared with you (0)" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("narrow the list to one kind", async () => {
@@ -414,10 +480,22 @@ describe("the totals", () => {
 });
 
 describe("paging", () => {
-  it("pages one list: your drives first, then the ones shared with you", async () => {
-    const names = Array.from({ length: 10 }, (_, i) => `Own ${String(i + 1).padStart(2, "0")}`);
-    folders.value = { local: names.map((n) => local(n)), remote: [] };
-    sharing.byLabel = new Map(names.map((n) => [n, shared(1)]));
+  const ownNames = (n: number) => Array.from({ length: n }, (_, i) => `Own ${String(i + 1).padStart(2, "0")}`);
+  function ownShared(n: number) {
+    const names = ownNames(n);
+    folders.value = { local: names.map((name) => local(name)), remote: [] };
+    sharing.byLabel = new Map(names.map((name) => [name, shared(1)]));
+  }
+
+  it("draws no pager for ten drives", async () => {
+    ownShared(10);
+    renderPage();
+    await screen.findByText("Own 10");
+    expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+  });
+
+  it("pages one list, ten to a page: your drives first, then the ones shared with you", async () => {
+    ownShared(10);
     withMe.data = {
       kind: "ready",
       memberships: [membership("Design", "aa".repeat(8)), membership("Research", "bb".repeat(8))],
@@ -425,45 +503,212 @@ describe("paging", () => {
     renderPage();
 
     await screen.findByText("Own 01");
-    expect(screen.getByText("Own 08")).toBeInTheDocument();
-    expect(screen.queryByText("Own 09")).not.toBeInTheDocument();
+    expect(screen.getByText("Own 10")).toBeInTheDocument();
     expect(screen.queryByText("Design")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "2" }));
-    expect(screen.queryByText("Own 08")).not.toBeInTheDocument();
-    expect(screen.getByText("Own 09")).toBeInTheDocument();
-    expect(screen.getByText("Own 10")).toBeInTheDocument();
+    expect(screen.queryByText("Own 10")).not.toBeInTheDocument();
     expect(screen.getByText("Design")).toBeInTheDocument();
+    expect(screen.getByText("Research")).toBeInTheDocument();
     expect(withMeProps.value!.slice).toEqual({ start: 0, end: 2 });
   });
 
-  it("starts each tab on its first page, and pages within it", async () => {
-    const names = Array.from({ length: 10 }, (_, i) => `Own ${String(i + 1).padStart(2, "0")}`);
-    folders.value = { local: names.map((n) => local(n)), remote: [] };
-    sharing.byLabel = new Map(names.map((n) => [n, shared(1)]));
+  it("starts each tab on its first page, pages within it, and hides the pager for a tab of ten or fewer", async () => {
+    ownShared(12);
     withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
     renderPage();
     await screen.findByText("Own 01");
     fireEvent.click(screen.getByRole("button", { name: "2" }));
-    expect(screen.getByText("Own 09")).toBeInTheDocument();
+    expect(screen.getByText("Own 11")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Shared by you (10)" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Shared by you (12)" }));
     expect(screen.getByText("Own 01")).toBeInTheDocument();
-    expect(screen.queryByText("Own 09")).not.toBeInTheDocument();
+    expect(screen.queryByText("Own 11")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "2" }));
-    expect(screen.getByText("Own 10")).toBeInTheDocument();
+    expect(screen.getByText("Own 12")).toBeInTheDocument();
     expect(screen.queryByText("Design")).not.toBeInTheDocument();
 
-    // One page of drives shared with you needs no pager.
     fireEvent.click(screen.getByRole("tab", { name: "Shared with you (1)" }));
     expect(screen.getByText("Design")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+  });
+
+  it("moves back a page, and drops the pager, when drives on the last page go away", async () => {
+    ownShared(10);
+    withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
+    const { rerender } = renderPage();
+    await screen.findByText("Own 01");
+    fireEvent.click(screen.getByRole("button", { name: "2" }));
+    expect(screen.getByText("Design")).toBeInTheDocument();
+
+    // Leaving "Design" empties page 2.
+    withMe.data = { kind: "ready", memberships: [] };
+    rerender(
+      <Provider store={createStore()}>
+        <SharedDrivesView />
+      </Provider>,
+    );
+    expect(await screen.findByText("Own 01")).toBeInTheDocument();
+    expect(screen.getByText("Own 10")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+
+    // A drive coming back starts from page 1, not the stale page 2.
+    withMe.data = { kind: "ready", memberships: [membership("Research", "bb".repeat(8))] };
+    rerender(
+      <Provider store={createStore()}>
+        <SharedDrivesView />
+      </Provider>,
+    );
+    expect(await screen.findByText("Own 01")).toBeInTheDocument();
+    expect(screen.queryByText("Research")).not.toBeInTheDocument();
+  });
+});
+
+describe("a plan without sharing", () => {
+  it("names the plan on Share a drive and goes to the upgrade, never to the picker", async () => {
+    plan.allows = false;
+    withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
+    renderPage({ renderHeader: (actions) => <header data-testid="page-header">{actions}</header> });
+    await screen.findByText("Design");
+    const button = within(screen.getByTestId("page-header")).getByTestId("share-a-drive-upgrade");
+    expect(button).toHaveTextContent("Share a drive");
+    expect(button).toHaveTextContent("Plus");
+    fireEvent.click(button);
+    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(screen.queryByRole("dialog", { name: "Share a drive picker" })).not.toBeInTheDocument();
+  });
+
+  it("still lists and opens the drives shared with the account", async () => {
+    plan.allows = false;
+    withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
+    renderPage();
+    expect(await screen.findByText("Design")).toBeInTheDocument();
+    const open = withMeProps.value!.onOpenDrive as (identity: object) => void;
+    open({ ownerSs58: OWNER, folderHash: "aa".repeat(8), displayLabel: "Design" });
+    expect(push).toHaveBeenCalledWith(expect.stringContaining("openName=Design"));
+  });
+
+  it("offers the upgrade with nothing shared either way, and says joining works on any plan", async () => {
+    plan.allows = false;
+    renderPage();
+    const copy = sharedDrivesEmptyCopy("all", false);
+    expect(await screen.findByText(copy.description)).toBeInTheDocument();
+    const card = screen.getByTestId("shared-drives-empty-all");
+    expect(within(card).queryByRole("button", { name: /Share a drive/ })).not.toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button", { name: /Upgrade plan/ }));
+    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+  });
+
+  it("keeps a downgraded owner's shared drives listed, with Manage access", async () => {
+    plan.allows = false;
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    renderPage();
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Manage access" }).length).toBeGreaterThan(0);
+  });
+
+  it("shows neither version of the button, nor an empty state, while the plan loads", async () => {
+    plan.allows = undefined;
+    renderPage({ renderHeader: (actions) => <header data-testid="page-header">{actions}</header> });
+    await waitFor(() => expect(screen.getByLabelText("Loading shared drives")).toBeInTheDocument());
+    expect(screen.getByTestId("share-a-drive-placeholder")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Share a drive/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(SHARE_A_DRIVE_EMPTY_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+describe("a list that could not load", () => {
+  it("says so with Try again, never that nothing is shared, when the drives shared with you failed", async () => {
+    withMe.data = { kind: "error" };
+    renderPage();
+    const alert = await screen.findByTestId("shared-drives-error");
+    expect(alert).toHaveTextContent(sharedDrivesErrorCopy("all", false).title);
+    expect(screen.queryByText(SHARE_A_DRIVE_EMPTY_TITLE)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("shared-drives-totals")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: /Try again/ }));
+    });
+    expect(withMe.reload).toHaveBeenCalled();
+    expect(sharing.refetch).toHaveBeenCalled();
+    expect(refetchGrants).toHaveBeenCalled();
+    // The drive listing answered, so it is not asked again: reloading it
+    // would blank rows already on screen.
+    expect(fetchFolders).toHaveBeenCalledTimes(1);
+  });
+
+  it("says so when the drive listing failed, and lists the drives once Try again gets an answer", async () => {
+    foldersFail.value = true;
+    renderPage();
+    const alert = await screen.findByTestId("shared-drives-error");
+
+    foldersFail.value = false;
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: /Try again/ }));
+    });
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    expect(screen.queryByTestId("shared-drives-error")).not.toBeInTheDocument();
+  });
+
+  it("says so when no own drive's sharing could be read", async () => {
+    folders.value = { local: [local("Team"), local("Archive")], remote: [] };
+    renderPage();
+    expect(await screen.findByTestId("shared-drives-error")).toBeInTheDocument();
+  });
+
+  it("says so when the sharing query failed", async () => {
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.isError = true;
+    renderPage();
+    expect(await screen.findByTestId("shared-drives-error")).toBeInTheDocument();
+  });
+
+  it("shows the rows that did load, names the half that is missing, and leaves its count off", async () => {
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    withMe.data = { kind: "error" };
+    renderPage();
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    const line = screen.getByTestId("shared-drives-partial-error");
+    expect(line).toHaveTextContent(/shared with you couldn't load/);
+    // No "(0)": that would claim nothing is shared with you.
+    expect(screen.getByRole("tab", { name: "Shared with you" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shared with you" }));
+    expect(screen.getByTestId("shared-drives-error")).toHaveTextContent(sharedDrivesErrorCopy("with-you", false).title);
+    // A tab that could not load has no totals: "0 B" there would be wrong.
+    expect(screen.queryByText("Total size:")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId("shared-drives-error")).getByRole("button", { name: /Try again/ }));
+    });
+    expect(withMe.reload).toHaveBeenCalled();
+  });
+
+  it("says it is offline, and loads again by itself once back online", async () => {
+    const onLine = vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    withMe.data = { kind: "error" };
+    renderPage();
+    expect(await screen.findByText(sharedDrivesErrorCopy("all", true).description)).toBeInTheDocument();
+    expect(withMe.reload).not.toHaveBeenCalled();
+
+    onLine.mockReturnValue(true);
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await waitFor(() => expect(withMe.reload).toHaveBeenCalled());
+    onLine.mockRestore();
   });
 });
 
 describe("Share a drive", () => {
   it("sits in the page header and opens the picker of the account's own drives", async () => {
     folders.value = { local: [local("Mine"), local("Theirs", { ownerSs58: OWNER })], remote: [] };
+    sharing.byLabel = new Map([["Mine", shared(0)]]);
     renderPage({ renderHeader: (actions) => <header data-testid="page-header">{actions}</header> });
     await screen.findByText(SHARE_A_DRIVE_EMPTY_TITLE);
     fireEvent.click(within(screen.getByTestId("page-header")).getByRole("button", { name: "Share a drive" }));

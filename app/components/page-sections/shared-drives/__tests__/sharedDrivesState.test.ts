@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import type { FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 import { parseFolderGrantLabel, parseSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { resolveFolderListPage } from "@/components/page-sections/drive/folder-list/folderListPaging";
 import {
+  SHARED_DRIVES_PAGE_SIZE,
   UNKNOWN_FIGURE,
   effectiveSharedDrivesFilter,
   folderGrantRoute,
@@ -11,11 +13,15 @@ import {
   ownDriveRoute,
   ownDriveRows,
   ownDriveStatRow,
-  sharedByMeLoading,
+  resolveSharedDrivesContent,
   sharedByMeRows,
+  sharedByYouStatus,
   sharedDriveListTotals,
   sharedDrivesPageSlices,
+  sharedDrivesTabCount,
+  sharedWithYouStatus,
   showSharedDrivesTabs,
+  type SharedKind,
 } from "../sharedDrivesState";
 
 const OWNER = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
@@ -66,11 +72,52 @@ describe("ownDriveRows", () => {
   });
 });
 
-describe("sharedByMeLoading", () => {
-  it("waits for the drives and for their sharing", () => {
-    expect(sharedByMeLoading({ foldersLoading: true, sharingPending: false })).toBe(true);
-    expect(sharedByMeLoading({ foldersLoading: false, sharingPending: true })).toBe(true);
-    expect(sharedByMeLoading({ foldersLoading: false, sharingPending: false })).toBe(false);
+describe("sharedByYouStatus", () => {
+  const base = {
+    foldersLoading: false,
+    foldersFailed: false,
+    ownDriveCount: 2,
+    sharingPending: false,
+    sharingFailed: false,
+    sharingAnswered: 2,
+  };
+
+  it("waits for the drives and then for their sharing", () => {
+    expect(sharedByYouStatus({ ...base, foldersLoading: true })).toBe("loading");
+    expect(sharedByYouStatus({ ...base, sharingPending: true })).toBe("loading");
+    expect(sharedByYouStatus(base)).toBe("ready");
+  });
+
+  it("is an error, never none, when the drive listing failed", () => {
+    expect(sharedByYouStatus({ ...base, foldersFailed: true })).toBe("error");
+  });
+
+  it("is an error when the sharing query failed", () => {
+    expect(sharedByYouStatus({ ...base, sharingFailed: true })).toBe("error");
+  });
+
+  it("is an error when not one own drive got an answer (the IPC drops a drive whose listings both failed)", () => {
+    expect(sharedByYouStatus({ ...base, sharingAnswered: 0 })).toBe("error");
+    // Some answered: the ones that did are shown.
+    expect(sharedByYouStatus({ ...base, sharingAnswered: 1 })).toBe("ready");
+  });
+
+  it("is a real none with no own drives, asking nothing about sharing", () => {
+    expect(sharedByYouStatus({ ...base, ownDriveCount: 0, sharingAnswered: 0 })).toBe("ready");
+  });
+});
+
+describe("sharedWithYouStatus", () => {
+  it("waits for the memberships and the folder grants", () => {
+    expect(sharedWithYouStatus({ memberships: "idle", grantsSettled: true })).toBe("loading");
+    expect(sharedWithYouStatus({ memberships: "loading", grantsSettled: true })).toBe("loading");
+    expect(sharedWithYouStatus({ memberships: "ready", grantsSettled: false })).toBe("loading");
+    expect(sharedWithYouStatus({ memberships: "ready", grantsSettled: true })).toBe("ready");
+  });
+
+  it("is an error for a failed fetch, and a quiet none for a server with the feature off", () => {
+    expect(sharedWithYouStatus({ memberships: "error", grantsSettled: true })).toBe("error");
+    expect(sharedWithYouStatus({ memberships: "unavailable", grantsSettled: true })).toBe("ready");
   });
 });
 
@@ -107,18 +154,106 @@ describe("routes into a drive", () => {
   });
 });
 
-describe("the tabs' filter", () => {
-  it("shows the tabs only when both kinds exist", () => {
-    expect(showSharedDrivesTabs({ withYou: 2, byYou: 1 })).toBe(true);
-    expect(showSharedDrivesTabs({ withYou: 0, byYou: 1 })).toBe(false);
-    expect(showSharedDrivesTabs({ withYou: 2, byYou: 0 })).toBe(false);
+const ready = (count: number): SharedKind => ({ status: "ready", count });
+const loading = (count = 0): SharedKind => ({ status: "loading", count });
+const failed = (count = 0): SharedKind => ({ status: "error", count });
+
+describe("the tabs", () => {
+  it("show once both kinds have answered and anything is listed, even with one kind", () => {
+    expect(showSharedDrivesTabs({ withYou: ready(2), byYou: ready(1) })).toBe(true);
+    expect(showSharedDrivesTabs({ withYou: ready(0), byYou: ready(1) })).toBe(true);
+    expect(showSharedDrivesTabs({ withYou: ready(2), byYou: ready(0) })).toBe(true);
   });
 
-  it("falls back to all when the chosen kind has emptied, leaving no tab to leave it by", () => {
-    expect(effectiveSharedDrivesFilter("by-you", { withYou: 2, byYou: 1 })).toBe("by-you");
-    expect(effectiveSharedDrivesFilter("by-you", { withYou: 2, byYou: 0 })).toBe("all");
-    expect(effectiveSharedDrivesFilter("with-you", { withYou: 0, byYou: 3 })).toBe("all");
-    expect(effectiveSharedDrivesFilter("all", { withYou: 2, byYou: 1 })).toBe("all");
+  it("do not show with nothing either way, or while a kind is still loading", () => {
+    expect(showSharedDrivesTabs({ withYou: ready(0), byYou: ready(0) })).toBe(false);
+    expect(showSharedDrivesTabs({ withYou: loading(), byYou: ready(3) })).toBe(false);
+    expect(showSharedDrivesTabs({ withYou: ready(3), byYou: loading() })).toBe(false);
+  });
+
+  it("show beside a failed kind when the other has rows, so the failed tab can say so", () => {
+    expect(showSharedDrivesTabs({ withYou: failed(), byYou: ready(2) })).toBe(true);
+    expect(showSharedDrivesTabs({ withYou: failed(), byYou: ready(0) })).toBe(false);
+  });
+
+  it("apply the chosen filter only while drawn", () => {
+    expect(effectiveSharedDrivesFilter("by-you", true)).toBe("by-you");
+    expect(effectiveSharedDrivesFilter("by-you", false)).toBe("all");
+    expect(effectiveSharedDrivesFilter("with-you", false)).toBe("all");
+  });
+
+  it("count a kind that failed as unknown, never zero, and All with it", () => {
+    expect(sharedDrivesTabCount([ready(2), ready(3)])).toBe(5);
+    expect(sharedDrivesTabCount([ready(0)])).toBe(0);
+    expect(sharedDrivesTabCount([failed()])).toBeUndefined();
+    expect(sharedDrivesTabCount([ready(2), failed()])).toBeUndefined();
+  });
+});
+
+describe("resolveSharedDrivesContent", () => {
+  const resolve = (filter: "all" | "with-you" | "by-you", byYou: SharedKind, withYou: SharedKind, planKnown = true) =>
+    resolveSharedDrivesContent({ filter, byYou, withYou, planKnown });
+
+  it("holds the skeleton until both kinds answer, never an early empty", () => {
+    expect(resolve("all", loading(), ready(0))).toEqual({ kind: "loading" });
+    expect(resolve("all", ready(0), loading())).toEqual({ kind: "loading" });
+  });
+
+  it("shows rows that arrived, with a placeholder for a kind still loading", () => {
+    expect(resolve("all", ready(2), loading())).toEqual({ kind: "rows", pending: true, failed: [] });
+    expect(resolve("all", ready(2), ready(1))).toEqual({ kind: "rows", pending: false, failed: [] });
+  });
+
+  it("is empty only when everything in scope answered with nothing", () => {
+    expect(resolve("all", ready(0), ready(0))).toEqual({ kind: "empty", scope: "all" });
+  });
+
+  it("is a tab's own empty state when that tab is empty and the other is not", () => {
+    expect(resolve("with-you", ready(4), ready(0))).toEqual({ kind: "empty", scope: "with-you" });
+    expect(resolve("by-you", ready(0), ready(4))).toEqual({ kind: "empty", scope: "by-you" });
+  });
+
+  it("ignores a kind the tab leaves out, loading or failed", () => {
+    expect(resolve("by-you", ready(3), loading())).toEqual({ kind: "rows", pending: false, failed: [] });
+    expect(resolve("by-you", ready(0), failed())).toEqual({ kind: "empty", scope: "by-you" });
+  });
+
+  it("is an error, not empty, when a kind in scope failed and nothing else is listed", () => {
+    expect(resolve("all", failed(), failed())).toEqual({ kind: "error", scope: "all" });
+    expect(resolve("all", ready(0), failed())).toEqual({ kind: "error", scope: "all" });
+    expect(resolve("with-you", ready(5), failed())).toEqual({ kind: "error", scope: "with-you" });
+  });
+
+  it("shows the rows it has and names the kind that failed", () => {
+    expect(resolve("all", ready(3), failed())).toEqual({ kind: "rows", pending: false, failed: ["with-you"] });
+    // Folder grants listed while the drive memberships failed.
+    expect(resolve("with-you", ready(0), failed(1))).toEqual({ kind: "rows", pending: false, failed: ["with-you"] });
+  });
+
+  it("waits for the plan before an empty state, which words its button by plan", () => {
+    expect(resolve("all", ready(0), ready(0), false)).toEqual({ kind: "loading" });
+    // Rows and errors do not depend on the plan.
+    expect(resolve("all", ready(1), ready(0), false)).toEqual({ kind: "rows", pending: false, failed: [] });
+    expect(resolve("all", failed(), ready(0), false)).toEqual({ kind: "error", scope: "all" });
+  });
+});
+
+describe("paging", () => {
+  it("is ten to a page, and draws no pager for ten or fewer", () => {
+    expect(SHARED_DRIVES_PAGE_SIZE).toBe(10);
+    expect(resolveFolderListPage({ total: 10, page: 1, pageSize: SHARED_DRIVES_PAGE_SIZE }).showPager).toBe(false);
+    expect(resolveFolderListPage({ total: 11, page: 1, pageSize: SHARED_DRIVES_PAGE_SIZE })).toMatchObject({
+      showPager: true,
+      totalPages: 2,
+    });
+  });
+
+  it("clamps a page left past the end when drives go away", () => {
+    expect(resolveFolderListPage({ total: 10, page: 2, pageSize: SHARED_DRIVES_PAGE_SIZE })).toMatchObject({
+      page: 1,
+      start: 0,
+      end: 10,
+    });
   });
 });
 
