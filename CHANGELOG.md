@@ -71,6 +71,9 @@ carries security updates.
   share one of your own. If the list can't load, for example while you're
   offline, it says so with Try again instead of saying nothing is shared, and
   loads again by itself once you're back online.
+- **The Drive page shows ten drives a page.** Now that drives shared with you
+  are on Shared Drives, your own drives list 10 a page instead of 8, with no
+  page numbers when 10 or fewer fit.
 
 ### Changed
 

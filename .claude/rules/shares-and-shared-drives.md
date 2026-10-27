@@ -265,8 +265,10 @@ shows (`sharedDriveListTotals`: a drive nobody could size is left out, never cou
 all unknown is a dash; own drives from the drive listing, joined drives from
 `useSharedDriveStats`, folders from `useFolderGrantStatsList`, which shares the rows' cache
 keys); they sit on the right of the tabs row from `@2xl` and on their own line above it
-below that, and show only while the tab has rows (an empty or failed tab has none). One pager (`SHARED_DRIVES_PAGE_SIZE`, 10, the console's; the Drive page keeps
-`FOLDER_LIST_PAGE_SIZE`) windows the sequence own-then-joined (`sharedDrivesPageSlices`) on
+below that, and show only while the tab has rows (an empty or failed tab has none). One pager (`SHARED_DRIVES_PAGE_SIZE`, which is `DRIVE_LIST_PAGE_SIZE`, 10, the console's;
+the Drive page's `FolderList` pages by the same constant, while Settings keeps the default
+`FOLDER_LIST_PAGE_SIZE`, 8, because "Shared with me" still sits under its list; `FolderList`
+keeps its page state on the clamped page, except while loading) windows the sequence own-then-joined (`sharedDrivesPageSlices`) on
 every tab, is drawn only when the tab holds more than a page, resets to page 1 on a tab
 change, and the page state follows the clamped page when drives go away (leaving the last
 drive on the last page). The list area is ONE pure decision, `resolveSharedDrivesContent`
