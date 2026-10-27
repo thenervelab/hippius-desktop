@@ -34,6 +34,13 @@ describe("folderUrlForPath", () => {
     expect(folderUrlForPath(rows, "", noParams)).toBeNull();
     expect(folderUrlForPath(rows, "Missing/Deeper", noParams)).toBeNull();
   });
+  // A drive hosted on another page (Captures, Shared Drives) keeps its
+  // folders on that page, or the trail and Back lead to the Drive page.
+  it("stays on the page hosting the drive", () => {
+    expect(folderUrlForPath(rows, "Captures", noParams)?.startsWith("/files?")).toBe(true);
+    expect(folderUrlForPath(rows, "Captures", noParams, "/shared-drives")?.startsWith("/shared-drives?")).toBe(true);
+    expect(folderUrlForPath(rows, "Captures/2026", noParams, "/shared-drives")?.startsWith("/shared-drives?")).toBe(true);
+  });
 });
 
 describe("folder names as the disk spells them", () => {

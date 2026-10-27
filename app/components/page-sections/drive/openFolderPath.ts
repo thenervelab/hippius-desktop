@@ -17,6 +17,7 @@ export function folderUrlForPath(
   rows: readonly FormattedUserFile[],
   path: string,
   getParam: ParamGetter,
+  basePath = "/files",
 ): string | null {
   // Names are compared as they are, spaces included ("Notes " is its own
   // folder), and in one Unicode form: macOS hands out decomposed (NFD)
@@ -26,7 +27,7 @@ export function folderUrlForPath(
   const first = nfc(parts[0]);
   const row = rows.find((f) => f.isFolder && (nfc(f.actualFileName) === first || nfc(f.name) === first));
   if (!row) return null;
-  const { url } = generateFolderUrl(row, getParam);
+  const { url } = generateFolderUrl(row, getParam, undefined, basePath);
   if (parts.length === 1) return url;
 
   const params = new URLSearchParams(url.split("?")[1] ?? "");
@@ -35,7 +36,7 @@ export function folderUrlForPath(
   params.set("folderActualName", last);
   params.set("mainFolderActualName", parts[0]);
   params.set("subFolderPath", parts.join("/"));
-  return `/files?${params.toString()}`;
+  return `${basePath}?${params.toString()}`;
 }
 
 /**
@@ -57,8 +58,9 @@ export function resolvePendingFolder(
   pending: PendingFolder,
   rows: readonly FormattedUserFile[],
   getParam: ParamGetter,
+  basePath = "/files",
 ): { url: string | null; pending: PendingFolder | null } {
-  const url = folderUrlForPath(rows, pending.path, getParam);
+  const url = folderUrlForPath(rows, pending.path, getParam, basePath);
   if (url) return { url, pending: null };
   if (pending.missedOn === null) return { url: null, pending: { ...pending, missedOn: rows } };
   if (pending.missedOn === rows) return { url: null, pending };
