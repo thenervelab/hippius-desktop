@@ -2,13 +2,13 @@
 // shared with you, narrowed by underline tabs when there are both, with the
 // total size and file count of what the list shows; it never claims
 // "nothing shared" before both kinds are known; it pages the list as one;
-// and "Share a drive" in the page header takes the one-dialog-at-a-time path
-// from the picker through a new drive to its Share dialog. The picker, the
-// folder dialog and "Shared with me"'s rows are stubbed: each has its own
-// tests, and here only the page's wiring of them is the question.
+// and "Share a drive" in the page header opens the picker, which makes and
+// shares a new drive itself with no folder dialog. The picker and "Shared
+// with me"'s rows are stubbed: each has its own tests, and here only the
+// page's wiring of them is the question.
 
 import React from "react";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Provider, createStore } from "jotai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
@@ -30,11 +30,6 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/app/lib/wallet-auth-context", () => ({
   useWalletAuth: () => ({ polkadotAddress: "5Grwva" }),
-}));
-
-const requireUploadRoom = vi.hoisted(() => vi.fn(async () => true));
-vi.mock("@/lib/hooks/useCreditCheck", () => ({
-  useCreditCheck: () => ({ requireUploadRoom }),
 }));
 
 const folders = vi.hoisted(() => ({
@@ -91,41 +86,22 @@ vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
   ),
 }));
 
-// The picker's own Continue/close rules are tested with it. Here it is only
-// the way to a new drive, which the real one reaches after closing itself.
+// The picker's own Continue, New drive and close rules are tested with it.
+// Here it only reports what the page handed it, and closes.
+const pickerProps = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }));
 vi.mock("@/components/page-sections/drive/share-drive-picker/ShareDriveFlow", () => ({
   __esModule: true,
-  default: ({ drives, onClose, onAddDrive }: { drives: string[]; onClose: () => void; onAddDrive: () => void }) => (
-    <div role="dialog" aria-label="Share a drive picker">
-      <span data-testid="picker-drives">{drives.join(",")}</span>
-      <button
-        type="button"
-        onClick={() => {
-          onClose();
-          onAddDrive();
-        }}
-      >
-        Picker new drive
-      </button>
-    </div>
-  ),
-}));
-
-vi.mock("@/components/page-sections/settings/AddLocalFolderDialog", () => ({
-  AddLocalFolderDialog: ({ open, onClose, onSuccess }: { open: boolean; onClose: () => void; onSuccess: (label?: string) => void }) =>
-    open ? (
-      <div role="dialog" aria-label="Add folder dialog">
-        <button
-          type="button"
-          onClick={() => {
-            onSuccess("Launch");
-            onClose();
-          }}
-        >
-          Folder added
+  default: (props: { drives: string[]; onClose: () => void }) => {
+    pickerProps.value = props as unknown as Record<string, unknown>;
+    return (
+      <div role="dialog" aria-label="Share a drive picker">
+        <span data-testid="picker-drives">{props.drives.join(",")}</span>
+        <button type="button" onClick={props.onClose}>
+          Picker close
         </button>
       </div>
-    ) : null,
+    );
+  },
 }));
 
 // "Shared with me"'s rows: one line per drive, then folder, in the slice
@@ -210,7 +186,7 @@ const totals = () => screen.getByTestId("shared-drives-totals");
 
 beforeEach(() => {
   push.mockReset();
-  requireUploadRoom.mockClear();
+  pickerProps.value = null;
   folders.value = { local: [], remote: [] };
   sharing.byLabel = new Map();
   sharing.isPending = false;
@@ -480,33 +456,18 @@ describe("Share a drive", () => {
     expect(within(screen.getByTestId("page-header")).getByRole("button", { name: "Share a drive" })).toBeInTheDocument();
   });
 
-  it("goes from a new drive to its Share dialog, one dialog at a time", async () => {
+  it("hands the picker no way to sync a folder: a new drive is made inside it", async () => {
     const { store } = renderPage();
     await screen.findByText(SHARE_A_DRIVE_EMPTY_TITLE);
 
     fireEvent.click(screen.getAllByRole("button", { name: "Share a drive" })[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "Picker new drive" }));
-    // The storage gate first, as the Drive page's Sync a Folder.
-    await waitFor(() => expect(requireUploadRoom).toHaveBeenCalledWith("folder-sync", false));
+    expect(pickerProps.value).not.toBeNull();
+    expect(Object.keys(pickerProps.value!).sort()).toEqual(["drives", "loading", "onClose", "sharingByLabel"]);
+    fireEvent.click(screen.getByRole("button", { name: "Picker close" }));
     expect(screen.queryByRole("dialog", { name: "Share a drive picker" })).not.toBeInTheDocument();
-    expect(await screen.findByRole("dialog", { name: "Add folder dialog" })).toBeInTheDocument();
+    // No folder dialog anywhere on the page, and nothing opened behind it.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(store.get(shareDialogAtom)).toBeNull();
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Folder added" }));
-    });
-    expect(screen.queryByRole("dialog", { name: "Add folder dialog" })).not.toBeInTheDocument();
-    expect(store.get(shareDialogAtom)).toEqual({ label: "Launch", folderName: "Launch" });
-  });
-
-  it("opens nothing when the storage gate refuses", async () => {
-    requireUploadRoom.mockResolvedValueOnce(false);
-    renderPage();
-    await screen.findByText(SHARE_A_DRIVE_EMPTY_TITLE);
-    fireEvent.click(screen.getAllByRole("button", { name: "Share a drive" })[0]!);
-    fireEvent.click(screen.getByRole("button", { name: "Picker new drive" }));
-    await waitFor(() => expect(requireUploadRoom).toHaveBeenCalled());
-    expect(screen.queryByRole("dialog", { name: "Add folder dialog" })).not.toBeInTheDocument();
   });
 });
 

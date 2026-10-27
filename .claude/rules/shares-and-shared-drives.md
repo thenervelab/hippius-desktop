@@ -13,6 +13,8 @@ paths:
   - "src-tauri/src/sync/fileops/remote.rs"
   - "src-tauri/src/sync/fileops/folders.rs"
   - "src-tauri/src/sync/fileops/recent_uploads.rs"
+  # Share a drive's New drive creates through it.
+  - "src-tauri/src/sync/fileops/cloud_drive.rs"
   - "src-tauri/src/sync/migrate/**"
   - "src-tauri/src/sync/projection/tauri_bridge.rs"
   - "app/lib/tauri/sharedDrives.ts"
@@ -275,15 +277,31 @@ primary button on the right of the page header (`renderHeader` hands it to `Page
 only (`folderRows` without `ownerSs58`), "Shared with N" / "Shared" / "Not shared" from
 `useOwnedDriveSharing` (unknown says nothing), search above `PICKER_SEARCH_THRESHOLD` (6), and a
 `+ New drive` `primaryOutline` button on the search row (full width under it below `sm`),
-offered only when the plan shares and drives exist; with none, the footer's Sync a Folder is
-the way. The list's scrollbar has its own lane (`.scroll-gutter` in `globals.css`: a styled,
+offered only when the plan shares; with no drives it is the footer's main action instead, and
+on a plan that does not share the empty state shows `NotEntitledNotice` rather than any way to
+make a drive. The list's scrollbar has its own lane (`.scroll-gutter` in `globals.css`: a styled,
 never-overlay WebKit scrollbar plus `scrollbar-gutter: stable`, pulled into the dialog's side
 padding by `-mr-3.5 pr-1.5`), because a macOS overlay scrollbar drew over the rows. The plan
 gate is `sharingGate({ owner: true })`, so Free/Starter get `NotEntitledNotice` (its Upgrade
 plan goes to `BILLING_ROUTE`) and no Continue. Continue CLOSES the picker, then sets
 `shareDialogAtom` exactly as the row's "Share drive..." does, so there is never a dialog over
-a dialog. New drive (or Sync a Folder) closes the picker and makes a drive through
-`AddLocalFolderDialog`, and its Share dialog opens only once the folder dialog has closed.
+a dialog. **New drive never asks for a local folder**: it is a name step inside the same
+dialog (`useNewDriveStep`; Back or Escape returns to the list, nothing closes while it
+creates), and Create drive calls `create_cloud_drive` (`sync/fileops/cloud_drive.rs`), which
+registers the drive the way the console's New drive does: `register_folder` with
+`folder_hash(name)`, the name verbatim as the label, and this computer's device name, so the
+console, mobile and desktop all see one drive and its key derives from the master and the
+label on first use. Then the picker closes, every drive list is refreshed
+(`triggerSyncPathRefreshAtom`) and the Share dialog opens for it like Continue. It lists as
+"Not synced here"; "Sync to this computer" in its menu binds it to a folder later. Registering
+is an upsert keyed on the hash, so Rust refuses a name any drive already answers to (local
+label or folder name, server label or hash, NFC and case-insensitive) against a FRESH server
+listing, and an unreadable listing stops the create rather than guessing. Rust also owns the
+name rules (the console's, plus a name `sanitize_label` cannot empty, so the drive can be
+synced later) and every refusal's sentence (offline, read-only or suspended account, 402),
+shown under the field. The command itself has no plan gate (making a drive is open to every
+plan, as on the console); the picker only offers it on a plan that shares, and the invite
+mint stays the server's call. Pinned by the `cloud_drive` unit and stand-in-server tests.
 Pinned by `ShareDrivePicker.test.tsx`, `SharedDrivesView.test.tsx`, `sharedDrivesState.test.ts`,
 `underlineTabs.test.tsx`, `scrollGutter.test.ts`, `ShareADriveEmptyState.test.tsx`,
 `SharedWithMeSection.test.tsx` and `sharedWithMeState.test.ts`.
