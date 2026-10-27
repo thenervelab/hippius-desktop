@@ -11,18 +11,17 @@
 // drive looks and behaves the same here as everywhere else.
 //
 // Sharing starts from the page header's "Share a drive", which opens the
-// picker of this account's own drives; its "New drive" makes a new drive
-// and goes straight on to sharing it. On a plan without sharing (Free,
-// Starter) that button names the plan that includes it and goes to
-// Settings > Billing instead, while drives shared WITH the account list and
-// open as usual: joining is open on every plan.
+// picker of this account's own drives; its "New drive" makes a new drive on
+// Hippius (no local folder) and goes straight on to sharing it. On a plan
+// without sharing (Free, Starter) that button names the plan that includes
+// it and goes to Settings > Billing instead, while drives shared WITH the
+// account list and open as usual: joining is open on every plan.
 //
 // The list never claims more than it knows: skeleton rows until both kinds
 // answer, an error with Try again when one could not be loaded (never "none
 // shared"), and an empty state per tab that says what goes there.
 //
-// One dialog at a time throughout: the picker closes before the folder
-// dialog opens, and the folder dialog has closed before the Share dialog
+// One dialog at a time throughout: the picker closes before the Share dialog
 // opens. The Share dialog and Manage access
 // are mounted for the whole app (`ResponsiveContent`), so this page only
 // sets their atoms.
@@ -46,9 +45,7 @@ import ShareDriveFlow from "@/components/page-sections/drive/share-drive-picker/
 import { SharedWithMeSection } from "@/components/page-sections/settings/multi-folder-sync";
 import FolderRowSkeleton from "@/components/page-sections/settings/multi-folder-sync/FolderRowSkeleton";
 import { useDriveMemberships } from "@/components/page-sections/settings/multi-folder-sync/useDriveMemberships";
-import { AddLocalFolderDialog } from "@/components/page-sections/settings/AddLocalFolderDialog";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
-import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { useOwnedDriveSharingState } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import useIsOnline from "@/lib/hooks/useIsOnline";
@@ -104,7 +101,6 @@ export interface SharedDrivesViewProps {
 export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps = {}) {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
-  const { requireUploadRoom } = useCreditCheck();
   const syncPathRefreshTrigger = useAtomValue(triggerSyncPathRefreshAtom);
   const openShareDialog = useSetAtom(shareDialogAtom);
   const openManageAccess = useSetAtom(shareDriveModalAtom);
@@ -118,10 +114,6 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
   // the same as having shared nothing.
   const [foldersFailed, setFoldersFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [addingDrive, setAddingDrive] = useState(false);
-  // A drive made from "Share a drive", waiting for the folder dialog to
-  // close before its Share dialog opens.
-  const [shareWhenAdded, setShareWhenAdded] = useState<string | null>(null);
   const [filter, setFilter] = useState<SharedDrivesFilter>("all");
   const [page, setPage] = useState(1);
 
@@ -293,18 +285,6 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
     }
   }, [online, anyFailed, retry]);
 
-  useEffect(() => {
-    if (addingDrive || !shareWhenAdded) return;
-    openShareDialog({ label: shareWhenAdded, folderName: shareWhenAdded });
-    setShareWhenAdded(null);
-  }, [addingDrive, shareWhenAdded, openShareDialog]);
-
-  // The Drive page's Sync a Folder: the storage gate first, then the dialog.
-  const startNewDrive = async () => {
-    if (!(await requireUploadRoom("folder-sync", false))) return;
-    setAddingDrive(true);
-  };
-
   const shareDrive = (row: FolderRow) =>
     openShareDialog({ label: row.folderName, folderName: row.folderName });
   const manageAccess = (row: FolderRow) =>
@@ -467,17 +447,8 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
           sharingByLabel={sharingByLabel}
           loading={foldersLoading}
           onClose={() => setPickerOpen(false)}
-          onAddDrive={() => void startNewDrive()}
         />
       )}
-      <AddLocalFolderDialog
-        open={addingDrive}
-        onClose={() => setAddingDrive(false)}
-        onSuccess={(newLabel) => {
-          void loadFolders();
-          if (newLabel) setShareWhenAdded(newLabel);
-        }}
-      />
     </>
   );
 }
