@@ -1,6 +1,6 @@
 "use client";
 
-// "Shared by Me" with nothing in it yet: what a shared drive is for, the way
+// The Shared Drives page with nothing shared either way yet: what a shared drive is for, the way
 // to share one, and the docs. The app's framed empty-state card, the same one
 // an empty drive list uses, with the teamwork picture above it.
 

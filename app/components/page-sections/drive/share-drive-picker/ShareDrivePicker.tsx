@@ -7,13 +7,17 @@
 // there is never a dialog over a dialog.
 //
 // States besides loading:
-// - drives, on a plan that shares: the list, and Continue;
+// - drives, on a plan that shares: the list, and Continue, with New drive
+//   above the list on the row the search field takes past six drives (so it
+//   never scrolls out of view), dropping under the search at full width in
+//   a narrow window;
 // - drives, on Free or Starter (Rust's `canShareDrives`): the upgrade card
 //   above the list, whose Upgrade plan takes the place of Continue;
 // - no drives of your own: a line saying so, and Sync a Folder, the app's
 //   way of making a drive.
 
 import React, { useMemo, useRef, useState } from "react";
+import { Plus } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Button, Icons, SearchInput, Skeleton } from "@/components/ui";
@@ -33,6 +37,7 @@ export const SHARE_DRIVE_PICKER_TITLE = "Share a drive";
 export const SHARE_DRIVE_PICKER_SUBTITLE = "Choose which of your drives to share";
 export const NO_DRIVE_TITLE = "You don't have a drive yet";
 export const NO_DRIVE_BODY = "Sync a folder to make your first drive, then come back to share it.";
+export const NEW_DRIVE_LABEL = "New drive";
 
 const FOOTER_BUTTON = "h-[38px] w-full rounded-[8px] px-5 text-sm font-medium sm:w-auto sm:min-w-[96px]";
 
@@ -69,6 +74,11 @@ export default function ShareDrivePicker({
   const settling = loading || gate === "loading";
   const upgrade = gate === "upgrade";
   const empty = !settling && drives.length === 0;
+  const searchable = drives.length > PICKER_SEARCH_THRESHOLD;
+  // A drive made here goes straight on to its Share dialog, so it is offered
+  // only on a plan that shares. With no drives at all it is the footer's
+  // main action instead.
+  const canCreate = !upgrade && !settling && !empty;
   const shown = useMemo(() => filterDrives(drives, query), [drives, query]);
   const selected = selectedDrive(shown, picked);
 
@@ -115,8 +125,35 @@ export default function ShareDrivePicker({
         ) : (
           <>
             {upgrade ? <NotEntitledNotice onUpgrade={onUpgrade} /> : null}
-            {drives.length > PICKER_SEARCH_THRESHOLD ? (
-              <SearchInput value={query} onChange={setQuery} placeholder="Search your drives" />
+            {searchable || canCreate ? (
+              // Find one or make one, on one row above the list: the search
+              // first, then New drive, then the drives, in tab order too.
+              <div data-testid="picker-toolbar" className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center">
+                {searchable ? (
+                  <SearchInput
+                    value={query}
+                    onChange={setQuery}
+                    placeholder="Search your drives"
+                    className="min-w-0 sm:flex-1"
+                  />
+                ) : null}
+                {canCreate ? (
+                  <Button
+                    type="button"
+                    variant="primaryOutline"
+                    size="auto"
+                    // The search field's height, so the row reads as one.
+                    className={cn(
+                      "h-8 w-full shrink-0 gap-1.5 px-3.5 text-sm font-medium sm:w-auto",
+                      !searchable && "sm:ml-auto",
+                    )}
+                    onClick={onAddDrive}
+                  >
+                    <Plus aria-hidden className="size-4" />
+                    {NEW_DRIVE_LABEL}
+                  </Button>
+                ) : null}
+              </div>
             ) : null}
             <div
               ref={listRef}
@@ -124,7 +161,12 @@ export default function ShareDrivePicker({
               aria-label="Your drives"
               aria-disabled={upgrade || undefined}
               onKeyDown={onListKeyDown}
-              className="flex max-h-[min(320px,45vh)] min-w-0 flex-col gap-1.5 overflow-y-auto"
+              // The scrollbar gets a lane of its own (`scroll-gutter`) that sits
+              // in the dialog's side padding, so the rows line up with the
+              // search field and never run under it, overlay or classic.
+              // 38vh keeps Cancel and Continue on screen in the smallest
+              // window the app allows (650px tall).
+              className="scroll-gutter -ml-0.5 -mr-3.5 flex max-h-[min(320px,38vh)] min-w-0 flex-col gap-1.5 overflow-y-auto py-0.5 pl-0.5 pr-1.5"
             >
               {shown.map((label) => {
                 const meta = driveSharingMeta(sharingByLabel.get(label));

@@ -270,3 +270,26 @@ describe("Manage access on the row", () => {
     expect(onOpenRow).not.toHaveBeenCalled();
   });
 });
+
+// The Shared Drives page frames and pages its one list itself, so it asks
+// for the rows alone.
+describe("bare rows", () => {
+  const rows = Array.from({ length: 10 }, (_, i) =>
+    localRow({ id: `d${i}`, folderName: `Drive ${String(i).padStart(2, "0")}` }),
+  );
+
+  it("draws every row it is given, with no card heading and no pager", () => {
+    render(<FolderList bare label="Your Folders" rows={rows} />);
+    expect(screen.getByText("Drive 00")).toBeInTheDocument();
+    expect(screen.getByText("Drive 09")).toBeInTheDocument();
+    expect(screen.queryByText("Your Folders")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "2" })).not.toBeInTheDocument();
+  });
+
+  it("still pages inside its own card when not bare", () => {
+    render(<FolderList label="Your Folders" rows={rows} />);
+    expect(screen.getByText("Your Folders")).toBeInTheDocument();
+    expect(screen.queryByText("Drive 09")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
+  });
+});
