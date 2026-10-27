@@ -48,15 +48,14 @@ import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQuer
 import { RetentionChart } from "./RetentionChart";
 import {
   COMPARE_PLANS,
-  LOCK_BODY,
-  LOCK_BODY_NOT_COUNTING,
-  LOCK_TITLE,
   PRICING_URL,
   SAMPLE_AVERAGE_WATCH_MS,
   SAMPLE_COMPLETION,
   SAMPLE_RETENTION,
   SAMPLE_UNIQUE_VIEWERS,
   SAMPLE_VIEWERS,
+  SAMPLE_LABEL,
+  SAMPLE_STILL_VIEWERS,
   SAMPLE_VIEWS,
   SUMMARY_REACTIONS,
   UPGRADE_PLAN,
@@ -72,6 +71,7 @@ import {
   formatPercent,
   formatWatched,
   headerLine,
+  lockCopy,
   switchOffLine,
   tabLabel,
   type InsightsTab,
@@ -326,6 +326,7 @@ function InsightsPanelFor({
             offLine={switchOffLine(settings, "insights")}
             onTurnOn={openSettings}
             onUpgrade={onClose}
+            video={VIDEO_NAME.test(fileName)}
             durationMs={durationMs}
             comments={commentsEnabled ? commentList : []}
           />
@@ -681,6 +682,7 @@ function ViewersTab({
   offLine,
   onTurnOn,
   onUpgrade,
+  video,
   durationMs,
   comments,
 }: {
@@ -690,6 +692,8 @@ function ViewersTab({
   offLine: string | null;
   onTurnOn: (from: HTMLElement) => void;
   onUpgrade: () => void;
+  /** A recording, so it has watch time; a picture or other file has none. */
+  video: boolean;
   durationMs: number | null;
   comments: ShareComment[];
 }) {
@@ -699,21 +703,25 @@ function ViewersTab({
     // Everything here is drawn from SAMPLE data, blurred, with no real value
     // anywhere in it: Rust sends none for a locked metric. A free link that
     // is not counting views has no real numbers at all, so its counts are
-    // samples under the lock too.
+    // samples under the lock too. A picture's sample has no watch time.
     return (
-      <Locked notCounting={notCounting} onUpgrade={onUpgrade}>
-        <div className="flex flex-col gap-4 p-3.5">
+      <Locked {...lockCopy({ video, notCounting })} onUpgrade={onUpgrade}>
+        <div className="flex flex-col gap-4 p-3.5 pt-10">
           {notCounting && (
             <Hero views={SAMPLE_VIEWS} aside={<span>{countLabel(SAMPLE_UNIQUE_VIEWERS, "person viewed", "people viewed")}</span>} />
           )}
-          <KpiStrip
-            items={[
-              { label: "Completion", value: formatPercent(SAMPLE_COMPLETION) },
-              { label: "Average watch", value: formatWatched(SAMPLE_AVERAGE_WATCH_MS) },
-            ]}
-          />
-          <RetentionChart values={SAMPLE_RETENTION} durationMs={252_000} />
-          <ViewerRows viewers={SAMPLE_VIEWERS.slice(0, 2)} />
+          {video && (
+            <>
+              <KpiStrip
+                items={[
+                  { label: "Completion", value: formatPercent(SAMPLE_COMPLETION) },
+                  { label: "Average watch", value: formatWatched(SAMPLE_AVERAGE_WATCH_MS) },
+                ]}
+              />
+              <RetentionChart values={SAMPLE_RETENTION} durationMs={252_000} />
+            </>
+          )}
+          <ViewerRows viewers={video ? SAMPLE_VIEWERS : SAMPLE_STILL_VIEWERS} />
         </div>
       </Locked>
     );
@@ -798,16 +806,20 @@ function EmptyBlock({
 
 /**
  * The locked part of the panel: what it holds is drawn blurred, hidden from
- * assistive tech and unreachable by keyboard or pointer, under one prompt.
- * Both sit in one grid cell, so the box is as tall as the taller of the two.
+ * assistive tech and unreachable by keyboard or pointer, under one prompt,
+ * with a "Sample data" label in its corner so the made-up numbers are never
+ * read as the link's. Both sit in one grid cell, so the box is as tall as
+ * the taller of the two.
  */
 function Locked({
   children,
-  notCounting,
+  title,
+  body,
   onUpgrade,
 }: {
   children: ReactNode;
-  notCounting: boolean;
+  title: string;
+  body: string;
   onUpgrade: () => void;
 }) {
   const router = useRouter();
@@ -825,6 +837,12 @@ function Locked({
           "bg-gradient-to-b from-white/30 via-white/85 to-white dark:from-[#1c1c1c]/30 dark:via-[#1c1c1c]/85 dark:to-[#1c1c1c]",
         )}
       >
+        <span
+          data-testid="insights-sample-label"
+          className="absolute left-3 top-3 inline-flex h-5 items-center rounded-full border border-grey-80 bg-white px-2 text-[11px] font-medium text-grey-30 dark:border-[#494949] dark:bg-[#262626] dark:text-grey-dark-700"
+        >
+          {SAMPLE_LABEL}
+        </span>
         <div className="flex max-w-[290px] flex-col items-center gap-2 text-center">
           <span
             aria-hidden
@@ -832,10 +850,8 @@ function Locked({
           >
             <BarChart3 className="size-[18px]" />
           </span>
-          <p className={cn("text-[14px] font-semibold", STRONG)}>{LOCK_TITLE}</p>
-          <p className="text-[12.5px] leading-5 text-grey-30 dark:text-grey-dark-700">
-            {notCounting ? LOCK_BODY_NOT_COUNTING : LOCK_BODY}
-          </p>
+          <p className={cn("text-[14px] font-semibold", STRONG)}>{title}</p>
+          <p className="text-[12.5px] leading-5 text-grey-30 dark:text-grey-dark-700">{body}</p>
           <div className="mt-1 flex flex-wrap justify-center gap-2">
             <Button
               variant="primary"
