@@ -35,6 +35,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
@@ -99,6 +100,7 @@ export default function FileContextMenu({
   const [mounted, setMounted] = useState(false);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
+  const driveRoute = useDriveRoute();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   // "Share folder" is live: always behind the folder-roles flag, else once
@@ -164,7 +166,7 @@ export default function FileContextMenu({
     onClose();
   };
 
-  const { url: folderUrl } = generateFolderUrl(file, getParam);
+  const { url: folderUrl } = generateFolderUrl(file, getParam, undefined, driveRoute.basePath);
   const fileManagerName = fileManagerLabel();
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
