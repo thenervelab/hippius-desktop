@@ -56,4 +56,27 @@ describe("resolveBreadcrumbBack", () => {
     back?.go();
     expect(parent).toHaveBeenCalledOnce();
   });
+
+  // From a drive opened on another page (Shared Drives), the root is that
+  // page, and the button says so rather than promising "all folders".
+  it("names the page the drive was opened from at the drive's root", () => {
+    const root = vi.fn();
+    const back = resolveBreadcrumbBack([{ label: "Design team" }], root, { rootLabel: "Shared Drives" });
+    expect(back?.label).toBe("Back to Shared Drives");
+    back?.go();
+    expect(root).toHaveBeenCalledOnce();
+  });
+
+  it("still goes up one folder at a time below that drive's root", () => {
+    const parent = vi.fn();
+    const back = resolveBreadcrumbBack(
+      [{ label: "Design team", onClick: vi.fn() }, { label: "Clients", onClick: parent }, { label: "ACME" }],
+      vi.fn(),
+      { rootLabel: "Shared Drives" },
+    );
+    expect(back?.label).toBe("Back to Clients");
+    back?.go();
+    expect(parent).toHaveBeenCalledOnce();
+  });
 });
+

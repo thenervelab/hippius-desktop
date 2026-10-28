@@ -9,10 +9,9 @@
 //! only a short-lived token for billing API calls. It also retries up to
 //! [`MAX_ATTEMPTS`] times to handle transient network failures.
 
-use alloy_signer::SignerSync;
-use alloy_signer_local::PrivateKeySigner;
 use zeroize::Zeroize;
 
+use crate::auth::evm_signer::EvmSigner;
 use crate::auth::service::{CHALLENGE_PATH, VERIFY_PATH, base_url, sign_challenge_sr25519};
 use crate::auth::tokens::{get_api_token, save_api_token};
 use crate::sync::mnemonic::get_mnemonic_for_account;
@@ -61,7 +60,7 @@ async fn attempt(
     challenge_url: &str,
     verify_url: &str,
     sr25519_pair: &subxt_signer::sr25519::Keypair,
-    eth_signer: &PrivateKeySigner,
+    eth_signer: &EvmSigner,
     eth_address: &str,
     substrate_address: &str,
 ) -> Result<BillingAuthResult, crate::error::AppError> {
@@ -89,10 +88,9 @@ async fn attempt(
 
     let cr: ChallengeResponse = challenge_res.json().await?;
 
-    let sig = eth_signer
-        .sign_message_sync(cr.message.as_bytes())
+    let formatted_sig = eth_signer
+        .sign_message(cr.message.as_bytes())
         .map_err(|e| crate::error::AppError::Crypto(format!("Signing failed: {e}")))?;
-    let formatted_sig = format!("{sig}");
 
     let verify_res = client
         .post(verify_url)

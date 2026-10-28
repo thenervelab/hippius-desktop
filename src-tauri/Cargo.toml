@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.16-beta.1"
+version = "0.6.16-beta.2"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -167,10 +167,12 @@ keyring = { version = "3", default-features = false, features = [
     "sync-secret-service",
     "crypto-rust",
 ] }
-alloy-signer = { version = "0.8", default-features = false }
-alloy-signer-local = { version = "0.8", default-features = false, features = [
-    "mnemonic",
-] }
+# Ethereum login signer (auth/evm_signer.rs): secp256k1 ECDSA, BIP-32
+# HMAC-SHA512 and Keccak-256. Replaces alloy, whose every release pins k256
+# 0.13 and with it the vulnerable crypto-bigint 0.5 (RUSTSEC-2026-0387).
+k256 = { version = "0.14", default-features = false, features = ["ecdsa"] }
+hmac = "0.12"
+sha3 = "0.10"
 # Pinned to hcfs `main` HEAD. Includes #326 (`get_state` total from
 # `user_summaries.file_count`; `has_more` is page length — a low-drifting
 # COUNT feeding `offset + len < total` truncates a walk, which this client

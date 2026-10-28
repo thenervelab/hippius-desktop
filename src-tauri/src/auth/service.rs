@@ -3,11 +3,9 @@
 //! Extracted from `commands/auth.rs` so that `hcfs_drive.rs` can refresh tokens
 //! without importing the IPC layer.
 
+use crate::auth::evm_signer::EvmSigner;
 use crate::auth::tokens::save_api_token;
 use crate::sync::mnemonic::get_mnemonic_for_account;
-use alloy_signer::SignerSync;
-use alloy_signer_local::coins_bip39::English;
-use alloy_signer_local::{MnemonicBuilder, PrivateKeySigner};
 use sqlx::sqlite::SqlitePool;
 use tauri::Emitter;
 use tracing::{info, warn};
@@ -41,7 +39,7 @@ struct VerifyResponse {
 /// Uses `subxt_signer::sr25519::Keypair` for the Substrate side, which
 /// implements `subxt::tx::Signer<PolkadotConfig>` directly — no `PairSigner`
 /// wrapper, no `sp-core` dependency on the signing path.
-pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keypair, String, PrivateKeySigner, String), String> {
+pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keypair, String, EvmSigner, String), String> {
     use subxt_signer::bip39::Mnemonic as SubxtMnemonic;
     use subxt_signer::sr25519::Keypair as SrKeypair;
 
@@ -55,13 +53,8 @@ pub(crate) fn derive_keys(mnemonic: &str) -> Result<(subxt_signer::sr25519::Keyp
     // behaviour and what the Hippius API expects.
     let substrate_address = sr25519_pair.public_key().to_account_id().to_string();
 
-    let eth_signer: PrivateKeySigner = MnemonicBuilder::<English>::default()
-        .phrase(mnemonic)
-        .index(0)
-        .map_err(|e| e.to_string())?
-        .build()
-        .map_err(|e| e.to_string())?;
-    let eth_address = format!("{}", eth_signer.address());
+    let eth_signer = EvmSigner::from_phrase(mnemonic)?;
+    let eth_address = eth_signer.address();
 
     Ok((sr25519_pair, substrate_address, eth_signer, eth_address))
 }
@@ -112,7 +105,7 @@ impl std::fmt::Display for IdentityError {
 pub(crate) fn derive_verified_keys(
     mnemonic: &str,
     account_id: &str,
-) -> Result<(subxt_signer::sr25519::Keypair, String, PrivateKeySigner, String), IdentityError> {
+) -> Result<(subxt_signer::sr25519::Keypair, String, EvmSigner, String), IdentityError> {
     let (sr25519_pair, substrate_address, eth_signer, eth_address) = derive_keys(mnemonic).map_err(IdentityError::DeriveFailed)?;
     if substrate_address != account_id {
         return Err(IdentityError::Mismatch { derived: substrate_address });
@@ -152,7 +145,7 @@ pub(crate) fn verify_failure_message(status: reqwest::StatusCode, body: &str) ->
 pub(crate) async fn challenge_response(
     client: &reqwest::Client,
     sr25519_pair: &subxt_signer::sr25519::Keypair,
-    eth_signer: &PrivateKeySigner,
+    eth_signer: &EvmSigner,
     eth_address: &str,
     substrate_address: &str,
     referral_code: Option<&str>,
@@ -181,10 +174,9 @@ pub(crate) async fn challenge_response(
 
     let cr: ChallengeResponse = challenge_res.json().await.map_err(|e| format!("Failed to parse challenge: {e}"))?;
 
-    let sig = eth_signer
-        .sign_message_sync(cr.message.as_bytes())
+    let formatted_sig = eth_signer
+        .sign_message(cr.message.as_bytes())
         .map_err(|e| format!("Signing failed: {e}"))?;
-    let formatted_sig = format!("{sig}");
 
     let verify_res = client
         .post(format!("{base}{VERIFY_PATH}"))
@@ -258,7 +250,7 @@ pub(crate) async fn refresh_auth_token_internal(pool: &SqlitePool, app: &tauri::
     // `eth_signer` to sign the challenge — and we don't cache the
     // `eth_signer` (only `eth_address`) in `AuthInfo`. The derive runs
     // ~50ms and fires roughly every 4 hours, so the perf cost is
-    // negligible. If this becomes hot, cache `PrivateKeySigner` in
+    // negligible. If this becomes hot, cache `EvmSigner` in
     // `AuthInfo` alongside `eth_address`.
     //
     // VERIFIED derive: refuse to refresh when the mnemonic does not derive
@@ -325,7 +317,7 @@ mod tests {
     /// Frozen derivation vectors (audit R-28). `derive_keys` turns one BIP-39
     /// mnemonic into the user's funds-bearing Substrate (sr25519) and Ethereum
     /// (secp256k1, `m/44'/60'/0'/0/0`) addresses. A silent change in either
-    /// derivation — e.g. a `subxt_signer` or `alloy` bump that alters the
+    /// derivation — e.g. a `subxt_signer` or secp256k1 signer change that alters the
     /// scheme — would hand the user a *different* address: deposits to the old
     /// one, or signatures the chain rejects. This pins both so such a change
     /// fails CI instead of shipping.
@@ -333,7 +325,7 @@ mod tests {
     /// The mnemonic is the well-known Foundry/Anvil/Hardhat test phrase. Its
     /// Ethereum account-0 address is a published, cross-implementation constant
     /// (`0xf39F…2266`), so the ETH assertion is an INDEPENDENT correctness check
-    /// of the `MnemonicBuilder` path — not merely a snapshot. The Substrate
+    /// of the Ethereum derivation path — not merely a snapshot. The Substrate
     /// address is the value subxt_signer produces today (SS58 prefix 42); it is
     /// a regression anchor — if it changes, the sr25519 derivation moved and
     /// must be investigated before release.

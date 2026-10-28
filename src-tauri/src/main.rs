@@ -105,6 +105,7 @@ use crate::recovery::{
     restore_with_mnemonic, resume_recovery_password_rotation, seal_and_upload_mnemonic,
 };
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
+use crate::sync::cloud_drive::create_cloud_drive;
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
@@ -512,6 +513,7 @@ fn main() {
             rename_remote_file,
             rename_remote_folder,
             create_remote_folder,
+            create_cloud_drive,
             list_remote_folder_grouped,
             locate_remote_folder_entry,
             folder_grant_stats,
