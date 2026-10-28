@@ -395,6 +395,55 @@ describe("ShareInsightsSheet", () => {
     expect(screen.getByText("Owner")).toBeInTheDocument();
   });
 
+  it("highlights @mentions, marks the ones about the owner, and filters to them", async () => {
+    const mentioned: ShareComments = {
+      comments: [
+        {
+          id: "m1",
+          text: "@Owner can you share the slides?",
+          name: "Ada",
+          atMs: null,
+          createdAt: "2026-10-13T10:00:00Z",
+          mentions: [{ kind: "owner", name: "Owner", label: "Owner", you: true }],
+          mentionsYou: true,
+        },
+        {
+          id: "m2",
+          text: "@Grace Liu agreed",
+          name: "Bo",
+          atMs: null,
+          createdAt: "2026-10-13T11:00:00Z",
+          mentions: [{ kind: "commenter", name: "Grace Liu", label: "Grace Liu", you: false }],
+          mentionsYou: false,
+        },
+        { id: "m3", text: "No tags", name: "Cy", atMs: null, createdAt: "2026-10-13T12:00:00Z" },
+      ],
+      unreadable: null,
+    };
+    answer({ share_get_insights: PAID, share_list_comments: mentioned });
+    renderSheet();
+    const chip = (await screen.findByText("@Owner")).closest("[data-mention]");
+    expect(chip).toHaveAttribute("data-mention-you", "true");
+    expect(screen.getByText("@Grace Liu").closest("[data-mention]")).not.toHaveAttribute("data-mention-you");
+    expect(screen.getAllByTestId("mentioned-you")).toHaveLength(1);
+
+    const filter = screen.getByTestId("mentions-filter");
+    expect(filter).toHaveTextContent("Mentions you1");
+    expect(screen.getAllByTestId("comment-thread")).toHaveLength(3);
+    fireEvent.click(filter);
+    expect(filter).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getAllByTestId("comment-thread")).toHaveLength(1);
+    fireEvent.click(filter);
+    expect(screen.getAllByTestId("comment-thread")).toHaveLength(3);
+  });
+
+  it("offers no mentions filter when nobody mentioned the owner", async () => {
+    answer({ share_get_insights: PAID, share_list_comments: COMMENTS });
+    renderSheet();
+    expect(await screen.findByText("Looks great at 1:23!")).toBeInTheDocument();
+    expect(screen.queryByTestId("mentions-filter")).toBeNull();
+  });
+
   it("shows the reaction totals as chips and bars, and that viewers don't see them while Reactions is off", async () => {
     answer({
       share_get_insights: PAID,

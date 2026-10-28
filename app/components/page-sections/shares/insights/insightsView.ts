@@ -417,3 +417,68 @@ export const DEFINITIONS: ReadonlyArray<{ term: string; meaning: string }> = [
     meaning: "Viewers stay anonymous unless they comment under a name. Only numbers are kept, never what they saw.",
   },
 ];
+
+// ---------------------------------------------------------------------------
+// @mentions
+
+/** A letter, digit, mark or underscore: what may not touch a mention. */
+const WORD = /[\p{L}\p{N}\p{M}_]/u;
+
+function charBefore(text: string, i: number): string {
+  if (i <= 0) return "";
+  const low = text.charCodeAt(i - 1);
+  if (low >= 0xdc00 && low <= 0xdfff && i >= 2) {
+    const high = text.charCodeAt(i - 2);
+    if (high >= 0xd800 && high <= 0xdbff) return text.slice(i - 2, i);
+  }
+  return text.slice(i - 1, i);
+}
+
+function charAt(text: string, i: number): string {
+  return i >= text.length ? "" : String.fromCodePoint(text.codePointAt(i)!);
+}
+
+/** Where `@name` next stands as a whole word in `text`, from `from` on; -1 if nowhere. */
+function findTag(text: string, name: string, from: number): number {
+  const needle = `@${name}`;
+  let at = text.indexOf(needle, from);
+  while (at !== -1) {
+    if (!WORD.test(charBefore(text, at)) && !WORD.test(charAt(text, at + needle.length))) return at;
+    at = text.indexOf(needle, at + 1);
+  }
+  return -1;
+}
+
+export type MentionSegment<M> = { kind: "text"; text: string } | { kind: "mention"; mention: M };
+
+/**
+ * A comment's text cut into plain runs and mentions. Mentions are matched in
+ * order, never by offset: the first is the first `@Name` for it, the next
+ * the next one after that. A mention whose `@Name` is not in the text is
+ * skipped and the text shows as it is. The console draws mentions by the
+ * same rule (`mentions.ts`).
+ */
+export function mentionSegments<M extends { name: string }>(
+  text: string,
+  mentions: readonly M[] | undefined,
+): MentionSegment<M>[] {
+  const out: MentionSegment<M>[] = [];
+  let cursor = 0;
+  for (const mention of mentions ?? []) {
+    const at = findTag(text, mention.name, cursor);
+    if (at === -1) continue;
+    if (at > cursor) out.push({ kind: "text", text: text.slice(cursor, at) });
+    out.push({ kind: "mention", mention });
+    cursor = at + 1 + mention.name.length;
+  }
+  if (cursor < text.length) out.push({ kind: "text", text: text.slice(cursor) });
+  return out;
+}
+
+/** Threads with a comment or reply that mentions the owner. */
+export function threadsMentioningYou<T extends { mentionsYou?: boolean; replies?: readonly { mentionsYou?: boolean }[] }>(
+  threads: readonly T[],
+): T[] {
+  return threads.filter((t) => t.mentionsYou === true || (t.replies ?? []).some((r) => r.mentionsYou === true));
+}
+
