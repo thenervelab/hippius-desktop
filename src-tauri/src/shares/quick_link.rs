@@ -1,4 +1,5 @@
-//! One-click "Copy link" for a file, used by the tray popover's upload rows.
+//! One-click "Copy link" for a file, used by the tray popover's upload rows,
+//! and "Create link" in a capture's Insights panel.
 //!
 //! The Drive's Share dialog asks how long a link should live and whether it
 //! needs a password; a quick action cannot ask anything, so this command
@@ -18,7 +19,8 @@ use crate::auth::account_key::account_key;
 use crate::error::{AppError, Result};
 use crate::shares::SqliteShareKeystore;
 use crate::shares::client::build_account_client;
-use crate::shares::commands::{ShareChoice, console_base_url};
+use crate::shares::commands::{ShareChoice, ShareLink, console_base_url};
+use crate::shares::insights::LinkSettings;
 use crate::shares::origin;
 use chrono::{DateTime, Duration, Utc};
 use hcfs_client::client::share::{ShareSecret, ShareTtl, build_share_url_for};
@@ -135,8 +137,8 @@ async fn existing_links(state: &AppState, account_id: &str, folder_label: &str, 
 }
 
 /// Mint a public, never-expiring link through the Share dialog's funnels.
-async fn mint(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str, file_id: Option<&str>) -> Result<String> {
-    let link = match file_id {
+async fn mint(state: &AppState, account_id: &str, folder_label: &str, relative_path: &str, file_id: Option<&str>) -> Result<ShareLink> {
+    match file_id {
         Some(id) => {
             crate::shares::commands::create_remote_share_inner(
                 state,
@@ -151,14 +153,13 @@ async fn mint(state: &AppState, account_id: &str, folder_label: &str, relative_p
                 // switch in front of it to say whether the user wants one.
                 None,
             )
-            .await?
+            .await
         }
         None => {
             crate::shares::commands::share_synced_file(state, account_id, folder_label, relative_path, ShareTtl::Never, ShareChoice::Public, None)
-                .await?
+                .await
         }
-    };
-    Ok(link.share_url)
+    }
 }
 
 /// Reuse the file's link or make one, then put it on the clipboard.
@@ -197,7 +198,7 @@ pub async fn copy_file_share_link(
     let (url, reused) = match existing {
         Some(url) => (url, true),
         None => match mint(&state, &account_id, &folder_label, &relative_path, file_id.as_deref()).await {
-            Ok(url) => (url, false),
+            Ok(link) => (link.share_url, false),
             Err(e) => {
                 warn!(error = %e, cloud_only = file_id.is_some(), "quick link could not be made");
                 return Ok(QuickLinkOutcome::Failed { message: failure_copy(&e) });
@@ -212,6 +213,83 @@ pub async fn copy_file_share_link(
         return Ok(QuickLinkOutcome::Failed { message: NOT_COPIED.into() });
     }
     Ok(QuickLinkOutcome::Copied { url, reused })
+}
+
+/// What "Create link" in a capture's Insights panel made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureLink {
+    pub share_token: String,
+    pub share_url: String,
+    /// The link is on the clipboard, as the capture card's "Create link" leaves it.
+    pub copied: bool,
+}
+
+/// The switches a link made from the Insights panel asks for: all three, since
+/// the user pressed "Create link" to see who views the capture. The plan rule
+/// still decides (`insights::apply_after_mint` passes them through
+/// `within_plan`), so a free plan's link starts with them off, as every new
+/// link on that plan does.
+pub const INSIGHTS_PANEL_LINK_SETTINGS: LinkSettings = LinkSettings::all(true);
+
+/// "Create link" in the Insights panel of a capture that has no link yet:
+/// a public link that lasts until it is revoked, made through the same
+/// funnels as the tray's Copy link (so the storage gate, the share-origin
+/// row that matches it to the capture's row and the owner wrap all apply),
+/// then its switches, then its chat preview when Settings asks for one, as
+/// the capture card's "Create link" does. Always a new link: the panel offers
+/// this only when the capture has none.
+///
+/// The switches are sent before this returns, unlike after other mints, so
+/// the panel that opens on the new link reads them on rather than racing the
+/// request. The link is copied too; a refused clipboard is not a failure.
+///
+/// # Errors
+///
+/// A blank drive or path, no signed-in account, or a link that could not be
+/// made, in Rust's sentence (`failure_copy`).
+#[tauri::command]
+pub async fn create_capture_link(
+    state: tauri::State<'_, AppState>,
+    app: AppHandle,
+    folder_label: String,
+    relative_path: String,
+    file_id: Option<String>,
+) -> Result<CaptureLink> {
+    let folder_label = folder_label.trim().to_owned();
+    let relative_path = relative_path.trim().trim_matches('/').to_owned();
+    if folder_label.is_empty() || relative_path.is_empty() {
+        return Err(AppError::Validation("This capture can't get a link from here.".into()));
+    }
+    let file_id = file_id.map(|id| id.trim().to_owned()).filter(|id| !id.is_empty());
+    let account_id = state.current_account_id()?;
+
+    let link = match mint(&state, &account_id, &folder_label, &relative_path, file_id.as_deref()).await {
+        Ok(link) => link,
+        Err(e) => {
+            warn!(error = %e, cloud_only = file_id.is_some(), "capture link could not be made from Insights");
+            return Err(AppError::Validation(failure_copy(&e)));
+        }
+    };
+    crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, INSIGHTS_PANEL_LINK_SETTINGS).await;
+    // A preview is drawn from the file on this computer; a cloud-only
+    // capture has none here, so it gets no preview, as from the tray.
+    if file_id.is_none() {
+        let source = crate::capture::deliver::LinkSource::Synced {
+            label: folder_label.clone(),
+            rel_path: relative_path.clone(),
+        };
+        crate::capture::deliver::spawn_preview_if_wanted(&app, &state, &account_id, &source, &link.share_token).await;
+    }
+    info!("capture link made from Insights");
+
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let copied = app.clipboard().write_text(link.share_url.clone()).is_ok();
+    Ok(CaptureLink {
+        share_token: link.share_token,
+        share_url: link.share_url,
+        copied,
+    })
 }
 
 #[cfg(test)]
@@ -268,6 +346,31 @@ mod tests {
         };
         assert_eq!(pick_reusable(&[dying, expired], now), None);
         assert_eq!(pick_reusable(&[link(1, Some(48), Some("alive"), false)], now).as_deref(), Some("alive"));
+    }
+
+    /// A link made from the Insights panel asks for every switch, and the
+    /// plan rule still gives the free plan's link none, as for any new link.
+    #[test]
+    fn the_insights_panels_link_asks_for_every_switch_within_the_plan() {
+        use crate::shares::insights::within_plan;
+        assert_eq!(INSIGHTS_PANEL_LINK_SETTINGS, LinkSettings::all(true));
+        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, Some(true)), LinkSettings::all(true));
+        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, Some(false)), LinkSettings::all(false));
+        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, None), LinkSettings::all(false));
+    }
+
+    /// The Insights panel reads `shareToken` and `copied` off this.
+    #[test]
+    fn capture_link_wire_shape_is_camel_case() {
+        let link = CaptureLink {
+            share_token: "t".into(),
+            share_url: "u".into(),
+            copied: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&link).expect("serialises"),
+            serde_json::json!({ "shareToken": "t", "shareUrl": "u", "copied": true })
+        );
     }
 
     #[test]

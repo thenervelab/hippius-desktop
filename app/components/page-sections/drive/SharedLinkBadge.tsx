@@ -22,7 +22,10 @@ import {
   folderShareRowId,
 } from "@/app/lib/utils/sharesPageLink";
 import { cn } from "@/lib/utils";
+import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import { buildSharedBadgeTooltip } from "./sharedBadgeTooltip";
+import { useDriveRoute } from "./driveRoute";
+import { captureSharesFrom } from "./useCaptureInsightsItem";
 
 interface SharedLinkBadgeProps {
   label: string | null | undefined;
@@ -50,6 +53,12 @@ interface SharedLinkBadgeProps {
    * the badge display-only.
    */
   onManageShare?: (shareRowIds: string[]) => void;
+  /**
+   * The file's size, when known. On the Captures page a link made elsewhere
+   * is matched to its capture by name (`captureSharesFrom`), and a size that
+   * differs rules the match out.
+   */
+  fileSize?: number;
 }
 
 const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
@@ -59,8 +68,10 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   isFolder = false,
   folderRelativePath,
   onManageShare,
+  fileSize,
 }) => {
-  const { getSharesFor } = useSharedFiles();
+  const { getSharesFor, getUnplacedSharesNamed } = useSharedFiles();
+  const { basePath } = useDriveRoute();
 
   // Folder badges key on the share's server-side `(folderHash, pathPrefix)`
   // identity from the folder-share LISTING — never on `share_origin` rows,
@@ -75,10 +86,15 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   // Legacy zip-era folder shares were FILE shares of an archive with an
   // origin row keyed by the folder's path, so a folder row still consults
   // the file index too until those links age out.
-  const fileRows = getSharesFor(
-    label,
-    isFolder ? (folderRelativePath ?? actualName) : actualName,
-  );
+  //
+  // A capture on the Captures page also shows links made for it elsewhere
+  // (the browser extension, the web console, another computer), the same
+  // links its Insights button opens.
+  const fileRows = isFolder
+    ? getSharesFor(label, folderRelativePath ?? actualName)
+    : basePath === CAPTURES_ROUTE
+      ? captureSharesFrom({ getSharesFor, getUnplacedSharesNamed }, label, actualName, fileSize)
+      : getSharesFor(label, actualName);
   const rows = isFolder ? [...folderRows, ...fileRows] : fileRows;
   const tooltipLines = buildSharedBadgeTooltip(rows);
   // `buildSharedBadgeTooltip` returns null for unshared files, which
