@@ -87,6 +87,7 @@ describe("SidePanel", () => {
     await screen.findByRole("complementary", { name: "Details" });
     fireEvent.keyDown(screen.getByRole("heading", { name: "Details" }), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
-    expect(open).toHaveFocus();
+    // Focus goes back as the panel's effects are cleaned up, which React does just after the panel leaves the page.
+    await waitFor(() => expect(open).toHaveFocus());
   });
 });

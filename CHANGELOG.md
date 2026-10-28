@@ -30,11 +30,22 @@ carries security updates.
   end, and a chart of where people stopped, with the moment most people left.
   Open Insights from Shared Links, from the Insights button on a capture on the
   Captures page, or from the card that appears after a screenshot or recording.
+- **Insights for every screenshot and recording.** Every capture on the
+  Captures page has an Insights button and a "View insights" item in its
+  menu, and so does each capture in the menu bar window. A capture without a
+  share link opens Insights with a "Create link" button: press it and the
+  link is made and copied, with views, comments and reactions counted where
+  your plan includes them. Links made for a capture in the browser extension,
+  the web app or on another computer show on its row too.
 - **Comments and reactions.** People who open your link can leave a comment
   and react to it. Comments are end-to-end encrypted and are listed in the
   link's Insights, with its reactions shown as bars. You can delete any
   comment, or block the person who wrote it from commenting and reacting on
   that link.
+- **See when a comment mentions you.** When a viewer tags you with @ in a
+  comment on your link, the mention is highlighted in Insights, the comment
+  says "Mentioned you", and a "Mentions you" filter shows only those
+  comments. Who was tagged stays inside the encrypted comment.
 - **Choose what each link collects.** The share dialog has Insights, Comments
   and Reactions switches for every file link. On paid Drive plans, new
   screenshot and recording links start with all three on, and other files

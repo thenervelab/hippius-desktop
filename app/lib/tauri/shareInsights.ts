@@ -75,6 +75,25 @@ export interface ShareComment {
    * draws none without the capability.
    */
   replies?: ShareCommentReply[];
+  /**
+   * The people it @mentions, in the order their `@Name` appears in the
+   * text (read from inside the encrypted comment; the server never sees
+   * them). Empty when none.
+   */
+  mentions?: ShareCommentMention[];
+  /** It mentions the owner reading it; never on the owner's own comment. */
+  mentionsYou?: boolean;
+}
+
+/** Someone a comment @mentions, as Rust opened it. */
+export interface ShareCommentMention {
+  kind: "owner" | "commenter";
+  /** The name after the `@`, as the text holds it. */
+  name: string;
+  /** How it reads: an access-key account's generated name shortened. */
+  label: string;
+  /** It is the owner reading the panel. */
+  you: boolean;
 }
 
 /** A reply under a comment, the owner's own marked so (hcfs #804). */
@@ -84,6 +103,8 @@ export interface ShareCommentReply {
   name: string | null;
   createdAt: string;
   byOwner: boolean;
+  mentions?: ShareCommentMention[];
+  mentionsYou?: boolean;
 }
 
 export interface ShareComments {

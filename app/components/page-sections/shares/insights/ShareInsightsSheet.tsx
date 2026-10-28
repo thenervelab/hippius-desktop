@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import {
   EyeOff,
   File as FileIcon,
   ImageIcon,
+  Link2,
   MessageSquare,
   Settings,
   Sparkles,
@@ -26,8 +27,14 @@ import TabList from "@/components/ui/tabs/TabList";
 import TabPanel from "@/components/ui/tabs/TabPanel";
 import { cn } from "@/lib/utils";
 import { BILLING_ROUTE } from "@/app/lib/routes";
-import { insightsSheetAtom, shareCommentsEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { findCachedShare } from "@/app/lib/hooks/useSharedFiles";
+import {
+  insightsSheetAtom,
+  shareCommentsEnabledAtom,
+  type InsightsSheetTarget,
+} from "@/app/lib/global-atoms/sharesAtoms";
+import { findCachedShare, SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
+import { createCaptureLink } from "@/app/lib/tauri/shares";
+import { newestShare, useCaptureShares } from "@/components/page-sections/drive/useCaptureInsightsItem";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import {
@@ -100,24 +107,215 @@ const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|heic)$/i;
 export default function ShareInsightsSheet() {
   const [target, setTarget] = useAtom(insightsSheetAtom);
   const onClose = () => setTarget(null);
+  // The link "Create link" just made: its panel takes focus from the button
+  // that is gone now, since the panel itself stays open.
+  const created = useRef<string | null>(null);
   return (
     <SidePanel
       open={target !== null}
       onClose={onClose}
       width={INSIGHTS_PANEL_WIDTH_PX}
       label={target ? `Insights for ${target.fileName}` : "Insights"}
-      focusKey={target?.shareToken}
+      focusKey={target ? panelFocusKey(target) : undefined}
     >
-      {target && (
-        <InsightsPanelFor
-          key={target.shareToken}
-          shareToken={target.shareToken}
-          fileName={target.fileName}
-          file={target.file}
-          onClose={onClose}
-        />
-      )}
+      {target &&
+        (target.shareToken !== null ? (
+          <InsightsPanelFor
+            key={target.shareToken}
+            shareToken={target.shareToken}
+            fileName={target.fileName}
+            file={target.file}
+            onClose={onClose}
+            focusHeading={created.current === target.shareToken}
+          />
+        ) : (
+          <CaptureInsightsPanel
+            target={target}
+            onClose={onClose}
+            onLinkCreated={(shareToken) => {
+              created.current = shareToken;
+              setTarget((prev) => (prev ? { ...prev, shareToken } : prev));
+            }}
+          />
+        ))}
     </SidePanel>
+  );
+}
+
+/**
+ * What the panel is about, for `SidePanel`'s focus handling: the capture
+ * when it was opened for one, so making its link (which gives the target a
+ * token) does not count as opening the panel for something new.
+ */
+function panelFocusKey(target: InsightsSheetTarget): string {
+  return target.capture ? `capture:${target.capture.label}/${target.capture.relativePath}` : (target.shareToken ?? "");
+}
+
+/**
+ * A capture opened before a link was known (a Captures row with none, or
+ * the tray): its newest link from the share listing already loaded, else
+ * the "Create link" step. Nothing is fetched per capture to find it.
+ */
+function CaptureInsightsPanel({
+  target,
+  onClose,
+  onLinkCreated,
+}: {
+  target: InsightsSheetTarget;
+  onClose: () => void;
+  onLinkCreated: (shareToken: string) => void;
+}) {
+  const { sharesFor, isLoading } = useCaptureShares();
+  const capture = target.capture;
+  const share = capture ? newestShare(sharesFor(capture.label, capture.relativePath, target.file?.size)) : null;
+  if (share) {
+    return (
+      <InsightsPanelFor
+        key={share.shareToken}
+        shareToken={share.shareToken}
+        fileName={target.fileName}
+        file={target.file}
+        onClose={onClose}
+      />
+    );
+  }
+  return (
+    <NoLinkPanel
+      target={target}
+      listingLoading={isLoading}
+      onClose={onClose}
+      onLinkCreated={onLinkCreated}
+    />
+  );
+}
+
+/** The no-link step's words. */
+export const NO_LINK_TITLE = "No link yet";
+export const CREATE_LINK = "Create link";
+export function noLinkBody(commentsEnabled: boolean): string {
+  return commentsEnabled
+    ? "Insights start once this capture has a share link. Create one to see who views it, and their comments and reactions, here."
+    : "Insights start once this capture has a share link. Create one to see who views it here.";
+}
+
+/**
+ * The panel for a capture with no link: what Insights need, and "Create
+ * link". Nothing is made until the button is pressed; Rust makes the link
+ * the tray's Copy link way, with its switches on where the plan includes
+ * them, and the panel then shows that link's Insights.
+ */
+function NoLinkPanel({
+  target,
+  listingLoading,
+  onClose,
+  onLinkCreated,
+}: {
+  target: InsightsSheetTarget;
+  listingLoading: boolean;
+  onClose: () => void;
+  onLinkCreated: (shareToken: string) => void;
+}) {
+  const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
+  const queryClient = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const capture = target.capture;
+
+  const create = async () => {
+    if (!capture || creating) return;
+    setCreating(true);
+    setError(null);
+    try {
+      const link = await createCaptureLink(capture.label, capture.relativePath, capture.fileId);
+      // The row's link badge and Insights button, and Shared Links, read the
+      // listing: ask it again so they show the new link.
+      void queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
+      toast.success(link.copied ? "Link created and copied" : "Link created");
+      onLinkCreated(link.shareToken);
+    } catch (e) {
+      setError(errorMessage(e));
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel-no-link">
+      <PanelHeader
+        file={target.file}
+        fileName={target.fileName}
+        subtitle={listingLoading ? null : NO_LINK_TITLE}
+        onClose={onClose}
+      />
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
+        {listingLoading ? (
+          <InsightsSkeleton />
+        ) : (
+          <EmptyBlock
+            icon={<Link2 className="size-[18px]" />}
+            title={NO_LINK_TITLE}
+            body={noLinkBody(commentsEnabled)}
+            action={
+              capture ? (
+                <div className="mt-3 flex flex-col items-start gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={creating}
+                    aria-busy={creating || undefined}
+                    onClick={() => void create()}
+                  >
+                    <Link2 className="size-3.5" aria-hidden />
+                    {creating ? "Creating link…" : CREATE_LINK}
+                  </Button>
+                  {error && (
+                    <p role="alert" className="text-xs leading-[1.45] text-error-50 dark:text-error-70">
+                      {error}
+                    </p>
+                  )}
+                </div>
+              ) : null
+            }
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The no-link panel's header: the capture, its name, a line under it, Close. */
+function PanelHeader({
+  file,
+  fileName,
+  subtitle,
+  onClose,
+}: {
+  file?: FormattedUserFile;
+  fileName: string;
+  subtitle: string | null;
+  onClose: () => void;
+}) {
+  return (
+    <header className={cn("shrink-0 border-b px-4 pb-3 pt-4", HAIRLINE)}>
+      <div className="flex items-center gap-2.5">
+        <HeaderThumb file={file} fileName={fileName} onDuration={() => undefined} />
+        <div className="min-w-0 flex-1">
+          <h2
+            tabIndex={-1}
+            data-panel-autofocus
+            title={fileName}
+            className={cn("text-[15px] font-semibold leading-5 outline-none", STRONG)}
+          >
+            <span className="sr-only">Insights for </span>
+            <MiddleTruncate text={fileName} kind="name" title={null} />
+          </h2>
+          {subtitle ? <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p> : null}
+        </div>
+        <button type="button" aria-label="Close" onClick={onClose} className={ICON_BUTTON}>
+          <X className="size-4" />
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -210,11 +408,14 @@ function InsightsPanelFor({
   fileName,
   file,
   onClose,
+  focusHeading = false,
 }: {
   shareToken: string;
   fileName: string;
   file?: FormattedUserFile;
   onClose: () => void;
+  /** Take focus on mount: the panel stayed open while its content changed. */
+  focusHeading?: boolean;
 }) {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const tabsId = useId();
@@ -224,6 +425,11 @@ function InsightsPanelFor({
   const scrollRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const titleRowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusHeading) document.getElementById(titleId)?.focus();
+    // Once, on mount: later renders must not pull focus back.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Link settings: open or not, where it sits, and what opened it.
   const [settingsOpen, setSettingsOpen] = useState(false);
