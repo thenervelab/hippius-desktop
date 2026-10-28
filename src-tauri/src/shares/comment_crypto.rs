@@ -18,6 +18,9 @@
 //! - Plaintext: `{"text": ..., "name": ... | null}` for a comment,
 //!   `{"name": ...}` for a viewer name. A lone UTF-16 surrogate escape in
 //!   either, which older console builds wrote, reads as U+FFFD.
+//! - A comment may also carry `"mentions"`: the people it @mentions (see
+//!   [`CommentMention`]). Optional, and read leniently: a malformed entry is
+//!   dropped on its own and never makes the comment unreadable.
 //!
 //! The share key is the link's own key (`#k=`), which the owner gets back
 //! from this device's keystore or its owner wrap. A password link's key is
@@ -155,6 +158,77 @@ pub struct CommentPlaintext {
     pub text: String,
     #[serde(default)]
     pub name: Option<String>,
+    /// The people it @mentions, in the order their `@Name` appears in the
+    /// text. Empty for a comment without mentions, and for one whose list
+    /// would not parse.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "lenient_mentions")]
+    pub mentions: Vec<CommentMention>,
+}
+
+/// Who a mention points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MentionKind {
+    /// The link's owner.
+    Owner,
+    /// Someone who commented on the link under a name.
+    Commenter,
+}
+
+/// Someone a comment @mentions, as the console writes it inside the
+/// ciphertext (`comment-crypto.ts`, `CommentMention`). The text keeps a plain
+/// `@` and the name, so a client without mentions still reads it; this only
+/// says which `@`s are mentions and who they are. The server never sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentMention {
+    pub kind: MentionKind,
+    /// The name after the `@` in the text, cleaned by [`clean_name`].
+    pub name: String,
+    /// For a commenter: the id of one of their comments on this link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+/// The most mentions one comment carries; the console writes no more.
+pub const MAX_MENTIONS: usize = 10;
+/// Comment ids are short server ids; anything longer is not one.
+const MAX_MENTION_REF_LEN: usize = 128;
+
+fn lenient_mentions<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<CommentMention>, D::Error> {
+    let raw = serde_json::Value::deserialize(deserializer)?;
+    Ok(clean_mentions(&raw))
+}
+
+/// The mentions in a comment's `mentions` value, each checked on its own:
+/// an unknown kind, a missing or blank name, or anything that is not an
+/// object is dropped, names are cleaned like any name, and past
+/// [`MAX_MENTIONS`] the rest are dropped. Same rules as the console's
+/// `parseMentions`.
+pub fn clean_mentions(raw: &serde_json::Value) -> Vec<CommentMention> {
+    let Some(items) = raw.as_array() else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| {
+            let kind = match item.get("kind")?.as_str()? {
+                "owner" => MentionKind::Owner,
+                "commenter" => MentionKind::Commenter,
+                _ => return None,
+            };
+            let name = clean_name(item.get("name").and_then(serde_json::Value::as_str))?;
+            let comment = match kind {
+                MentionKind::Owner => None,
+                MentionKind::Commenter => item
+                    .get("comment")
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|id| !id.is_empty() && id.chars().count() <= MAX_MENTION_REF_LEN)
+                    .map(str::to_owned),
+            };
+            Some(CommentMention { kind, name, comment })
+        })
+        .take(MAX_MENTIONS)
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -455,7 +529,7 @@ mod tests {
     fn every_shared_vector_decrypts() {
         let f = fixture();
         let key = CommentKey::derive(&share_key(&f));
-        assert_eq!(f.vectors.len(), 3, "comment, anonymous comment and viewer name");
+        assert_eq!(f.vectors.len(), 4, "comment, anonymous comment, comment with mentions and viewer name");
         for v in &f.vectors {
             let purpose = purpose_of(&v.kind);
             assert_eq!(aad(&f.token, purpose), v.aad.as_bytes(), "{}: additional data", v.kind);
@@ -682,6 +756,74 @@ mod tests {
     fn open_raw_comment(f: &Fixture, plaintext: &str) -> Result<CommentPlaintext, OpenError> {
         let (nonce, ct) = seal_raw(f, Purpose::Comment, plaintext);
         open_comment(&CommentKey::derive(&share_key(f)), &f.token, &nonce, &ct)
+    }
+
+    /// The console's comment with mentions opens with them, in order.
+    #[test]
+    fn the_mentions_vector_opens_with_its_mentions() {
+        let f = fixture();
+        let key = CommentKey::derive(&share_key(&f));
+        let v = f.vectors.iter().find(|v| v.kind == "comment-mentions").unwrap();
+        let c = open_comment(&key, &f.token, &v.nonce_b64, &v.ciphertext_b64).unwrap();
+        assert_eq!(c.text, "@Owner thanks, and @Grace Liu see 0:42");
+        assert_eq!(c.name.as_deref(), Some("Ahmad"));
+        assert_eq!(
+            c.mentions,
+            vec![
+                CommentMention {
+                    kind: MentionKind::Owner,
+                    name: "Owner".into(),
+                    comment: None,
+                },
+                CommentMention {
+                    kind: MentionKind::Commenter,
+                    name: "Grace Liu".into(),
+                    comment: Some("c-17".into()),
+                },
+            ]
+        );
+    }
+
+    /// A comment without mentions has none, and garbage in the list drops
+    /// only the garbage, never the comment.
+    #[test]
+    fn malformed_mentions_are_dropped_one_by_one() {
+        let f = fixture();
+        let plain = open_raw_comment(&f, r#"{"text":"hi","name":"Bo"}"#).unwrap();
+        assert!(plain.mentions.is_empty());
+
+        let odd = open_raw_comment(&f, r#"{"text":"@Ada hi","name":"Bo","mentions":{"kind":"owner"}}"#).unwrap();
+        assert_eq!(odd.text, "@Ada hi");
+        assert!(odd.mentions.is_empty());
+
+        let mixed = open_raw_comment(
+            &f,
+            r#"{"text":"@Ada @Owner","name":"Bo","mentions":[{"kind":"admin","name":"Root"},{"kind":"commenter","name":"   "},"Ada",null,{"kind":"commenter","name":"‮Ada","comment":"c1"},{"kind":"owner","name":"Owner","comment":"c9"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            mixed.mentions,
+            vec![
+                CommentMention {
+                    kind: MentionKind::Commenter,
+                    name: "Ada".into(),
+                    comment: Some("c1".into()),
+                },
+                CommentMention {
+                    kind: MentionKind::Owner,
+                    name: "Owner".into(),
+                    comment: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn at_most_ten_mentions_are_kept() {
+        let many: Vec<serde_json::Value> = (0..15)
+            .map(|i| serde_json::json!({ "kind": "commenter", "name": format!("P{i}") }))
+            .collect();
+        assert_eq!(clean_mentions(&serde_json::Value::Array(many)).len(), MAX_MENTIONS);
     }
 
     /// Comments sealed before the console replaced lone surrogates read the

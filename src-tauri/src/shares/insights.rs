@@ -41,7 +41,7 @@ use tracing::{debug, info, warn};
 
 use super::SqliteShareKeystore;
 use super::capabilities::{ServerCapabilities, fetch_capabilities};
-use super::comment_crypto::{self, CommentKey};
+use super::comment_crypto::{self, CommentKey, CommentMention, MentionKind};
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
@@ -269,6 +269,42 @@ pub struct ShareComment {
     pub at_ms: Option<u64>,
     /// RFC 3339.
     pub created_at: String,
+    /// The people it @mentions, in the order their `@Name` appears in the
+    /// text. Empty when it mentions nobody or could not be read.
+    pub mentions: Vec<ShareCommentMention>,
+    /// It mentions the owner reading it (never true on the owner's own).
+    pub mentions_you: bool,
+}
+
+/// Someone a comment @mentions, as the owner's panel draws it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareCommentMention {
+    pub kind: MentionKind,
+    /// The name after the `@`, as the text holds it: what the panel looks
+    /// for to highlight it.
+    pub name: String,
+    /// How it reads: a generated access-key name shortened, like an author
+    /// ([`readable_name`]).
+    pub label: String,
+    /// It is the owner: a mention of the owner, or of a comment the owner wrote.
+    pub you: bool,
+}
+
+/// A mention as the owner reads it. `mine` holds the ids of the owner's own
+/// comments on the link, which is how a mention of the owner as a commenter
+/// is known.
+fn owner_mention(m: CommentMention, mine: &HashSet<String>) -> ShareCommentMention {
+    let you = match m.kind {
+        MentionKind::Owner => true,
+        MentionKind::Commenter => m.comment.as_ref().is_some_and(|id| mine.contains(id)),
+    };
+    ShareCommentMention {
+        kind: m.kind,
+        label: readable_name(m.name.clone()),
+        name: m.name,
+        you,
+    }
 }
 
 /// A link's comments, oldest first.
@@ -294,6 +330,9 @@ struct WireComment {
     created_at: String,
     #[serde(default)]
     anonymous: bool,
+    /// Written by the signed-in account, here the owner.
+    #[serde(default)]
+    mine: bool,
 }
 
 impl WireComment {
@@ -356,24 +395,32 @@ impl KeyUnavailable {
 
 /// Open each comment with `key`, or explain why none can be.
 fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<&CommentKey, KeyUnavailable>) -> ShareComments {
+    let mine: HashSet<String> = items.iter().filter(|c| c.mine).map(WireComment::id).collect();
     let comments = items
         .into_iter()
         .map(|c| {
             let opened = key
                 .ok()
                 .and_then(|k| comment_crypto::open_comment(k, token, &c.nonce, &c.ciphertext).ok());
-            let (text, name) = match opened {
+            let (text, name, mentions) = match opened {
                 // An anonymous comment never shows a name, whatever its
                 // ciphertext carries.
-                Some(p) => (Some(p.text), if c.anonymous { None } else { p.name.map(readable_name) }),
-                None => (None, None),
+                Some(p) => (
+                    Some(p.text),
+                    if c.anonymous { None } else { p.name.map(readable_name) },
+                    p.mentions.into_iter().map(|m| owner_mention(m, &mine)).collect::<Vec<_>>(),
+                ),
+                None => (None, None, Vec::new()),
             };
+            let mentions_you = !c.mine && mentions.iter().any(|m| m.you);
             ShareComment {
                 id: c.id(),
                 text,
                 name,
                 at_ms: c.at_ms,
                 created_at: c.created_at,
+                mentions,
+                mentions_you,
             }
         })
         .collect();
@@ -1387,6 +1434,7 @@ mod tests {
             at_ms: Some(83_000),
             created_at: "2026-10-13T10:00:00Z".into(),
             anonymous,
+            mine: false,
         }
     }
 
@@ -1427,6 +1475,58 @@ mod tests {
         assert_eq!(out.comments[0].at_ms, Some(83_000));
         assert_eq!(out.comments[1].name, None, "an anonymous comment never shows a name");
         assert_eq!(out.comments[2].text, None, "one that does not open is kept, unread");
+    }
+
+    /// The console's comment with mentions: both come through, the owner's
+    /// marked as the reader's, and the comment flagged as mentioning them.
+    #[test]
+    fn mentions_come_through_and_a_mention_of_the_owner_is_flagged() {
+        let (key, token, _, _) = vector_key();
+        let f: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/share_comments_vectors.json"
+        )))
+        .unwrap();
+        let v = f["vectors"].as_array().unwrap().iter().find(|v| v["kind"] == "comment-mentions").unwrap();
+        let nonce = v["nonce_b64"].as_str().unwrap();
+        let ct = v["ciphertext_b64"].as_str().unwrap();
+        let mut own = wire_comment("c-17", nonce, ct, false);
+        own.mine = true;
+        let out = open_comments(&token, vec![wire_comment("1", nonce, ct, false), own], Ok(&key));
+        let c = &out.comments[0];
+        assert_eq!(c.text.as_deref(), Some("@Owner thanks, and @Grace Liu see 0:42"));
+        assert_eq!(
+            c.mentions,
+            vec![
+                ShareCommentMention {
+                    kind: MentionKind::Owner,
+                    name: "Owner".into(),
+                    label: "Owner".into(),
+                    you: true,
+                },
+                ShareCommentMention {
+                    kind: MentionKind::Commenter,
+                    name: "Grace Liu".into(),
+                    label: "Grace Liu".into(),
+                    // Points at comment c-17, which is the owner's own.
+                    you: true,
+                },
+            ]
+        );
+        assert!(c.mentions_you);
+        assert!(!out.comments[1].mentions_you, "never on the owner's own comment");
+
+        let json = serde_json::to_value(c).unwrap();
+        assert_eq!(json["mentionsYou"], serde_json::json!(true));
+        assert_eq!(json["mentions"][0]["kind"], serde_json::json!("owner"));
+    }
+
+    #[test]
+    fn a_comment_without_mentions_has_none() {
+        let (key, token, nonce, ct) = vector_key();
+        let out = open_comments(&token, vec![wire_comment("1", &nonce, &ct, false)], Ok(&key));
+        assert!(out.comments[0].mentions.is_empty());
+        assert!(!out.comments[0].mentions_you);
     }
 
     #[test]
