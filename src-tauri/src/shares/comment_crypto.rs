@@ -798,7 +798,7 @@ mod tests {
 
         let mixed = open_raw_comment(
             &f,
-            r#"{"text":"@Ada @Owner","name":"Bo","mentions":[{"kind":"admin","name":"Root"},{"kind":"commenter","name":"   "},"Ada",null,{"kind":"commenter","name":"‮Ada","comment":"c1"},{"kind":"owner","name":"Owner","comment":"c9"}]}"#,
+            r#"{"text":"@Ada @Owner","name":"Bo","mentions":[{"kind":"admin","name":"Root"},{"kind":"commenter","name":"   "},"Ada",null,{"kind":"commenter","name":"\u202eAda","comment":"c1"},{"kind":"owner","name":"Owner","comment":"c9"}]}"#,
         )
         .unwrap();
         assert_eq!(
