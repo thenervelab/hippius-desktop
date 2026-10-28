@@ -15,7 +15,9 @@ import {
   headerLine,
   defaultInsightsTab,
   initials,
+  mentionSegments,
   sortThreads,
+  threadsMentioningYou,
   switchOffLine,
   switchPills,
   tabLabel,
@@ -268,3 +270,42 @@ describe("emptyInsightsCopy", () => {
     expect(copy.body).not.toMatch(/Nobody/);
   });
 });
+
+describe("mentionSegments", () => {
+  const owner = { kind: "owner" as const, name: "Owner", label: "Owner", you: true };
+  const grace = { kind: "commenter" as const, name: "Grace Liu", label: "Grace Liu", you: false };
+
+  it("cuts the text into runs and mentions, in order", () => {
+    expect(mentionSegments("@Owner thanks, and @Grace Liu see 0:42", [owner, grace])).toEqual([
+      { kind: "mention", mention: owner },
+      { kind: "text", text: " thanks, and " },
+      { kind: "mention", mention: grace },
+      { kind: "text", text: " see 0:42" },
+    ]);
+  });
+
+  it("matches whole words only and skips a mention not in the text", () => {
+    expect(mentionSegments("mail me@Owner.com or @Owners", [owner])).toEqual([
+      { kind: "text", text: "mail me@Owner.com or @Owners" },
+    ]);
+    expect(mentionSegments("hi @Owner", [grace, owner])).toEqual([
+      { kind: "text", text: "hi " },
+      { kind: "mention", mention: owner },
+    ]);
+  });
+
+  it("is the text as it is without mentions", () => {
+    expect(mentionSegments("@Owner hi", undefined)).toEqual([{ kind: "text", text: "@Owner hi" }]);
+  });
+
+  it("finds threads that mention the owner in the comment or a reply", () => {
+    const threads = [
+      { id: "a", mentionsYou: true },
+      { id: "b", replies: [{ mentionsYou: true }] },
+      { id: "c", replies: [{ mentionsYou: false }] },
+      { id: "d" },
+    ];
+    expect(threadsMentioningYou(threads).map((t) => t.id)).toEqual(["a", "b"]);
+  });
+});
+

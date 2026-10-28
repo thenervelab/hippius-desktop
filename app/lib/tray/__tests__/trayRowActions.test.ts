@@ -7,6 +7,7 @@ const editor = { on: true };
 import {
   canEditTrayRow,
   canLinkTrayRow,
+  canViewTrayRowInsights,
   cloudFileIdFor,
   getTrayQuickActions,
   getTrayRowActions,
@@ -122,6 +123,45 @@ describe("tray row menu, per file state", () => {
     expect(ids(row({ label: undefined, source: "", fileId: undefined }))).toEqual([
       "preview",
     ]);
+  });
+});
+
+describe("tray row View insights", () => {
+  const recording = (overrides: Partial<UploadFeedItem> = {}) =>
+    row({
+      name: "Recording 2026-10-28 at 16.04.09.mp4",
+      actualFileName: "Recording 2026-10-28 at 16.04.09.mp4",
+      source: "/Users/me/hippius-recording/Recording 2026-10-28 at 16.04.09.mp4",
+      label: "Hippius Captures",
+      ...overrides,
+    });
+  const captureIds = (item: UploadFeedItem) =>
+    getTrayRowActions(item, "Finder", editor.on, true).map((a) => a.id);
+
+  it("follows Share via link in a capture's menu, labelled View insights", () => {
+    const ids = captureIds(recording());
+    expect(ids.indexOf("insights")).toBe(ids.indexOf("share") + 1);
+    const item = getTrayRowActions(recording(), "Finder", editor.on, true).find((a) => a.id === "insights");
+    expect(item?.label).toBe("View insights");
+  });
+
+  it("is offered for screenshots and recordings, with a link or not", () => {
+    expect(canViewTrayRowInsights(recording(), true)).toBe(true);
+    expect(canViewTrayRowInsights(recording({ name: "Screenshot 1.png", actualFileName: "Screenshot 1.png" }), true)).toBe(true);
+    // A capture only on the server still gets a link made from its id.
+    expect(canViewTrayRowInsights(recording({ source: "" }), true)).toBe(true);
+  });
+
+  it("is not offered outside the captures, for other files, or where no link can be made", () => {
+    expect(ids(recording())).not.toContain("insights");
+    expect(canViewTrayRowInsights(row(), true)).toBe(false);
+    expect(canViewTrayRowInsights(recording({ feedStatus: "uploading" }), true)).toBe(false);
+    expect(canViewTrayRowInsights(recording({ syncStatus: "pending" }), true)).toBe(false);
+  });
+
+  it("runs in the main window, which holds the Insights panel", () => {
+    expect(runsInMainWindow("insights")).toBe(true);
+    expect(parseTrayFileActionRequest({ action: "insights", file: recording() })?.action).toBe("insights");
   });
 });
 

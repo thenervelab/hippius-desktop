@@ -1,7 +1,9 @@
 // The Insights button on a row of the Captures page: a small bordered button
 // with the chart icon beside the row's link badge that opens the Insights
-// sheet for that capture's newest link. Renders nothing off the Captures
-// page, for a row with no link, or on a server without Insights
+// sheet for that capture's newest link. Every screenshot and recording has
+// one; a capture with no link yet gets a quieter one that opens the sheet's
+// "Create link" step. Renders nothing off the Captures page, for a folder or
+// another kind of file, or on a server without Insights
 // (`useCaptureInsightsShare`). On the free plan the sheet itself shows the
 // upgrade prompt.
 
@@ -16,6 +18,7 @@ import { BarChart3 } from "lucide-react";
 import {
   insightsSheetAtom,
   shareInsightsEnabledAtom,
+  type CaptureLinkSource,
   shareInsightsSeenEnabledAtom,
   shareListingCountsEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -26,9 +29,12 @@ import type { ShareSummary } from "@/app/lib/tauri/shares";
 import { linkSettingsQueryKey } from "@/components/page-sections/shares/insights/queryKeys";
 import { cn } from "@/lib/utils";
 import { useDriveRoute } from "./driveRoute";
-import { useCaptureInsightsShare } from "./useCaptureInsightsItem";
+import { captureLinkSource, useCaptureInsightsShare, VIEW_INSIGHTS_LABEL } from "./useCaptureInsightsItem";
 
-export const VIEW_INSIGHTS_LABEL = "View insights";
+export { VIEW_INSIGHTS_LABEL };
+
+/** The tooltip on the button of a capture that has no link yet. */
+export const NO_LINK_TOOLTIP = "No link yet. Open to create one and see insights.";
 
 /** What the button says, and whether it reads as off. */
 export interface InsightsButtonView {
@@ -91,45 +97,60 @@ const CaptureInsightsButton: FC<CaptureInsightsButtonProps> = (props) => {
 
 const InsightsButtonForLink: FC<CaptureInsightsButtonProps> = ({ label, actualName, fileName, file, className }) => {
   const shareFor = useCaptureInsightsShare();
-  const share = shareFor(label, actualName, false);
-  if (!share) return null;
-  return <InsightsButton share={share} fileName={fileName} file={file} className={className} />;
+  const { offered, share } = shareFor(label, actualName, false, file?.size);
+  if (!offered) return null;
+  const capture =
+    label && actualName
+      ? file
+        ? captureLinkSource({ ...file, label }, actualName)
+        : { label, relativePath: actualName }
+      : undefined;
+  return <InsightsButton share={share} capture={capture} fileName={fileName} file={file} className={className} />;
 };
 
-/** The button for one known link (exported for its tests). */
+/**
+ * The button for a capture's newest link, or for a capture with none yet
+ * (`share` null), which opens the sheet's "Create link" step (exported for
+ * its tests).
+ */
 export const InsightsButton: FC<{
-  share: ShareSummary;
+  share: ShareSummary | null;
+  capture?: CaptureLinkSource;
   fileName: string;
   file?: FormattedUserFile;
   className?: string;
-}> = ({ share, fileName, file, className }) => {
+}> = ({ share, capture, fileName, file, className }) => {
   const open = useSetAtom(insightsSheetAtom);
   const listingCounts = useAtomValue(shareListingCountsEnabledAtom);
   const insightsSeen = useAtomValue(shareInsightsSeenEnabledAtom);
-  const shareToken = share.shareToken;
+  const shareToken = share?.shareToken ?? null;
   // The switch as the sheet (or the share dialog) last read it. Never
   // fetched from here: the listing does not carry it, and one request per
   // row is what this must not do.
   const cached = useQuery({
-    queryKey: linkSettingsQueryKey(shareToken),
-    queryFn: () => getLinkSettings(shareToken),
+    queryKey: linkSettingsQueryKey(shareToken ?? ""),
+    queryFn: () => getLinkSettings(shareToken ?? ""),
     enabled: false,
   });
-  const insightsOff = cached.data?.offered.insights === true && cached.data.on.insights === false;
-  const view = insightsButtonView(share, { listingCounts, insightsSeen, insightsOff });
+  const insightsOff = share !== null && cached.data?.offered.insights === true && cached.data.on.insights === false;
+  const view: InsightsButtonView = share
+    ? insightsButtonView(share, { listingCounts, insightsSeen, insightsOff })
+    : { label: "Insights", off: false, newSinceSeen: false };
+  const noLink = share === null;
 
   // The row's own click opens the file, so this stops it from getting there.
   // preventDefault guards against sitting inside the row's preview button.
   const activate = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    open({ shareToken, fileName, file });
+    open({ shareToken, fileName, file, ...(capture ? { capture } : {}) });
   };
 
-  const tooltip = view.off ? "Insights are off for this link" : VIEW_INSIGHTS_LABEL;
+  const tooltip = noLink ? NO_LINK_TOOLTIP : view.off ? "Insights are off for this link" : VIEW_INSIGHTS_LABEL;
   // The visible words lead the name, so a voice user can say what they see.
   const name = [
     view.off ? `${view.label}, view insights` : view.label === "Insights" ? VIEW_INSIGHTS_LABEL : `${view.label}, view insights`,
+    noLink ? "no link yet" : null,
     view.newSinceSeen ? "new since you last looked" : null,
   ]
     .filter(Boolean)
@@ -147,6 +168,7 @@ export const InsightsButton: FC<{
             aria-label={name}
             data-testid="capture-insights-button"
             data-off={view.off ? "true" : undefined}
+            data-no-link={noLink ? "true" : undefined}
             onClick={activate}
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") activate(e);
@@ -157,6 +179,9 @@ export const InsightsButton: FC<{
               "border-grey-80 bg-white text-grey-10 hover:bg-grey-100",
               "dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:hover:bg-[#2a2a2a]",
               view.off && "border-dashed font-medium text-grey-50 dark:text-grey-dark-600",
+              // No link yet: the same button, quieter, so the rows that have
+              // numbers to show still stand out.
+              noLink && "font-medium text-grey-50 dark:text-grey-dark-600",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
               className,
             )}
@@ -164,7 +189,7 @@ export const InsightsButton: FC<{
             <BarChart3
               className={cn(
                 "size-3.5",
-                view.off ? "text-grey-50 dark:text-grey-dark-600" : "text-primary-50 dark:text-primary-brand-dark",
+                view.off || noLink ? "text-grey-50 dark:text-grey-dark-600" : "text-primary-50 dark:text-primary-brand-dark",
               )}
               aria-hidden
             />

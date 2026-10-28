@@ -531,6 +531,7 @@ fn main() {
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
             crate::shares::quick_link::copy_file_share_link,
+            crate::shares::quick_link::create_capture_link,
             crate::shares::commands::hcfs_create_folder_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,

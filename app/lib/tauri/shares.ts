@@ -392,6 +392,33 @@ export async function createFolderShare(
   });
 }
 
+/** Mirrors Rust's `shares::quick_link::CaptureLink`. */
+export interface CaptureLink {
+  shareToken: string;
+  shareUrl: string;
+  /** The link was also put on the clipboard. */
+  copied: boolean;
+}
+
+/**
+ * "Create link" in the Insights panel of a capture with no link: Rust makes
+ * a public link that lasts until it is revoked, through the same funnels as
+ * the tray's Copy link, turns on its insights, comments and reactions where
+ * the plan includes them, and copies it. `fileId` only for a capture with no
+ * copy on this computer. Rejects with Rust's sentence.
+ */
+export async function createCaptureLink(
+  folderLabel: string,
+  relativePath: string,
+  fileId?: string | null,
+): Promise<CaptureLink> {
+  return invoke<CaptureLink>("create_capture_link", {
+    folderLabel,
+    relativePath,
+    fileId: fileId ?? null,
+  });
+}
+
 export async function listShares(): Promise<ShareSummary[]> {
   return invoke<ShareSummary[]>("hcfs_list_shares");
 }

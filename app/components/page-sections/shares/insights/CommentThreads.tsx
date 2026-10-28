@@ -22,6 +22,7 @@ import {
   listShareComments,
   unblockShareCommenter,
   type ShareComment,
+  type ShareCommentMention,
   type ShareCommentReply,
   type ShareInsights,
 } from "@/app/lib/tauri/shareInsights";
@@ -34,7 +35,9 @@ import {
   DELETE_EXPLAINER,
   formatAgo,
   formatWatched,
+  mentionSegments,
   sortThreads,
+  threadsMentioningYou,
   viewerName,
   visibleReplies,
   type CommentOrder,
@@ -117,8 +120,11 @@ export function CommentsTab({
   const { comments, asking, setAsking, blocked, remove, block } = moderation;
   const [order, setOrder] = useState<CommentOrder>("newest");
   const [limit, setLimit] = useState(COMMENTS_PAGE);
+  const [onlyMentions, setOnlyMentions] = useState(false);
   const list = useMemo(() => comments.data?.comments ?? [], [comments.data]);
-  const sorted = useMemo(() => sortThreads(list, order), [list, order]);
+  const mentioning = useMemo(() => threadsMentioningYou(list), [list]);
+  const filtering = onlyMentions && mentioning.length > 0;
+  const sorted = useMemo(() => sortThreads(filtering ? mentioning : list, order), [filtering, mentioning, list, order]);
   const shown = sorted.slice(0, limit);
 
   return (
@@ -144,7 +150,19 @@ export function CommentsTab({
                   {/* On the free plan comments are not locked: say so. */}
                   {plan === "free" ? "All included on your plan" : null}
                 </p>
-                {list.length > 1 && <SortToggle order={order} onChange={setOrder} />}
+                <div className="flex shrink-0 items-center gap-2">
+                  {mentioning.length > 0 && (
+                    <MentionsFilter
+                      count={mentioning.length}
+                      on={filtering}
+                      onChange={(on) => {
+                        setOnlyMentions(on);
+                        setLimit(COMMENTS_PAGE);
+                      }}
+                    />
+                  )}
+                  {list.length > 1 && <SortToggle order={order} onChange={setOrder} />}
+                </div>
               </div>
               <ul className={cn("flex flex-col divide-y", DIVIDE)} aria-label="Comments">
                 {shown.map((c) => (
@@ -180,6 +198,70 @@ export function CommentsTab({
         </>
       )}
     </div>
+  );
+}
+
+/** "Mentions you", once anyone has: shows only the threads that mention the owner. */
+function MentionsFilter({ count, on, onChange }: { count: number; on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={on}
+      data-testid="mentions-filter"
+      onClick={() => onChange(!on)}
+      className={cn(
+        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-[11.5px] font-medium transition-colors",
+        FOCUS,
+        on
+          ? "border-[#e5c96a] bg-[#fff0c2] text-[#6b4700] dark:border-[#ffc933]/40 dark:bg-[#ffc933]/[0.18] dark:text-[#ffd666]"
+          : cn("border-grey-80 hover:text-grey-10 dark:border-white/10 dark:hover:text-white", MUTED),
+      )}
+    >
+      Mentions you
+      <span className="tabular-nums">{count}</span>
+    </button>
+  );
+}
+
+const MENTION_CHIP =
+  "rounded-[4px] bg-primary-50/10 px-[3px] py-px font-medium text-primary-50 [box-decoration-break:clone] dark:bg-primary-50/20 dark:text-primary-brand-dark";
+const MENTION_CHIP_YOU =
+  "rounded-[4px] bg-[#fff0c2] px-[3px] py-px font-semibold text-[#6b4700] [box-decoration-break:clone] dark:bg-[#ffc933]/[0.18] dark:text-[#ffd666]";
+
+/** A comment's text with its @mentions highlighted; a mention of the owner stands out. */
+export function MentionText({ text, mentions }: { text: string; mentions?: readonly ShareCommentMention[] }) {
+  if (!mentions || mentions.length === 0) return <>{text}</>;
+  return (
+    <>
+      {mentionSegments(text, mentions).map((seg, i) =>
+        seg.kind === "text" ? (
+          <span key={i}>{seg.text}</span>
+        ) : (
+          <span
+            key={i}
+            data-mention={seg.mention.kind}
+            data-mention-you={seg.mention.you ? "true" : undefined}
+            title={seg.mention.kind === "owner" ? "The owner of this link" : undefined}
+            className={seg.mention.you ? MENTION_CHIP_YOU : MENTION_CHIP}
+          >
+            <bdi>@{seg.mention.label}</bdi>
+            {seg.mention.you && <span className="sr-only"> (you)</span>}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
+
+/** "Mentioned you" beside a comment that mentions the owner. */
+function MentionedYou() {
+  return (
+    <span
+      data-testid="mentioned-you"
+      className="inline-flex h-5 shrink-0 items-center whitespace-nowrap rounded-full bg-[#fff0c2] px-[7px] text-[11px] font-semibold text-[#6b4700] dark:bg-[#ffc933]/[0.18] dark:text-[#ffd666]"
+    >
+      Mentioned you
+    </span>
   );
 }
 
@@ -227,7 +309,15 @@ export function PersonName({ name, muted = false, className }: { name: string | 
  * Text clamped to four lines, with Show more when it is cut. Whether it is
  * cut is measured, so a short comment never carries the button.
  */
-function ClampedText({ text, className }: { text: string; className?: string }) {
+function ClampedText({
+  text,
+  mentions,
+  className,
+}: {
+  text: string;
+  mentions?: readonly ShareCommentMention[];
+  className?: string;
+}) {
   const ref = useRef<HTMLParagraphElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [cut, setCut] = useState(false);
@@ -248,7 +338,7 @@ function ClampedText({ text, className }: { text: string; className?: string }) 
         data-clamped-text=""
         className={cn("whitespace-pre-wrap break-words [overflow-wrap:anywhere]", !expanded && "line-clamp-4", className)}
       >
-        {text}
+        <MentionText text={text} mentions={mentions} />
       </p>
       {(cut || expanded) && (
         <button
@@ -345,11 +435,16 @@ function CommentRow({
             <>
               {comment.atMs !== null && <MomentChip atMs={comment.atMs} />}
               <When at={comment.createdAt} />
+              {comment.mentionsYou && <MentionedYou />}
             </>
           )}
         </p>
         {comment.text !== null ? (
-          <ClampedText text={comment.text} className={cn("text-[13px] leading-[1.45]", blocked ? MUTED : STRONG)} />
+          <ClampedText
+            text={comment.text}
+            mentions={comment.mentions}
+            className={cn("text-[13px] leading-[1.45]", blocked ? MUTED : STRONG)}
+          />
         ) : (
           <p className={cn("text-[13px] italic", MUTED)}>This comment couldn&apos;t be read.</p>
         )}
@@ -490,8 +585,11 @@ function ReplyRow({ reply: r }: { reply: ShareCommentReply }) {
             <span className="shrink-0 text-[11px] font-semibold text-primary-50 dark:text-primary-brand-dark">Owner</span>
           )}
           <When at={r.createdAt} />
+          {r.mentionsYou && <MentionedYou />}
         </p>
-        {r.text !== null && <ClampedText text={r.text} className={cn("text-[12.5px] leading-[1.45]", STRONG)} />}
+        {r.text !== null && (
+          <ClampedText text={r.text} mentions={r.mentions} className={cn("text-[12.5px] leading-[1.45]", STRONG)} />
+        )}
       </div>
     </li>
   );
