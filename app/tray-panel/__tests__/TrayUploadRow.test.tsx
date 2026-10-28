@@ -435,6 +435,27 @@ describe("row menu", () => {
     expect(menuItems().indexOf("Edit image")).toBe(menuItems().indexOf("View") + 1);
   });
 
+  it("offers View insights after Share via link on a capture, and hands it to the main window", async () => {
+    renderRow(screenshot(), true);
+    fireEvent.click(
+      screen.getByRole("button", { name: "More actions for Screenshot 2026-10-06 at 10.00.00.png" }),
+    );
+    expect(menuItems().indexOf("View insights")).toBe(menuItems().indexOf("Share via link…") + 1);
+    fireEvent.click(screen.getByRole("menuitem", { name: "View insights" }));
+    await waitFor(() => expect(fileActions()).toEqual([expect.objectContaining({ action: "insights" })]));
+    expect(fileActions()[0].file.name).toBe("Screenshot 2026-10-06 at 10.00.00.png");
+    expect(main.show).toHaveBeenCalled();
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("hide_tray_panel"));
+  });
+
+  it("offers no View insights on a row that is not a capture", () => {
+    renderRow(screenshot(), false);
+    fireEvent.click(
+      screen.getByRole("button", { name: "More actions for Screenshot 2026-10-06 at 10.00.00.png" }),
+    );
+    expect(menuItems()).not.toContain("View insights");
+  });
+
   it("opens the same menu on right click", () => {
     renderRow();
     fireEvent.contextMenu(screen.getByText("PDF · 15.3 MB · 2d ago"));

@@ -3,7 +3,12 @@ import { act, render, screen, waitFor, configure } from "@testing-library/react"
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import {
+  insightsSheetAtom,
+  serverCapabilitiesAtom,
+  shareModalFileAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
+import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 
@@ -74,7 +79,7 @@ vi.mock("@/app/components/page-sections/drive/DeleteFileConfirmDialog", () => ({
     file ? <div role="alertdialog">Delete {file.name}?</div> : null,
 }));
 
-import TrayFileActionHost, { TRAY_RENAME_NOT_ALLOWED } from "../TrayFileActionHost";
+import TrayFileActionHost, { TRAY_INSIGHTS_UNAVAILABLE, TRAY_RENAME_NOT_ALLOWED } from "../TrayFileActionHost";
 
 function file(overrides: Partial<FormattedUserFile> = {}): FormattedUserFile {
   return {
@@ -97,8 +102,9 @@ function file(overrides: Partial<FormattedUserFile> = {}): FormattedUserFile {
   };
 }
 
-function mount() {
+function mount(caps: ServerCapabilities | null = null) {
   const store = createStore();
+  store.set(serverCapabilitiesAtom, caps);
   render(
     <Provider store={store}>
       <TrayFileActionHost />
@@ -134,6 +140,41 @@ describe("tray file actions in the main window", () => {
     mount();
     await send({ action: "show-in-drive", file: file({ source: "", actualFileName: "a.png", name: "a.png" }) });
     expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openRemote=1&openFile=a.png");
+  });
+
+  it("opens the Captures page at a capture with its Insights panel, before any link is known", async () => {
+    const store = mount({ shares: true, share_insights: true } as ServerCapabilities);
+    const capture = file({
+      name: "Recording 1.mp4",
+      actualFileName: "Recording 1.mp4",
+      label: "Hippius Captures",
+      source: "/Users/me/hippius-recording/Recording 1.mp4",
+    });
+    await send({ action: "insights", file: capture });
+    expect(push).toHaveBeenCalledWith("/captures?openLabel=Hippius+Captures&openFile=Recording+1.mp4");
+    // The panel finds the newest link in the listing, or offers to make one.
+    expect(store.get(insightsSheetAtom)).toEqual({
+      shareToken: null,
+      fileName: "Recording 1.mp4",
+      file: capture,
+      capture: { label: "Hippius Captures", relativePath: "Recording 1.mp4", fileId: null },
+    });
+  });
+
+  it("opens a capture kept in a folder of another drive where Show in Hippius would", async () => {
+    const store = mount({ shares: true, share_insights: true } as ServerCapabilities);
+    const capture = file({ name: "Shot.png", actualFileName: "Captures/Shot.png", source: "/Users/me/Docs/Captures/Shot.png" });
+    await send({ action: "insights", file: capture });
+    expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openSubfolder=Captures&openFile=Shot.png");
+    expect(store.get(insightsSheetAtom)?.capture).toEqual({ label: "Docs", relativePath: "Captures/Shot.png", fileId: null });
+  });
+
+  it("says Insights are unavailable on a server without them, and opens nothing", async () => {
+    const store = mount({ shares: true } as ServerCapabilities);
+    await send({ action: "insights", file: file({ name: "a.png", actualFileName: "a.png" }) });
+    expect(toastError).toHaveBeenCalledWith(TRAY_INSIGHTS_UNAVAILABLE);
+    expect(push).not.toHaveBeenCalled();
+    expect(store.get(insightsSheetAtom)).toBeNull();
   });
 
   it("opens the Drive's Share dialog with the file's drive path", async () => {

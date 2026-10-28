@@ -8,6 +8,7 @@ import {
 } from "@/app/lib/utils/renameGating";
 import { normalizeRelPath } from "@/app/lib/utils/relPath";
 import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
+import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
 
 /**
  * What the tray popover offers on one upload row: the three-dots menu, the
@@ -28,6 +29,7 @@ export type TrayRowActionId =
   | "download"
   | "copy-link"
   | "share"
+  | "insights"
   | "show-in-drive"
   | "reveal"
   | "rename"
@@ -48,6 +50,7 @@ export type TrayMainWindowAction =
   | "preview"
   | "download"
   | "share"
+  | "insights"
   | "show-in-drive"
   | "rename"
   | "delete";
@@ -56,6 +59,7 @@ const MAIN_WINDOW_ACTIONS: ReadonlySet<TrayRowActionId> = new Set([
   "preview",
   "download",
   "share",
+  "insights",
   "show-in-drive",
   "rename",
   "delete",
@@ -204,6 +208,20 @@ export function canEditTrayRow(item: UploadFeedItem, editorEnabled: boolean): bo
   );
 }
 
+/**
+ * Whether a capture row offers "View insights": a screenshot or recording
+ * a link can be made for (`canLinkTrayRow`), with a link or not, since the
+ * main window's Insights panel offers to make one. Only in the Captures
+ * list, or for a row Rust also listed as a capture. The popover cannot read
+ * the server's capabilities (a provider-free webview), so the main window
+ * checks that Insights are on before it opens anything.
+ */
+export function canViewTrayRowInsights(item: UploadFeedItem, isCapture: boolean): boolean {
+  if (!isCapture || !canLinkTrayRow(item)) return false;
+  const type = getFileTypeFromExtension(item.name.split(".").pop() ?? null);
+  return type === "image" || type === "video";
+}
+
 /** Whether there is a file on this computer to reveal. */
 export function canRevealTrayRow(item: UploadFeedItem): boolean {
   if (isCloudOnlyRow(item)) return false;
@@ -221,6 +239,7 @@ export function getTrayRowActions(
   item: UploadFeedItem,
   fileManager: string,
   editorEnabled: boolean,
+  isCapture = false,
 ): TrayRowAction[] {
   const actions: TrayRowAction[] = [];
   const completed = item.feedStatus === "completed";
@@ -237,6 +256,9 @@ export function getTrayRowActions(
   if (canLinkTrayRow(item)) {
     actions.push({ id: "copy-link", label: "Copy link" });
     actions.push({ id: "share", label: "Share via link…" });
+  }
+  if (canViewTrayRowInsights(item, isCapture)) {
+    actions.push({ id: "insights", label: "View insights" });
   }
   if (hasDrive(item)) {
     actions.push({ id: "show-in-drive", label: "Show in Hippius" });
