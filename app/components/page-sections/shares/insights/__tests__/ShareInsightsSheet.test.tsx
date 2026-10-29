@@ -1110,6 +1110,26 @@ describe("the Insights side panel", () => {
     expect(store.get(insightsSheetAtom)).not.toBeNull();
   });
 
+  it("lets Escape put back a Delete or Block question without closing the panel", async () => {
+    const { store } = renderWithOpener();
+    await screen.findByText("Looks great at 1:23!");
+    for (const [item, question] of [
+      [/Delete comment/, "Delete this comment for everyone?"],
+      [/^Block/, /^Block them on this link\?/],
+    ] as const) {
+      await openMenu("Ahmad");
+      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      const asking = screen.getByText(question);
+      fireEvent.keyDown(document.activeElement ?? asking, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByText(question)).toBeNull());
+      expect(store.get(insightsSheetAtom)).not.toBeNull();
+      await waitFor(() => expect(screen.getAllByRole("button", { name: "Comment actions for Ahmad" })[0]).toHaveFocus());
+    }
+    // With no question open, Escape closes the panel as before.
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(store.get(insightsSheetAtom)).toBeNull();
+  });
+
   it("ignores Escape pressed somewhere else on the page", async () => {
     const { store, opener } = renderWithOpener();
     await screen.findByRole("complementary");
