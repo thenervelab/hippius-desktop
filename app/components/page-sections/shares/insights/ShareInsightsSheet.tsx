@@ -189,6 +189,10 @@ function CaptureInsightsPanel({
   );
 }
 
+/** After Create link, when the new link's switches could not be turned on. */
+export const SWITCHES_NOT_SENT =
+  "The link was made, but its Insights, comments and reactions couldn't be turned on. Turn them on in Link settings.";
+
 /** The no-link step's words. */
 export const NO_LINK_TITLE = "No link yet";
 export const CREATE_LINK = "Create link";
@@ -231,6 +235,8 @@ function NoLinkPanel({
       // listing: ask it again so they show the new link.
       void queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
       toast.success(link.copied ? "Link created and copied" : "Link created");
+      // Said, not left to be found: the switches it asked for are off.
+      if (link.switchesNotSent) toast.error(SWITCHES_NOT_SENT);
       onLinkCreated(link.shareToken);
     } catch (e) {
       setError(errorMessage(e));

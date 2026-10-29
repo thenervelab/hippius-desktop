@@ -398,6 +398,11 @@ export interface CaptureLink {
   shareUrl: string;
   /** The link was also put on the clipboard. */
   copied: boolean;
+  /**
+   * Its Insights, Comments and Reactions were asked for but could not be
+   * turned on, so the link has them off.
+   */
+  switchesNotSent: boolean;
 }
 
 /**

@@ -108,10 +108,13 @@ const NO_COMMENTS = { comments: [], unreadable: null };
 const NO_REACTIONS = { counts: [], total: 0 };
 const ALL_ON = { insights: true, comments: true, reactions: true };
 
+/** Answers IPC by command; a function answer is called with the arguments. */
 function answer(map: Record<string, unknown>) {
-  invokeMock.mockImplementation((cmd: string) =>
-    cmd in map ? Promise.resolve(map[cmd]) : Promise.reject(new Error(`unexpected ${cmd}`)),
-  );
+  invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+    if (!(cmd in map)) return Promise.reject(new Error(`unexpected ${cmd}`));
+    const value = map[cmd];
+    return Promise.resolve(typeof value === "function" ? value(args) : value);
+  });
 }
 
 function renderSheet(caps: ServerCapabilities = CAPS, seed?: (client: QueryClient) => void, fileName: string = NAME) {
@@ -482,18 +485,19 @@ describe("ShareInsightsSheet", () => {
 
   it("changes a link switch at once and puts it back when the server refuses", async () => {
     let settingsCalls = 0;
-    invokeMock.mockImplementation((cmd: string) => {
+    // The server's switches: a change it takes is what the next read shows.
+    let on = { insights: true, comments: false, reactions: true };
+    invokeMock.mockImplementation((cmd: string, args?: { change?: Partial<typeof on> }) => {
       if (cmd === "share_get_insights") return Promise.resolve(PAID);
       if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
       if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
       if (cmd === "share_get_link_settings")
-        return Promise.resolve({
-          offered: { insights: true, comments: true, reactions: true },
-          on: { insights: true, comments: false, reactions: true },
-        });
+        return Promise.resolve({ offered: { insights: true, comments: true, reactions: true }, on });
       if (cmd === "share_set_link_settings") {
         settingsCalls += 1;
-        return settingsCalls === 1 ? Promise.resolve() : Promise.reject({ kind: "Api", message: "nope" });
+        if (settingsCalls !== 1) return Promise.reject({ kind: "Api", message: "nope" });
+        on = { ...on, ...args?.change };
+        return Promise.resolve();
       }
       return Promise.reject(new Error(`unexpected ${cmd}`));
     });
@@ -507,7 +511,7 @@ describe("ShareInsightsSheet", () => {
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
         shareToken: "tok",
-        settings: { insights: true, comments: true, reactions: true },
+        change: { comments: true },
       }),
     );
     expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "true");
@@ -525,13 +529,17 @@ describe("ShareInsightsSheet", () => {
 
   describe("on the free plan", () => {
     const ALL = { insights: true, comments: true, reactions: true };
-    function freeLink(on: { insights: boolean; comments: boolean; reactions: boolean }) {
-      invokeMock.mockImplementation((cmd: string) => {
+    function freeLink(start: { insights: boolean; comments: boolean; reactions: boolean }) {
+      let on = start;
+      invokeMock.mockImplementation((cmd: string, args?: { change?: Partial<typeof on> }) => {
         if (cmd === "share_get_insights") return Promise.resolve({ ...FREE, totalViews: 0, uniqueViewers: 0 });
         if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
         if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
         if (cmd === "share_get_link_settings") return Promise.resolve({ offered: ALL, on, switchesInPlan: false });
-        if (cmd === "share_set_link_settings") return Promise.resolve();
+        if (cmd === "share_set_link_settings") {
+          on = { ...on, ...args?.change };
+          return Promise.resolve();
+        }
         return Promise.reject(new Error(`unexpected ${cmd}`));
       });
     }
@@ -587,14 +595,15 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: false, reactions: true },
+          change: { comments: false },
         }),
       );
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Reactions" })).not.toBeDisabled());
       fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: false, reactions: false },
+          change: { reactions: false },
         }),
       );
       await waitFor(() => expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "false"));
@@ -616,7 +625,7 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: true, reactions: true },
+          change: { insights: false },
         }),
       );
     });
@@ -727,12 +736,15 @@ describe("ShareInsightsSheet", () => {
     });
 
     it("says in the Comments tab that comments are off, with Turn on, and still lists what is there", async () => {
+      let link = SOME_OFF;
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
         share_get_reactions: NO_REACTIONS,
-        share_get_link_settings: SOME_OFF,
-        share_set_link_settings: undefined,
+        share_get_link_settings: () => link,
+        share_set_link_settings: ({ change }: { change: Partial<typeof ALL_ON> }) => {
+          link = { ...link, on: { ...link.on, ...change } };
+        },
       });
       renderSheet();
       const notice = await screen.findByText("Comments are off, so viewers can't add new ones.");
@@ -743,7 +755,7 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: ALL_ON,
+          change: { comments: true },
         }),
       );
       await waitFor(() => expect(screen.queryByText("Comments are off, so viewers can't add new ones.")).toBeNull());
