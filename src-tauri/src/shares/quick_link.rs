@@ -223,6 +223,11 @@ pub struct CaptureLink {
     pub share_url: String,
     /// The link is on the clipboard, as the capture card's "Create link" leaves it.
     pub copied: bool,
+    /// Its Insights, Comments and Reactions were asked for but could not be
+    /// turned on (the plan or the server could not be asked, or the request
+    /// failed), so the link has them off. The panel says so rather than
+    /// leaving the owner to find the switches off.
+    pub switches_not_sent: bool,
 }
 
 /// The switches a link made from the Insights panel asks for: all three, since
@@ -271,7 +276,7 @@ pub async fn create_capture_link(
             return Err(AppError::Validation(failure_copy(&e)));
         }
     };
-    crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, INSIGHTS_PANEL_LINK_SETTINGS).await;
+    let switches = crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, INSIGHTS_PANEL_LINK_SETTINGS).await;
     // A preview is drawn from the file on this computer; a cloud-only
     // capture has none here, so it gets no preview, as from the tray.
     if file_id.is_none() {
@@ -289,6 +294,7 @@ pub async fn create_capture_link(
         share_token: link.share_token,
         share_url: link.share_url,
         copied,
+        switches_not_sent: switches == crate::shares::insights::AfterMint::NotSent,
     })
 }
 
@@ -366,10 +372,11 @@ mod tests {
             share_token: "t".into(),
             share_url: "u".into(),
             copied: true,
+            switches_not_sent: false,
         };
         assert_eq!(
             serde_json::to_value(&link).expect("serialises"),
-            serde_json::json!({ "shareToken": "t", "shareUrl": "u", "copied": true })
+            serde_json::json!({ "shareToken": "t", "shareUrl": "u", "copied": true, "switchesNotSent": false })
         );
     }
 
