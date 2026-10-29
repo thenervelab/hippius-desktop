@@ -42,6 +42,17 @@ export function isCaptureMedia(name: string | null | undefined): boolean {
   return type === "image" || type === "video";
 }
 
+/**
+ * A name Hippius gives a capture: "Screenshot " or "Recording ", then
+ * `YYYY-MM-DD at HH.MM.SS`, then anything (an extension, " (edited)"). The
+ * same rule as Rust's `shares::preview::is_capture_name`. Only such a name,
+ * which carries the second it was taken, is specific enough to match a link
+ * made elsewhere by name alone: a plain `image.png` is not.
+ */
+export function isCaptureName(name: string): boolean {
+  return /^(Screenshot|Recording) \d{4}-\d{2}-\d{2} at \d{2}\.\d{2}\.\d{2}/.test(name);
+}
+
 /** The last part of a drive-relative path. */
 function baseName(relativePath: string): string {
   return relativePath.slice(relativePath.lastIndexOf("/") + 1);
@@ -53,8 +64,9 @@ function baseName(relativePath: string): string {
  * computer) from a file of the same name, unless the sizes say it was a
  * different file. The server names a link's file by name and size only, and
  * the console and the extension match links to files the same way. Trusted
- * only for screenshots and recordings, whose names carry the second they
- * were taken; any other file gets only this device's links.
+ * only for a capture's own name ({@link isCaptureName}), which carries the
+ * second it was taken; any other file, a plain `image.png` included, gets
+ * only this device's links.
  */
 export function captureSharesFrom(
   lookups: Pick<ReturnType<typeof useSharedFiles>, "getSharesFor" | "getUnplacedSharesNamed">,
@@ -64,9 +76,10 @@ export function captureSharesFrom(
 ): ShareSummary[] {
   if (!label || !relativePath) return [];
   const placed = lookups.getSharesFor(label, relativePath);
-  if (!isCaptureMedia(relativePath)) return placed;
+  const name = baseName(relativePath);
+  if (!isCaptureMedia(relativePath) || !isCaptureName(name)) return placed;
   const named = lookups
-    .getUnplacedSharesNamed(baseName(relativePath))
+    .getUnplacedSharesNamed(name)
     .filter((row) => !size || !row.plaintextSize || row.plaintextSize === size);
   return named.length === 0 ? placed : [...placed, ...named];
 }
