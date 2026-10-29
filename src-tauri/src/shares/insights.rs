@@ -858,8 +858,19 @@ async fn read_ok(resp: reqwest::Response) -> Result<String> {
     })
 }
 
-fn transport(what: &str, e: &reqwest::Error) -> AppError {
-    AppError::Hcfs(format!("{what} failed: {e}"))
+/// A request that never got an answer, worded without its URL: reqwest's
+/// `Display` appends the request URL, and every route here carries the
+/// link's token in its path, which opens the link's unencrypted preview.
+/// This text reaches the Insights panel, screenshots of it and the logs.
+fn transport(what: &str, e: reqwest::Error) -> AppError {
+    let reason = if e.is_timeout() {
+        "Hippius took too long to answer".to_string()
+    } else if e.is_connect() {
+        "couldn't reach Hippius".to_string()
+    } else {
+        e.without_url().to_string()
+    };
+    AppError::Hcfs(format!("{what} failed: {reason}"))
 }
 
 async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
@@ -869,7 +880,7 @@ async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Re
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("insights", &e))?;
+        .map_err(|e| transport("insights", e))?;
     read_ok(resp).await
 }
 
@@ -884,7 +895,7 @@ async fn get_all_comments(http: &reqwest::Client, api: &Api, token: &str) -> Res
             url = format!("{url}?after={}", query_value(cursor));
         }
         let req = http.get(url).bearer_auth(&api.bearer).timeout(REQUEST_TIMEOUT);
-        let body = read_ok(req.send().await.map_err(|e| transport("comments", &e))?).await?;
+        let body = read_ok(req.send().await.map_err(|e| transport("comments", e))?).await?;
         let page: WireCommentsPage = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("comments parse failed: {e}")))?;
         let (items, next) = page.into_parts();
         let mut fresh = 0usize;
@@ -911,7 +922,7 @@ async fn delete_comment_at(http: &reqwest::Client, api: &Api, token: &str, comme
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment delete", &e))?;
+        .map_err(|e| transport("comment delete", e))?;
     // Already gone is what the owner asked for.
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(());
@@ -930,7 +941,7 @@ async fn set_comment_author_blocked(http: &reqwest::Client, api: &Api, token: &s
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment block", &e))?;
+        .map_err(|e| transport("comment block", e))?;
     // The bodiless 404 covers a link that is gone and a comment that is no
     // longer there; the sheet re-reads the list either way, so say the one
     // the owner can act on.
@@ -947,7 +958,7 @@ async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> R
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("reactions", &e))?;
+        .map_err(|e| transport("reactions", e))?;
     read_ok(resp).await
 }
 
@@ -959,7 +970,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("share meta", &e))?;
+        .map_err(|e| transport("share meta", e))?;
     read_ok(resp).await
 }
 
@@ -971,7 +982,7 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .json(patch)
         .send()
         .await
-        .map_err(|e| transport("share settings", &e))?;
+        .map_err(|e| transport("share settings", e))?;
     read_ok(resp).await.map(|_| ())
 }
 
@@ -982,7 +993,7 @@ async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<Notificati
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1002,7 +1013,7 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
         .json(&preferences_body(prefs))
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(AppError::Api {
@@ -1824,6 +1835,22 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
         (format!("http://{addr}"), seen)
+    }
+
+    /// The token in a share route opens the link's preview, so a request
+    /// that fails must not carry its URL into the panel or the logs.
+    #[tokio::test]
+    async fn a_failed_request_never_names_its_url() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:9/v1/shares/SECRET-LINK-TOKEN/insights")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        let text = transport("insights", e).to_string();
+        assert!(!text.contains("SECRET-LINK-TOKEN"), "token leaked: {text}");
+        assert!(!text.contains("127.0.0.1"), "url leaked: {text}");
+        assert!(text.contains("insights failed: couldn't reach Hippius"), "got: {text}");
     }
 
     #[tokio::test]
