@@ -189,35 +189,51 @@ const EMPTY_GRANTS: readonly MyFolderGrantInfo[] = [];
  * The folders shared WITH this account (folder grants), behind the folder
  * roles flag. Off, this is empty and nothing is fetched; on a server without
  * folder grants the listing is simply empty.
+ *
+ * A listing that FAILED is not an empty one: `grants` stays empty (or keeps
+ * the last answer), and `isError` says so, so the Shared Drives page shows
+ * an error with Try again instead of "Nothing shared with you yet" until
+ * the cached empty answer goes stale.
  */
 export function useMyFolderGrants(): {
   grants: readonly MyFolderGrantInfo[];
   isSettled: boolean;
+  /** The last ask failed and nothing is asking again. */
+  isError: boolean;
   /** Ask again (the Shared Drives page's Retry). */
   refetch: () => void;
 } {
   // The flag alone: inside it nothing waits on a capability.
   const enabled = FOLDER_ROLES_ENABLED;
-  const { data, isFetched, refetch } = useQuery({
+  const { data, isFetched, isError, isFetching, refetch } = useQuery({
     queryKey: [MY_FOLDER_GRANTS_QUERY_KEY],
     queryFn: async () => {
       try {
         return await listMyFolderGrants();
       } catch (err) {
-        if (!isSharedDrivesUnavailable(err)) {
-          console.warn("[useMyFolderGrants] listing failed:", err);
-        }
-        return [] as MyFolderGrantInfo[];
+        // A server without shared drives has nothing shared: a real empty.
+        if (isSharedDrivesUnavailable(err)) return [] as MyFolderGrantInfo[];
+        console.warn("[useMyFolderGrants] listing failed:", err);
+        throw err;
       }
     },
     enabled,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    // A local IPC call: run it offline too, so it fails (and says so)
+    // instead of pausing with the page's skeleton up.
+    networkMode: "always",
+    retry: (failures) => failures < 1 && (typeof navigator === "undefined" || navigator.onLine !== false),
   });
   const retry = useCallback(() => {
     if (enabled) void refetch();
   }, [enabled, refetch]);
-  return { grants: data ?? EMPTY_GRANTS, isSettled: !enabled || isFetched, refetch: retry };
+  return {
+    grants: data ?? EMPTY_GRANTS,
+    isSettled: !enabled || isFetched,
+    isError: enabled && isError && !isFetching,
+    refetch: retry,
+  };
 }
 
 /** The folder grant a `grant:` browse label names, if this account holds it. */
