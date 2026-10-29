@@ -30,6 +30,7 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   insightsSheetAtom,
   shareCommentsEnabledAtom,
+  type CaptureLinkSource,
   type InsightsSheetTarget,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { findCachedShare, SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
@@ -129,12 +130,21 @@ export default function ShareInsightsSheet() {
             focusHeading={created.current === target.shareToken}
           />
         ) : (
+          // Keyed by the capture, so opening another one while a link is
+          // being made starts a fresh panel instead of carrying the first
+          // one's "Creating link…" over to it.
           <CaptureInsightsPanel
+            key={panelFocusKey(target)}
             target={target}
             onClose={onClose}
-            onLinkCreated={(shareToken) => {
-              created.current = shareToken;
-              setTarget((prev) => (prev ? { ...prev, shareToken } : prev));
+            onLinkCreated={(capture, shareToken) => {
+              // The link belongs to the capture it was made for: if the panel
+              // has moved on to another capture meanwhile, it stays as it is.
+              setTarget((prev) => {
+                if (!prev || prev.shareToken !== null || !prev.capture || !sameCapture(prev.capture, capture)) return prev;
+                created.current = shareToken;
+                return { ...prev, shareToken };
+              });
             }}
           />
         ))}
@@ -151,6 +161,11 @@ function panelFocusKey(target: InsightsSheetTarget): string {
   return target.capture ? `capture:${target.capture.label}/${target.capture.relativePath}` : (target.shareToken ?? "");
 }
 
+/** Two captures are the same file: the same drive and drive-relative path. */
+export function sameCapture(a: CaptureLinkSource, b: CaptureLinkSource): boolean {
+  return a.label === b.label && a.relativePath === b.relativePath;
+}
+
 /**
  * A capture opened before a link was known (a Captures row with none, or
  * the tray): its newest link from the share listing already loaded, else
@@ -163,7 +178,7 @@ function CaptureInsightsPanel({
 }: {
   target: InsightsSheetTarget;
   onClose: () => void;
-  onLinkCreated: (shareToken: string) => void;
+  onLinkCreated: (capture: CaptureLinkSource, shareToken: string) => void;
 }) {
   const { sharesFor, isLoading } = useCaptureShares();
   const capture = target.capture;
@@ -213,7 +228,7 @@ function NoLinkPanel({
   target: InsightsSheetTarget;
   listingLoading: boolean;
   onClose: () => void;
-  onLinkCreated: (shareToken: string) => void;
+  onLinkCreated: (capture: CaptureLinkSource, shareToken: string) => void;
 }) {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const queryClient = useQueryClient();
@@ -231,7 +246,7 @@ function NoLinkPanel({
       // listing: ask it again so they show the new link.
       void queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
       toast.success(link.copied ? "Link created and copied" : "Link created");
-      onLinkCreated(link.shareToken);
+      onLinkCreated(capture, link.shareToken);
     } catch (e) {
       setError(errorMessage(e));
       setCreating(false);

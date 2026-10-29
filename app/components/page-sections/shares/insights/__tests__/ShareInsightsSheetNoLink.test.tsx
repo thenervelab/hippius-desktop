@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -168,6 +168,37 @@ describe("the Insights panel for a capture with no link", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: `Insights for ${NAME}` })).toHaveFocus());
     // The listing is asked again, so the row's badge and button show the link.
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "hcfs_list_shares").length).toBeGreaterThan(1);
+  });
+
+  it("gives a new link to the capture it was made for, even when another capture is open by then", async () => {
+    const OTHER = "Screenshot 2026-10-28 at 16.10.31.png";
+    let finish: (value: unknown) => void = () => {};
+    answer(() => [], {
+      create_capture_link: new Promise((resolve) => {
+        finish = resolve;
+      }),
+    });
+    const store = renderSheet();
+    fireEvent.click(await screen.findByRole("button", { name: CREATE_LINK }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("create_capture_link", expect.anything()));
+
+    // While the recording's link is being made, the user opens a screenshot.
+    const other: InsightsSheetTarget = {
+      shareToken: null,
+      fileName: OTHER,
+      capture: { label: "Hippius Captures", relativePath: OTHER, fileId: null },
+    };
+    act(() => store.set(insightsSheetAtom, other));
+    // A fresh panel: the recording's "Creating link…" does not follow it.
+    expect(await screen.findByRole("button", { name: CREATE_LINK })).toBeEnabled();
+
+    await act(async () => {
+      finish({ shareToken: "rec-link", shareUrl: "https://console.hippius.com/s/rec-link", copied: true });
+    });
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    expect(store.get(insightsSheetAtom)).toEqual(other);
+    expect(screen.getByRole("button", { name: CREATE_LINK })).toBeEnabled();
+    expect(invokeMock).not.toHaveBeenCalledWith("share_get_insights", { shareToken: "rec-link" });
   });
 
   it("says why when the link could not be made, and lets the user try again", async () => {
