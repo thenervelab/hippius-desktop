@@ -293,6 +293,30 @@ describe("managing access from a shared drive's row", () => {
     expect(onOpenDrive).not.toHaveBeenCalled();
   });
 
+  // Enter and Space on the row's own controls belong to them. The row
+  // listened for them from anything inside it, so Manage access and Leave
+  // opened the drive instead.
+  it("answers Enter and Space on its buttons and menu items, never by opening the drive", async () => {
+    const onManageAccess = vi.fn();
+    const onOpenDrive = vi.fn();
+    listMyDriveMembershipsMock.mockResolvedValue([membership({ role: "manager" })]);
+    render(<SharedWithMeSection onManageAccess={onManageAccess} onOpenDrive={onOpenDrive} />);
+
+    const [manage] = await screen.findAllByRole("button", { name: "Manage access" });
+    const leave = screen.getByRole("button", { name: "Leave drive" });
+    for (const control of [manage!, leave]) {
+      for (const key of ["Enter", " "]) {
+        const event = fireEvent.keyDown(control, { key });
+        // Not swallowed either: the browser's own press still happens.
+        expect(event).toBe(true);
+      }
+    }
+    expect(onOpenDrive).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Open team-docs" }), { key: " " });
+    expect(onOpenDrive).toHaveBeenCalledTimes(1);
+  });
+
   it("opens a synced drive by its local label", async () => {
     const onManageAccess = vi.fn();
     listMyDriveMembershipsMock.mockResolvedValue([
@@ -518,6 +542,19 @@ describe("folders shared with me (folder roles)", () => {
     expect(screen.getByText("Editor")).toBeInTheDocument();
     // Never offered: syncing a granted folder to disk is out of scope.
     expect(screen.queryByText("Sync to this computer")).not.toBeInTheDocument();
+  });
+
+  it("opens from the keyboard only when the key is pressed on the row itself", async () => {
+    const onOpenFolderGrant = vi.fn();
+    render(<SharedWithMeSection onOpenFolderGrant={onOpenFolderGrant} />);
+    const row = await screen.findByRole("button", { name: "Open ACME" });
+    for (const name of ["Actions for ACME", "Leave folder"]) {
+      fireEvent.keyDown(screen.getByRole("button", { name }), { key: "Enter" });
+    }
+    expect(onOpenFolderGrant).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onOpenFolderGrant).toHaveBeenCalledTimes(1);
   });
 
   it("opens the folder rooted at itself", async () => {
