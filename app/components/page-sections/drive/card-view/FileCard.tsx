@@ -354,6 +354,7 @@ const FileCard: React.FC<FileCardProps> = ({
               label={file.label}
               actualName={file.actualFileName}
               onManageShare={(ids) => router.push(sharesPageHref(ids))}
+              fileSize={file.size}
               className="ml-1.5"
             />
             {/* Captures page only: opens the link's Insights. */}

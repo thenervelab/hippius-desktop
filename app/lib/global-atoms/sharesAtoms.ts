@@ -127,12 +127,30 @@ export const shareReactionMomentsEnabledAtom = atom(
 );
 
 /**
+ * What "Create link" in the Insights panel makes a capture's link from: its
+ * drive, its drive-relative path, and its server id when there is no copy on
+ * this computer (shared from the server, as the Share dialog does).
+ */
+export interface CaptureLinkSource {
+  label: string;
+  relativePath: string;
+  fileId?: string | null;
+}
+
+/**
  * The link whose Insights panel is open, or `null`. Set by Shared Links, the
- * Captures page and the capture card; read by `ShareInsightsSheet`, the right
- * side panel mounted beside the page in `ResponsiveContent`.
+ * Captures page, the capture card and the tray; read by `ShareInsightsSheet`,
+ * the right side panel mounted beside the page in `ResponsiveContent`.
  */
 export type InsightsSheetTarget = {
-  shareToken: string;
+  /**
+   * The link, or `null` for a capture opened before a link was known (the
+   * Captures page or the tray): the panel finds its newest link in the share
+   * listing, and offers "Create link" while it has none.
+   */
+  shareToken: string | null;
+  /** The capture the panel is about, when it was opened for one. */
+  capture?: CaptureLinkSource;
   fileName: string;
   /**
    * The capture, when the opener has it: the sheet's header shows a frame of

@@ -474,6 +474,7 @@ const NameCell: FC<NameCellProps> = ({
                     label={label}
                     actualName={actualName}
                     onManageShare={onManageShare}
+                    fileSize={file?.size}
                     className="ml-1.5"
                   />
                   {/* Captures page only: opens the link's Insights. */}

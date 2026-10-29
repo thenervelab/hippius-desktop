@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  BarChart3,
   Download,
   Eye,
   FolderOpen,
@@ -24,6 +25,7 @@ export const TRAY_ACTION_ICONS: Record<TrayRowActionId, LucideIcon> = {
   download: Download,
   "copy-link": Link2,
   share: Share2,
+  insights: BarChart3,
   "show-in-drive": HardDrive,
   reveal: FolderOpen,
   rename: Pencil,

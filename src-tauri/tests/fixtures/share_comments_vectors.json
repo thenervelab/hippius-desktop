@@ -20,6 +20,13 @@
       "ciphertext_b64": "vm37sBJMsORN1igrmTmAt7HSVn82IIWTUZtEJXGMS32oB7heevGREPyKSA=="
     },
     {
+      "kind": "comment-mentions",
+      "aad": "sx5QIbv8AjPlxin1kZs0jw:comment",
+      "nonce_b64": "oKGio6Slpqeoqaqr",
+      "plaintext": "{\"text\":\"@Owner thanks, and @Grace Liu see 0:42\",\"name\":\"Ahmad\",\"mentions\":[{\"kind\":\"owner\",\"name\":\"Owner\"},{\"kind\":\"commenter\",\"name\":\"Grace Liu\",\"comment\":\"c-17\"}]}",
+      "ciphertext_b64": "vm37sBJMsORN2A4/kn7etavbWnR/acfGXJldEJeJoaljBGClv1AD2AOzZwIW8T+XnKoCNg9xLjC2CZ1h7krVC7jESAR3PAb2Hzzw5/G28gbDZ/LAZXu5OCmqiI1y/6lHqqdqlM9XFxlcEExpM2ddC171V01lLy+W+6gQvxEZQ+FwRBC0kpfqKzbqTPrgfRHdpchMrMK9ME7ddJnrUKJKF+tRGqlI5rjSPOgk7MkEfVHpcuLPPFs="
+    },
+    {
       "kind": "viewer-name",
       "aad": "sx5QIbv8AjPlxin1kZs0jw:viewer-name",
       "nonce_b64": "oKGio6Slpqeoqaqr",
