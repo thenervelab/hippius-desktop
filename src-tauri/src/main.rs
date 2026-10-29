@@ -25,6 +25,7 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+mod ipc_guard;
 pub mod media_preview;
 pub mod notifications;
 pub mod power;
@@ -388,7 +389,8 @@ fn main() {
         // The tray icon's clicks reach Rust here, whatever state the webview
         // that made the icon is in (see `tray::panel::on_tray_icon_event`).
         .on_tray_icon_event(|app, event| crate::tray::panel::on_tray_icon_event(app, &event))
-        .invoke_handler(tauri::generate_handler![
+        // Sensitive commands answer the main window only: see `ipc_guard`.
+        .invoke_handler(crate::ipc_guard::main_window_only(tauri::generate_handler![
             // Team chat (Rust half: gate, OIDC bridge, keyring session, 4S key, native surfaces)
             chat::config::chat_get_config,
             chat::keys::chat_derive_secret_storage_key,
@@ -904,7 +906,7 @@ fn main() {
             transform_marketplace_credits,
             calculate_storage_cost,
             calculate_storage_capacity,
-        ]);
+        ]));
 
     let builder = setup(builder);
     let builder = on_window_event(builder);
