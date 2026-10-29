@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
-import ShareFileModal from "../ShareFileModal";
+import ShareFileModal, { PASSWORD_NO_COMMENTS } from "../ShareFileModal";
 import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -1204,6 +1204,28 @@ describe("ShareFileModal link switches", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The server said no."));
     expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("offers no Comments switch for a password link, says why, and sends comments off", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "hcfs_generate_share_password" ? Promise.resolve("plum-otter-41-lake") : Promise.resolve(LINK),
+    );
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Comments" });
+    fireEvent.click(screen.getByRole("button", { name: "Password protected" }));
+    await waitFor(() => expect(screen.queryByRole("switch", { name: "Comments" })).toBeNull());
+    expect(screen.getByText(PASSWORD_NO_COMMENTS)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Insights" })).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue("plum-otter-41-lake"));
+    confirmChooser();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "hcfs_create_share",
+        expect.objectContaining({ linkSettings: { insights: true, comments: false, reactions: true } }),
+      ),
+    );
   });
 
   it("on the free plan, starts every switch off and shows the upgrade prompt instead of turning one on", async () => {

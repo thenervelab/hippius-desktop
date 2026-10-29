@@ -534,7 +534,7 @@ describe("the card's actions (Rust decides which)", () => {
     tauri.onInvoke("capture_preview_open_insights", () => null);
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Insights" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "View insights" }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -547,7 +547,7 @@ describe("the card's actions (Rust decides which)", () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     expect(screen.getByRole("menuitem", { name: "Manage link" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Insights" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "View insights" })).toBeNull();
   });
 
   it("offers Manage link only when Rust does", async () => {
