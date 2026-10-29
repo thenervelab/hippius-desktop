@@ -547,20 +547,111 @@ async fn clear_pending(pool: &sqlx::SqlitePool, account_id: &str) -> Result<()> 
 /// same name), except `except`: the card's capture, which its own delivery
 /// moves. Hidden files stay. Returns how many moved.
 pub fn move_waiting(from: &Path, to: &Path, except: Option<&Path>) -> usize {
-    let Ok(entries) = std::fs::read_dir(from) else { return 0 };
-    let mut moved = 0;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let hidden = entry.file_name().to_string_lossy().starts_with('.');
-        if hidden || !path.is_file() || except == Some(path.as_path()) {
-            continue;
+    move_waiting_within(from, to, except, None).moved.len()
+}
+
+/// What [`move_waiting_within`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Moved {
+    /// Where each capture that moved is now.
+    pub moved: Vec<PathBuf>,
+    /// Recordings the plan had no room for, left where they were.
+    pub held: Vec<PathBuf>,
+}
+
+/// [`move_waiting`], oldest first, moving at most `recordings` videos when
+/// it is `Some`: a recording moved into a synced drive uploads, so on a
+/// limited plan only as many go as it has room for, and the rest come back
+/// in [`Moved::held`]. Screenshots always move.
+pub fn move_waiting_within(from: &Path, to: &Path, except: Option<&Path>, recordings: Option<usize>) -> Moved {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Moved::default();
+    };
+    let mut waiting: Vec<(Option<std::time::SystemTime>, PathBuf)> = entries
+        .flatten()
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| (entry.metadata().and_then(|m| m.modified()).ok(), entry.path()))
+        .filter(|(_, path)| path.is_file() && except != Some(path.as_path()))
+        .collect();
+    waiting.sort();
+    let mut room = recordings;
+    let mut out = Moved::default();
+    for (_, path) in waiting {
+        let video = path
+            .file_name()
+            .is_some_and(|n| super::recording_allowance::is_video_name(&n.to_string_lossy()));
+        if video && let Some(left) = room.as_mut() {
+            if *left == 0 {
+                out.held.push(path);
+                continue;
+            }
+            *left -= 1;
         }
         match super::deliver::keep_in_folder(to, &path) {
-            Ok(_) => moved += 1,
+            Ok(now) => out.moved.push(now),
             Err(e) => tracing::warn!(error = %e, "a waiting capture could not be moved into the captures drive; left where it was"),
         }
     }
-    moved
+    out
+}
+
+/// Waiting recordings the free plan has no room for: each goes into a
+/// capture temp folder of its own with a failed marker, so it comes back as
+/// its card, with Upgrade and Retry (whose delivery checks the limit again),
+/// and is never lost nor uploaded past the limit. Returns how many.
+fn hold_over_limit(held: &[PathBuf], account_id: &str, destination: &CaptureDestination) -> usize {
+    use super::kept_failed::KeptFailed;
+    let Ok(root) = super::screenshot::capture_tmp_root() else {
+        return 0;
+    };
+    let account = crate::auth::account_key::account_key(account_id);
+    let mut kept = 0;
+    for file in held {
+        let Some(name) = file.file_name() else { continue };
+        let Ok(dir) = super::screenshot::fresh_capture_dir(&root) else {
+            continue;
+        };
+        let to = dir.join(name);
+        if let Err(e) = std::fs::rename(file, &to) {
+            // Still in the waiting folder, where it is still counted.
+            tracing::warn!(error = %e, "a recording over the free limit stays in the waiting folder");
+            let _ = std::fs::remove_dir(&dir);
+            continue;
+        }
+        let marker = KeptFailed::in_flight(&account, super::session::CaptureKind::Recording, destination.clone(), false, None).failed(
+            Some(destination.clone()),
+            super::recording_allowance::LIMIT_KEPT.into(),
+            FailureReason::StorageFull,
+        );
+        super::kept_failed::write(&root, &to, &marker);
+        kept += 1;
+    }
+    kept
+}
+
+/// How many recordings are waiting in `dir`: the videos directly in it.
+#[must_use]
+pub fn waiting_recordings_in(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map_or(0, |entries| {
+        entries
+            .flatten()
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                !name.starts_with('.') && super::recording_allowance::is_video_name(&name) && e.path().is_file()
+            })
+            .count()
+    })
+}
+
+/// The folders where this account's captures wait on this computer before
+/// any drive takes them: Hippius's own waiting folder (no captures folder
+/// chosen yet) and the chosen folder whose drive could not be added yet.
+pub async fn waiting_dirs(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Vec<PathBuf>> {
+    let mut dirs = vec![waiting_dir(&home_dir()?, account_id)];
+    if let Some(pending) = load_pending(pool, account_id).await? {
+        dirs.push(pending.path);
+    }
+    Ok(dirs)
 }
 
 /// How many captures are waiting in `dir`.
@@ -717,19 +808,59 @@ pub async fn capture_drive_create(state: tauri::State<'_, AppState>, app: tauri:
             None => false,
         };
         if !already {
-            match add_drive(&app, &state, &account_id, &dir).await? {
-                Added::Ready(_) => {}
-                Added::Blocked(why) => save_pending(pool, &account_id, &dir, why).await?,
-            }
+            let ready = match add_drive(&app, &state, &account_id, &dir).await? {
+                Added::Ready(d) => Some(d),
+                Added::Blocked(why) => {
+                    save_pending(pool, &account_id, &dir, why).await?;
+                    None
+                }
+            };
             // The card's capture first, sent as Retry sends it (it waits for
             // this lock, so it sees the drive), then everything else waiting.
             let on_card = super::commands::redeliver_kept_card(&app);
+            // Into a drive that uploads them, a free plan's waiting
+            // recordings go only as far as its limit; the card's own takes
+            // one place first.
+            let mut room = match &ready {
+                Some(_) => super::recording_allowance::room_for_waiting(&state, &account_id).await,
+                None => None,
+            };
+            let card_is_recording = on_card
+                .as_deref()
+                .and_then(Path::file_name)
+                .is_some_and(|n| super::recording_allowance::is_video_name(&n.to_string_lossy()));
+            if card_is_recording && let Some(left) = room.as_mut() {
+                *left = left.saturating_sub(1);
+            }
             let waiting = waiting_dir(&home, &account_id);
-            let moved = tokio::task::spawn_blocking(move || move_waiting(&waiting, &dir, on_card.as_deref()))
+            let target = dir.clone();
+            let moved = tokio::task::spawn_blocking(move || move_waiting_within(&waiting, &target, on_card.as_deref(), room))
                 .await
-                .unwrap_or(0);
-            if moved > 0 {
-                tracing::info!(moved, "waiting captures moved into the captures drive");
+                .unwrap_or_default();
+            if !moved.moved.is_empty() {
+                tracing::info!(moved = moved.moved.len(), "waiting captures moved into the captures drive");
+            }
+            if let Some(destination) = &ready {
+                // They count from now on, before the server lists them.
+                for file in &moved.moved {
+                    if let Some(name) = file.file_name() {
+                        super::recording_allowance::note_delivered(&state, &account_id, destination, &name.to_string_lossy()).await;
+                    }
+                }
+                let held = moved.held.len();
+                if held > 0 {
+                    let kept = hold_over_limit(&moved.held, &account_id, destination);
+                    tracing::info!(held, kept, "waiting recordings over the free limit kept on this computer");
+                    super::commands::notify(
+                        &app,
+                        if held == 1 {
+                            "A recording stays on this computer".into()
+                        } else {
+                            format!("{held} recordings stay on this computer")
+                        },
+                        super::recording_allowance::LIMIT_KEPT_NOTICE.into(),
+                    );
+                }
             }
         }
     }
@@ -1039,6 +1170,34 @@ mod tests {
         assert!(drive.join("b.mp4").exists());
         assert_eq!(waiting_count(&waiting), 1);
         assert_eq!(move_waiting(&tmp.path().join("missing"), &drive, None), 0);
+    }
+
+    /// Into a drive that uploads them, a free plan's waiting recordings go
+    /// only as far as its room, oldest first; screenshots always go, and the
+    /// recordings left over stay where they were for the caller to keep.
+    #[test]
+    fn waiting_recordings_move_only_as_far_as_the_plans_room() {
+        let tmp = tempfile::tempdir().unwrap();
+        let waiting = tmp.path().join("waiting");
+        let drive = tmp.path().join("Hippius Captures");
+        std::fs::create_dir_all(&waiting).unwrap();
+        let start = std::time::SystemTime::now() - std::time::Duration::from_mins(10);
+        for (i, name) in ["old.mp4", "shot.png", "middle.mov", "new.mp4"].iter().enumerate() {
+            let file = waiting.join(name);
+            std::fs::write(&file, name).unwrap();
+            let at = start + std::time::Duration::from_mins(i as u64);
+            std::fs::File::options().write(true).open(&file).unwrap().set_modified(at).unwrap();
+        }
+        assert_eq!(waiting_recordings_in(&waiting), 3);
+        let moved = move_waiting_within(&waiting, &drive, None, Some(1));
+        assert_eq!(moved.moved, vec![drive.join("old.mp4"), drive.join("shot.png")]);
+        assert_eq!(moved.held, vec![waiting.join("middle.mov"), waiting.join("new.mp4")]);
+        assert!(waiting.join("middle.mov").exists() && waiting.join("new.mp4").exists());
+        assert_eq!(waiting_recordings_in(&waiting), 2);
+        // No limit: everything goes.
+        let rest = move_waiting_within(&waiting, &drive, None, None);
+        assert_eq!(rest.moved.len(), 2);
+        assert!(rest.held.is_empty());
     }
 
     async fn pool() -> sqlx::SqlitePool {
