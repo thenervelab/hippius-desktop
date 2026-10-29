@@ -8,7 +8,7 @@ import {
   type FocusEvent,
   type RefObject,
 } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import {
   PILL_POINTER_EVENT,
   setCapturePillTip,
@@ -89,12 +89,12 @@ export function usePillTips(
 
   useEffect(() => {
     if (!enabled) return;
-    const unlisten = listen<CaptureWindowPoint | null>(
+    const unlisten = onTauriEvent<CaptureWindowPoint | null>(
       PILL_POINTER_EVENT,
       (e) => setPoint(e.payload),
     );
     return () => {
-      void unlisten.then((fn) => fn());
+      unlisten();
     };
   }, [enabled]);
 

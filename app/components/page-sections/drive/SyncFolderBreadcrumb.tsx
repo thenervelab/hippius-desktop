@@ -35,6 +35,12 @@ interface SyncFolderBreadcrumbProps {
    * drive is the top and there is no folder list above it to go back to.
    */
   hideRoot?: boolean;
+  /**
+   * The root crumb's words when the drive was opened from another page
+   * (`DriveRoute.parent`, "Shared Drives"). Defaults to "Drive", the Drive
+   * page's folder list.
+   */
+  rootLabel?: string;
 }
 
 /**
@@ -69,9 +75,10 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   segments,
   className,
   hideRoot = false,
+  rootLabel,
 }) => {
   const hasSegments = segments.length > 0;
-  const back = resolveBreadcrumbBack(segments, onLocalClick, { hideRoot });
+  const back = resolveBreadcrumbBack(segments, onLocalClick, { hideRoot, rootLabel });
 
   return (
     <nav
@@ -107,10 +114,10 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
           className={cn(
             SEGMENT_BASE,
             hasSegments ? SEGMENT_INACTIVE : SEGMENT_ACTIVE,
-            "bg-transparent border-0 p-0 m-0",
+            "bg-transparent border-0 p-0 m-0 shrink-0",
           )}
         >
-          {ROOT_LABEL}
+          {rootLabel ?? ROOT_LABEL}
         </button>
       )}
       {segments.map((segment, index) => {

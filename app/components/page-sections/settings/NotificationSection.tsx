@@ -10,7 +10,9 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useNotificationPreferences } from "@/app/lib/hooks/useNotificationPreferences";
 import { notificationCategoryLabel } from "@/app/lib/helpers/notificationCategories";
-import { useSetAtom } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
+import { shareNotificationsEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import ShareLinkEmailsSetting from "./ShareLinkEmailsSetting";
 import {
   refreshEnabledTypesAtom,
   refreshNotificationsAtom,
@@ -117,6 +119,8 @@ export default function NotificationSection() {
   const [localEmail, setLocalEmail] = useState<EmailSettings>(EMPTY_EMAIL);
 
   const [isSaving, setIsSaving] = useState(false);
+  // Emails about share links, once the server sends them.
+  const shareEmails = useAtomValue(shareNotificationsEnabledAtom);
 
   const isAccessKeyLogin = oauthSession?.provider === "mnemonic";
   const requiresOAuthLogin = isAccessKeyLogin || !oauthSession?.token;
@@ -319,6 +323,18 @@ export default function NotificationSection() {
               {busy ? "Saving..." : "Save Changes"}
             </Button>
           </div>
+
+          {/* Share link emails save as they change, so they sit apart from the Save button above. */}
+          {shareEmails && (
+            <div
+              className={cn(
+                "transition-all duration-500 ease-out delay-200",
+                inView ? "opacity-100 translate-y-0" : "opacity-0 translate-y-3"
+              )}
+            >
+              <ShareLinkEmailsSetting />
+            </div>
+          )}
         </div>
       )}
     </InView>

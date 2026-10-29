@@ -23,6 +23,8 @@ export interface FramedDialogProps {
   headerLayout?: "centered" | "leading";
   /** One muted line under a `leading` title. */
   subtitle?: ReactNode;
+  /** A thumbnail or icon left of a `leading` title (the Insights sheet's capture). */
+  leadingVisual?: ReactNode;
   children: ReactNode;
   contentClassName?: string;
   cardClassName?: string;
@@ -49,6 +51,12 @@ export interface FramedDialogProps {
    * reader hears more than the title when the dialog opens.
    */
   describedBy?: string;
+  /**
+   * Escape, when it should do something other than close: a step inside the
+   * dialog uses it to go back a step. Call `preventDefault()` on the event
+   * to keep the dialog open. Ignored while `preventClose` is set.
+   */
+  onEscapeKeyDown?: (_event: KeyboardEvent) => void;
 }
 
 export function FramedDialog({
@@ -67,7 +75,9 @@ export function FramedDialog({
   preventClose = false,
   headerLayout = "centered",
   subtitle,
+  leadingVisual,
   describedBy,
+  onEscapeKeyDown,
 }: FramedDialogProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const bodyId = useId();
@@ -111,7 +121,7 @@ export function FramedDialog({
           aria-describedby={describedBy ?? bodyId}
           className="fixed top-0 left-0 right-0 h-screen z-[61] flex items-center justify-center p-3 sm:p-6"
           onClick={preventClose ? undefined : onClose}
-          onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : undefined}
+          onEscapeKeyDown={preventClose ? (e) => e.preventDefault() : onEscapeKeyDown}
           onPointerDownOutside={
             preventClose ? (e) => e.preventDefault() : undefined
           }
@@ -167,20 +177,29 @@ export function FramedDialog({
                 {headerLayout === "leading" ? (
                   // Compact header: title and subtitle on the left, clear of
                   // the close button in the top-right corner.
-                  <div className={cn("mb-4 min-w-0 pr-8", preventClose && "pr-0")}>
-                    <Dialog.Title
-                      className={cn(
-                        "min-w-0 truncate text-left text-lg font-semibold leading-7 text-[#0a0a0a] dark:text-white",
-                        titleClassName,
-                      )}
-                    >
-                      {title}
-                    </Dialog.Title>
-                    {subtitle ? (
-                      <div className="mt-0.5 min-w-0 text-left text-[13px] leading-5 text-grey-50 dark:text-grey-dark-600">
-                        {subtitle}
-                      </div>
-                    ) : null}
+                  <div
+                    className={cn(
+                      "mb-4 min-w-0 pr-8",
+                      preventClose && "pr-0",
+                      leadingVisual && "flex items-center gap-3",
+                    )}
+                  >
+                    {leadingVisual}
+                    <div className="min-w-0 flex-1">
+                      <Dialog.Title
+                        className={cn(
+                          "min-w-0 truncate text-left text-lg font-semibold leading-7 text-[#0a0a0a] dark:text-white",
+                          titleClassName,
+                        )}
+                      >
+                        {title}
+                      </Dialog.Title>
+                      {subtitle ? (
+                        <div className="mt-0.5 min-w-0 text-left text-[13px] leading-5 text-grey-50 dark:text-grey-dark-600">
+                          {subtitle}
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
                 ) : (
                   <>

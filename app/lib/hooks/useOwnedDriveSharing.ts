@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -45,12 +45,34 @@ const EMPTY: ReadonlyMap<string, DriveSharing> = new Map();
 export function useOwnedDriveSharing(
   ownLabels: readonly string[],
 ): ReadonlyMap<string, DriveSharing> {
-  const key = useMemo(() => [...ownLabels].sort(), [ownLabels]);
+  return useOwnedDriveSharingState(ownLabels).byLabel;
+}
 
-  const { data } = useQuery({
+/**
+ * The same answer, with whether it is still on its way: a list that shows
+ * ONLY shared drives (the Shared Drives page) must not say "none" before the
+ * sharing has been asked, where the drive page's badges can simply wait.
+ * Settled with no drives, with the flag off, and once the query answers or
+ * gives up.
+ */
+export function useOwnedDriveSharingState(ownLabels: readonly string[]): {
+  byLabel: ReadonlyMap<string, DriveSharing>;
+  isPending: boolean;
+  /**
+   * The query gave up without an answer (and is not trying again). Not the
+   * same as "no drive shared": the Shared Drives page shows a Retry for it.
+   */
+  isError: boolean;
+  /** Ask again; a retry with no answer yet reads as pending. */
+  refetch: () => void;
+} {
+  const key = useMemo(() => [...ownLabels].sort(), [ownLabels]);
+  const enabled = SHARED_DRIVES_ENABLED && key.length > 0;
+
+  const { data, isPending, isError, isFetching, refetch } = useQuery({
     queryKey: [OWNED_DRIVE_SHARING_QUERY_KEY, ...key],
     queryFn: () => listOwnedDriveSharing(key),
-    enabled: SHARED_DRIVES_ENABLED && key.length > 0,
+    enabled,
     // Two requests per drive on the server side, so no interval and no focus
     // refetch: the state changes only through this app's own mutations,
     // which invalidate explicitly, or from another device, which the next
@@ -61,12 +83,25 @@ export function useOwnedDriveSharing(
     retry: 2,
   });
 
-  return useMemo(() => {
+  const byLabel = useMemo(() => {
     if (!data) return EMPTY;
     return new Map(
       data.map(({ label, ...sharing }) => [label, sharing] as const),
     );
   }, [data]);
+  const retry = useCallback(() => {
+    void refetch();
+  }, [refetch]);
+  // A disabled query reports pending for ever; nothing is on its way then.
+  // A retry after a failure keeps the error status until it lands, so it
+  // counts as pending while it runs, or the page would hold its error card
+  // over a request already on its way.
+  return {
+    byLabel,
+    isPending: enabled && (isPending || (isFetching && !data)),
+    isError: enabled && isError && !isFetching,
+    refetch: retry,
+  };
 }
 
 /**

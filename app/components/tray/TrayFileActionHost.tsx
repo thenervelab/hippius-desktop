@@ -10,10 +10,11 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import {
   parseTrayFileActionRequest,
   trayDriveLocation,
+  trayRowRelativePath,
   TRAY_FILE_ACTION_EVENT,
   type TrayFileActionRequest,
 } from "@/app/lib/tray/trayRowActions";
-import { driveFolderRoute } from "@/app/lib/routes";
+import { capturesRoute, driveFolderRoute } from "@/app/lib/routes";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import {
   offersShareAction,
@@ -25,9 +26,12 @@ import {
   RENAME_DISABLED_TOOLTIP,
 } from "@/app/lib/utils/renameGating";
 import {
+  insightsSheetAtom,
   shareFeatureEnabledAtom,
+  shareInsightsEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { captureLinkSource } from "@/app/components/page-sections/drive/useCaptureInsightsItem";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import {
   useMemberDriveLabels,
@@ -41,6 +45,9 @@ import DeleteFileConfirmDialog from "@/app/components/page-sections/drive/Delete
 export const TRAY_RENAME_NOT_ALLOWED =
   "You can view this drive but not change it, so this file can't be renamed.";
 
+/** Said when the server has no Insights, so "View insights" has nothing to open. */
+export const TRAY_INSIGHTS_UNAVAILABLE = "Insights aren't available for your account yet.";
+
 /**
  * Runs the tray popover's row actions that need the main window: the popover
  * is a separate, provider-free webview, so it reveals this window and sends
@@ -51,7 +58,8 @@ export const TRAY_RENAME_NOT_ALLOWED =
  * global Share and Rename dialogs (`shareModalFileAtom`,
  * `renameModalFileAtom`), `downloadFile`, the one preview dialog
  * (`UnifiedMediaDialog`, mounted here like the sidebar search mounts it),
- * the Drive page at the file (`driveFolderRoute`), and the Drive's delete
+ * the Drive page at the file (`driveFolderRoute`), a capture's Insights
+ * panel on the Captures page (`insightsSheetAtom`), and the Drive's delete
  * behind a confirm. The Drive's role gates (`offersWriteAction`,
  * `canRenameFile`) are applied here again, because the popover cannot read
  * shared-drive roles; a refusal is a toast, never a silent no-op.
@@ -60,7 +68,9 @@ export default function TrayFileActionHost() {
   const router = useRouter();
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  const setInsights = useSetAtom(insightsSheetAtom);
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const memberDriveLabels = useMemberDriveLabels();
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
@@ -84,6 +94,31 @@ export default function TrayFileActionHost() {
           router.push(
             driveFolderRoute(at.label, at.remote, at.subfolder, at.fileName),
           );
+          return;
+        }
+        case "insights": {
+          // The Captures page with the capture pointed out, its Insights
+          // panel open beside it. The panel finds the capture's newest link
+          // in the listing, or offers to make one, so nothing is asked of
+          // the server here. A capture in a folder inside another drive is
+          // on the Drive page instead, as "Show in Hippius" opens it.
+          if (!insightsEnabled) {
+            toast.error(TRAY_INSIGHTS_UNAVAILABLE);
+            return;
+          }
+          const at = trayDriveLocation(file);
+          if (!at) return;
+          router.push(
+            at.subfolder
+              ? driveFolderRoute(at.label, at.remote, at.subfolder, at.fileName)
+              : capturesRoute(at.label, at.remote, at.fileName),
+          );
+          setInsights({
+            shareToken: null,
+            fileName: at.fileName,
+            file,
+            capture: captureLinkSource(file, trayRowRelativePath(file)),
+          });
           return;
         }
         case "preview":
@@ -121,6 +156,8 @@ export default function TrayFileActionHost() {
       router,
       polkadotAddress,
       shareEnabled,
+      insightsEnabled,
+      setInsights,
       memberDriveLabels,
       writableMemberDriveLabels,
       setShareModalFile,

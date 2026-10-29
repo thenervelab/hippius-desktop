@@ -15,6 +15,103 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.16] - 2026-10-27
+
+See who watched the screenshots, recordings and files you share, read what
+they say about them, and choose what each link collects. Shared drives
+have a page of their own, the Hippius logo has a fresh look, and this release
+carries security updates.
+
+### Added
+
+- **See who watched your links.** A share link's Insights show how many times
+  it was opened and by how many people. For a recording they also show how
+  much each viewer watched, the average watch time, how many watched to the
+  end, and a chart of where people stopped, with the moment most people left.
+  Open Insights from Shared Links, from the Insights button on a capture on the
+  Captures page, or from the card that appears after a screenshot or recording.
+- **Insights for every screenshot and recording.** Every capture on the
+  Captures page has an Insights button and a "View insights" item in its
+  menu, and so does each capture in the menu bar window. A capture without a
+  share link opens Insights with a "Create link" button: press it and the
+  link is made and copied, with views, comments and reactions counted where
+  your plan includes them. Links made for a capture in the browser extension,
+  the web app or on another computer show on its row too.
+- **Comments and reactions.** People who open your link can leave a comment
+  and react to it. Comments are end-to-end encrypted and are listed in the
+  link's Insights, with its reactions shown as bars. You can delete any
+  comment, or block the person who wrote it from commenting and reacting on
+  that link.
+- **See when a comment mentions you.** When a viewer tags you with @ in a
+  comment on your link, the mention is highlighted in Insights, the comment
+  says "Mentioned you", and a "Mentions you" filter shows only those
+  comments. Who was tagged stays inside the encrypted comment.
+- **Choose what each link collects.** The share dialog has Insights, Comments
+  and Reactions switches for every file link. On paid Drive plans, new
+  screenshot and recording links start with all three on, and other files
+  start with them off. On the free plan new links start with all three off,
+  and turning one on asks you to upgrade; on the free plan Insights still show
+  a link's views and viewers, and the blurred preview behind the upgrade prompt
+  is labelled Sample data. Links that already have one on keep it, and you
+  can always turn it off. For new captures, use "Track views, comments and
+  reactions" in Settings, Screenshots & Recording.
+- **Emails about your links.** Settings, Notifications lets you get an email
+  when one of your links is opened for the first time, when people comment,
+  and a daily or weekly summary of views and comments.
+- **Shared Drives has its own place in the sidebar.** One list shows the
+  drives you've shared, marked as yours with who they're shared with, and the
+  drives and folders other people invited you into, with tabs to show just one
+  kind when you have both and the total size and number of files for what you
+  are looking at. The list shows 10 drives a page. Manage who has access or
+  leave a drive from its row. Drives shared with you are no longer listed on
+  the Drive page; find them on Shared Drives.
+- **Share a drive, or make a new one to share.** "Share a drive" sits at the
+  top of the Shared Drives page; pick one of your drives, or choose "New
+  drive" beside the search. Name it and it is made on Hippius straight away,
+  without syncing a folder, and you go straight on to choosing who to share
+  it with. It shows as not synced on this computer, and you can sync it to a
+  folder later from its menu. On a plan without sharing, Share a drive says it
+  comes with Plus and takes you to upgrade; drives other people share with you
+  open as usual on any plan.
+- **Drives open right on Shared Drives.** A drive you open from Shared Drives
+  stays there: the path at the top reads Shared Drives, then the drive, then
+  each folder you open, and every step takes you back to that level. Back
+  from the drive returns to the list, on the tab you left it on.
+- **Shared Drives says what's going on when the list is empty.** An empty tab
+  says what belongs there: drives other people invite you into, or a way to
+  share one of your own. If the list can't load, for example while you're
+  offline, it says so with Try again instead of saying nothing is shared, and
+  loads again by itself once you're back online.
+- **The Drive page shows ten drives a page.** Now that drives shared with you
+  are on Shared Drives, your own drives list 10 a page instead of 8, with no
+  page numbers when 10 or fewer fit.
+
+### Changed
+
+- **The Hippius logo has a fresh look.** The name and logo at the top of the
+  window, on the sign-in screens, in the menu bar window and in the update
+  dialog use the flat Hippius mark, with the name in black, or white in dark
+  mode.
+- **Insights open in a side panel.** A share link's Insights open in a panel
+  on the right, like file details, instead of a window over the page, so the
+  page stays in view. Views, completion and how many comments and reactions a
+  link has stay at the top, with Comments, Viewers and Reactions tabs below, so
+  a link with twenty or more comments stays easy to read: long comments and
+  replies fold away until you open them, comments sort newest or oldest first,
+  and more load as you go. The link's Insights, Comments and Reactions switches
+  sit behind the gear at the top, and long names are shortened in the middle
+  with the full name on hover. Someone who signed in with an access key shows
+  as a short address, like 5dsqam…sk63, instead of the whole wallet address.
+  Press Escape to close it.
+
+### Security
+
+- **Signing in with your recovery phrase uses an updated signing library.** It
+  fixes a timing weakness found in the library Hippius used before. Nothing
+  changes in how you sign in.
+- **A compression library Hippius uses is updated.** It fixes four security
+  issues reported in it.
+
 ## [0.6.15] - 2026-10-23
 
 The free plan's recording count now includes every recording in your

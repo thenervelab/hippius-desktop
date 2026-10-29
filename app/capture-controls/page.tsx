@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { ChevronDown, ChevronUp, Mic, MicOff, Pause, Play, RotateCcw, Square, Trash2, Video, VideoOff, VolumeX, X } from "lucide-react";
 import "@/app/lib/capture/floating-window.css";
 import {
@@ -194,20 +194,20 @@ export default function CaptureControlsPage() {
       })
       .catch(() => undefined);
     const unlisteners = [
-      listen<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
-      listen<CaptureCameraState>("capture_camera_state", (e) => {
+      onTauriEvent<CapturePhaseEvent>("capture_state_changed", (e) => take(e.payload)),
+      onTauriEvent<CaptureCameraState>("capture_camera_state", (e) => {
         heardCamera = true;
         setCamera(e.payload);
       }),
-      listen<CaptureDeviceLost>(DEVICE_LOST_EVENT, (e) => setLost(e.payload)),
-      listen<CaptureMicrophoneState>(MICROPHONE_STATE_EVENT, (e) => {
+      onTauriEvent<CaptureDeviceLost>(DEVICE_LOST_EVENT, (e) => setLost(e.payload)),
+      onTauriEvent<CaptureMicrophoneState>(MICROPHONE_STATE_EVENT, (e) => {
         heardMic = true;
         setMic(e.payload);
       }),
-      listen<number | null>(PILL_COUNTDOWN_EVENT, (e) => setCountdown(e.payload)),
+      onTauriEvent<number | null>(PILL_COUNTDOWN_EVENT, (e) => setCountdown(e.payload)),
     ];
     return () => {
-      for (const u of unlisteners) void u.then((fn) => fn());
+      for (const stop of unlisteners) stop();
     };
   }, []);
 

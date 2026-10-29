@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
@@ -193,10 +193,12 @@ const EMPTY_GRANTS: readonly MyFolderGrantInfo[] = [];
 export function useMyFolderGrants(): {
   grants: readonly MyFolderGrantInfo[];
   isSettled: boolean;
+  /** Ask again (the Shared Drives page's Retry). */
+  refetch: () => void;
 } {
   // The flag alone: inside it nothing waits on a capability.
   const enabled = FOLDER_ROLES_ENABLED;
-  const { data, isFetched } = useQuery({
+  const { data, isFetched, refetch } = useQuery({
     queryKey: [MY_FOLDER_GRANTS_QUERY_KEY],
     queryFn: async () => {
       try {
@@ -212,7 +214,10 @@ export function useMyFolderGrants(): {
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
-  return { grants: data ?? EMPTY_GRANTS, isSettled: !enabled || isFetched };
+  const retry = useCallback(() => {
+    if (enabled) void refetch();
+  }, [enabled, refetch]);
+  return { grants: data ?? EMPTY_GRANTS, isSettled: !enabled || isFetched, refetch: retry };
 }
 
 /** The folder grant a `grant:` browse label names, if this account holds it. */

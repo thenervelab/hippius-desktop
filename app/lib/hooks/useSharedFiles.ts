@@ -22,7 +22,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 
 import { listShares, type ShareSummary } from "@/app/lib/tauri/shares";
@@ -30,35 +30,52 @@ import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 
-const SHARES_QUERY_KEY = "shares-list";
+/** The share listing's query key, shared with the `/shares` page. */
+export const SHARES_QUERY_KEY = "shares-list";
 
-type SharedIndex = Map<string, Map<string, ShareSummary[]>>;
+interface SharedIndex {
+  byPath: Map<string, Map<string, ShareSummary[]>>;
+  /** Links this device has no origin for, by `filename`. */
+  unplacedByName: Map<string, ShareSummary[]>;
+}
 
 interface UseSharedFilesResult {
   /** Active share rows for this `(label, relativePath)` pair. Empty array for unshared files. */
   getSharesFor: (label: string | null | undefined, relativePath: string | null | undefined) => ShareSummary[];
+  /**
+   * Active links made from a file of this name that this device has no
+   * origin for: made in the browser extension, the web console or on
+   * another computer (`share_origin` is per device). The server names a
+   * link's file by name and size only, so this is all there is to match
+   * them by; callers decide where a name is specific enough to trust.
+   */
+  getUnplacedSharesNamed: (fileName: string | null | undefined) => ShareSummary[];
   /** True while the first fetch is in flight. */
   isLoading: boolean;
 }
 
-const EMPTY_INDEX: SharedIndex = new Map();
+const EMPTY_INDEX: SharedIndex = { byPath: new Map(), unplacedByName: new Map() };
 const EMPTY_ROWS: ShareSummary[] = [];
 
+function pushTo(map: Map<string, ShareSummary[]>, key: string, row: ShareSummary) {
+  const list = map.get(key);
+  if (list) list.push(row);
+  else map.set(key, [row]);
+}
+
 function buildIndex(rows: ShareSummary[]): SharedIndex {
-  const index: SharedIndex = new Map();
+  const index: SharedIndex = { byPath: new Map(), unplacedByName: new Map() };
   for (const row of rows) {
-    if (!row.folderLabel || !row.relativePath) continue;
-    let folder = index.get(row.folderLabel);
+    if (!row.folderLabel || !row.relativePath) {
+      if (row.filename) pushTo(index.unplacedByName, row.filename, row);
+      continue;
+    }
+    let folder = index.byPath.get(row.folderLabel);
     if (!folder) {
       folder = new Map();
-      index.set(row.folderLabel, folder);
+      index.byPath.set(row.folderLabel, folder);
     }
-    const list = folder.get(row.relativePath);
-    if (list) {
-      list.push(row);
-    } else {
-      folder.set(row.relativePath, [row]);
-    }
+    pushTo(folder, row.relativePath, row);
   }
   return index;
 }
@@ -90,11 +107,30 @@ export function useSharedFiles(): UseSharedFilesResult {
       relativePath: string | null | undefined,
     ): ShareSummary[] => {
       if (!label || !relativePath) return EMPTY_ROWS;
-      const folder = index.get(label);
+      const folder = index.byPath.get(label);
       if (!folder) return EMPTY_ROWS;
       return folder.get(relativePath) ?? EMPTY_ROWS;
     };
   }, [index]);
+  const getUnplacedSharesNamed = useMemo(() => {
+    return (fileName: string | null | undefined): ShareSummary[] =>
+      (fileName && index.unplacedByName.get(fileName)) || EMPTY_ROWS;
+  }, [index]);
 
-  return { getSharesFor, isLoading: isLoading && shareEnabled };
+  return { getSharesFor, getUnplacedSharesNamed, isLoading: isLoading && shareEnabled };
+}
+
+/**
+ * One link from the share listing already in the cache, by its token, or
+ * `null`. Reads only what is cached (any account's entry), so it never asks
+ * the server: the Insights sheet's header uses it for the date the link was
+ * made, and leaves the date out when the listing has not been loaded.
+ */
+export function findCachedShare(client: QueryClient, shareToken: string): ShareSummary | null {
+  for (const [, data] of client.getQueriesData<unknown>({ queryKey: [SHARES_QUERY_KEY] })) {
+    if (!Array.isArray(data)) continue;
+    const row = (data as ShareSummary[]).find((r) => r?.shareToken === shareToken);
+    if (row) return row;
+  }
+  return null;
 }

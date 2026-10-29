@@ -27,6 +27,7 @@ import {
 } from "@/app/lib/utils/restoreUtils";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
+import { fetchSyncFoldersWithStats } from "@/app/lib/tauri/syncFolders";
 import {
   getHcfsConfig,
   saveHcfsConfig,
@@ -34,6 +35,7 @@ import {
 import { HcfsSetupDialog } from "@/components/page-sections/settings/HcfsSetupDialog";
 import { Button } from "@/components/ui/button";
 import FolderList from "./folder-list/FolderList";
+import { DRIVE_LIST_PAGE_SIZE } from "./folder-list/folderListPaging";
 import CaptureButtons from "@/app/components/capture/CaptureButtons";
 import FolderListEmptyState from "./folder-list/FolderListEmptyState";
 import DriveStatusBanner from "./service-status/DriveStatusBanner";
@@ -52,7 +54,6 @@ import {
 import { RefreshCw } from "lucide-react";
 import { ArrowUpToLine } from "@/components/ui/icons";
 import {
-  SharedWithMeSection,
   RemoveFolderDialog,
   PauseSyncDialog,
   SyncDestinationDialog,
@@ -67,7 +68,6 @@ import {
 import { applyDriveStatusToRow } from "@/app/lib/utils/driveRowStatus";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
-import ShareDriveFlow from "./share-drive-picker/ShareDriveFlow";
 interface DriveOnboardingProps {
   // Fired when a folder is added or a remote folder is synced. `newLabel`
   // is the unique label of the newly added/synced folder; the parent uses
@@ -81,22 +81,6 @@ interface DriveOnboardingProps {
   // drive in the files view (server-only browsing — no local sync needed).
   onOpenRemoteFolder?: (label: string) => void;
   /**
-   * Open a drive somebody shared with this account, without syncing it here.
-   * Browsing needs its WIRE identity, since no local row names it.
-   */
-  onOpenSharedDrive?: (identity: {
-    ownerSs58: string;
-    folderHash: string;
-    displayLabel: string;
-  }) => void;
-  /** Open a FOLDER shared with this account, rooted at that folder. */
-  onOpenFolderGrant?: (grant: {
-    ownerSs58: string;
-    folderHash: string;
-    pathPrefix: string;
-    folderName: string;
-  }) => void;
-  /**
    * Polled plan gate: uploads / sync will be refused. Clicks open the
    * upgrade dialog instead of the folder picker.
    */
@@ -107,8 +91,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   onSyncStarted,
   onSelectFolder,
   onOpenRemoteFolder,
-  onOpenSharedDrive,
-  onOpenFolderGrant,
   isStorageFull = false,
 }) => {
   const { polkadotAddress, getMnemonic } = useWalletAuth();
@@ -140,9 +122,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
-  // "Share a drive" from Shared with Me: the picker of this account's own
-  // drives. Continue hands over to the Share dialog, closing this first.
-  const [sharePickerOpen, setSharePickerOpen] = useState(false);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   // Remove folder dialog state. `mode: "leave"` is the member-drive
@@ -232,54 +211,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
       if (!opts?.silent) setIsLoading(true);
 
       // Single Rust call: fetches local + remote folders, joins data, determines status
-      const result = await invoke<{
-        local: Array<{
-          id: string;
-          folderName: string;
-          localPath: string;
-          status: string;
-          fileCount: number | null;
-          totalBytes: number | null;
-          lastModified: number | null;
-          ownerSs58: string | null;
-        }>;
-        remote: Array<{
-          folderName: string;
-          deviceName: string;
-          fileCount: number;
-          totalBytes: number;
-          lastModified: number;
-          origin: { kind: "locallyRemoved" } | { kind: "otherDevice" };
-        }>;
-      }>("get_sync_folders_with_stats", { accountId: polkadotAddress });
-
-      // Keep all three stat fields the Rust IPC returns
-      // (`get_sync_folders_with_stats` already populates them). The
-      // shared folder list renders them inline next to the
-      // status pill, so dropping them here was the difference between
-      // the Files-page card showing "default · Syncing" and the
-      // Settings-page card showing "default · Syncing · 229.8 MB ·
-      // 351 files · May 26, 2026 at 5:50 pm".
-      const localFolders: SyncFolder[] = result.local.map((f) => ({
-        id: f.id,
-        folderName: f.folderName,
-        localPath: f.localPath,
-        isLocal: true,
-        status: f.status as "syncing" | "paused",
-        fileCount: f.fileCount ?? undefined,
-        totalBytes: f.totalBytes ?? undefined,
-        lastModified: f.lastModified ?? undefined,
-        ownerSs58: f.ownerSs58 ?? undefined,
-      }));
-
-      const remoteFoldersData: RemoteFolder[] = result.remote.map((f) => ({
-        folderName: f.folderName,
-        deviceName: f.deviceName,
-        fileCount: f.fileCount,
-        totalBytes: f.totalBytes,
-        lastModified: f.lastModified,
-        origin: f.origin,
-      }));
+      const { local: localFolders, remote: remoteFoldersData } =
+        await fetchSyncFoldersWithStats(polkadotAddress);
 
       setSyncFolders(localFolders);
       setRemoteFolders(remoteFoldersData);
@@ -626,13 +559,6 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
     ),
   );
 
-  // The drives the picker offers: this account's own, the same set the
-  // sharing marks are asked about.
-  const ownDriveLabels = useMemo(
-    () => folderRows.filter((r) => !r.ownerSs58).map((r) => r.folderName),
-    [folderRows],
-  );
-
   // The Sync a Folder action, wherever it is offered on this page.
   const startSyncFolder = async () => {
     if (isStorageFull) return;
@@ -720,6 +646,10 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
           }
           rows={folderRows}
           isLoading={isLoading}
+          // Ten a page, like Shared Drives: drives shared with you moved
+          // there, so this list no longer makes room for them below it. The
+          // default of eight stays for Settings, where they still sit below.
+          pageSize={DRIVE_LIST_PAGE_SIZE}
           headerAction={
             /* Two kinds of action, told apart by where they sit rather
                than by wording alone. Left of the divider adds CONTENT to a
@@ -801,33 +731,9 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
             to decide. An account with folders, or one already on a plan,
             sees nothing here; the header card covers them. */}
         <FreshAccountPlans hasFolders={folderRows.length > 0} isLoading={isLoading} />
-
-        {/* Flag-gated; always shown here, with "Share a drive" when nothing
-            is shared with this account yet. onDriveAdded routes the new label
-            to the breadcrumb exactly like a freshly added local folder. */}
-        <SharedWithMeSection
-          onShareDrive={() => setSharePickerOpen(true)}
-          onOpenDrive={onOpenSharedDrive}
-          onOpenFolderGrant={onOpenFolderGrant}
-          onManageAccess={setShareDriveTarget}
-          onDriveAdded={(label) => {
-            loadFolders();
-            onSyncStarted(label);
-          }}
-        />
-
       </div>
 
       {/* ──────── Dialogs ──────── */}
-      {sharePickerOpen && (
-        <ShareDriveFlow
-          drives={ownDriveLabels}
-          sharingByLabel={ownDriveSharing}
-          loading={isLoading}
-          onClose={() => setSharePickerOpen(false)}
-          onAddDrive={() => void startSyncFolder()}
-        />
-      )}
       <FolderUploadDialog
         open={isFolderUploadOpen}
         onClose={() => setIsFolderUploadOpen(false)}

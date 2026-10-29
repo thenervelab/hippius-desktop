@@ -573,6 +573,10 @@ pub(crate) fn share_progress_forwarder(channel: Channel<ShareProgress>) -> Share
 /// link is minted, a picture of the file is uploaded for chat apps in the
 /// background (`shares::preview`). Never for a password share, whatever the
 /// switch says.
+///
+/// `link_settings` is the dialog's Insights, Comments and Reactions switches,
+/// sent to the server once the link exists, in the background
+/// (`shares::insights`); `None` (an older front end) sends nothing.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // the dialog's choices plus the app handle the background preview needs
 pub async fn hcfs_create_share(
@@ -584,6 +588,7 @@ pub async fn hcfs_create_share(
     visibility: String,
     password: Option<String>,
     chat_preview: Option<bool>,
+    link_settings: Option<super::insights::LinkSettings>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
@@ -603,6 +608,9 @@ pub async fn hcfs_create_share(
 
     let progress = share_progress_forwarder(on_progress);
     let link = create_share_inner(&state, &account_id, &folder_label, &relative_path, ttl, choice, Some(progress)).await?;
+    if let Some(settings) = link_settings {
+        super::insights::spawn_apply(&app, &account_id, &link.share_token, settings);
+    }
     if send_preview {
         spawn_preview_for_synced(&app, &state, &account_id, &folder_label, &relative_path, &link.share_token).await;
     }
@@ -991,14 +999,15 @@ pub async fn hcfs_create_remote_share(
     visibility: String,
     password: Option<String>,
     chat_preview: Option<bool>,
+    link_settings: Option<super::insights::LinkSettings>,
     on_progress: Channel<ShareProgress>,
 ) -> Result<ShareLink> {
     let account_id = state.current_account_id()?;
     let ttl = parse_ttl(&ttl)?;
     let choice = ShareChoice::parse(&visibility, password)?;
-    let preview = super::preview::allowed(&choice, chat_preview.unwrap_or(false)).then_some(PreviewAfterMint { app });
+    let preview = super::preview::allowed(&choice, chat_preview.unwrap_or(false)).then_some(PreviewAfterMint { app: app.clone() });
     let progress = share_progress_forwarder(on_progress);
-    create_remote_share_inner(
+    let link = create_remote_share_inner(
         &state,
         &account_id,
         &folder_label,
@@ -1009,7 +1018,11 @@ pub async fn hcfs_create_remote_share(
         Some(progress),
         preview,
     )
-    .await
+    .await?;
+    if let Some(settings) = link_settings {
+        super::insights::spawn_apply(&app, &account_id, &link.share_token, settings);
+    }
+    Ok(link)
 }
 
 // ─── Folder shares (browsable live links) ──────────────────────────────────

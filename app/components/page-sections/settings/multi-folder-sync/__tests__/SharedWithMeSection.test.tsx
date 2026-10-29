@@ -96,11 +96,6 @@ vi.mock("@/app/lib/tauri/sharedDrives", async (importOriginal) => {
   };
 });
 
-const openUrlMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: (...args: unknown[]) => openUrlMock(...args),
-}));
-
 const openDialogMock = vi.fn();
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: (...args: unknown[]) => openDialogMock(...args),
@@ -190,6 +185,56 @@ describe("silent non-rows states", () => {
     listMyDriveMembershipsMock.mockResolvedValue([]);
     const { container } = render(<SharedWithMeSection />);
     await waitFor(() => expect(listMyDriveMembershipsMock).toHaveBeenCalled());
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// The Shared Drives page keeps the section up with nothing in it, under its
+// own heading and with its own empty text. Sharing starts in that page's
+// other card, so the section offers none.
+describe("on the Shared Drives page (alwaysShow)", () => {
+  it("shows its own heading and empty text once nothing turns out to be shared", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([]);
+    render(
+      <SharedWithMeSection
+        label="Shared with Me"
+        alwaysShow
+        emptyState={<p>Nothing shared with you yet</p>}
+      />,
+    );
+    expect(await screen.findByText("Nothing shared with you yet")).toBeInTheDocument();
+    expect(screen.getByText("Shared with Me")).toBeInTheDocument();
+    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+  });
+
+  it("holds skeleton rows, not the empty text, while the listing is out", () => {
+    listMyDriveMembershipsMock.mockReturnValue(new Promise(() => undefined));
+    render(<SharedWithMeSection alwaysShow emptyState={<p>Nothing shared with you yet</p>} />);
+    expect(screen.getByLabelText("Loading drives shared with you")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing shared with you yet")).not.toBeInTheDocument();
+  });
+
+  it("names its card as asked when there are rows, with no button in its header", async () => {
+    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
+    render(<SharedWithMeSection label="Shared with you" alwaysShow />);
+    expect(await screen.findByText("Shared with you")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Share a drive/ })).not.toBeInTheDocument();
+  });
+
+  it("stays hidden on a feature-off server", async () => {
+    listMyDriveMembershipsMock.mockRejectedValue(UNAVAILABLE);
+    const { container } = render(
+      <SharedWithMeSection alwaysShow emptyState={<p>Nothing shared with you yet</p>} />,
+    );
+    await waitFor(() => expect(listMyDriveMembershipsMock).toHaveBeenCalled());
+    await waitFor(() => expect(container).toBeEmptyDOMElement());
+  });
+
+  it("stays hidden with the flag off", () => {
+    flagState.sharedDrivesEnabled = false;
+    const { container } = render(
+      <SharedWithMeSection alwaysShow emptyState={<p>Nothing shared with you yet</p>} />,
+    );
     expect(container).toBeEmptyDOMElement();
   });
 });
@@ -576,55 +621,123 @@ describe("folders shared with me (folder roles)", () => {
   });
 });
 
-describe("on the Drive page (Share a drive)", () => {
-  it("shows the empty state with Share a drive and the docs when nothing is shared", async () => {
-    listMyDriveMembershipsMock.mockResolvedValue([]);
-    const onShareDrive = vi.fn();
-    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
-
-    const region = await screen.findByRole("region", { name: "A place for teamwork" });
-    expect(screen.getByText("Shared with Me")).toBeInTheDocument();
-    expect(screen.getByTestId("teamwork-illustration")).toBeInTheDocument();
-    expect(
-      screen.getByText("Share a drive to work on the same encrypted files with your team."),
-    ).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
-    expect(onShareDrive).toHaveBeenCalledTimes(1);
-
-    // Docs open in the browser, never in the app's own window.
-    fireEvent.click(screen.getByRole("link", { name: /How shared drives work/ }));
-    expect(openUrlMock).toHaveBeenCalledWith("https://docs.hippius.com/use/desktop/shared-drives");
-    expect(region).toBeInTheDocument();
+// The Shared Drives page draws these rows inside its own list: it holds the
+// memberships fetch (for its tab counts), frames the list, draws the loading
+// and empty states, and pages drives and folders as one sequence.
+describe("as rows of the Shared Drives page's list", () => {
+  const controller = (memberships: DriveMembershipInfo[]) => ({
+    data: { kind: "ready" as const, memberships },
+    reload: vi.fn(async () => {}),
+    markUnavailable: vi.fn(),
   });
 
-  it("holds skeleton rows while the listing loads, never the empty state", () => {
-    listMyDriveMembershipsMock.mockReturnValue(new Promise(() => undefined));
-    render(<SharedWithMeSection onShareDrive={vi.fn()} />);
-    expect(screen.getByLabelText("Loading drives shared with you")).toBeInTheDocument();
-    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
+  it("uses the page's fetch and never asks again", async () => {
+    render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={controller([membership({ displayLabel: "Design" })])}
+      />,
+    );
+    expect(await screen.findByText("Design")).toBeInTheDocument();
+    expect(listMyDriveMembershipsMock).not.toHaveBeenCalled();
   });
 
-  it("lists shared drives with a Share a drive button in the header", async () => {
-    listMyDriveMembershipsMock.mockResolvedValue([membership()]);
-    const onShareDrive = vi.fn();
-    render(<SharedWithMeSection onShareDrive={onShareDrive} />);
-    await screen.findByText("team-docs");
-    expect(screen.queryByText("A place for teamwork")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Share a drive/ }));
-    expect(onShareDrive).toHaveBeenCalledTimes(1);
+  it("draws only the rows, with no card heading", async () => {
+    render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        label="Shared with Me"
+        memberships={controller([membership({ displayLabel: "Design" })])}
+      />,
+    );
+    await screen.findByText("Design");
+    expect(screen.queryByText("Shared with Me")).not.toBeInTheDocument();
   });
 
-  it("stays hidden on a feature-off server", async () => {
-    listMyDriveMembershipsMock.mockRejectedValue(UNAVAILABLE);
-    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
-    await waitFor(() => expect(listMyDriveMembershipsMock).toHaveBeenCalled());
-    await waitFor(() => expect(container).toBeEmptyDOMElement());
-  });
-
-  it("stays hidden with the flag off", () => {
-    flagState.sharedDrivesEnabled = false;
-    const { container } = render(<SharedWithMeSection onShareDrive={vi.fn()} />);
+  it("draws nothing while loading or empty: the page owns those states", () => {
+    const { container, rerender } = render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={{ data: { kind: "loading" }, reload: vi.fn(), markUnavailable: vi.fn() }}
+      />,
+    );
     expect(container).toBeEmptyDOMElement();
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <SharedWithMeSection variant="rows" alwaysShow memberships={controller([])} />
+      </QueryClientProvider>,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("draws the slice of drives the page's pager asks for", async () => {
+    const drives = ["One", "Two", "Three"].map((displayLabel, i) =>
+      membership({ displayLabel, folderHash: `${i}`.repeat(16) }),
+    );
+    render(
+      <SharedWithMeSection variant="rows" alwaysShow memberships={controller(drives)} slice={{ start: 1, end: 3 }} />,
+    );
+    expect(await screen.findByText("Two")).toBeInTheDocument();
+    expect(screen.getByText("Three")).toBeInTheDocument();
+    expect(screen.queryByText("One")).not.toBeInTheDocument();
+  });
+
+  it("draws nothing for an empty slice", () => {
+    const { container } = render(
+      <SharedWithMeSection
+        variant="rows"
+        alwaysShow
+        memberships={controller([membership({ displayLabel: "Design" })])}
+        slice={{ start: 0, end: 0 }}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("reloads through the page's fetch after leaving a drive", async () => {
+    const ctl = controller([membership({ displayLabel: "Design" })]);
+    leaveSharedDriveByIdentityMock.mockResolvedValue(undefined);
+    render(<SharedWithMeSection variant="rows" alwaysShow memberships={ctl} />);
+    // The row menu's item, then the confirmation's button of the same name.
+    fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    const buttons = screen.getAllByRole("button", { name: "Leave drive" });
+    fireEvent.click(buttons[buttons.length - 1]!);
+    await waitFor(() => expect(ctl.reload).toHaveBeenCalled());
+  });
+});
+
+describe("folders after drives, in the page's slice", () => {
+  beforeEach(() => {
+    folderRolesFlag.on = true;
+    listMyFolderGrantsMock.mockResolvedValue([
+      {
+        ownerSs58: OWNER,
+        folderHash: "0123456789abcdef",
+        displayLabel: "team-docs",
+        pathPrefix: "Clients/ACME",
+        role: "reader",
+        createdAt: "2026-08-20T00:00:00Z",
+      },
+    ]);
+    folderGrantStatsMock.mockResolvedValue({ totalBytes: 1, fileCount: 1, truncated: false });
+  });
+
+  afterEach(() => {
+    folderRolesFlag.on = false;
+  });
+
+  it("counts a folder after every drive", async () => {
+    const memberships = {
+      data: { kind: "ready" as const, memberships: [membership({ displayLabel: "Design" })] },
+      reload: vi.fn(async () => {}),
+      markUnavailable: vi.fn(),
+    };
+    render(<SharedWithMeSection variant="rows" alwaysShow memberships={memberships} slice={{ start: 1, end: 2 }} />);
+    expect(await screen.findByText("ACME")).toBeInTheDocument();
+    expect(screen.queryByText("Design")).not.toBeInTheDocument();
   });
 });

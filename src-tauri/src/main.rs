@@ -105,6 +105,7 @@ use crate::recovery::{
     restore_with_mnemonic, resume_recovery_password_rotation, seal_and_upload_mnemonic,
 };
 use crate::recovery_binding::{cancel_account_recovery, list_recoverable_accounts, recover_account_files};
+use crate::sync::cloud_drive::create_cloud_drive;
 use crate::sync::control::{reveal_drive_in_finder, trigger_sync_now};
 use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
@@ -512,6 +513,7 @@ fn main() {
             rename_remote_file,
             rename_remote_folder,
             create_remote_folder,
+            create_cloud_drive,
             list_remote_folder_grouped,
             locate_remote_folder_entry,
             folder_grant_stats,
@@ -529,11 +531,25 @@ fn main() {
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
             crate::shares::quick_link::copy_file_share_link,
+            crate::shares::quick_link::create_capture_link,
             crate::shares::commands::hcfs_create_folder_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
             crate::shares::commands::hcfs_set_share_preview,
             crate::shares::commands::hcfs_share_preview_default,
+            crate::shares::insights::share_engagement_features,
+            crate::shares::insights::share_get_insights,
+            crate::shares::insights::share_list_comments,
+            crate::shares::insights::share_delete_comment,
+            crate::shares::insights::share_block_commenter,
+            crate::shares::insights::share_unblock_commenter,
+            crate::shares::insights::share_get_reactions,
+            crate::shares::insights::share_get_link_settings,
+            crate::shares::insights::share_set_link_settings,
+            crate::shares::insights::share_link_settings_default,
+            crate::shares::insights::share_switches_in_plan,
+            crate::shares::insights::share_get_notification_preferences,
+            crate::shares::insights::share_set_notification_preferences,
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_reshare_folder_link,
@@ -792,6 +808,7 @@ fn main() {
             crate::capture::commands::capture_preview_mint_link,
             crate::capture::commands::capture_preview_revoke_link,
             crate::capture::commands::capture_preview_manage_link,
+            crate::capture::commands::capture_preview_open_insights,
             crate::capture::commands::capture_preview_reveal,
             crate::capture::commands::capture_preview_discard,
             crate::capture::commands::capture_limit_upgrade,

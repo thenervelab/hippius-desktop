@@ -6,6 +6,7 @@
 // wire shape is a one-file change.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import type { LinkSettings } from "./shareInsights";
 
 /**
  * Server feature advertisement. Old hcfs-server deployments either
@@ -58,6 +59,20 @@ export interface ServerCapabilities {
   upload_folder_shares?: boolean;
   /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
   share_preview?: boolean;
+  /** A link's Insights and its Insights switch. Absent on older servers. */
+  share_insights?: boolean;
+  /** Encrypted comments and reactions on links. Absent on older servers. */
+  share_comments?: boolean;
+  /** Emails about views and comments on links. Absent on older servers. */
+  share_notifications?: boolean;
+  /** Per-link view and comment counts on the share listing (hcfs #805). Absent on older servers. */
+  share_listing_counts?: boolean;
+  /** When the owner last looked at a link's Insights (hcfs #805). Absent on older servers. */
+  share_insights_seen?: boolean;
+  /** Replies to comments and the owner's replies (hcfs #804). Absent on older servers. */
+  share_comment_replies?: boolean;
+  /** The moment of the recording each reaction was made at (hcfs #803). Absent on older servers. */
+  share_reaction_moments?: boolean;
   /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
@@ -111,6 +126,11 @@ export interface ShareChoice {
    * it for a password share and for folders.
    */
   chatPreview?: boolean;
+  /**
+   * The Insights, Comments and Reactions switches, sent once the link exists.
+   * Left out (a folder, or a server without them) nothing is sent.
+   */
+  linkSettings?: LinkSettings;
 }
 
 /** Where the "Show a preview in chats" switch starts. Mirrors Rust's `PreviewDefault`. */
@@ -272,6 +292,17 @@ export interface ShareSummary {
    */
   folderLabel: string | null;
   relativePath: string | null;
+  /**
+   * The link's views and comments, whether it counts views, and whether
+   * anything happened since the owner last opened its Insights. Only once
+   * the server's listing carries them (`share_listing_counts` /
+   * `share_insights_seen`, hcfs #805); Rust sends none yet, and nothing
+   * reads them without the capability.
+   */
+  views?: number;
+  comments?: number;
+  insightsOn?: boolean;
+  newSinceSeen?: boolean;
 }
 
 export async function getServerCapabilities(accountId: string): Promise<ServerCapabilities> {
@@ -306,6 +337,7 @@ export async function createShare(
     visibility: choice.visibility,
     password: choice.password ?? null,
     chatPreview: choice.chatPreview ?? false,
+    linkSettings: choice.linkSettings ?? null,
     onProgress: onProgressChannel,
   });
 }
@@ -335,6 +367,7 @@ export async function createRemoteShare(
     visibility: choice.visibility,
     password: choice.password ?? null,
     chatPreview: choice.chatPreview ?? false,
+    linkSettings: choice.linkSettings ?? null,
     onProgress: onProgressChannel,
   });
 }
@@ -356,6 +389,33 @@ export async function createFolderShare(
     ttl: choice.ttl,
     visibility: choice.visibility,
     password: choice.password ?? null,
+  });
+}
+
+/** Mirrors Rust's `shares::quick_link::CaptureLink`. */
+export interface CaptureLink {
+  shareToken: string;
+  shareUrl: string;
+  /** The link was also put on the clipboard. */
+  copied: boolean;
+}
+
+/**
+ * "Create link" in the Insights panel of a capture with no link: Rust makes
+ * a public link that lasts until it is revoked, through the same funnels as
+ * the tray's Copy link, turns on its insights, comments and reactions where
+ * the plan includes them, and copies it. `fileId` only for a capture with no
+ * copy on this computer. Rejects with Rust's sentence.
+ */
+export async function createCaptureLink(
+  folderLabel: string,
+  relativePath: string,
+  fileId?: string | null,
+): Promise<CaptureLink> {
+  return invoke<CaptureLink>("create_capture_link", {
+    folderLabel,
+    relativePath,
+    fileId: fileId ?? null,
   });
 }
 
@@ -571,6 +631,7 @@ export async function confirmFinderShare(
     visibility: choice.visibility,
     password: choice.password ?? null,
     chatPreview: choice.chatPreview ?? false,
+    linkSettings: choice.linkSettings ?? null,
     onProgress: onProgressChannel,
   });
 }

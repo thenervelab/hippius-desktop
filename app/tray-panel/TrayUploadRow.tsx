@@ -75,7 +75,7 @@ export default function TrayUploadRow({
   const name = displayFileName(item.name);
   const picture = useTrayThumbnail(item, accountId);
 
-  const actions = getTrayRowActions(item, fileManagerLabel(), editorEnabled);
+  const actions = getTrayRowActions(item, fileManagerLabel(), editorEnabled, isCapture);
   const quick = getTrayQuickActions(item, editorEnabled);
   const opensViewer = trayRowOpensViewer(item);
   const subtitleId = useId();

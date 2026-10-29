@@ -51,3 +51,49 @@ export function capturesRoute(label: string, remote: boolean, openFile?: string)
   if (openFile) params.set("openFile", openFile);
   return `${CAPTURES_ROUTE}?${params.toString()}`;
 }
+
+/** The Shared Drives page: drives shared with this account, and the ones it shared. */
+export const SHARED_DRIVES_ROUTE = "/shared-drives";
+
+/**
+ * Open a drive somebody shared with this account, or a folder of one, on the
+ * Drive page without syncing it here. `label` is its browse label
+ * (`makeSharedDriveLabel` / `makeFolderGrantLabel`), which browses like any
+ * server-only drive; `name` is what the breadcrumb shows instead of that
+ * label, which names the owner and a hash rather than anything a person
+ * would recognise.
+ */
+export function sharedDriveRoute(label: string, name: string): string {
+  return openDriveHref("/files", { label, remote: true, name });
+}
+
+/** A drive to open at its root: the fields `driveFolderRoute` and `sharedDriveRoute` carry. */
+export interface DriveToOpen {
+  label: string;
+  /** Not synced on this computer: browsed from the server. */
+  remote: boolean;
+  /** What the breadcrumb shows for a shared drive's browse label. */
+  name?: string | null;
+}
+
+/**
+ * `basePath` with one drive open at its root. The Drive page clears these
+ * params once the drive is open; the Shared Drives page keeps them, since
+ * there they are the only record of which drive is on screen.
+ */
+export function openDriveHref(basePath: string, drive: DriveToOpen): string {
+  const params = new URLSearchParams({ openLabel: drive.label });
+  if (drive.remote) params.set("openRemote", "1");
+  if (drive.name) params.set("openName", drive.name);
+  return `${basePath}?${params.toString()}`;
+}
+
+/**
+ * Open a drive from the Shared Drives page on that page, rather than on the
+ * Drive page: the breadcrumb then reads "Shared Drives › drive", Back from
+ * the drive's root returns to the list, and the sidebar keeps Shared Drives
+ * selected.
+ */
+export function sharedDrivesDriveRoute(drive: DriveToOpen): string {
+  return openDriveHref(SHARED_DRIVES_ROUTE, drive);
+}

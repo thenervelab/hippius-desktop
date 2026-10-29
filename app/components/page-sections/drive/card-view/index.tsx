@@ -32,6 +32,7 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
+import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { useRouter } from "next/navigation";
@@ -43,6 +44,7 @@ import { useSetAtom } from "jotai";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -102,8 +104,10 @@ const CardView: FC<CardViewProps> = ({
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
+  const captureInsightsItem = useCaptureInsightsItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
+  const { basePath } = useDriveRoute();
   const { isSelectionMode, enterSelectionModeAndSelectFile } =
     useFileSelection();
 
@@ -190,7 +194,7 @@ const CardView: FC<CardViewProps> = ({
               // Get folder URL if file is a folder
               let folderUrl = "";
               if (file.isFolder) {
-                const { url } = generateFolderUrl(file, getParam);
+                const { url } = generateFolderUrl(file, getParam, undefined, basePath);
                 folderUrl = url;
               }
 
@@ -386,6 +390,12 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
+                          // Insights for a capture's link, on the Captures page.
+                          ...captureInsightsItem(
+                            file,
+                            shareTargetFor(file, currentSubfolderPath).relativePath,
+                            () => setOpenMenuIndex(null),
+                          ),
                           // Rename: same local-presence gating as the
                           // table-view 3-dots menu (shared `canRenameFile`),
                           // and absent where the role cannot write.

@@ -256,6 +256,15 @@ pub async fn spawn_preview_if_wanted(app: &tauri::AppHandle, state: &AppState, a
     crate::shares::preview::spawn_upload(app.clone(), account_id.to_owned(), share_token.to_owned(), path, file_name, false);
 }
 
+/// After a capture link made later (the card's "Create link", an edited
+/// screenshot's new link): turn on its Insights, Comments and Reactions when
+/// Settings has "Track views, comments and reactions" on, as a capture's
+/// first link does. In the background and best-effort.
+pub async fn spawn_link_settings(app: &tauri::AppHandle, state: &AppState, account_id: &str, share_token: &str) {
+    let wanted = crate::shares::insights::for_capture(crate::shares::insights::captures_default(state).await);
+    crate::shares::insights::spawn_apply(app, account_id, share_token, wanted);
+}
+
 /// How long to wait before making a capture's link again after failed
 /// attempt `attempt` (0 = the first), or `None` to give up. A request that
 /// did not get through (offline, a server that did not answer, a dropped

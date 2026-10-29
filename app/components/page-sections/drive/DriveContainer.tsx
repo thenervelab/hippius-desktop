@@ -9,7 +9,7 @@ import React, {
   useRef,
 } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import useUserFiles, {
   FormattedUserFile,
 } from "@/app/lib/hooks/use-user-files";
@@ -78,9 +78,8 @@ import {
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import {
-  makeSharedDriveLabel,
-  makeFolderGrantLabel,
   parseSharedDriveLabel,
+  browseNameFromUrl,
 } from "@/app/lib/shared-drives/sharedDriveLabel";
 import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
@@ -114,6 +113,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { HIGHLIGHT_OPEN_LIMIT_MS, type HighlightRequest } from "./highlightEntry";
 import { useDriveHighlight } from "./useDriveHighlight";
 import { useDriveRoute } from "./driveRoute";
+import {
+  driveRootHref,
+  driveTrail,
+  initialDriveView,
+  urlAfterOpen,
+  type TrailTarget,
+} from "./driveTrail";
+import { folderGrantRowView } from "../settings/multi-folder-sync/sharedWithMeState";
 
 /**
  * Rows per page in the browsed file list.
@@ -211,12 +218,28 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   //   than wherever the last session happened to end.
   //
   // A page that pins this container to one drive (the Captures page) opens
-  // straight into it and never shows the folder list.
-  const { basePath, pinned } = useDriveRoute();
+  // straight into it and never shows the folder list. A page with a
+  // `parent` (Shared Drives) mounts it only while a drive is in the URL, and
+  // starts in that drive (`initialDriveView`).
+  const driveRoute = useDriveRoute();
+  const { basePath, pinned, parent } = driveRoute;
+  const initialSearchParams = useSearchParams();
+  const [initialView] = useState(() =>
+    initialDriveView({
+      pinned,
+      parent,
+      open: initialSearchParams.get("openLabel")
+        ? {
+            label: initialSearchParams.get("openLabel")!,
+            remote: initialSearchParams.get("openRemote") === "1",
+          }
+        : null,
+    }),
+  );
   const [activeSyncFolderLabel, setActiveSyncFolderLabel] = useState<
     string | null
-  >(() => (pinned && !pinned.remote ? pinned.label : null));
-  const [isOnLocalView, setIsOnLocalView] = useState(!pinned);
+  >(initialView.syncLabel);
+  const [isOnLocalView, setIsOnLocalView] = useState(initialView.onFolderList);
   // Tracks whether the saved label has been hydrated, so the bootstrap
   // / fallback effects don't fight each other on first mount.
   const [activeFolderHydrated, setActiveFolderHydrated] = useState(false);
@@ -227,9 +250,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // bounce the user back to the first folder — the bug where syncing a 2nd
   // folder dropped the user onto the 1st. Cleared once the list catches up.
   // A pinned drive just set up is in the same position until the list has it.
-  const pendingActiveLabelRef = useRef<string | null>(
-    pinned && !pinned.remote ? pinned.label : null,
-  );
+  const pendingActiveLabelRef = useRef<string | null>(initialView.syncLabel);
 
   // Search state
   const [searchTerm, setSearchTerm] = useState<string>("");
@@ -387,6 +408,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `driveFolderRoute`.
   const urlOpenLabel = getParam("openLabel");
   const urlOpenRemote = getParam("openRemote") === "1";
+  // …and, for a shared drive, the name its browse label stands for
+  // (`sharedDriveRoute`).
+  const urlOpenName = getParam("openName");
   // …and one level into it (a capture's "Show in folder" → Captures).
   const urlOpenSubfolder = getParam("openSubfolder");
   // …and the file in it to point out ("Show in folder" on a capture's card
@@ -465,11 +489,17 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Display names for the shared drives browsed this session, keyed by their
   // synthetic label. Display-only, so a stale entry costs a breadcrumb
   // caption and never a wrong request.
+  // Seeded from the URL on a page that keeps the drive there (`parent`), so
+  // its first frame already shows the name rather than the label.
   const [sharedDriveNames, setSharedDriveNames] = useState<ReadonlyMap<string, string>>(
-    () => new Map(),
+    () => {
+      const label = initialSearchParams.get("openLabel");
+      const name = parent ? browseNameFromUrl(label, initialSearchParams.get("openName")) : null;
+      return label && name ? new Map([[label, name]]) : new Map();
+    },
   );
   const [activeRemoteLabel, setActiveRemoteLabel] = useState<string | null>(
-    () => (pinned?.remote ? pinned.label : null),
+    initialView.remoteLabel,
   );
   const isRemoteRoot =
     !isRecentFiles && !isNested && !isOnLocalView && Boolean(activeRemoteLabel);
@@ -1540,32 +1570,44 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       if (isNested) router.push(basePath);
       return;
     }
+    if (parent) {
+      // Opened from another page (Shared Drives): the root crumb and Back
+      // from the drive's root go back to that page, not to Drive's folder
+      // list. That page shows its list once the drive leaves the URL.
+      router.push(parent.href);
+      return;
+    }
     setIsOnLocalView(true);
     setActiveRemoteLabel(null);
     if (isNested) {
       router.push(basePath);
     }
-  }, [isNested, router, pinned, basePath]);
+  }, [isNested, router, pinned, parent, basePath]);
 
   // Click on the top-level sync folder segment (e.g. "MyDrive" in
   // Local > MyDrive > Photos > 2024). Pops the user back to that drive's
   // root listing and persists it as the active folder.
+  //
+  // On the Drive page a drive's root is view state and the URL goes back to
+  // the bare page; on a page with a `parent` the drive stays in the URL
+  // (`driveRootHref`), or that page would show its list instead.
   const handleNavigateToSyncFolderRoot = useCallback(
-    (label: string, remote = false) => {
+    (label: string, remote = false, name?: string) => {
+      const href = driveRootHref(driveRoute, { label, remote, name });
       if (remote) {
         // Back to the REMOTE drive's root: state-based (no nested URL).
         setActiveRemoteLabel(label);
         setIsOnLocalView(false);
-        router.push(basePath);
+        router.push(href);
         return;
       }
       pendingActiveLabelRef.current = label;
       setActiveSyncFolderLabel(label);
       setActiveRemoteLabel(null);
       setIsOnLocalView(false);
-      router.push(basePath);
+      router.push(href);
     },
-    [router, basePath],
+    [router, driveRoute],
   );
 
   // Click on an intermediate nested segment. Rebuilds the URL so we
@@ -1605,51 +1647,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     setActiveRemoteLabel(label);
     setIsOnLocalView(false);
   }, []);
-
-  /**
-   * Open a drive somebody shared with this account, WITHOUT syncing it here.
-   *
-   * It browses exactly like any other server-only drive — the synthetic label
-   * carries the owner and folder hash the backend needs, and `/browse`
-   * authorises any member of the named drive.
-   */
-  const handleOpenSharedDrive = useCallback(
-    (identity: { ownerSs58: string; folderHash: string; displayLabel: string }) => {
-      const label = makeSharedDriveLabel(identity);
-      setSharedDriveNames((prev) =>
-        prev.get(label) === identity.displayLabel
-          ? prev
-          : new Map(prev).set(label, identity.displayLabel),
-      );
-      setActiveRemoteLabel(label);
-      setIsOnLocalView(false);
-    },
-    [],
-  );
-
-  /**
-   * Open a FOLDER somebody shared with this account (folder roles), rooted at
-   * that folder: its `grant:` label carries the folder, and Rust puts it in
-   * front of every path the view sends, so nothing above it is reachable.
-   */
-  const handleOpenFolderGrant = useCallback(
-    (grant: {
-      ownerSs58: string;
-      folderHash: string;
-      pathPrefix: string;
-      folderName: string;
-    }) => {
-      const label = makeFolderGrantLabel(grant);
-      setSharedDriveNames((prev) =>
-        prev.get(label) === grant.folderName
-          ? prev
-          : new Map(prev).set(label, grant.folderName),
-      );
-      setActiveRemoteLabel(label);
-      setIsOnLocalView(false);
-    },
-    [],
-  );
 
   // Clicking "Drive" in the sidebar returns to the folder list from
   // wherever the user is — a folder, a nested subfolder, a remote drive.
@@ -1701,15 +1698,46 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         : null,
     );
     if (urlOpenRemote) {
+      // A shared drive's browse label is not a name: show the one it came with.
+      const openName = browseNameFromUrl(urlOpenLabel, urlOpenName);
+      if (openName) {
+        setSharedDriveNames((prev) =>
+          prev.get(urlOpenLabel) === openName
+            ? prev
+            : new Map(prev).set(urlOpenLabel, openName),
+        );
+      }
       handleSelectRemoteFolderFromCards(urlOpenLabel);
     } else {
       handleSelectFolderFromCards(urlOpenLabel);
     }
-    router.replace(basePath);
+    // The Drive page clears the request; a page with a `parent` keeps the
+    // drive in the URL so a reload reopens it (`urlAfterOpen`). What it
+    // replaces the URL with is remembered as handled, or the shorter
+    // request would read as a new one and open the drive a second time.
+    const next = urlAfterOpen(driveRoute, {
+      label: urlOpenLabel,
+      remote: Boolean(urlOpenRemote),
+      name: urlOpenName,
+      subfolder: urlOpenSubfolder,
+      file: urlOpenFile,
+    });
+    if (next === null) return;
+    if (parent) {
+      openedFromUrlRef.current = shouldOpenFromUrl(null, {
+        label: urlOpenLabel,
+        remote: Boolean(urlOpenRemote),
+        subfolder: null,
+        file: null,
+      }).key;
+    }
+    router.replace(next);
   }, [
-    basePath,
+    driveRoute,
+    parent,
     urlOpenLabel,
     urlOpenRemote,
+    urlOpenName,
     urlOpenSubfolder,
     urlOpenFile,
     handleSelectFolderFromCards,
@@ -1726,10 +1754,10 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   useEffect(() => {
     const wanted = pendingSubfolderRef.current;
     if (!wanted || isNested || isOnLocalView || isLoading) return;
-    const next = resolvePendingFolder(wanted, allData, getParam);
+    const next = resolvePendingFolder(wanted, allData, getParam, basePath);
     pendingSubfolderRef.current = next.pending;
     if (next.url) router.push(next.url);
-  }, [allData, isNested, isOnLocalView, isLoading, router, getParam]);
+  }, [allData, isNested, isOnLocalView, isLoading, router, getParam, basePath]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the
@@ -1834,74 +1862,70 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         }) || !browsedMembership.isSettled
       : syncedDriveCanWrite;
 
+  // The open drive's name. A shared drive's browse label names its owner and
+  // a hash, never anything a person would recognise: it shows the name the
+  // drive was opened with, else the membership or folder grant the label
+  // stands for. That second half is what keeps the name after a reload into
+  // a folder of the drive, where the URL no longer carries it.
+  const openDriveName = useMemo(() => {
+    if (!openDriveLabel) return null;
+    const fromShare = openFolderGrant.grant
+      ? folderGrantRowView(openFolderGrant.grant).folderName
+      : browsedSharedDrive
+        ? browsedMembership.membership?.displayLabel
+        : undefined;
+    return (
+      sharedDriveNames.get(openDriveLabel) ??
+      fromShare ??
+      labelDisplayNames[openDriveLabel] ??
+      openDriveLabel
+    );
+  }, [
+    openDriveLabel,
+    openFolderGrant.grant,
+    browsedSharedDrive,
+    browsedMembership.membership,
+    sharedDriveNames,
+    labelDisplayNames,
+  ]);
+
+  // The crumbs after the root (`driveTrail`): the open drive, then each
+  // folder down to the one on screen. The root crumb itself is the page the
+  // drive was opened from, drawn by the breadcrumb.
   const breadcrumbSegments = useMemo<BreadcrumbSegment[]>(() => {
     if (isRecentFiles || isOnLocalView) return [];
-    const segments: BreadcrumbSegment[] = [];
-
-    const topLabel = isNested
-      ? nestedDrive?.label
-      : (activeRemoteLabel ?? activeSyncFolderLabel);
     const topIsRemote = isNested
       ? Boolean(nestedDrive?.remote)
       : Boolean(activeRemoteLabel);
-    if (topLabel) {
-      const topDisplayName =
-        sharedDriveNames.get(topLabel) ?? labelDisplayNames[topLabel] ?? topLabel;
-      segments.push({
-        label: topDisplayName,
-        title: topDisplayName,
-        // Only clickable when the user is below this level (nested view).
-        // In the root view the segment IS the current location.
-        onClick: isNested
-          ? () => handleNavigateToSyncFolderRoot(topLabel, topIsRemote)
-          : undefined,
-      });
-    }
-
-    // `urlSubFolderPath` is rooted at `mainFolderActualName` (e.g.
-    // "Photos/2024"). Split it into parts and emit one segment per
-    // intermediate level, with the final part rendered as the active
-    // (non-clickable) segment.
-    if (isNested && urlSubFolderPath) {
-      const mainName = urlMainFolderActualName || "";
-      const allParts: string[] = [];
-      if (mainName) allParts.push(mainName);
-      let trailing = urlSubFolderPath;
-      if (mainName && trailing.startsWith(`${mainName}/`)) {
-        trailing = trailing.substring(mainName.length + 1);
-      } else if (trailing === mainName) {
-        trailing = "";
-      }
-      if (trailing) {
-        trailing
-          .split("/")
-          .filter(Boolean)
-          .forEach((part) => allParts.push(part));
-      }
-
-      allParts.forEach((part, idx) => {
-        const isLast = idx === allParts.length - 1;
-        if (isLast) {
-          segments.push({ label: part, title: part });
-        } else {
-          const subPathTo = allParts.slice(0, idx + 1).join("/");
-          segments.push({
-            label: part,
-            title: part,
-            onClick: () => handleNavigateToBreadcrumbSegment(part, subPathTo),
-          });
-        }
-      });
-    }
-
-    return segments;
+    const steps = driveTrail({
+      drive: openDriveLabel
+        ? { label: openDriveLabel, remote: topIsRemote, name: openDriveName ?? openDriveLabel }
+        : null,
+      nested: isNested,
+      subFolderPath: urlSubFolderPath,
+      mainFolderActualName: urlMainFolderActualName,
+    });
+    const go = (target: TrailTarget) =>
+      target.kind === "drive"
+        ? () =>
+            handleNavigateToSyncFolderRoot(
+              target.label,
+              target.remote,
+              sharedDriveNames.get(target.label),
+            )
+        : () => handleNavigateToBreadcrumbSegment(target.name, target.subPath);
+    return steps.map((step) => ({
+      label: step.label,
+      title: step.label,
+      onClick: step.target ? go(step.target) : undefined,
+    }));
   }, [
     isRecentFiles,
     isOnLocalView,
     isNested,
     nestedDrive,
-    activeSyncFolderLabel,
-    labelDisplayNames,
+    openDriveLabel,
+    openDriveName,
     sharedDriveNames,
     urlSubFolderPath,
     urlMainFolderActualName,
@@ -2195,8 +2219,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2215,8 +2237,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2231,8 +2251,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
         onSyncStarted={handleOnboardingSyncStarted}
         onSelectFolder={handleSelectFolderFromCards}
         onOpenRemoteFolder={handleSelectRemoteFolderFromCards}
-        onOpenSharedDrive={handleOpenSharedDrive}
-        onOpenFolderGrant={handleOpenFolderGrant}
         isStorageFull={isStorageFull}
       />
     );
@@ -2449,16 +2467,11 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onBreadcrumbLocalClick={handleNavigateToLocalView}
                 // A pinned page has no folder list for the root crumb to open.
                 hideBreadcrumbRoot={Boolean(pinned)}
+                breadcrumbRootLabel={parent?.label}
                 openDriveLabel={openDriveLabel}
                 browsedSharedDrive={browsedSharedDrive}
                 isReadOnlyDrive={!openDriveCanWrite}
-                openDriveDisplayName={
-                  openDriveLabel
-                    ? (sharedDriveNames.get(openDriveLabel) ??
-                      labelDisplayNames[openDriveLabel] ??
-                      openDriveLabel)
-                    : null
-                }
+                openDriveDisplayName={openDriveName}
                 isNested={isNested}
                 nestedFolderName={isNested ? urlFolderName : null}
                 nestedSubfolderPath={isNested ? urlSubFolderPath : null}

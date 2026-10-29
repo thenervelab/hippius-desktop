@@ -94,6 +94,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
@@ -117,6 +118,7 @@ import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
 import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
+import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -654,6 +656,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       ? manageableMemberDriveLabels
       : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
+    const captureInsightsItem = useCaptureInsightsItem();
     const setInviteDialogTarget = useSetAtom(shareDialogAtom);
     const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
     // The folders of this listing's drive shared on their own, for the
@@ -771,6 +774,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       return activeSort.desc ? "desc" : "asc";
     }, [sorting]);
     const { getParam } = useUrlParams();
+    const { basePath: drivePagePath } = useDriveRoute();
     const router = useRouter();
     const {
       isSelectionMode,
@@ -991,6 +995,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             file,
             getParam,
             parentSubFolderPath,
+            drivePagePath,
           );
           folderUrl = url;
         }
@@ -1202,6 +1207,11 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // Insights for a capture's link, on the Captures page.
+          ...captureInsightsItem(
+            file,
+            shareTargetFor(file, parentSubFolderPath ?? normalizedSubfolderPath).relativePath,
+          ),
           ...(SHARED_DRIVES_ENABLED &&
           file.isFolder &&
           (!isMemberDriveLabel(file.label, memberDriveLabels) ||
@@ -1340,6 +1350,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         localHandleShowFileDetails,
         handleDeleteFile,
         getParam,
+        drivePagePath,
         router,
         polkadotAddress,
         shareEnabled,
@@ -1363,6 +1374,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         normalizedSubfolderPath,
         resolveRelativePath,
         queryClient,
+        captureInsightsItem,
       ],
     );
 
@@ -1541,6 +1553,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                 mainReqHash={file.mainReqHash}
                 syncStatus={file.syncStatus}
                 onManageShare={(ids) => router.push(sharesPageHref(ids))}
+                file={file}
               />
             );
 
@@ -2158,7 +2171,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       createTableItems,
       onSelectFile: handleSetSelectedFile,
       onOpenFolder: (childFile, parentPath) => {
-        const { url } = generateFolderUrl(childFile, getParam, parentPath);
+        const { url } = generateFolderUrl(childFile, getParam, parentPath, drivePagePath);
         router.push(url);
       },
       accountId: polkadotAddress,

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
 import { useQueryClient } from "@tanstack/react-query";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { toast } from "sonner";
 
 import { EDITOR_OPEN_EVENT, copySavedLink, getEditorContext, type SaveOutcome } from "@/app/lib/tauri/captureEditor";
@@ -44,10 +44,10 @@ export default function ScreenshotEditorHost() {
         if (alive && ctx) setSession((s) => s ?? ctx.session);
       })
       .catch(() => undefined);
-    const unlisten = listen<number>(EDITOR_OPEN_EVENT, (e) => setSession(e.payload));
+    const unlisten = onTauriEvent<number>(EDITOR_OPEN_EVENT, (e) => setSession(e.payload));
     return () => {
       alive = false;
-      void unlisten.then((fn) => fn()).catch(() => undefined);
+      unlisten();
     };
   }, []);
 

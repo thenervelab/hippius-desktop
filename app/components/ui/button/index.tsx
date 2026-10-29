@@ -18,6 +18,7 @@ const CornerDots = ({
     | "defaultStable"
     | "primary"
     | "primaryLight"
+    | "primaryOutline"
     | "raised"
     | "destructive"
     | "warning"
@@ -35,11 +36,13 @@ const CornerDots = ({
     ? ""
     : variant === "primary" || variant === "primaryLight"
       ? "border-primary-50 dark:border-primary-50"
-      : variant === "destructive"
-        ? "border-[#fc7d73] dark:border-[#fc7d73]"
-        : variant === "warning"
-          ? "border-[#fbbd59] dark:border-[#fbbd59]"
-          : "border-grey-dark-400 dark:border-grey-50";
+      : variant === "primaryOutline"
+        ? "border-primary-50 dark:border-primary-brand-dark"
+        : variant === "destructive"
+          ? "border-[#fc7d73] dark:border-[#fc7d73]"
+          : variant === "warning"
+            ? "border-[#fbbd59] dark:border-[#fbbd59]"
+            : "border-grey-dark-400 dark:border-grey-50";
 
   const borderWidthClassName =
     variant === "primary" || variant === "primaryLight"
@@ -130,6 +133,13 @@ const buttonVariants = cva(
         warning: "bg-warning-200 text-white rounded-md hover:bg-warning-300 ",
         primaryLight:
           "border border-primary-50 bg-primary-50/[0.21] text-primary-50 rounded-[6px] hover:bg-primary-50/[0.25] dark:border-primary-brand-dark dark:bg-primary-65/[0.21] dark:text-primary-brand-dark dark:hover:bg-primary-50/[0.18]",
+        // A secondary action that still reads as primary: primary border and
+        // text over a faint tint, the same treatment as a picked row in the
+        // drive pickers, so it sits beside a field without competing with
+        // the solid primary button in the footer. The web console's
+        // `primaryOutline`.
+        primaryOutline:
+          "border border-primary-50 bg-primary-50/[0.06] text-primary-50 rounded-md hover:bg-primary-50/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:border-primary-brand-dark dark:bg-primary-brand-dark/10 dark:text-primary-brand-dark dark:hover:bg-primary-brand-dark/[0.16] dark:focus-visible:ring-primary-brand-dark/50",
         // A white button that still reads as a control on a grey ground; the
         // grey defaultStable variant vanishes on the plan cards and dialogs.
         raised:

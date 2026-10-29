@@ -13,6 +13,8 @@ paths:
   - "src-tauri/src/sync/fileops/remote.rs"
   - "src-tauri/src/sync/fileops/folders.rs"
   - "src-tauri/src/sync/fileops/recent_uploads.rs"
+  # Share a drive's New drive creates through it.
+  - "src-tauri/src/sync/fileops/cloud_drive.rs"
   - "src-tauri/src/sync/migrate/**"
   - "src-tauri/src/sync/projection/tauri_bridge.rs"
   - "app/lib/tauri/sharedDrives.ts"
@@ -29,7 +31,13 @@ The `HIPPIUS_CONSOLE_BASE_URL` runtime override is honored in dev builds and **s
 
 **One-click "Copy link" (`shares/quick_link.rs::copy_file_share_link`, the tray popover's rows)** reuses the newest link this device minted for the same `(label, relative_path)` (`share_origin`) that the server still lists, is public (a password link is useless without its never-stored password), has over an hour left and can be rebuilt from the keystore; otherwise it mints public, until revoked, through `share_synced_file` or `create_remote_share_inner` (cloud-only, by `file_id`), so the storage gate, origin row and owner wrap apply. Rust writes the clipboard and words every failure (`QuickLinkOutcome::Failed`, via the capture card's `link_failure_copy`). Pinned by the module's unit tests and `tray_popover_wiring.rs`.
 
+**"Create link" in a capture's Insights panel (`quick_link::create_capture_link`)** mints through the same `mint` (always a new link: the panel offers it only when the capture has none), then AWAITS `apply_after_mint` with all three switches (`INSIGHTS_PANEL_LINK_SETTINGS`, still cut by `within_plan`, so a free plan's link starts off) before answering, because the panel opens on the new link at once and reads its settings; then the chat preview when Settings wants one (not for a cloud-only capture) and the clipboard. Pinned by `the_insights_panels_create_link_mints_like_the_tray_and_turns_insights_on_first` and the module's unit tests.
+
+**A capture's links on the Captures page** are this device's `share_origin` rows for its path PLUS listing rows with no origin here whose `filename` is the capture's name (sizes, when both known, must agree): `captureSharesFrom` in `drive/useCaptureInsightsItem.tsx`, read by the row's link badge, its Insights button, its "View insights" item and the Insights panel. `share_origin` is per device, so without this a link made in the browser extension, the web console or on another computer (its key arrives through the owner wrap) never showed on its row; the console and the extension match links to files by name the same way. Only for screenshots and recordings (`isCaptureMedia`), whose names carry the second they were taken; every other file and every other page keep the origin match alone. Pinned by `useCaptureInsightsItem.test.tsx`, `CaptureInsightsButton.test.tsx`, `ShareInsightsSheetNoLink.test.tsx`.
+
 **Chat previews (`shares/preview.rs`)** are a plaintext picture plus the file name as title, `PUT /v1/shares/{token}/preview` after the mint (`DELETE` to turn off; the server deletes it on revoke). Rules: never for a password link (`preview::allowed`, the server cannot tell them apart; pinned by `no_password_share_sends_a_chat_preview`); only when `/v1/capabilities` has `share_preview`, otherwise nothing is sent; always a re-encoded JPEG (fit 1200 px, under 300 KB, no EXIF/ICC, orientation applied), never the file's bytes; best-effort in a spawned task, so a failure never fails or slows the share. The dialog's switch default comes from Rust (`hcfs_share_preview_default`: offered for png/jpg/bmp/mp4/mov/m4v, on for a capture by drive or name when `CaptureOptions.chat_preview`), and captures delivered with an automatic link follow that same stored option (`deliver_and_announce` reads the preview while the link is minted and removes the temp copy only after; `spawn_preview_then_cleanup`). The tray's one-click Copy link sends none.
+
+**Share link insights (`shares/insights.rs`, `shares/comment_crypto.rs`)** are the owner's side only; viewers track, comment and react on the console's share page. Every route is gated on its own `/v1/capabilities` flag and nothing is sent without it: `share_insights` (`GET .../insights`, `PATCH .../settings`), `share_comments` (comments list, owner delete, block and unblock of a comment's author, reaction totals; the Comments and Reactions switches), `share_notifications` (`/v1/notification-preferences`). Rules: a free plan's locked metric crosses IPC as `Gated::Locked` with NO value, and anything the server sends for a metric it calls locked (or on any non-paid plan) is dropped in `parse_insights`, so the sheet's locked cards can only be drawn from the FE's sample numbers (labelled "Sample data" outside the blur, sample names that say so, and for a picture or other file the picture words of `lockCopy` with no completion, watch time or retention) (pinned by `a_locked_metric_crosses_ipc_with_no_value`, `values_sent_for_a_locked_metric_are_dropped`, `ShareInsightsSheet.test.tsx`). Comments and viewer names are AES-256-GCM under `HKDF-SHA256(share key, empty salt, "hippius-share-comments-v1")` with AAD `<token>:comment` / `<token>:viewer-name`, a cross-client contract with the console: `tests/fixtures/share_comments_vectors.json` is shared verbatim and both decrypt and fixed-nonce encrypt are asserted. The share key comes from the keystore, else `owner_wrap::sync_file_wraps`; a password link's key is never recoverable, so its comments list unread with Rust's sentence. A new link's switches are a `PATCH` after the mint through `insights::spawn_apply` (best-effort, spawned, only the keys the server advertises, nothing for an all-off new link): the dialog's and Finder chooser's `link_settings`, and captures from `CaptureOptions.link_insights` (`for_capture`) on the automatic link, the card's Create link and the editor's new link. Defaults come from Rust (`share_link_settings_default`: never for folders; on for a capture by drive or name when the option is on). Pinned by `a_captures_link_settings_follow_the_settings_default` and `the_share_dialogs_switches_are_sent_after_the_mint`. The tray's one-click Copy link sends none, as for previews. The sheet's Link settings read a link's switches from its `/meta` `settings` (the owner listing in hcfs-client does not carry them). Block (`POST`/`DELETE .../comments/{id}/block`) is per link and keyed on the author, who the server never names; the server lists no block state, so the sheet only shows "Blocked" with Unblock for comments blocked while it is open. Viewer ids in insights are per-link pseudonyms (hcfs #738), used only as row keys. Names: an access-key account has no name of its own, so the share page signs with its generated username, `user_` plus the whole lowercased address; `insights::readable_name` turns exactly that shape (`user_` then 40 to 64 ASCII letters and digits) into the address's first 6 and last 4 (`5dsqam…sk63`) for every viewer and comment name, and leaves any chosen name alone (pinned by `an_access_key_accounts_generated_name_reads_as_a_short_address`). **Plan rule**: all three link switches, Insights (view counting, watch time, the owner's numbers), Comments and Reactions, come with paid Drive plans only, decided once in `insights::switches_in_plan` from the same plan read as the capture watermark (`capture::allowance::tier_from_reads`). `apply_after_mint` passes every new link through `within_plan`, so a free plan or a plan that cannot be read mints all three off and never holds the share up; `LinkSettingsDefault.switches_in_plan` (and `share_switches_in_plan` for Settings) lets the FE show the upgrade prompt on the free plan instead of turning any switch on (`LinkEngagementSwitches`, and Settings' "Track views, comments and reactions" shown locked, since it has no effect there); an unread plan locks nothing. `share_set_link_settings` refuses only switching one ON from off on a known free plan (`refuses_switching_on`, checking only the keys the patch turns on), so older links keep what they have and turning any switch off always works. The prompt's sentence (`LOCKED_PROMPT`) is the console's verbatim. **Waiting on the server**: `share_listing_counts` / `share_insights_seen` (per-link counts, Insights switch and last-seen on the listing), `share_comment_replies` (replies, Owner badge) and `share_reaction_moments` are parsed (default `false`) and their UI renders nothing without them; the Captures row button never fetches insights or settings per row (it reads only the sheet's cached `share-link-settings` for "Insights off"). Every screenshot and recording on the Captures page has the button and a "View insights" menu item; one with no link gets a quieter button and opens the panel on its "Create link" step (`InsightsSheetTarget.shareToken` `null` plus `capture`, resolved in the panel from the listing already loaded, a skeleton while it loads). The sheet's words and avatar palette (`insightsView.ts`, FNV-1a over the lowercased name's code points, mod 6, exactly as the console hashes it, pinned by known colours) are shared with the console. Pinned by `ShareInsightsSheet.test.tsx`, `CaptureInsightsButton.test.tsx`, `insightsView.test.ts`.
 
 ## Shared drives (cross-account member drives)
 
@@ -243,22 +251,97 @@ A legacy copy-link invite's fragment (`#k=`) is the drive entropy, or a folder i
 
 `SHARED_DRIVES_ENABLED` gates only the ADDITIVE surfaces — the "Share drive" menu item + `ShareDriveModal` (invite mint + members tab), the "Shared with me" sections, the owner badge.
 
-**Shared with Me on the Drive page is always there** (`SharedWithMeSection` with `onShareDrive`,
-view from `sharedWithMeState.ts::getSharedWithMeView(..., { alwaysShow, grantsSettled })`):
-skeleton rows until the membership AND folder-grant listings answer, then the rows with a
-"Share a drive" header button, or `SharedWithMeEmptyState` (the shared `NoEntriesFound` card,
-its `illustration`/`footerLink`/`titleId` props; "A place for teamwork", docs link
-`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`). A feature-off
-server still hides it; a failed fetch shows the empty state. Settings passes no `onShareDrive`
-and keeps the quiet, rows-only section. "Share a drive" opens `share-drive-picker/`
-(`ShareDriveFlow` + `ShareDrivePicker`): own drives only (`folderRows` without `ownerSs58`),
-"Shared with N" / "Shared" / "Not shared" from `useOwnedDriveSharing` (unknown says nothing),
-search above `PICKER_SEARCH_THRESHOLD` (6). The plan gate is `sharingGate({ owner: true })`,
-so Free/Starter get `NotEntitledNotice` (its Upgrade plan goes to `BILLING_ROUTE`) and no
-Continue. Continue CLOSES the picker, then sets `shareDialogAtom` exactly as the row's "Share
-drive..." does, so there is never a dialog over a dialog. No drives: Sync a Folder (the
-page's `startSyncFolder`). Pinned by `ShareDrivePicker.test.tsx`, `SharedWithMeSection.test.tsx`
-and `sharedWithMeState.test.ts`.
+**Shared drives are listed only on the Shared Drives page** (`/shared-drives`, sidebar entry
+under Drive, `featureFlag: "sharedDrives"`; `shared-drives/SharedDrivesView.tsx`). The Drive
+page does not list drives shared with this account. ONE list, the console's: own drives
+shared as a whole (`isDriveShared`, drawn by the Drive page's `FolderList` with `bare` and
+`markOwned`, the Owner chip), then the drives and folders shared with this account
+(`SharedWithMeSection` with `variant="rows"`, handed the page's `useDriveMemberships` fetch so
+the tab counts and the rows read one answer). Quiet underline tabs (`ui/tabs/UnderlineTabs`,
+the console's: All / Shared with you / Shared by you, count pills, roving tabindex with
+Left/Right/Home/End, short labels "With you" / "By you" below `@2xl` of the scroll area's
+container while the accessible name keeps the full label and count) show once BOTH kinds have
+answered and anything is listed, even with one kind, so an empty tab can say what goes there
+(`showSharedDrivesTabs`); with nothing either way they hide and the filter reads as All
+(`effectiveSharedDrivesFilter`). A kind that failed has no count pill, and neither does All
+(`sharedDrivesTabCount`): a "0" there would claim nothing is shared. "Total size:" / "File No:" sum the drives the current tab
+shows (`sharedDriveListTotals`: a drive nobody could size is left out, never counted as zero;
+all unknown is a dash; own drives from the drive listing, joined drives from
+`useSharedDriveStats`, folders from `useFolderGrantStatsList`, which shares the rows' cache
+keys); they sit on the right of the tabs row from `@2xl` and on their own line above it
+below that, and show only while the tab has rows (an empty or failed tab has none). One pager (`SHARED_DRIVES_PAGE_SIZE`, which is `DRIVE_LIST_PAGE_SIZE`, 10, the console's;
+the Drive page's `FolderList` pages by the same constant, while Settings keeps the default
+`FOLDER_LIST_PAGE_SIZE`, 8, because "Shared with me" still sits under its list; `FolderList`
+keeps its page state on the clamped page, except while loading) windows the sequence own-then-joined (`sharedDrivesPageSlices`) on
+every tab, is drawn only when the tab holds more than a page, resets to page 1 on a tab
+change, and the page state follows the clamped page when drives go away (leaving the last
+drive on the last page). The list area is ONE pure decision, `resolveSharedDrivesContent`
+over each kind's `{status, count}` (`sharedByYouStatus`, `sharedWithYouStatus`): rows win
+(placeholder rows for a kind still loading, a `role="alert"` line with Try again for a kind
+that failed); no rows and a kind loading is the skeleton; no rows and a kind failed is
+`SharedDrivesLoadError` (Try again; offline copy from `useIsOnline`, and the page retries by
+itself on reconnect), NEVER an empty state; only then `ShareADriveEmptyState` for the scope
+(nothing either way: "A place for teamwork"; "Shared with you": where invites land, no
+button; "Shared by you": Share a drive), docs link
+`https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`. An empty state
+also waits for the plan, since it words its button by plan. "Shared by you" is an error, not
+none, when the drive listing threw, the sharing query failed, or own drives exist and not one
+got an answer (`list_owned_drive_sharing` drops a drive whose listings both failed and still
+answers OK, and own-drive resolution is local and lenient, so only the network drops all).
+"Shared with you" is an error on a failed memberships fetch; a feature-off server is a quiet
+none. Copy lives in `sharedDrivesCopy.ts`. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
+A row opens its drive ON THIS PAGE, never on `/files` (`sharedDrivesDriveRoute`: browse label,
+`openRemote`, plus `openName`, shown in the breadcrumb only for a shared label,
+`browseNameFromUrl`): the page renders `SharedDriveOpenView` (the Drive container under
+`SHARED_DRIVES_DRIVE_ROUTE`, `basePath` `/shared-drives`, `parent` "Shared Drives") while
+`isDriveOpenInUrl` says a drive is open, keeping the list mounted but hidden (attribute AND
+class) so Back returns to the same tab and page. With a `parent` the container keeps the drive
+in the URL at its root too (`urlAfterOpen`, `driveRootHref`) and starts in it
+(`initialDriveView`), so a reload keeps the drive and the trail; the root crumb and Back from
+the drive's root push `parent.href`; every folder link builds on `useDriveRoute().basePath`
+(`generateFolderUrl`'s `basePath`), since one hardcoded `/files` drops the user onto the Drive
+page. The drive crumb's name falls back to the membership's `displayLabel` or the grant's
+folder name when the URL no longer carries `openName` (a reload inside a folder). Opening from
+Settings still uses `sharedDriveRoute` (`/files`). Pinned by `driveTrail.test.ts`,
+`sharedDrivesPage.test.tsx`, `breadcrumbRoot.test.tsx`, `breadcrumbBack.test.ts`. "Share a drive"
+(`ShareADriveButton`) sits on the right of the page header (`renderHeader` hands it to
+`PageHeader`'s `actions`) and follows `sharingGate({ owner: true })`: a placeholder while the
+plan loads; on Free/Starter the same words with a "Plus" pill, a hover naming Plus, Max and
+Scale, and a click to `BILLING_ROUTE` (never the picker); on a plan that shares, a filled
+primary button that opens `share-drive-picker/` (`ShareDriveFlow` + `ShareDrivePicker`): own drives
+only (`folderRows` without `ownerSs58`), "Shared with N" / "Shared" / "Not shared" from
+`useOwnedDriveSharing` (unknown says nothing), search above `PICKER_SEARCH_THRESHOLD` (6), and a
+`+ New drive` `primaryOutline` button on the search row (full width under it below `sm`),
+offered only when the plan shares; with no drives it is the footer's main action instead, and
+on a plan that does not share the empty state shows `NotEntitledNotice` rather than any way to
+make a drive. The list's scrollbar has its own lane (`.scroll-gutter` in `globals.css`: a styled,
+never-overlay WebKit scrollbar plus `scrollbar-gutter: stable`, pulled into the dialog's side
+padding by `-mr-3.5 pr-1.5`), because a macOS overlay scrollbar drew over the rows. The plan
+gate is `sharingGate({ owner: true })`, so Free/Starter get `NotEntitledNotice` (its Upgrade
+plan goes to `BILLING_ROUTE`) and no Continue. Continue CLOSES the picker, then sets
+`shareDialogAtom` exactly as the row's "Share drive..." does, so there is never a dialog over
+a dialog. **New drive never asks for a local folder**: it is a name step inside the same
+dialog (`useNewDriveStep`; Back or Escape returns to the list, nothing closes while it
+creates), and Create drive calls `create_cloud_drive` (`sync/fileops/cloud_drive.rs`), which
+registers the drive the way the console's New drive does: `register_folder` with
+`folder_hash(name)`, the name verbatim as the label, and this computer's device name, so the
+console, mobile and desktop all see one drive and its key derives from the master and the
+label on first use. Then the picker closes, every drive list is refreshed
+(`triggerSyncPathRefreshAtom`) and the Share dialog opens for it like Continue. It lists as
+"Not synced here"; "Sync to this computer" in its menu binds it to a folder later. Registering
+is an upsert keyed on the hash, so Rust refuses a name any drive already answers to (local
+label or folder name, server label or hash, NFC and case-insensitive) against a FRESH server
+listing, and an unreadable listing stops the create rather than guessing. Rust also owns the
+name rules (the console's, plus a name `sanitize_label` cannot empty, so the drive can be
+synced later) and every refusal's sentence (offline, read-only or suspended account, 402),
+shown under the field. The command itself has no plan gate (making a drive is open to every
+plan, as on the console); the picker only offers it on a plan that shares, and the invite
+mint stays the server's call. Pinned by the `cloud_drive` unit and stand-in-server tests.
+Joining is open on every plan (the owner pays), so drives shared WITH a Free account list and
+open as usual. Pinned by `ShareDrivePicker.test.tsx`, `SharedDrivesView.test.tsx`,
+`sharedDrivesState.test.ts`, `sharedDrivesCopy.test.ts`, `ShareADriveButton.test.tsx`,
+`underlineTabs.test.tsx`, `scrollGutter.test.ts`, `ShareADriveEmptyState.test.tsx`,
+`SharedWithMeSection.test.tsx` and `sharedWithMeState.test.ts`.
 
 **Added by: one rule for the column and the filter** (`lib/shared-drives/uploaderFilter.ts`:
 `uploaderKind`, `matchesUploader`; Rust `uploader_search_values` in

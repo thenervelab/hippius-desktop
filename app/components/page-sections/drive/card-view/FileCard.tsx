@@ -14,6 +14,7 @@ import {
 } from "@/lib/utils/fileTypeUtils";
 import { Folder2 } from "@/components/ui/icons";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
+import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
@@ -353,7 +354,16 @@ const FileCard: React.FC<FileCardProps> = ({
               label={file.label}
               actualName={file.actualFileName}
               onManageShare={(ids) => router.push(sharesPageHref(ids))}
+              fileSize={file.size}
               className="ml-1.5"
+            />
+            {/* Captures page only: opens the link's Insights. */}
+            <CaptureInsightsButton
+              label={file.label}
+              actualName={file.actualFileName}
+              fileName={file.actualFileName || file.name}
+              file={file}
+              className="ml-1"
             />
           </div>
         )}
