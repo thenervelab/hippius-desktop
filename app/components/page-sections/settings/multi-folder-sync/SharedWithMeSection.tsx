@@ -61,10 +61,7 @@ import {
 import { useDriveMemberships, type DriveMemberships } from "./useDriveMemberships";
 import SharedFolderGrantRow from "./SharedFolderGrantRow";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  MY_FOLDER_GRANTS_QUERY_KEY,
-  useMyFolderGrants,
-} from "@/app/lib/hooks/useSharedDriveRoles";
+import { refreshSharedWithMe, useMyFolderGrants } from "@/app/lib/hooks/useSharedDriveRoles";
 import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface SharedWithMeSectionProps {
@@ -152,7 +149,7 @@ export function SharedWithMeSection({
   const { grants: folderGrants, isSettled: grantsSettled } = useMyFolderGrants();
   const [leaveGrant, setLeaveGrant] = useState<MyFolderGrantInfo | null>(null);
   const ownMemberships = useDriveMemberships(!membershipsFromPage);
-  const { data, reload: load, markUnavailable } = membershipsFromPage ?? ownMemberships;
+  const { data, markUnavailable } = membershipsFromPage ?? ownMemberships;
   // The row whose add_shared_drive call is in flight, keyed by
   // `${ownerSs58}:${folderHash}` (the membership's wire identity).
   const [busyKey, setBusyKey] = useState<string | null>(null);
@@ -179,13 +176,15 @@ export function SharedWithMeSection({
       try {
         await leaveSharedDriveByIdentity(membership.ownerSs58, membership.folderHash);
         toast.success(`Left "${membership.displayLabel}"`);
-        await load();
+        // The shared queries, not just this list: a drive left here must
+        // also go from every other list and badge that reads them.
+        await refreshSharedWithMe(queryClient);
       } catch (err) {
         if (isSharedDrivesUnavailable(err)) return;
         toast.error(`Could not leave the drive: ${errorMessage(err)}`);
       }
     },
-    [load],
+    [queryClient],
   );
 
   const syncLocally = useCallback(
@@ -211,7 +210,7 @@ export function SharedWithMeSection({
         );
         toast.success(`Started syncing "${result.label}"`);
         onDriveAdded?.(result.label);
-        await load();
+        await refreshSharedWithMe(queryClient);
       } catch (err) {
         if (isSharedDrivesUnavailable(err)) {
           markUnavailable();
@@ -225,7 +224,7 @@ export function SharedWithMeSection({
         setBusyKey(null);
       }
     },
-    [onDriveAdded, load, markUnavailable],
+    [onDriveAdded, queryClient, markUnavailable],
   );
 
   /**
@@ -236,7 +235,7 @@ export function SharedWithMeSection({
     try {
       await leaveSharedDriveByIdentity(grant.ownerSs58, grant.folderHash);
       toast.success(`Left "${folderGrantRowView(grant).folderName}"`);
-      await queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] });
+      await refreshSharedWithMe(queryClient);
     } catch (err) {
       if (isSharedDrivesUnavailable(err)) return;
       toast.error(`Could not leave the folder: ${errorMessage(err)}`);

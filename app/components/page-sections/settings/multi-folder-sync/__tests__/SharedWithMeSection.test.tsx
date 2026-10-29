@@ -55,6 +55,7 @@ vi.mock("@/components/ui/alt-table/TableActionMenu", () => ({
 }));
 
 import { SharedWithMeSection } from "../SharedWithMeSection";
+import { useDriveMemberships } from "../useDriveMemberships";
 
 // The section asks the owners' listings for each drive's size and counts, so
 // it reads the query client.
@@ -697,16 +698,24 @@ describe("as rows of the Shared Drives page's list", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("reloads through the page's fetch after leaving a drive", async () => {
-    const ctl = controller([membership({ displayLabel: "Design" })]);
+  // The page's list reads the same memberships query the section refreshes,
+  // so a drive left from its row goes from the page at once.
+  it("takes a drive left from its row off the page's list", async () => {
+    function Page() {
+      const memberships = useDriveMemberships();
+      return <SharedWithMeSection variant="rows" alwaysShow memberships={memberships} />;
+    }
+    listMyDriveMembershipsMock.mockResolvedValue([membership({ displayLabel: "Design" })]);
     leaveSharedDriveByIdentityMock.mockResolvedValue(undefined);
-    render(<SharedWithMeSection variant="rows" alwaysShow memberships={ctl} />);
+    render(<Page />);
     // The row menu's item, then the confirmation's button of the same name.
     fireEvent.click(await screen.findByRole("button", { name: "Leave drive" }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    listMyDriveMembershipsMock.mockResolvedValue([]);
     const buttons = screen.getAllByRole("button", { name: "Leave drive" });
     fireEvent.click(buttons[buttons.length - 1]!);
-    await waitFor(() => expect(ctl.reload).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText("Design")).not.toBeInTheDocument());
+    expect(listMyDriveMembershipsMock).toHaveBeenCalledTimes(2);
   });
 });
 

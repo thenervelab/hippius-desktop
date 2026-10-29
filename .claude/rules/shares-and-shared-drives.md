@@ -257,7 +257,11 @@ page does not list drives shared with this account. ONE list, the console's: own
 shared as a whole (`isDriveShared`, drawn by the Drive page's `FolderList` with `bare` and
 `markOwned`, the Owner chip), then the drives and folders shared with this account
 (`SharedWithMeSection` with `variant="rows"`, handed the page's `useDriveMemberships` fetch so
-the tab counts and the rows read one answer). Quiet underline tabs (`ui/tabs/UnderlineTabs`,
+the tab counts and the rows read one answer). `useDriveMemberships` reads the ONE memberships
+query (`sharedDriveMembershipsQueryOptions`, also behind the row badges), refetched on mount;
+every leave and join (Manage access, the row menu, Settings, Sync locally) calls
+`refreshSharedWithMe`, which invalidates it and the folder-grant query. A page-private copy of
+the listing kept a drive just left from Manage access on screen, still opening it. Quiet underline tabs (`ui/tabs/UnderlineTabs`,
 the console's: All / Shared with you / Shared by you, count pills, roving tabindex with
 Left/Right/Home/End, short labels "With you" / "By you" below `@2xl` of the scroll area's
 container while the accessible name keeps the full label and count) show once BOTH kinds have
