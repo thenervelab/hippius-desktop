@@ -526,6 +526,9 @@ const NameCell: FC<NameCellProps> = ({
               fileName={actualName || rawName}
               file={file}
               collapsible
+              // The pill is the web app's 30px; the row keeps its height
+              // (the cell's padding has the room), as with the old 24px one.
+              className="-my-[3px]"
             />
           </div>
         </div>
