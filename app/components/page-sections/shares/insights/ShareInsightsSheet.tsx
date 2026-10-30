@@ -5,19 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import {
-  BarChart3,
-  Eye,
-  EyeOff,
-  File as FileIcon,
-  ImageIcon,
-  Link2,
-  MessageSquare,
-  Settings,
-  Sparkles,
-  Video,
-  X,
-} from "lucide-react";
+import { BarChart3, Eye, EyeOff, Link2, MessageSquare, Settings, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -37,7 +25,6 @@ import { findCachedShare, SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFile
 import { createCaptureLink } from "@/app/lib/tauri/shares";
 import { newestShare, useCaptureShares } from "@/components/page-sections/drive/useCaptureInsightsItem";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import {
   getLinkSettingsDefault,
   getShareInsights,
@@ -53,6 +40,9 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { CommentsTab, PersonName, useCommentModeration } from "./CommentThreads";
 import { InsightsAvatar } from "./InsightsAvatar";
+import { CopyLinkButton, LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
+import { MediaPreview, MediaTile, usePanelMedia } from "./PanelMedia";
+import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
 import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, StatusPills, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
 import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
@@ -97,7 +87,6 @@ export const INSIGHTS_PANEL_WIDTH_PX = 360;
 export { insightsQueryKey, commentsQueryKey, reactionsQueryKey, linkSettingsQueryKey };
 
 const VIDEO_NAME = /\.(mp4|mov|m4v|webm|mkv)$/i;
-const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|heic)$/i;
 
 /**
  * The owner's Insights for one link, opened from Shared Links, a row on the
@@ -250,7 +239,13 @@ export const LISTING_ERROR_BODY = "Hippius couldn't load this capture's links, s
 function ListingErrorPanel({ target, onClose, onRetry }: { target: InsightsSheetTarget; onClose: () => void; onRetry: () => void }) {
   return (
     <div className="relative flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel-listing-error">
-      <PanelHeader file={target.file} fileName={target.fileName} subtitle={null} onClose={onClose} />
+      <PanelHeader
+        file={target.file}
+        fileName={target.fileName}
+        location={captureLocation(target)}
+        subtitle={null}
+        onClose={onClose}
+      />
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
         <div role="alert">
           <EmptyBlock
@@ -324,6 +319,7 @@ function NoLinkPanel({
       <PanelHeader
         file={target.file}
         fileName={target.fileName}
+        location={captureLocation(target)}
         subtitle={listingLoading ? null : NO_LINK_TITLE}
         onClose={onClose}
       />
@@ -364,22 +360,36 @@ function NoLinkPanel({
   );
 }
 
-/** The no-link panel's header: the capture, its name, a line under it, Close. */
+/** Where a capture the panel was opened for lives, for its preview. */
+function captureLocation(target: InsightsSheetTarget): DriveLocation | null {
+  return target.capture ? { label: target.capture.label, relativePath: target.capture.relativePath } : null;
+}
+
+/**
+ * The no-link panel's header: the capture, its name, a line under it, Close,
+ * and the capture's preview under them while unlocked.
+ */
 function PanelHeader({
   file,
   fileName,
+  location,
   subtitle,
   onClose,
 }: {
   file?: FormattedUserFile;
   fileName: string;
+  location: DriveLocation | null;
   subtitle: string | null;
   onClose: () => void;
 }) {
+  const previewId = useId();
+  const unlocked = !useAppLocked();
+  const { media, source } = usePanelMedia({ file, fileName, location, unlocked });
   return (
     <header className={cn("shrink-0 border-b px-4 pb-3 pt-4", HAIRLINE)}>
+      {source}
       <div className="flex items-center gap-2.5">
-        <HeaderThumb file={file} fileName={fileName} onDuration={() => undefined} />
+        <MediaTile media={media} fileName={fileName} previewId={previewId} onDuration={() => undefined} />
         <div className="min-w-0 flex-1">
           <h2
             tabIndex={-1}
@@ -396,6 +406,7 @@ function PanelHeader({
           <X className="size-4" />
         </button>
       </div>
+      <MediaPreview media={media} fileName={fileName} id={previewId} />
     </header>
   );
 }
@@ -418,56 +429,6 @@ function useDurationMs(shareToken: string, mediaMs: number | null): number | nul
   const viewers = insights.data?.viewers;
   if (!viewers || viewers.state !== "shown") return null;
   return estimateDurationMs(viewers.value, comments.data?.comments ?? []);
-}
-
-/**
- * A frame of the capture when it is on this device (a recording also gives
- * the panel its length), otherwise a tile with the file's kind.
- */
-function HeaderThumb({
-  file,
-  fileName,
-  onDuration,
-}: {
-  file?: FormattedUserFile;
-  fileName: string;
-  onDuration: (ms: number) => void;
-}) {
-  const [failed, setFailed] = useState(false);
-  const local = file ? getFileUrl(file) : null;
-  const url = local?.isLocal && local.url && !failed ? local.url : null;
-  const isVideo = VIDEO_NAME.test(fileName);
-  const isImage = IMAGE_NAME.test(fileName);
-  const Icon = isVideo ? Video : isImage ? ImageIcon : FileIcon;
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "relative flex h-9 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[8px]",
-        url ? "bg-[#000]" : "bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark",
-      )}
-    >
-      {url && isVideo ? (
-        <video
-          src={`${url}#t=0.1`}
-          muted
-          playsInline
-          preload="metadata"
-          tabIndex={-1}
-          className="size-full object-cover"
-          onLoadedMetadata={(e) => {
-            const seconds = e.currentTarget.duration;
-            if (Number.isFinite(seconds) && seconds > 0) onDuration(Math.round(seconds * 1000));
-          }}
-          onError={() => setFailed(true)}
-        />
-      ) : url && isImage ? (
-        <img src={url} alt="" className="size-full object-cover" onError={() => setFailed(true)} />
-      ) : (
-        <Icon className="size-[18px]" />
-      )}
-    </span>
-  );
 }
 
 function anyLocked(insights: ShareInsights): boolean {
@@ -502,6 +463,7 @@ function InsightsPanelFor({
   const tabsId = useId();
   const titleId = useId();
   const popoverId = useId();
+  const previewId = useId();
   const [chosenTab, setChosenTab] = useState<InsightsTab | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -534,6 +496,11 @@ function InsightsPanelFor({
   const seenInListing = useRef(false);
   if (summary) seenInListing.current = true;
   const turnedOff = seenInListing.current && summary === null;
+  // The link to show and copy, and a picture of the capture, each only as far
+  // as this computer can open them: see `panelLink` and `planPanelMedia`.
+  const appLocked = useAppLocked();
+  const link = panelLink(summary, appLocked);
+  const { media, source } = usePanelMedia({ file, fileName, location: locationOf(summary), unlocked: !appLocked });
   const subtitle = headerLine({
     sharedAt: summary?.createdAt ?? null,
     durationMs,
@@ -635,9 +602,11 @@ function InsightsPanelFor({
 
   return (
     <div ref={rootRef} className="relative flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel">
+      <ListingKeeper />
       <header className={cn("shrink-0 border-b px-4 pb-3 pt-4", HAIRLINE)}>
+        {source}
         <div ref={titleRowRef} className="flex items-center gap-2.5">
-          <HeaderThumb file={file} fileName={fileName} onDuration={setMediaMs} />
+          <MediaTile media={media} fileName={fileName} previewId={previewId} onDuration={setMediaMs} />
           <div className="min-w-0 flex-1">
             <h2
               id={titleId}
@@ -655,6 +624,7 @@ function InsightsPanelFor({
               <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p>
             ) : null}
           </div>
+          {!turnedOff && <CopyLinkButton link={link} />}
           {!turnedOff && (
             <button
               type="button"
@@ -673,6 +643,8 @@ function InsightsPanelFor({
             <X className="size-4" />
           </button>
         </div>
+        {!turnedOff && <MediaPreview media={media} fileName={fileName} id={previewId} />}
+        {!turnedOff && <LinkField link={link} />}
         {settings && !turnedOff && (
           <div className="mt-2.5 empty:hidden">
             <StatusPills settings={settings} popoverId={popoverId} open={settingsOpen} onOpen={openSettings} />
