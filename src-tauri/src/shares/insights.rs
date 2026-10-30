@@ -65,6 +65,10 @@ const LINK_GONE: &str = "This link isn't active any more.";
 /// link's switches can be neither read nor changed. Never "all off": that
 /// would be a guess dressed up as the link's state.
 const SETTINGS_UNREACHABLE: &str = "Couldn't reach Hippius to check this link's settings. Try again.";
+/// Shown when the server could not be asked whether it has Insights or
+/// comments at all. Never "aren't available yet", which reads as a feature
+/// that is missing rather than a connection that failed.
+const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
 const COMMENT_GONE: &str = "That comment isn't on this link any more.";
 
 // ─── Insights ──────────────────────────────────────────────────────────────
@@ -1080,12 +1084,13 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
     }
 }
 
-/// The server's capabilities for reading or changing a link's switches: a
-/// failed read is an error the owner sees, never a server without switches.
-async fn capabilities_checked(state: &AppState, account_id: &str) -> Result<ServerCapabilities> {
+/// The server's capabilities for something the owner is looking at: a failed
+/// read is an error the owner sees (`unreachable`), never a server without
+/// the feature.
+async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
     fetch_capabilities(state, account_id).await.map_err(|e| {
-        debug!(error = %e, "share settings: capabilities unavailable");
-        AppError::Validation(SETTINGS_UNREACHABLE.into())
+        debug!(error = %e, "share insights: capabilities unavailable");
+        AppError::Validation(unreachable.into())
     })
 }
 
@@ -1279,7 +1284,7 @@ pub async fn share_engagement_features(state: tauri::State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareInsights> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_insights {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1301,7 +1306,7 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
 #[tauri::command]
 pub async fn share_list_comments(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareComments> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1320,7 +1325,7 @@ pub async fn share_list_comments(state: tauri::State<'_, AppState>, share_token:
 #[tauri::command]
 pub async fn share_delete_comment(state: tauri::State<'_, AppState>, share_token: String, comment_id: String) -> Result<()> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1343,7 +1348,7 @@ pub async fn share_unblock_commenter(state: tauri::State<'_, AppState>, share_to
 
 async fn set_blocked(state: &AppState, share_token: &str, comment_id: &str, blocked: bool) -> Result<()> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(state, &account_id).await.share_comments {
+    if !capabilities_checked(state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(state, &account_id).await?;
@@ -1355,7 +1360,7 @@ async fn set_blocked(state: &AppState, share_token: &str, comment_id: &str, bloc
 #[tauri::command]
 pub async fn share_get_reactions(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareReactions> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1369,7 +1374,7 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     // A new link's own switches first, so what is read is what it has.
     after_mint_switches_sent(&share_token).await;
-    let offered = OfferedSwitches::from_caps(&capabilities_checked(&state, &account_id).await?);
+    let offered = OfferedSwitches::from_caps(&capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?);
     if !offered.insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
@@ -1394,7 +1399,7 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
 pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_token: String, change: SettingsPatch) -> Result<()> {
     let account_id = state.current_account_id()?;
     after_mint_switches_sent(&share_token).await;
-    let caps = capabilities_checked(&state, &account_id).await?;
+    let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
     let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps)) else {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
@@ -2002,6 +2007,32 @@ mod tests {
         tokio::time::timeout(Duration::from_millis(100), after_mint_switches_sent("tok-idle"))
             .await
             .expect("no wait");
+    }
+
+    /// Offline, the capabilities read fails. What the owner is looking at
+    /// must then say Hippius couldn't be reached, never "aren't available
+    /// yet" or all switches off, which is what the lenient read gives.
+    #[test]
+    fn what_the_owner_looks_at_treats_a_failed_capabilities_read_as_an_error() {
+        let src = include_str!("insights.rs");
+        for name in [
+            "pub async fn share_get_insights(",
+            "pub async fn share_list_comments(",
+            "pub async fn share_delete_comment(",
+            "async fn set_blocked(",
+            "pub async fn share_get_reactions(",
+            "pub async fn share_get_link_settings(",
+            "pub async fn share_set_link_settings(",
+        ] {
+            let start = src.find(name).unwrap_or_else(|| panic!("{name} is defined"));
+            let body = &src[start..start + src[start..].find("\n}\n").expect("the body ends")];
+            assert!(body.contains("capabilities_checked("), "{name} reads the capabilities strictly");
+            assert!(
+                !body.contains("capabilities_or_none("),
+                "{name} never reads a failure as a missing feature"
+            );
+        }
+        assert_ne!(UNREACHABLE, INSIGHTS_UNAVAILABLE);
     }
 
     #[test]
