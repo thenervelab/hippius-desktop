@@ -27,15 +27,17 @@ import {
   type ShareCommentReply,
   type ShareInsights,
 } from "@/app/lib/tauri/shareInsights";
-import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { InsightsAvatar } from "./InsightsAvatar";
-import { commentsQueryKey, insightsQueryKey } from "./queryKeys";
+import { commentsQueryKey, insightsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import {
+  actionErrorLine,
   BLOCK_EXPLAINER,
   COMMENTS_PAGE,
   DELETE_EXPLAINER,
   formatAgo,
   formatWatched,
+  loadErrorLine,
   mentionSegments,
   sortThreads,
   threadsMentioningYou,
@@ -43,6 +45,7 @@ import {
   visibleReplies,
   type CommentOrder,
 } from "./insightsView";
+import { LoadError } from "./LoadError";
 import { SwitchOffNotice } from "./LinkSettingsPopover";
 import { DIVIDE, FLOATING, FOCUS, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
@@ -59,7 +62,7 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
   const comments = useQuery({
     queryKey: commentsQueryKey(shareToken),
     queryFn: () => listShareComments(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
     enabled,
   });
   const [asking, setAsking] = useState<RowQuestion>(null);
@@ -68,15 +71,17 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
   // while the panel is open.
   const [blocked, setBlocked] = useState<ReadonlySet<string>>(new Set());
   const remove = useMutation({
+    ...PANEL_MUTATION,
     mutationFn: (id: string) => deleteShareComment(shareToken, id),
     onSuccess: () => {
       setAsking(null);
       void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
       void queryClient.invalidateQueries({ queryKey: insightsQueryKey(shareToken) });
     },
-    onError: (err) => toast.error(`Couldn't delete the comment. ${errorMessage(err)}`),
+    onError: (err) => toast.error(actionErrorLine("delete the comment", err, navigator.onLine)),
   });
   const block = useMutation({
+    ...PANEL_MUTATION,
     mutationFn: ({ id, on }: { id: string; on: boolean }) =>
       on ? blockShareCommenter(shareToken, id) : unblockShareCommenter(shareToken, id),
     onSuccess: (_, { id, on }) => {
@@ -90,7 +95,7 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
       toast.success(on ? "Blocked. They can't comment or react on this link now." : "Unblocked.");
     },
     onError: (err, { on }) => {
-      toast.error(`Couldn't ${on ? "block" : "unblock"} them. ${errorMessage(err)}`);
+      toast.error(actionErrorLine(on ? "block them" : "unblock them", err, navigator.onLine));
       // A comment that is gone takes its row with it.
       void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
     },
@@ -118,6 +123,7 @@ export function CommentsTab({
   onTurnOn: (from: HTMLElement) => void;
 }) {
   const repliesEnabled = useAtomValue(shareCommentRepliesEnabledAtom);
+  const online = useIsOnline();
   const { comments, asking, setAsking, blocked, remove, block } = moderation;
   const [order, setOrder] = useState<CommentOrder>("newest");
   const [limit, setLimit] = useState(COMMENTS_PAGE);
@@ -138,7 +144,7 @@ export function CommentsTab({
           ))}
         </div>
       ) : comments.isError ? (
-        <p className={cn("text-sm", MUTED)}>Couldn&apos;t load comments. {errorMessage(comments.error)}</p>
+        <LoadError line={loadErrorLine("comments", comments.error, online)} onRetry={() => void comments.refetch()} />
       ) : (
         <>
           {comments.data.unreadable && <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>}

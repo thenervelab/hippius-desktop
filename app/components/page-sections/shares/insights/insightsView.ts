@@ -483,3 +483,39 @@ export function threadsMentioningYou<T extends { mentionsYou?: boolean; replies?
   return threads.filter((t) => t.mentionsYou === true || (t.replies ?? []).some((r) => r.mentionsYou === true));
 }
 
+// ─── When something does not load ──────────────────────────────────────────
+
+/** Said when this computer is offline. */
+export const OFFLINE_LINE = "You're offline. Try again once you're connected.";
+/** Said when Hippius could not be reached, or answered with no sentence of its own. */
+export const UNREACHABLE_LINE = "Couldn't reach Hippius. Try again.";
+
+/**
+ * Rust's own sentence for a failed request, when it wrote one for the user
+ * (a `Validation` or `NotFound` refusal, such as "This link isn't active any
+ * more."), else `null`: a transport or server error's text is never shown.
+ */
+function wordedByRust(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  if ((kind === "Validation" || kind === "NotFound") && typeof message === "string" && message.trim()) return message;
+  return null;
+}
+
+/**
+ * The line where something in the panel did not load (`what`: "insights",
+ * "comments", ...), always shown with Try again: offline says so, a refusal
+ * Rust worded is shown in its words, anything else is "Couldn't reach
+ * Hippius". Never the request's own text.
+ */
+export function loadErrorLine(what: string, err: unknown, online: boolean): string {
+  if (!online) return OFFLINE_LINE;
+  const worded = wordedByRust(err);
+  return worded ? `Couldn't load ${what}. ${worded}` : UNREACHABLE_LINE;
+}
+
+/** The toast after an action failed (`doing`: "delete the comment", ...). */
+export function actionErrorLine(doing: string, err: unknown, online: boolean): string {
+  if (!online) return `Couldn't ${doing}. ${OFFLINE_LINE}`;
+  return `Couldn't ${doing}. ${wordedByRust(err) ?? UNREACHABLE_LINE}`;
+}

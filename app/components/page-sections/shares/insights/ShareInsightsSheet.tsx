@@ -38,13 +38,14 @@ import {
   type ShareReactions,
 } from "@/app/lib/tauri/shareInsights";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { CommentsTab, PersonName, useCommentModeration } from "./CommentThreads";
 import { InsightsAvatar } from "./InsightsAvatar";
 import { CopyLinkButton, LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
 import { MediaPreview, MediaTile, usePanelMedia } from "./PanelMedia";
 import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
 import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, StatusPills, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
-import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey } from "./queryKeys";
+import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
 import {
   COMPARE_PLANS,
@@ -71,6 +72,7 @@ import {
   formatPercent,
   formatWatched,
   headerLine,
+  loadErrorLine,
   lockCopy,
   switchOffLine,
   tabLabel,
@@ -417,12 +419,12 @@ function useDurationMs(shareToken: string, mediaMs: number | null): number | nul
   const insights = useQuery({
     queryKey: insightsQueryKey(shareToken),
     queryFn: () => getShareInsights(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
   });
   const comments = useQuery({
     queryKey: commentsQueryKey(shareToken),
     queryFn: () => listShareComments(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
     enabled: commentsEnabled,
   });
   if (mediaMs !== null) return mediaMs;
@@ -510,13 +512,13 @@ function InsightsPanelFor({
   const insights = useQuery({
     queryKey: insightsQueryKey(shareToken),
     queryFn: () => getShareInsights(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
   });
   const switches = useLinkSwitches(shareToken);
   const reactions = useQuery({
     queryKey: reactionsQueryKey(shareToken),
     queryFn: () => getShareReactions(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
     enabled: commentsEnabled,
   });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
@@ -819,12 +821,13 @@ function Summary({
   commentCount: number | null;
   reactions: ShareReactions | null;
 }) {
+  const online = useIsOnline();
   if (insights.isError) {
     return (
       <section aria-label="Summary" className={cn("shrink-0 border-b px-4 py-3", HAIRLINE)}>
         <div role="alert" className={cn("flex flex-col items-start gap-2 p-3", CARD)}>
           <p className="text-sm text-grey-20 dark:text-grey-dark-800">
-            Couldn&apos;t load insights. {errorMessage(insights.error)}
+            {loadErrorLine("insights", insights.error, online)}
           </p>
           <Button variant="defaultStable" size="sm" onClick={() => void insights.refetch()}>
             Try again
@@ -1238,6 +1241,7 @@ function ReactionsTab({
   offLine: string | null;
   onTurnOn: (from: HTMLElement) => void;
 }) {
+  const online = useIsOnline();
   const sorted = useMemo(() => sortedReactions(reactions.data), [reactions.data]);
   const max = sorted[0]?.count ?? 0;
   return (
@@ -1247,7 +1251,7 @@ function ReactionsTab({
         <div className={cn(SKELETON, "h-8")} />
       ) : reactions.isError ? (
         <div className="flex flex-wrap items-center gap-2">
-          <p className={cn("text-sm", MUTED)}>Couldn&apos;t load reactions. {errorMessage(reactions.error)}</p>
+          <p className={cn("text-sm", MUTED)}>{loadErrorLine("reactions", reactions.error, online)}</p>
           <Button variant="defaultStable" size="sm" onClick={() => void reactions.refetch()}>
             Try again
           </Button>

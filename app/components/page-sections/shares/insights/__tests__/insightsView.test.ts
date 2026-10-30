@@ -2,6 +2,10 @@ import { describe, it, expect } from "vitest";
 
 import type { InsightsViewer } from "@/app/lib/tauri/shareInsights";
 import {
+  actionErrorLine,
+  loadErrorLine,
+  OFFLINE_LINE,
+  UNREACHABLE_LINE,
   ANONYMOUS,
   AVATAR_COLORS,
   REPLIES_SHOWN,
@@ -309,6 +313,30 @@ describe("mentionSegments", () => {
   });
 });
 
+describe("what a failed request says", () => {
+  const transport = { kind: "Hcfs", message: "comments failed: error sending request for url (https://x/v1/shares/t/comments)" };
+
+  it("never shows a transport or server error's own text", () => {
+    expect(loadErrorLine("comments", transport, true)).toBe(UNREACHABLE_LINE);
+    expect(loadErrorLine("comments", { kind: "Api", message: '{"error":"internal"}' }, true)).toBe(UNREACHABLE_LINE);
+    expect(loadErrorLine("comments", new Error("boom"), true)).toBe(UNREACHABLE_LINE);
+    expect(actionErrorLine("delete the comment", transport, true)).toBe(`Couldn't delete the comment. ${UNREACHABLE_LINE}`);
+  });
+
+  it("shows a sentence Rust wrote for the user", () => {
+    expect(loadErrorLine("insights", { kind: "NotFound", message: "This link isn't active any more." }, true)).toBe(
+      "Couldn't load insights. This link isn't active any more.",
+    );
+    expect(actionErrorLine("delete the comment", { kind: "NotFound", message: "That comment isn't on this link any more." }, true)).toBe(
+      "Couldn't delete the comment. That comment isn't on this link any more.",
+    );
+  });
+
+  it("says offline first", () => {
+    expect(loadErrorLine("insights", { kind: "NotFound", message: "x" }, false)).toBe(OFFLINE_LINE);
+    expect(actionErrorLine("block them", transport, false)).toBe(`Couldn't block them. ${OFFLINE_LINE}`);
+  });
+});
 
 describe("what Insights promise the owner", () => {
   // Owners see how many people viewed, and a name only for someone who

@@ -2,11 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 
 import { MotionGlobalConfig } from "framer-motion";
 
 import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
+import { OFFLINE_LINE, UNREACHABLE_LINE } from "../insightsView";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
@@ -670,8 +671,10 @@ describe("ShareInsightsSheet", () => {
     await screen.findByText("25%");
     expect(screen.queryByText("How we count views")).toBeNull();
     const settings = await openSettings();
-    // Settings that fail to load say so; the explanation is there either way.
-    expect(await within(settings).findByText(/Couldn't load this link's settings/)).toBeInTheDocument();
+    // Settings that fail to load say so, with Try again; the explanation is
+    // there either way.
+    expect(await within(settings).findByText(UNREACHABLE_LINE)).toBeInTheDocument();
+    expect(within(settings).getByRole("button", { name: "Try again" })).toBeInTheDocument();
     expect(within(settings).getByText("How we count views")).toBeInTheDocument();
     expect(within(settings).getByText("Each time the link is opened.")).toBeInTheDocument();
   });
@@ -1013,6 +1016,47 @@ describe("ShareInsightsSheet", () => {
       ),
     );
     expect(await screen.findByText(/^Shared Oct 20(, 2026)? · link on$/)).toBeInTheDocument();
+  });
+
+  it("never shows a request's own text, and offers Try again wherever something did not load", async () => {
+    let fail = true;
+    const transport = { kind: "Hcfs", message: "insights failed: error sending request for url (https://x/v1/shares/tok/insights)" };
+    invokeMock.mockImplementation((cmd: string) => {
+      if (fail) return Promise.reject(transport);
+      if (cmd === "share_get_insights") return Promise.resolve(PAID);
+      if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
+      if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
+      return Promise.reject(new Error(`unexpected ${cmd}`));
+    });
+    renderSheet();
+    const summary = await screen.findByRole("region", { name: "Summary" });
+    expect(await within(summary).findByText(UNREACHABLE_LINE)).toBeInTheDocument();
+    // The Comments tab (and the hidden Reactions tab) say the same, each
+    // with its own Try again.
+    expect(await screen.findAllByText(UNREACHABLE_LINE)).toHaveLength(3);
+    expect(screen.queryByText(/error sending request/)).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Try again" })).toHaveLength(2);
+
+    fail = false;
+    const body = screen.getByTestId("insights-body");
+    fireEvent.click(within(body).getByRole("button", { name: "Try again" }));
+    expect(await within(body).findByText("No comments yet.")).toBeInTheDocument();
+  });
+
+  it("says when this computer is offline, instead of loading for ever", async () => {
+    // Offline, TanStack pauses network queries; the panel's are IPC calls
+    // Rust answers anyway, so they must still run and reach the line.
+    const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    onlineManager.setOnline(false);
+    try {
+      invokeMock.mockImplementation(() => Promise.reject({ kind: "Validation", message: "Couldn't reach Hippius. Try again." }));
+      renderSheet();
+      const summary = await screen.findByRole("region", { name: "Summary" });
+      expect(await within(summary).findByText(OFFLINE_LINE)).toBeInTheDocument();
+    } finally {
+      online.mockRestore();
+      onlineManager.setOnline(true);
+    }
   });
 
   it("shows the share date once the listing arrives, as after Create link", async () => {
