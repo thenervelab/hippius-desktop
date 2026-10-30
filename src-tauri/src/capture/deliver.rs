@@ -55,6 +55,26 @@ pub fn keep_temp_after_upload(via_sync: bool, has_link: bool, editable: bool) ->
     !via_sync && (!has_link || editable)
 }
 
+/// The query parameter that tells the share page a load is the owner's own:
+/// it records no view or viewer for it and takes the parameter out of the
+/// address bar.
+pub const OWNER_VIEW_PARAM: &str = "owner=1";
+
+/// `url` as the app opens it for its owner: [`OWNER_VIEW_PARAM`] added to
+/// the query, before the `#` fragment, which holds the link's key and is
+/// left exactly as it is. Only for the app opening the link itself; a copied
+/// link never carries it.
+#[must_use]
+pub fn owner_view_url(url: &str) -> String {
+    let (base, fragment) = url.find('#').map_or((url, ""), |i| url.split_at(i));
+    let separator = match base.find('?') {
+        None => "?",
+        Some(_) if base.ends_with('?') || base.ends_with('&') => "",
+        Some(_) => "&",
+    };
+    format!("{base}{separator}{OWNER_VIEW_PARAM}{fragment}")
+}
+
 /// Where a capture is once it has been put in the drive, before any link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
@@ -336,7 +356,11 @@ const UPLOAD_FAILED: &str = "The capture couldn't be uploaded. Retry in a moment
 #[must_use]
 pub fn failure_reason(e: &AppError) -> FailureReason {
     match e {
-        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached) => FailureReason::StorageFull,
+        // The free plan's recordings used up reads like a full plan: Upgrade
+        // is the way on (Retry once an older recording is deleted).
+        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached | crate::error::NotReadyKind::RecordingLimitReached) => {
+            FailureReason::StorageFull
+        }
         other if is_offline_shaped(&other.to_string()) => FailureReason::Offline,
         _ => FailureReason::Other,
     }
@@ -349,9 +373,13 @@ pub fn failure_reason(e: &AppError) -> FailureReason {
 pub fn failure_copy(e: &AppError) -> String {
     match failure_reason(e) {
         FailureReason::Offline => OFFLINE.into(),
+        FailureReason::StorageFull if matches!(e, AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached)) => {
+            super::recording_allowance::LIMIT_KEPT.into()
+        }
         FailureReason::StorageFull => STORAGE_FULL.into(),
         FailureReason::NeedsFolder | FailureReason::Other => match e {
             AppError::Validation(message) => message.clone(),
+            AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable) => super::recording_allowance::COUNT_UNAVAILABLE.into(),
             _ => UPLOAD_FAILED.into(),
         },
     }
@@ -635,6 +663,39 @@ mod tests {
             ("Hippius Captures", "Captures/Recording.mp4")
         );
         assert!(!rows.contains_key("tok-sync"), "a synced share records its own origin when minted");
+    }
+
+    /// A recording kept back at the free limit says so and offers Upgrade
+    /// (the plan-full reason); one whose count could not be read says that.
+    #[test]
+    fn a_recording_kept_back_at_the_free_limit_says_why() {
+        let limit = AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached);
+        assert_eq!(failure_reason(&limit), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&limit), super::super::recording_allowance::LIMIT_KEPT);
+        let unknown = AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable);
+        assert_eq!(failure_reason(&unknown), FailureReason::Other);
+        assert_eq!(failure_copy(&unknown), super::super::recording_allowance::COUNT_UNAVAILABLE);
+    }
+
+    /// The owner's own open carries `owner=1` before the fragment, whatever
+    /// the link already has in its query, and the key is untouched.
+    #[test]
+    fn the_owners_open_marks_the_query_and_keeps_the_key() {
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok#k=AbC-_9"),
+            "https://console.hippius.com/share/tok?owner=1#k=AbC-_9"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok?lang=en#p=salt.key"),
+            "https://console.hippius.com/share/tok?lang=en&owner=1#p=salt.key"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok"),
+            "https://console.hippius.com/share/tok?owner=1"
+        );
+        assert_eq!(owner_view_url("https://x/share/tok?#k=1"), "https://x/share/tok?owner=1#k=1");
+        // A `?` inside the fragment is the key's, not a query.
+        assert_eq!(owner_view_url("https://x/share/tok#k=a?b"), "https://x/share/tok?owner=1#k=a?b");
     }
 
     #[test]

@@ -714,14 +714,18 @@ let stageInset: CGFloat = 12
 /// The Free plan's watermark (`src-tauri/src/capture/watermark.rs`). Rust
 /// draws every size into one atlas file, since only this process learns the
 /// frames' size; each frame then takes the size its shorter side calls for
-/// and has it blended into its bottom-right corner, in place, over the
-/// mark's own small rectangle. The atlas is little-endian: "HWM1", the
-/// marks (width, height, premultiplied BGRA), then the steps (shorter side
-/// from, mark, inset from the right, inset from the bottom).
+/// and has it blended near its bottom-right corner, in place, over the
+/// mark's own small rectangle. The mark sits a share of the frame's height
+/// up from the bottom (`liftPermille`), above the share page player's
+/// controls, or at the step's bottom inset when that is higher. The atlas is
+/// little-endian: "HWM2", the lift in thousandths, the marks (width, height,
+/// shadow pad, premultiplied BGRA), then the steps (shorter side from, mark,
+/// inset from the right, inset from the bottom).
 final class Watermark {
     struct Mark {
         let width: Int
         let height: Int
+        let pad: Int
         let pixels: [UInt8]
     }
 
@@ -732,15 +736,16 @@ final class Watermark {
         let insetBottom: Int
     }
 
+    private let liftPermille: Int
     private let marks: [Mark]
     private let steps: [Step]
-    /// The step for the last frame size seen; frames keep one size.
-    private var chosen: (width: Int, height: Int, step: Step)?
+    /// The step and bottom inset for the last frame size seen; frames keep one size.
+    private var chosen: (width: Int, height: Int, step: Step, insetBottom: Int)?
 
     init?(contentsOf url: URL) {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let bytes = [UInt8](data)
-        guard bytes.count >= 8, Array(bytes[0..<4]) == Array("HWM1".utf8) else { return nil }
+        guard bytes.count >= 8, Array(bytes[0..<4]) == Array("HWM2".utf8) else { return nil }
         var at = 4
         func word() -> UInt32? {
             guard at + 4 <= bytes.count else { return nil }
@@ -748,13 +753,14 @@ final class Watermark {
             at += 4
             return v
         }
+        guard let lift = word(), lift < 1000 else { return nil }
         guard let markCount = word(), markCount < 1000 else { return nil }
         var marks: [Mark] = []
         for _ in 0..<markCount {
-            guard let w = word(), let h = word(), w < 10_000, h < 10_000 else { return nil }
+            guard let w = word(), let h = word(), let pad = word(), w < 10_000, h < 10_000, pad < h else { return nil }
             let length = Int(w) * Int(h) * 4
             guard at + length <= bytes.count else { return nil }
-            marks.append(Mark(width: Int(w), height: Int(h), pixels: Array(bytes[at..<(at + length)])))
+            marks.append(Mark(width: Int(w), height: Int(h), pad: Int(pad), pixels: Array(bytes[at..<(at + length)])))
             at += length
         }
         guard let stepCount = word(), stepCount < 100_000 else { return nil }
@@ -764,6 +770,7 @@ final class Watermark {
             steps.append(Step(shortFrom: Int(from), mark: Int(mark), insetRight: Int(Int32(bitPattern: right)), insetBottom: Int(Int32(bitPattern: bottom))))
         }
         guard !steps.isEmpty, at == bytes.count else { return nil }
+        self.liftPermille = Int(lift)
         self.marks = marks
         self.steps = steps
     }
@@ -774,17 +781,22 @@ final class Watermark {
         let width = CVPixelBufferGetWidth(buffer)
         let height = CVPixelBufferGetHeight(buffer)
         let step: Step
+        let insetBottom: Int
         if let chosen, chosen.width == width, chosen.height == height {
             step = chosen.step
+            insetBottom = chosen.insetBottom
         } else {
             let short = min(width, height)
             guard let found = steps.last(where: { $0.shortFrom <= short }) else { return }
-            chosen = (width, height, found)
+            // Rounded half up in whole thousandths, as `recording_bottom_gap` does.
+            let lift = (height * liftPermille + 500) / 1000 - marks[found.mark].pad
+            insetBottom = max(found.insetBottom, lift)
+            chosen = (width, height, found, insetBottom)
             step = found
         }
         let mark = marks[step.mark]
         let left = width - step.insetRight - mark.width
-        let top = height - step.insetBottom - mark.height
+        let top = height - insetBottom - mark.height
         let x0 = max(left, 0), y0 = max(top, 0)
         let x1 = min(left + mark.width, width), y1 = min(top + mark.height, height)
         guard x0 < x1, y0 < y1 else { return }

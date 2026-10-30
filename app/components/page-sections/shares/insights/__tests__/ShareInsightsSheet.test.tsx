@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { MotionGlobalConfig } from "framer-motion";
 
-import ShareInsightsSheet from "../ShareInsightsSheet";
+import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
@@ -108,10 +108,13 @@ const NO_COMMENTS = { comments: [], unreadable: null };
 const NO_REACTIONS = { counts: [], total: 0 };
 const ALL_ON = { insights: true, comments: true, reactions: true };
 
+/** Answers IPC by command; a function answer is called with the arguments. */
 function answer(map: Record<string, unknown>) {
-  invokeMock.mockImplementation((cmd: string) =>
-    cmd in map ? Promise.resolve(map[cmd]) : Promise.reject(new Error(`unexpected ${cmd}`)),
-  );
+  invokeMock.mockImplementation((cmd: string, args?: unknown) => {
+    if (!(cmd in map)) return Promise.reject(new Error(`unexpected ${cmd}`));
+    const value = map[cmd];
+    return Promise.resolve(typeof value === "function" ? value(args) : value);
+  });
 }
 
 function renderSheet(caps: ServerCapabilities = CAPS, seed?: (client: QueryClient) => void, fileName: string = NAME) {
@@ -482,18 +485,19 @@ describe("ShareInsightsSheet", () => {
 
   it("changes a link switch at once and puts it back when the server refuses", async () => {
     let settingsCalls = 0;
-    invokeMock.mockImplementation((cmd: string) => {
+    // The server's switches: a change it takes is what the next read shows.
+    let on = { insights: true, comments: false, reactions: true };
+    invokeMock.mockImplementation((cmd: string, args?: { change?: Partial<typeof on> }) => {
       if (cmd === "share_get_insights") return Promise.resolve(PAID);
       if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
       if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
       if (cmd === "share_get_link_settings")
-        return Promise.resolve({
-          offered: { insights: true, comments: true, reactions: true },
-          on: { insights: true, comments: false, reactions: true },
-        });
+        return Promise.resolve({ offered: { insights: true, comments: true, reactions: true }, on });
       if (cmd === "share_set_link_settings") {
         settingsCalls += 1;
-        return settingsCalls === 1 ? Promise.resolve() : Promise.reject({ kind: "Api", message: "nope" });
+        if (settingsCalls !== 1) return Promise.reject({ kind: "Api", message: "nope" });
+        on = { ...on, ...args?.change };
+        return Promise.resolve();
       }
       return Promise.reject(new Error(`unexpected ${cmd}`));
     });
@@ -507,7 +511,7 @@ describe("ShareInsightsSheet", () => {
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
         shareToken: "tok",
-        settings: { insights: true, comments: true, reactions: true },
+        change: { comments: true },
       }),
     );
     expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "true");
@@ -525,13 +529,17 @@ describe("ShareInsightsSheet", () => {
 
   describe("on the free plan", () => {
     const ALL = { insights: true, comments: true, reactions: true };
-    function freeLink(on: { insights: boolean; comments: boolean; reactions: boolean }) {
-      invokeMock.mockImplementation((cmd: string) => {
+    function freeLink(start: { insights: boolean; comments: boolean; reactions: boolean }) {
+      let on = start;
+      invokeMock.mockImplementation((cmd: string, args?: { change?: Partial<typeof on> }) => {
         if (cmd === "share_get_insights") return Promise.resolve({ ...FREE, totalViews: 0, uniqueViewers: 0 });
         if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
         if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
         if (cmd === "share_get_link_settings") return Promise.resolve({ offered: ALL, on, switchesInPlan: false });
-        if (cmd === "share_set_link_settings") return Promise.resolve();
+        if (cmd === "share_set_link_settings") {
+          on = { ...on, ...args?.change };
+          return Promise.resolve();
+        }
         return Promise.reject(new Error(`unexpected ${cmd}`));
       });
     }
@@ -587,14 +595,15 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: false, reactions: true },
+          change: { comments: false },
         }),
       );
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Reactions" })).not.toBeDisabled());
       fireEvent.click(screen.getByRole("switch", { name: "Reactions" }));
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: false, reactions: false },
+          change: { reactions: false },
         }),
       );
       await waitFor(() => expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "false"));
@@ -616,7 +625,7 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: { insights: false, comments: true, reactions: true },
+          change: { insights: false },
         }),
       );
     });
@@ -727,12 +736,15 @@ describe("ShareInsightsSheet", () => {
     });
 
     it("says in the Comments tab that comments are off, with Turn on, and still lists what is there", async () => {
+      let link = SOME_OFF;
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
         share_get_reactions: NO_REACTIONS,
-        share_get_link_settings: SOME_OFF,
-        share_set_link_settings: undefined,
+        share_get_link_settings: () => link,
+        share_set_link_settings: ({ change }: { change: Partial<typeof ALL_ON> }) => {
+          link = { ...link, on: { ...link.on, ...change } };
+        },
       });
       renderSheet();
       const notice = await screen.findByText("Comments are off, so viewers can't add new ones.");
@@ -743,7 +755,7 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() =>
         expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", {
           shareToken: "tok",
-          settings: ALL_ON,
+          change: { comments: true },
         }),
       );
       await waitFor(() => expect(screen.queryByText("Comments are off, so viewers can't add new ones.")).toBeNull());
@@ -998,6 +1010,45 @@ describe("ShareInsightsSheet", () => {
     expect(await screen.findByText(/^Shared Oct 20(, 2026)? · link on$/)).toBeInTheDocument();
   });
 
+  it("shows the share date once the listing arrives, as after Create link", async () => {
+    answer({ share_get_insights: PAID, share_list_comments: { comments: [], unreadable: null } });
+    let client: QueryClient | null = null;
+    renderSheet(CAPS, (c) => {
+      client = c;
+    });
+    await screen.findByRole("region", { name: "Summary" });
+    expect(screen.queryByText(/^Shared /)).toBeNull();
+    // The listing Create link asked for comes back with the new link.
+    act(() => {
+      client!.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]);
+    });
+    expect(await screen.findByText(/^Shared Oct 20(, 2026)? · link on$/)).toBeInTheDocument();
+  });
+
+  it("says the link is turned off when it is revoked while the panel is open", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: { comments: [], unreadable: null },
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+    });
+    let client: QueryClient | null = null;
+    renderSheet(CAPS, (c) => {
+      client = c;
+      c.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]);
+    });
+    await screen.findByRole("region", { name: "Summary" });
+    expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+    // Shared Links revokes it, and reads the listing again.
+    act(() => {
+      client!.setQueryData(["shares-list", "5Acct"], []);
+    });
+    expect(await screen.findAllByText(LINK_TURNED_OFF)).not.toHaveLength(0);
+    expect(screen.getByText(LINK_TURNED_OFF_BODY)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link settings" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Summary" })).toBeNull();
+  });
+
   it("offers Try again when the numbers do not load", async () => {
     invokeMock.mockImplementation((cmd: string) =>
       cmd === "share_get_insights"
@@ -1108,6 +1159,26 @@ describe("the Insights side panel", () => {
     fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
     expect(store.get(insightsSheetAtom)).not.toBeNull();
+  });
+
+  it("lets Escape put back a Delete or Block question without closing the panel", async () => {
+    const { store } = renderWithOpener();
+    await screen.findByText("Looks great at 1:23!");
+    for (const [item, question] of [
+      [/Delete comment/, "Delete this comment for everyone?"],
+      [/^Block/, /^Block them on this link\?/],
+    ] as const) {
+      await openMenu("Ahmad");
+      fireEvent.click(screen.getByRole("menuitem", { name: item }));
+      const asking = screen.getByText(question);
+      fireEvent.keyDown(document.activeElement ?? asking, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByText(question)).toBeNull());
+      expect(store.get(insightsSheetAtom)).not.toBeNull();
+      await waitFor(() => expect(screen.getAllByRole("button", { name: "Comment actions for Ahmad" })[0]).toHaveFocus());
+    }
+    // With no question open, Escape closes the panel as before.
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(store.get(insightsSheetAtom)).toBeNull();
   });
 
   it("ignores Escape pressed somewhere else on the page", async () => {

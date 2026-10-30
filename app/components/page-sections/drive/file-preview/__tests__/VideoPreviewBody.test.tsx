@@ -18,8 +18,6 @@ const tauri = await vi.hoisted(async () => {
 vi.mock("@tauri-apps/api/core", () => tauri.core);
 vi.mock("@tauri-apps/api/event", () => tauri.event);
 
-const opener = vi.hoisted(() => ({ openPath: vi.fn(async () => undefined) }));
-vi.mock("@tauri-apps/plugin-opener", () => opener);
 
 const resolved = vi.hoisted(() => ({
   value: { url: "", localPath: "", isLoading: false, error: null as string | null },
@@ -95,7 +93,8 @@ function stream() {
 beforeEach(() => {
   tauri.reset();
   tauri.onInvoke("video_stream_release", () => undefined);
-  opener.openPath.mockClear();
+  // Opened through Rust, which checks the file is in a synced folder.
+  tauri.onInvoke("open_in_default_app", () => null);
   player.started = undefined;
   player.failed = undefined;
   player.stuttered = undefined;
@@ -164,7 +163,9 @@ describe("VideoPreviewBody", () => {
     vi.useRealTimers();
     expect(screen.queryByTestId("video-player")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: /Open in your video player/ }));
-    await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("/drive/Captures/Recording.mp4"));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("open_in_default_app", { path: "/drive/Captures/Recording.mp4" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: /Download File/ }));
     expect(download).toHaveBeenCalledWith(file, "5Test");
   });
@@ -182,7 +183,9 @@ describe("VideoPreviewBody", () => {
     // Beside the player, not instead of it.
     expect(screen.getByTestId("video-player")).toHaveTextContent(STREAM_URL);
     fireEvent.click(screen.getByRole("button", { name: "Open in your video player" }));
-    await waitFor(() => expect(opener.openPath).toHaveBeenCalledWith("/drive/Captures/Recording.mp4"));
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("open_in_default_app", { path: "/drive/Captures/Recording.mp4" }),
+    );
   });
 
   it("never offers it where the webview plays the file itself", async () => {
