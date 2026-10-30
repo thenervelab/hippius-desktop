@@ -69,9 +69,12 @@ export function shareLookups(index: ShareLinkIndex): ShareLinkLookups {
   };
 }
 
-/** The newest of a file's links: the one its Insights are about. */
-export function newestShare(rows: ShareSummary[]): ShareSummary | null {
-  let newest: ShareSummary | null = null;
+/**
+ * The newest of a file's links: the one its Insights are about, and the one
+ * its Copy link copies. Takes folder links too (anything with `createdAt`).
+ */
+export function newestShare<T extends Pick<ShareSummary, "createdAt">>(rows: readonly T[]): T | null {
+  let newest: T | null = null;
   for (const row of rows) {
     if (!newest || Date.parse(row.createdAt) > Date.parse(newest.createdAt)) newest = row;
   }
