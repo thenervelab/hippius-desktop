@@ -307,6 +307,11 @@ fn owner_mention(m: CommentMention, mine: &HashSet<String>) -> ShareCommentMenti
     }
 }
 
+/// Whether `text` holds `@name`, the way a mention is written.
+fn mentioned_in(text: &str, name: &str) -> bool {
+    !name.is_empty() && text.contains(&format!("@{name}"))
+}
+
 /// A link's comments, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,11 +410,18 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
             let (text, name, mentions) = match opened {
                 // An anonymous comment never shows a name, whatever its
                 // ciphertext carries.
-                Some(p) => (
-                    Some(p.text),
-                    if c.anonymous { None } else { p.name.map(readable_name) },
-                    p.mentions.into_iter().map(|m| owner_mention(m, &mine)).collect::<Vec<_>>(),
-                ),
+                Some(p) => {
+                    // A mention counts only where its `@Name` is in the text:
+                    // the list is sealed with the comment by whoever wrote
+                    // it, so it could claim "mentioned you" over any text.
+                    let mentions = p
+                        .mentions
+                        .into_iter()
+                        .filter(|m| mentioned_in(&p.text, &m.name))
+                        .map(|m| owner_mention(m, &mine))
+                        .collect::<Vec<_>>();
+                    (Some(p.text), if c.anonymous { None } else { p.name.map(readable_name) }, mentions)
+                }
                 None => (None, None, Vec::new()),
             };
             let mentions_you = !c.mine && mentions.iter().any(|m| m.you);
@@ -1519,6 +1531,40 @@ mod tests {
         let json = serde_json::to_value(c).unwrap();
         assert_eq!(json["mentionsYou"], serde_json::json!(true));
         assert_eq!(json["mentions"][0]["kind"], serde_json::json!("owner"));
+    }
+
+    /// The mention list is sealed by whoever wrote the comment: one that
+    /// names the owner over text that never says `@Owner` must not flag the
+    /// comment as mentioning them.
+    #[test]
+    fn a_mention_missing_from_the_text_is_dropped() {
+        use base64::Engine as _;
+        let (key, token, _, _) = vector_key();
+        let seal = |plaintext: serde_json::Value| {
+            let nonce = [7u8; 12];
+            let ct =
+                comment_crypto::seal_with_nonce(&key, &token, comment_crypto::Purpose::Comment, &nonce, plaintext.to_string().as_bytes()).unwrap();
+            let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+            (b64(&nonce), b64(&ct))
+        };
+        let (n1, c1) = seal(serde_json::json!({
+            "text": "Mentioned you! Click here",
+            "mentions": [{ "kind": "owner", "name": "Owner" }],
+        }));
+        let (n2, c2) = seal(serde_json::json!({
+            "text": "@Owner have a look",
+            "mentions": [{ "kind": "owner", "name": "Owner" }, { "kind": "commenter", "name": "Grace", "comment": "c-1" }],
+        }));
+        let out = open_comments(
+            &token,
+            vec![wire_comment("1", &n1, &c1, false), wire_comment("2", &n2, &c2, false)],
+            Ok(&key),
+        );
+        assert!(out.comments[0].mentions.is_empty(), "no @Owner in the text");
+        assert!(!out.comments[0].mentions_you);
+        assert_eq!(out.comments[1].mentions.len(), 1, "only the mention the text holds");
+        assert_eq!(out.comments[1].mentions[0].name, "Owner");
+        assert!(out.comments[1].mentions_you);
     }
 
     #[test]
