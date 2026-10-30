@@ -924,8 +924,13 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     // Handle file deletion with captured files from confirmation dialog
     const handleDeleteSelectedFiles = useCallback(
-      (capturedFiles: FormattedUserFile[]) => {
+      (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][]) => {
         if (capturedFiles.length === 0) return;
+        // Each file's links to turn off ("Also turn off its links"), kept
+        // with the file through the filtering below.
+        const links = turnOffLinks
+          ? new Map(capturedFiles.map((f, i) => [f, turnOffLinks[i] ?? []] as const))
+          : undefined;
 
         // Filter out anything already mid-deletion so a fast double-tap
         // can't queue the same delete twice.
@@ -956,7 +961,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         // useDeleteFile hook re-initialise with `filesToDelete`
         // before `deleteFiles` reads its mutation function.
         setTimeout(() => {
-          deleteFiles(undefined, {
+          deleteFiles({ turnOffLinks: links }, {
             onSettled: () => {
               fresh.forEach((f) => {
                 const parentPath = f.isFolder

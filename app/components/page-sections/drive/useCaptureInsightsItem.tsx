@@ -87,6 +87,24 @@ export function useCaptureShares() {
 }
 
 /**
+ * The tokens of a capture's links, by the same lookup as its Insights
+ * ({@link captureSharesFrom}), for "Also turn off its links" when it is
+ * deleted. Nothing for a folder or a file that is not a screenshot or a
+ * recording.
+ */
+export function useCaptureLinkTokens() {
+  const { sharesFor } = useCaptureShares();
+  return useCallback(
+    (file: FormattedUserFile): string[] => {
+      const relativePath = file.actualFileName || file.name;
+      if (file.isFolder || !isCaptureMedia(relativePath)) return [];
+      return [...new Set(sharesFor(file.label, relativePath, file.size).map((row) => row.shareToken))];
+    },
+    [sharesFor],
+  );
+}
+
+/**
  * Whether a row on the Captures page offers Insights, and the link they are
  * about. `offered` is true for every screenshot and recording (never a
  * folder) once the server has Insights; `share` is its newest link, or
