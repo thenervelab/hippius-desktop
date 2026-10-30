@@ -4494,6 +4494,12 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             link_insights,
             placed,
         }) => {
+            // In the drive: a temp copy kept for the card (Edit, Create link)
+            // is now only that, and goes at launch or sign-out if the card
+            // does not remove it first.
+            if !placed.via_sync {
+                super::screenshot::mark_delivered(&placed.placed);
+            }
             announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
             // A recording counts toward the free plan's limit from now on,
             // before the server lists it (`recording_allowance`).
@@ -6381,10 +6387,21 @@ pub async fn end_for_logout(app: &AppHandle) {
     {
         tracing::warn!(error = %e, "capture not cancelled at sign-out");
     }
+    // A failed capture stays on disk with its marker and comes back after the
+    // next sign-in; the copies of captures already in the drive go now,
+    // rather than piling up until the next launch.
     lock(&state.capture.parked).take();
     lock(&state.capture.preview).take();
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
+    }
+    if let Ok(root) = super::screenshot::capture_tmp_root() {
+        let removed = tauri::async_runtime::spawn_blocking(move || super::screenshot::reclaim_delivered(&root, &[]))
+            .await
+            .unwrap_or(0);
+        if removed > 0 {
+            tracing::info!(removed, "removed uploaded captures' temp copies at sign-out");
+        }
     }
     for kind in ShortcutKind::ALL {
         if let Err(e) = shortcut::apply(app, kind, None) {
@@ -6393,11 +6410,12 @@ pub async fn end_for_logout(app: &AppHandle) {
     }
 }
 
-/// At launch: remove capture folders a crash or an abandoned start left
-/// empty for a day, or holding only leftovers for a week. A folder holding a
-/// capture (a recording the helper saved when the app died, a screenshot that
-/// never uploaded) is never removed (`screenshot::is_orphan`). Runs on its
-/// own thread; never delays start-up.
+/// At launch: remove the temp copies of captures already in the drive (the
+/// app quit with their card up), and capture folders a crash or an abandoned
+/// start left empty for a day, or holding only leftovers for a week. A folder
+/// holding a capture that did not upload (a recording the helper saved when
+/// the app died, a screenshot that never uploaded) is never removed
+/// (`screenshot::is_orphan`). Runs on its own thread; never delays start-up.
 pub fn reclaim_capture_tmp_at_launch() {
     let spawned = std::thread::Builder::new().name("capture-tmp-reclaim".into()).spawn(|| {
         let Ok(root) = super::screenshot::capture_tmp_root() else { return };
