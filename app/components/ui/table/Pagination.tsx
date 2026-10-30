@@ -25,17 +25,25 @@ const PaginationButton = ({
   onClick,
   children,
   className,
+  label,
 }: {
   active?: boolean;
   disabled?: boolean;
   onClick?: () => void;
   children: React.ReactNode;
   className?: string;
+  /**
+   * The button's name for a screen reader, for one that shows only an icon
+   * (the arrows). A page number is named by its own digits.
+   */
+  label?: string;
 }) => (
   <button
     type="button"
     onClick={onClick}
     disabled={disabled}
+    aria-label={label}
+    aria-current={active ? "page" : undefined}
     className={cn(
       "inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] border",
       "px-[13px] text-[14px] font-medium tracking-[-0.28px] transition-colors",
@@ -112,8 +120,9 @@ export const Pagination: React.FC<TablePaginationProps> = ({
             disabled={currentPage <= 1}
             onClick={() => setPage(Math.max(1, currentPage - 1))}
             className="px-0"
+            label="Previous page"
           >
-            <ChevronLeft className="size-4 text-[#6A7282] dark:text-grey-light-100" />
+            <ChevronLeft aria-hidden className="size-4 text-[#6A7282] dark:text-grey-light-100" />
           </PaginationButton>
 
           {pageData.map((p, i) =>
@@ -139,8 +148,9 @@ export const Pagination: React.FC<TablePaginationProps> = ({
             disabled={currentPage >= totalPages}
             onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
             className="px-0"
+            label="Next page"
           >
-            <ChevronRight className="size-4 text-[#6A7282] dark:text-grey-light-100" />
+            <ChevronRight aria-hidden className="size-4 text-[#6A7282] dark:text-grey-light-100" />
           </PaginationButton>
         </div>
       )}

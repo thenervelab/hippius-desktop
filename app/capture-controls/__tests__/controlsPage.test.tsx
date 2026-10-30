@@ -198,6 +198,20 @@ describe("the microphone mid-recording", () => {
     expect(screen.queryByRole("button", { name: "Choose a microphone" })).toBeNull();
   });
 
+  it("says when muting fails, and Try again mutes", async () => {
+    tauri.onInvoke("capture_microphone_state", () => MIC);
+    tauri.onInvoke("capture_microphone_mute", () => {
+      throw new Error("the recorder did not answer");
+    });
+    setup(withMic());
+    fireEvent.click(await screen.findByRole("button", { name: "Mute microphone" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't mute the microphone. It's still recording sound.");
+    tauri.onInvoke("capture_microphone_mute", (a) => ({ ...MIC, muted: (a as { muted: boolean }).muted }));
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("button", { name: "Unmute microphone" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("follows Rust's state when it arrives as an event", async () => {
     tauri.onInvoke("capture_microphone_state", () => MIC);
     setup(withMic());
@@ -705,5 +719,31 @@ describe("the pill's tooltips", () => {
     await act(async () => undefined);
     expect(tips().filter((t) => t !== null)).toEqual([]);
     expect(document.querySelector("[title]")).toBeNull();
+  });
+});
+
+describe("pausing and resuming", () => {
+  it("says when Pause fails, keeps recording, and OK brings the pill back", async () => {
+    tauri.onInvoke("capture_pause", () => {
+      throw new Error("the recorder did not answer");
+    });
+    setup(recording(30));
+    fireEvent.click(await screen.findByRole("button", { name: "Pause recording" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't pause the recording. It's still recording.");
+    fireEvent.click(screen.getByRole("button", { name: "OK" }));
+    expect(await screen.findByRole("button", { name: "Pause recording" })).toBeInTheDocument();
+  });
+
+  it("says when Resume fails, and Try again resumes", async () => {
+    tauri.onInvoke("capture_resume", () => {
+      throw new Error("the recorder did not answer");
+    });
+    setup({ phase: "paused", elapsedSecs: 30, microphone: false, seq: 1 } as CapturePhaseEvent);
+    fireEvent.click(await screen.findByRole("button", { name: "Resume recording" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't resume the recording. It's still paused.");
+    tauri.onInvoke("capture_resume", () => null);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    expect(tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_resume")).toHaveLength(2);
   });
 });

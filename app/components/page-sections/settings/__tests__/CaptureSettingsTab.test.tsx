@@ -251,7 +251,7 @@ describe("the capture bar's options, here as well", () => {
     setup({ insights: true, plan: false });
     expect(
       await screen.findByText(
-        "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. On paid Drive plans.",
+        "Links to your screenshots and recordings count how many people view them and for how long, and let viewers comment and react. On paid Drive plans.",
       ),
     ).toBeInTheDocument();
     const track = screen.getByRole("switch", { name: "Track views, comments and reactions" });

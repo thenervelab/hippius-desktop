@@ -175,8 +175,25 @@ export function getLinkSettings(shareToken: string): Promise<LinkSettingsDefault
   return invoke<LinkSettingsDefault>("share_get_link_settings", { shareToken });
 }
 
-export function setLinkSettings(shareToken: string, settings: LinkSettings): Promise<void> {
-  return invoke<void>("share_set_link_settings", { shareToken, settings });
+/** A change to a link's switches: only the ones flipped. */
+export type LinkSettingsChange = Partial<LinkSettings>;
+
+/**
+ * Flip some of a link's switches. Only the switches in `change` are sent, so
+ * a change made from a screen that is a moment out of date can never put
+ * back a switch it did not touch.
+ */
+export function setLinkSettings(shareToken: string, change: LinkSettingsChange): Promise<void> {
+  return invoke<void>("share_set_link_settings", { shareToken, change });
+}
+
+/** The switches that differ between `before` and `next`, as a change to send. */
+export function switchChange(before: LinkSettings, next: LinkSettings): LinkSettingsChange {
+  const change: LinkSettingsChange = {};
+  for (const key of ["insights", "comments", "reactions"] as const) {
+    if (before[key] !== next[key]) change[key] = next[key];
+  }
+  return change;
 }
 
 export function getLinkSettingsDefault(

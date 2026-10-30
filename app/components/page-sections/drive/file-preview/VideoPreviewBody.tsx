@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 
 import PreviewSurface from "./PreviewSurface";
+import { openInDefaultApp } from "./previewBytes";
 import { PreviewFallback, PreviewLoading } from "./PreviewState";
 
 /**
@@ -34,8 +35,7 @@ const STUTTER_LINE = "Not playing smoothly? Your video player may play it better
 // through the opener plugin), as the Linux PDF path does.
 async function openInVideoPlayer(filePath: string) {
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(filePath);
+    await openInDefaultApp(filePath);
   } catch (err) {
     console.error("Failed to open the video in the system player:", err);
   }

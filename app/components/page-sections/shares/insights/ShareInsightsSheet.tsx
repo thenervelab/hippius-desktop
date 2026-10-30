@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
@@ -39,9 +39,11 @@ import { newestShare, useCaptureShares } from "@/components/page-sections/drive/
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import {
+  getLinkSettingsDefault,
   getShareInsights,
   getShareReactions,
   listShareComments,
+  type LinkSettingsDefault,
   type InsightsViewer,
   type ReactionCount,
   type ShareComment,
@@ -180,9 +182,14 @@ function CaptureInsightsPanel({
   onClose: () => void;
   onLinkCreated: (capture: CaptureLinkSource, shareToken: string) => void;
 }) {
-  const { sharesFor, isLoading } = useCaptureShares();
+  const { sharesFor, isLoading, isError, refetch } = useCaptureShares();
   const capture = target.capture;
   const share = capture ? newestShare(sharesFor(capture.label, capture.relativePath, target.file?.size)) : null;
+  if (!share && isError) {
+    // Not "No link yet": the capture may well have one. Offering Create
+    // link here is how it ended up with a second one.
+    return <ListingErrorPanel target={target} onClose={onClose} onRetry={refetch} />;
+  }
   if (share) {
     return (
       <InsightsPanelFor
@@ -204,13 +211,62 @@ function CaptureInsightsPanel({
   );
 }
 
+/** After Create link, when the new link's switches could not be turned on. */
+export const SWITCHES_NOT_SENT =
+  "The link was made, but its Insights, comments and reactions couldn't be turned on. Turn them on in Link settings.";
+
 /** The no-link step's words. */
 export const NO_LINK_TITLE = "No link yet";
 export const CREATE_LINK = "Create link";
-export function noLinkBody(commentsEnabled: boolean): string {
-  return commentsEnabled
-    ? "Insights start once this capture has a share link. Create one to see who views it, and their comments and reactions, here."
-    : "Insights start once this capture has a share link. Create one to see who views it here.";
+/** Said with every no-link step: what kind of link Create link makes. */
+export const NO_LINK_PUBLIC = "Anyone with the link can open it, and it keeps working until you turn it off.";
+/**
+ * What Create link would give this capture, from Rust's answer for a new
+ * capture link (`share_link_settings_default`: the plan and Settings'
+ * "Track views, comments and reactions"), or `null` before it answers.
+ */
+export function noLinkBody(defaults: Pick<LinkSettingsDefault, "offered" | "on" | "switchesInPlan"> | null): string {
+  let first = "Create a link to share this capture.";
+  if (defaults?.on.insights) {
+    first = defaults.on.comments
+      ? "Create a link to see how many people view this capture, and their comments and reactions, here."
+      : "Create a link to see how many people view this capture here.";
+  } else if (defaults?.switchesInPlan === false && defaults.offered.insights) {
+    first = "Create a link to share this capture. Counting views, comments and reactions comes with paid Drive plans.";
+  } else if (defaults?.switchesInPlan === true && defaults.offered.insights) {
+    first = "Create a link to share this capture. It won't count views, comments or reactions: that's turned off in Settings, Screenshots & Recording.";
+  }
+  return `${first} ${NO_LINK_PUBLIC}`;
+}
+
+/** Create link found the capture's own link and gave that one again. */
+export const REUSED_COPIED = "This capture already had a link. It's copied.";
+export const REUSED = "This capture already had a link.";
+
+/** The capture's links could not be read: say so, and offer to try again. */
+export const LISTING_ERROR_TITLE = "Couldn't check for a link";
+export const LISTING_ERROR_BODY = "Hippius couldn't load this capture's links, so it can't tell yet whether it already has one.";
+
+function ListingErrorPanel({ target, onClose, onRetry }: { target: InsightsSheetTarget; onClose: () => void; onRetry: () => void }) {
+  return (
+    <div className="relative flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel-listing-error">
+      <PanelHeader file={target.file} fileName={target.fileName} subtitle={null} onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
+        <div role="alert">
+          <EmptyBlock
+            icon={<Link2 className="size-[18px]" />}
+            title={LISTING_ERROR_TITLE}
+            body={LISTING_ERROR_BODY}
+            action={
+              <Button variant="defaultStable" size="sm" className="mt-3" onClick={onRetry}>
+                Try again
+              </Button>
+            }
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -230,11 +286,18 @@ function NoLinkPanel({
   onClose: () => void;
   onLinkCreated: (capture: CaptureLinkSource, shareToken: string) => void;
 }) {
-  const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const capture = target.capture;
+  // What a new link for this capture would get, so the words promise only
+  // that. Rust decides it; a failed read just keeps the plain wording.
+  const defaults = useQuery({
+    queryKey: ["capture-link-defaults", capture?.label ?? null, target.fileName],
+    queryFn: () => getLinkSettingsDefault(capture?.label ?? null, target.fileName, false),
+    enabled: Boolean(capture),
+    retry: false,
+  });
 
   const create = async () => {
     if (!capture || creating) return;
@@ -245,7 +308,10 @@ function NoLinkPanel({
       // The row's link badge and Insights button, and Shared Links, read the
       // listing: ask it again so they show the new link.
       void queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
-      toast.success(link.copied ? "Link created and copied" : "Link created");
+      if (link.reused) toast.success(link.copied ? REUSED_COPIED : REUSED);
+      else toast.success(link.copied ? "Link created and copied" : "Link created");
+      // Said, not left to be found: the switches it asked for are off.
+      if (link.switchesNotSent) toast.error(SWITCHES_NOT_SENT);
       onLinkCreated(capture, link.shareToken);
     } catch (e) {
       setError(errorMessage(e));
@@ -268,7 +334,7 @@ function NoLinkPanel({
           <EmptyBlock
             icon={<Link2 className="size-[18px]" />}
             title={NO_LINK_TITLE}
-            body={noLinkBody(commentsEnabled)}
+            body={noLinkBody(defaults.data ?? null)}
             action={
               capture ? (
                 <div className="mt-3 flex flex-col items-start gap-2">
@@ -462,8 +528,12 @@ function InsightsPanelFor({
   // device; otherwise worked out from the viewers (`estimateDurationMs`).
   const [mediaMs, setMediaMs] = useState<number | null>(null);
   const durationMs = useDurationMs(shareToken, mediaMs);
-  const queryClient = useQueryClient();
-  const summary = useMemo(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  const summary = useCachedShare(shareToken);
+  // Seen in the listing, then gone from it: the link was revoked (from
+  // Shared Links, say) while its panel was open.
+  const seenInListing = useRef(false);
+  if (summary) seenInListing.current = true;
+  const turnedOff = seenInListing.current && summary === null;
   const subtitle = headerLine({
     sharedAt: summary?.createdAt ?? null,
     durationMs,
@@ -579,32 +649,38 @@ function InsightsPanelFor({
               <span className="sr-only">Insights for </span>
               <MiddleTruncate text={fileName} kind="name" title={null} />
             </h2>
-            {subtitle ? <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p> : null}
+            {turnedOff ? (
+              <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{LINK_TURNED_OFF}</p>
+            ) : subtitle ? (
+              <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p>
+            ) : null}
           </div>
-          <button
-            type="button"
-            {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
-            aria-label="Link settings"
-            aria-haspopup="dialog"
-            aria-expanded={settingsOpen}
-            aria-controls={settingsOpen ? popoverId : undefined}
-            onClick={(e) => (settingsOpen ? setSettingsOpen(false) : openSettings(e.currentTarget))}
-            className={cn(ICON_BUTTON, settingsOpen && "bg-grey-90 text-grey-10 dark:bg-white/10 dark:text-white")}
-          >
-            <Settings className="size-4" aria-hidden />
-          </button>
+          {!turnedOff && (
+            <button
+              type="button"
+              {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
+              aria-label="Link settings"
+              aria-haspopup="dialog"
+              aria-expanded={settingsOpen}
+              aria-controls={settingsOpen ? popoverId : undefined}
+              onClick={(e) => (settingsOpen ? setSettingsOpen(false) : openSettings(e.currentTarget))}
+              className={cn(ICON_BUTTON, settingsOpen && "bg-grey-90 text-grey-10 dark:bg-white/10 dark:text-white")}
+            >
+              <Settings className="size-4" aria-hidden />
+            </button>
+          )}
           <button type="button" aria-label="Close" onClick={onClose} className={ICON_BUTTON}>
             <X className="size-4" />
           </button>
         </div>
-        {settings && (
+        {settings && !turnedOff && (
           <div className="mt-2.5 empty:hidden">
             <StatusPills settings={settings} popoverId={popoverId} open={settingsOpen} onOpen={openSettings} />
           </div>
         )}
       </header>
 
-      {settingsOpen && (
+      {settingsOpen && !turnedOff && (
         <LinkSettingsPopover
           id={popoverId}
           switches={switches}
@@ -615,7 +691,11 @@ function InsightsPanelFor({
         />
       )}
 
-      {loading ? (
+      {turnedOff ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
+          <EmptyBlock icon={<Link2 className="size-[18px]" />} title={LINK_TURNED_OFF} body={LINK_TURNED_OFF_BODY} />
+        </div>
+      ) : loading ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
           <InsightsSkeleton />
         </div>
@@ -678,6 +758,23 @@ function InsightsPanelFor({
       )}
     </div>
   );
+}
+
+/** The panel of a link revoked while it was open. */
+export const LINK_TURNED_OFF = "This link is turned off";
+export const LINK_TURNED_OFF_BODY = "People with the link can't open it any more. Share the file again to make a new link.";
+
+/**
+ * A link's row from the share listing already loaded (`findCachedShare`),
+ * kept current: the header shows a new link's date once the listing that
+ * Create link asked for arrives, and a link revoked elsewhere (Shared Links)
+ * drops out. Nothing is fetched for it.
+ */
+function useCachedShare(shareToken: string) {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback((onChange: () => void) => queryClient.getQueryCache().subscribe(onChange), [queryClient]);
+  const read = useCallback(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {

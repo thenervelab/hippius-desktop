@@ -55,6 +55,26 @@ pub fn keep_temp_after_upload(via_sync: bool, has_link: bool, editable: bool) ->
     !via_sync && (!has_link || editable)
 }
 
+/// The query parameter that tells the share page a load is the owner's own:
+/// it records no view or viewer for it and takes the parameter out of the
+/// address bar.
+pub const OWNER_VIEW_PARAM: &str = "owner=1";
+
+/// `url` as the app opens it for its owner: [`OWNER_VIEW_PARAM`] added to
+/// the query, before the `#` fragment, which holds the link's key and is
+/// left exactly as it is. Only for the app opening the link itself; a copied
+/// link never carries it.
+#[must_use]
+pub fn owner_view_url(url: &str) -> String {
+    let (base, fragment) = url.find('#').map_or((url, ""), |i| url.split_at(i));
+    let separator = match base.find('?') {
+        None => "?",
+        Some(_) if base.ends_with('?') || base.ends_with('&') => "",
+        Some(_) => "&",
+    };
+    format!("{base}{separator}{OWNER_VIEW_PARAM}{fragment}")
+}
+
 /// Where a capture is once it has been put in the drive, before any link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
@@ -564,6 +584,27 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner's own open carries `owner=1` before the fragment, whatever
+    /// the link already has in its query, and the key is untouched.
+    #[test]
+    fn the_owners_open_marks_the_query_and_keeps_the_key() {
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok#k=AbC-_9"),
+            "https://console.hippius.com/share/tok?owner=1#k=AbC-_9"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok?lang=en#p=salt.key"),
+            "https://console.hippius.com/share/tok?lang=en&owner=1#p=salt.key"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok"),
+            "https://console.hippius.com/share/tok?owner=1"
+        );
+        assert_eq!(owner_view_url("https://x/share/tok?#k=1"), "https://x/share/tok?owner=1#k=1");
+        // A `?` inside the fragment is the key's, not a query.
+        assert_eq!(owner_view_url("https://x/share/tok#k=a?b"), "https://x/share/tok?owner=1#k=a?b");
+    }
 
     #[test]
     fn a_link_that_did_not_get_through_is_tried_three_times_in_all() {
