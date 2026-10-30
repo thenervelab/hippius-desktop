@@ -47,6 +47,7 @@ pub const NOT_COPIED: &str = "The link was made, but it couldn't be copied. Open
 /// An existing link to the file, as far as this device can see it.
 #[derive(Debug, Clone)]
 pub struct ExistingLink {
+    pub share_token: String,
     pub created_at: DateTime<Utc>,
     pub expires_at: Option<DateTime<Utc>>,
     /// The rebuilt URL, `None` when this device does not hold the key.
@@ -63,14 +64,24 @@ const MIN_REMAINING: Duration = Duration::hours(1);
 /// about to expire, and rebuildable on this device.
 #[must_use]
 pub fn pick_reusable(links: &[ExistingLink], now: DateTime<Utc>) -> Option<String> {
+    pick_reusable_link(links, now).and_then(|l| l.url.clone())
+}
+
+/// [`pick_reusable`], with the whole link: its token too.
+#[must_use]
+pub fn pick_reusable_link(links: &[ExistingLink], now: DateTime<Utc>) -> Option<&ExistingLink> {
     links
         .iter()
         .filter(|l| !l.is_private)
         .filter(|l| l.expires_at.is_none_or(|e| e > now + MIN_REMAINING))
         .filter(|l| l.url.is_some())
         .max_by_key(|l| l.created_at)
-        .and_then(|l| l.url.clone())
 }
+
+/// Create link in Insights, when the capture's links could not be read: no
+/// link is made, since that is how a capture ends up with two public,
+/// never-expiring links and a second full upload.
+pub const LINKS_UNREADABLE: &str = "Couldn't check whether this capture already has a link. Try again.";
 
 /// Two drive-relative paths name the same file. The server stores some paths
 /// with a leading slash and the sidecar stores whatever the minting surface
@@ -126,6 +137,7 @@ async fn existing_links(state: &AppState, account_id: &str, folder_label: &str, 
         .map(|s| {
             let secret = keys.get(&s.share_token);
             ExistingLink {
+                share_token: s.share_token.clone(),
                 created_at: s.created_at,
                 expires_at: s.expires_at,
                 // `Err` only for a folder-link secret, which no file token holds.
@@ -228,22 +240,47 @@ pub struct CaptureLink {
     /// failed), so the link has them off. The panel says so rather than
     /// leaving the owner to find the switches off.
     pub switches_not_sent: bool,
+    /// The capture already had a link this device can hand out, and that link
+    /// was given again rather than a second one made.
+    pub reused: bool,
 }
 
-/// The switches a link made from the Insights panel asks for: all three, since
-/// the user pressed "Create link" to see who views the capture. The plan rule
-/// still decides (`insights::apply_after_mint` passes them through
-/// `within_plan`), so a free plan's link starts with them off, as every new
-/// link on that plan does.
-pub const INSIGHTS_PANEL_LINK_SETTINGS: LinkSettings = LinkSettings::all(true);
+/// What a link made from the Insights panel asks for: what every capture
+/// link gets, Settings' "Track views, comments and reactions"
+/// (`insights::for_capture`). The plan rule still decides
+/// (`insights::apply_after_mint` passes them through `within_plan`), so a
+/// free plan's link starts with them off, as every new link on that plan does.
+#[must_use]
+pub const fn insights_panel_link_settings(captures_default: bool) -> LinkSettings {
+    crate::shares::insights::for_capture(captures_default)
+}
+
+/// An existing link handed out again: copied, as a new one would be.
+fn reused_capture_link(app: &AppHandle, link: &ExistingLink, url: String) -> CaptureLink {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+    let copied = app.clipboard().write_text(url.clone()).is_ok();
+    CaptureLink {
+        share_token: link.share_token.clone(),
+        share_url: url,
+        copied,
+        switches_not_sent: false,
+        reused: true,
+    }
+}
 
 /// "Create link" in the Insights panel of a capture that has no link yet:
 /// a public link that lasts until it is revoked, made through the same
 /// funnels as the tray's Copy link (so the storage gate, the share-origin
 /// row that matches it to the capture's row and the owner wrap all apply),
 /// then its switches, then its chat preview when Settings asks for one, as
-/// the capture card's "Create link" does. Always a new link: the panel offers
-/// this only when the capture has none.
+/// the capture card's "Create link" does.
+///
+/// The panel offers this only when the capture shows no link, but that can be
+/// because the listing it read was stale or failed. So the capture's links
+/// are looked up first: one this device can hand out is given again, and a
+/// lookup that fails makes nothing (`LINKS_UNREADABLE`), since a second
+/// public, never-expiring link and a second full upload is the cost of
+/// guessing wrong.
 ///
 /// The switches are sent before this returns, unlike after other mints, so
 /// the panel that opens on the new link reads them on rather than racing the
@@ -251,8 +288,9 @@ pub const INSIGHTS_PANEL_LINK_SETTINGS: LinkSettings = LinkSettings::all(true);
 ///
 /// # Errors
 ///
-/// A blank drive or path, no signed-in account, or a link that could not be
-/// made, in Rust's sentence (`failure_copy`).
+/// A blank drive or path, no signed-in account, a lookup of the capture's
+/// links that failed, or a link that could not be made, in Rust's sentence
+/// (`failure_copy`).
 #[tauri::command]
 pub async fn create_capture_link(
     state: tauri::State<'_, AppState>,
@@ -269,6 +307,20 @@ pub async fn create_capture_link(
     let file_id = file_id.map(|id| id.trim().to_owned()).filter(|id| !id.is_empty());
     let account_id = state.current_account_id()?;
 
+    let existing = match existing_links(&state, &account_id, &folder_label, &relative_path).await {
+        Ok(links) => links,
+        Err(e) => {
+            warn!(error = %e, "capture link: could not look for an existing link; making none");
+            return Err(AppError::Validation(LINKS_UNREADABLE.into()));
+        }
+    };
+    if let Some(found) = pick_reusable_link(&existing, Utc::now())
+        && let Some(url) = found.url.clone()
+    {
+        info!("capture link from Insights: reusing the capture's link");
+        return Ok(reused_capture_link(&app, found, url));
+    }
+
     let link = match mint(&state, &account_id, &folder_label, &relative_path, file_id.as_deref()).await {
         Ok(link) => link,
         Err(e) => {
@@ -276,7 +328,8 @@ pub async fn create_capture_link(
             return Err(AppError::Validation(failure_copy(&e)));
         }
     };
-    let switches = crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, INSIGHTS_PANEL_LINK_SETTINGS).await;
+    let wanted = insights_panel_link_settings(crate::shares::insights::captures_default(&state).await);
+    let switches = crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, wanted).await;
     // A preview is drawn from the file on this computer; a cloud-only
     // capture has none here, so it gets no preview, as from the tray.
     if file_id.is_none() {
@@ -295,6 +348,7 @@ pub async fn create_capture_link(
         share_url: link.share_url,
         copied,
         switches_not_sent: switches == crate::shares::insights::AfterMint::NotSent,
+        reused: false,
     })
 }
 
@@ -305,6 +359,7 @@ mod tests {
     fn link(age_hours: i64, expires_in_hours: Option<i64>, url: Option<&str>, is_private: bool) -> ExistingLink {
         let now = Utc::now();
         ExistingLink {
+            share_token: format!("tok-{}", url.unwrap_or("none")),
             created_at: now - Duration::hours(age_hours),
             expires_at: expires_in_hours.map(|h| now + Duration::hours(h)),
             url: url.map(str::to_owned),
@@ -339,12 +394,14 @@ mod tests {
     fn skips_a_link_about_to_expire() {
         let now = Utc::now();
         let dying = ExistingLink {
+            share_token: "dying".into(),
             created_at: now,
             expires_at: Some(now + Duration::minutes(10)),
             url: Some("dying".into()),
             is_private: false,
         };
         let expired = ExistingLink {
+            share_token: "expired".into(),
             created_at: now,
             expires_at: Some(now - Duration::minutes(1)),
             url: Some("expired".into()),
@@ -354,15 +411,35 @@ mod tests {
         assert_eq!(pick_reusable(&[link(1, Some(48), Some("alive"), false)], now).as_deref(), Some("alive"));
     }
 
-    /// A link made from the Insights panel asks for every switch, and the
-    /// plan rule still gives the free plan's link none, as for any new link.
+    /// A link made from the Insights panel follows Settings' "Track views,
+    /// comments and reactions" like every capture link, and the plan rule
+    /// still gives the free plan's link none, as for any new link.
     #[test]
-    fn the_insights_panels_link_asks_for_every_switch_within_the_plan() {
+    fn the_insights_panels_link_follows_the_settings_choice_within_the_plan() {
         use crate::shares::insights::within_plan;
-        assert_eq!(INSIGHTS_PANEL_LINK_SETTINGS, LinkSettings::all(true));
-        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, Some(true)), LinkSettings::all(true));
-        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, Some(false)), LinkSettings::all(false));
-        assert_eq!(within_plan(INSIGHTS_PANEL_LINK_SETTINGS, None), LinkSettings::all(false));
+        assert_eq!(insights_panel_link_settings(true), LinkSettings::all(true));
+        assert_eq!(
+            insights_panel_link_settings(false),
+            LinkSettings::all(false),
+            "tracking turned off in Settings"
+        );
+        assert_eq!(within_plan(insights_panel_link_settings(true), Some(true)), LinkSettings::all(true));
+        assert_eq!(within_plan(insights_panel_link_settings(true), Some(false)), LinkSettings::all(false));
+        assert_eq!(within_plan(insights_panel_link_settings(true), None), LinkSettings::all(false));
+    }
+
+    /// Create link in Insights gives the capture's existing link again, with
+    /// its token, rather than making a second one.
+    #[test]
+    fn the_reused_link_is_the_newest_public_one_with_its_token() {
+        let links = [
+            link(48, None, Some("old"), false),
+            link(1, None, Some("new"), false),
+            link(0, None, Some("pw"), true),
+        ];
+        let found = pick_reusable_link(&links, Utc::now()).expect("a link to reuse");
+        assert_eq!(found.share_token, "tok-new");
+        assert_eq!(found.url.as_deref(), Some("new"));
     }
 
     /// The Insights panel reads `shareToken` and `copied` off this.
@@ -373,10 +450,11 @@ mod tests {
             share_url: "u".into(),
             copied: true,
             switches_not_sent: false,
+            reused: true,
         };
         assert_eq!(
             serde_json::to_value(&link).expect("serialises"),
-            serde_json::json!({ "shareToken": "t", "shareUrl": "u", "copied": true, "switchesNotSent": false })
+            serde_json::json!({ "shareToken": "t", "shareUrl": "u", "copied": true, "switchesNotSent": false, "reused": true })
         );
     }
 

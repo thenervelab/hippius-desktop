@@ -403,6 +403,8 @@ export interface CaptureLink {
    * turned on, so the link has them off.
    */
   switchesNotSent: boolean;
+  /** The capture already had a link, and that one was copied instead. */
+  reused: boolean;
 }
 
 /**
