@@ -5,7 +5,7 @@ import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MotionGlobalConfig } from "framer-motion";
 
-import ShareInsightsSheet, { CREATE_LINK, NO_LINK_TITLE, noLinkBody } from "../ShareInsightsSheet";
+import ShareInsightsSheet, { CREATE_LINK, NO_LINK_TITLE, SWITCHES_NOT_SENT, noLinkBody } from "../ShareInsightsSheet";
 import {
   insightsSheetAtom,
   serverCapabilitiesAtom,
@@ -24,7 +24,10 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 const toastSuccess = vi.fn();
-vi.mock("sonner", () => ({ toast: { success: (...a: unknown[]) => toastSuccess(...a), error: vi.fn() } }));
+const toastError = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccess(...a), error: (...a: unknown[]) => toastError(...a) },
+}));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn(() => Promise.resolve()) }));
 vi.mock("@/app/lib/wallet-auth-context", () => ({
   useWalletAuth: () => ({ polkadotAddress: "5Acct" }),
@@ -111,6 +114,7 @@ describe("the Insights panel for a capture with no link", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     toastSuccess.mockReset();
+    toastError.mockReset();
   });
 
   it("explains what Insights need and makes nothing until Create link is pressed", async () => {
@@ -168,6 +172,21 @@ describe("the Insights panel for a capture with no link", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: `Insights for ${NAME}` })).toHaveFocus());
     // The listing is asked again, so the row's badge and button show the link.
     expect(invokeMock.mock.calls.filter(([cmd]) => cmd === "hcfs_list_shares").length).toBeGreaterThan(1);
+  });
+
+  it("says so when the new link's switches could not be turned on, instead of leaving them silently off", async () => {
+    answer(() => [], {
+      create_capture_link: {
+        shareToken: "fresh",
+        shareUrl: "https://console.hippius.com/s/fresh",
+        copied: true,
+        switchesNotSent: true,
+      },
+    });
+    renderSheet();
+    fireEvent.click(await screen.findByRole("button", { name: CREATE_LINK }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith(SWITCHES_NOT_SENT));
+    expect(toastSuccess).toHaveBeenCalledWith("Link created and copied");
   });
 
   it("says why when the link could not be made, and lets the user try again", async () => {

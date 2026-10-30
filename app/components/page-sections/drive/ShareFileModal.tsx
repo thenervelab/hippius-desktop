@@ -65,8 +65,10 @@ import {
 } from "@/app/lib/tauri/shares";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import {
+  getLinkSettings,
   getLinkSettingsDefault,
   setLinkSettings,
+  switchChange,
   type LinkSettings,
   type LinkSettingsDefault,
   type OfferedSwitches,
@@ -114,6 +116,9 @@ type ModalState =
  * the plan includes them (Rust's `switchesInPlan`).
  */
 type Engagement = { offered: OfferedSwitches; value: LinkSettings; switchesInPlan: boolean | null };
+
+/** Under the finished link's switches when one asked for did not turn on. */
+export const SWITCHES_NOT_ON = "Some of the settings you chose couldn't be turned on. Check them below and try again.";
 
 /** What the chooser's switches were drawn from: carried into the done view. */
 type SwitchSource = Pick<LinkSettingsDefault, "offered" | "switchesInPlan">;
@@ -1113,14 +1118,44 @@ function DoneBody({
   const [previewSaving, setPreviewSaving] = useState(false);
   const [switches, setSwitches] = useState<LinkSettings | null>(engagement?.value ?? null);
   const [switchesSaving, setSwitchesSaving] = useState(false);
+  const [switchesNote, setSwitchesNote] = useState<string | null>(null);
+  const switchesTouched = useRef(false);
 
-  // Shown as changed at once, put back if the server refuses.
+  // The switches asked for are sent just after the link is made, in the
+  // background. Read them back (Rust answers once that send is done), so the
+  // switches show what the link has, and say so when one did not turn on. A
+  // change the user already made wins over this read.
+  useEffect(() => {
+    const asked = engagement?.value;
+    if (!asked || !(asked.insights || asked.comments || asked.reactions)) return;
+    let alive = true;
+    getLinkSettings(link.shareToken)
+      .then((real) => {
+        if (!alive || switchesTouched.current) return;
+        setSwitches(real.on);
+        const missed = (["insights", "comments", "reactions"] as const).some(
+          (key) => asked[key] && real.offered[key] && !real.on[key],
+        );
+        if (missed) setSwitchesNote(SWITCHES_NOT_ON);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+    // Once, for the link just made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.shareToken]);
+
+  // Shown as changed at once, put back if the server refuses. Only the
+  // switch flipped is sent.
   const changeSwitches = async (next: LinkSettings) => {
     const before = switches;
+    switchesTouched.current = true;
+    setSwitchesNote(null);
     setSwitches(next);
     setSwitchesSaving(true);
     try {
-      await setLinkSettings(link.shareToken, next);
+      await setLinkSettings(link.shareToken, before ? switchChange(before, next) : next);
     } catch (err) {
       setSwitches(before);
       toast.error(errorMessage(err));
@@ -1247,6 +1282,11 @@ function DoneBody({
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
           />
+          {switchesNote && (
+            <p role="status" className="mt-2 text-xs leading-[1.45] text-error-50 dark:text-error-70">
+              {switchesNote}
+            </p>
+          )}
         </div>
       )}
 
