@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { MotionGlobalConfig } from "framer-motion";
 
-import ShareInsightsSheet from "../ShareInsightsSheet";
+import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
@@ -1008,6 +1008,45 @@ describe("ShareInsightsSheet", () => {
       ),
     );
     expect(await screen.findByText(/^Shared Oct 20(, 2026)? · link on$/)).toBeInTheDocument();
+  });
+
+  it("shows the share date once the listing arrives, as after Create link", async () => {
+    answer({ share_get_insights: PAID, share_list_comments: { comments: [], unreadable: null } });
+    let client: QueryClient | null = null;
+    renderSheet(CAPS, (c) => {
+      client = c;
+    });
+    await screen.findByRole("region", { name: "Summary" });
+    expect(screen.queryByText(/^Shared /)).toBeNull();
+    // The listing Create link asked for comes back with the new link.
+    act(() => {
+      client!.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]);
+    });
+    expect(await screen.findByText(/^Shared Oct 20(, 2026)? · link on$/)).toBeInTheDocument();
+  });
+
+  it("says the link is turned off when it is revoked while the panel is open", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: { comments: [], unreadable: null },
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+    });
+    let client: QueryClient | null = null;
+    renderSheet(CAPS, (c) => {
+      client = c;
+      c.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]);
+    });
+    await screen.findByRole("region", { name: "Summary" });
+    expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+    // Shared Links revokes it, and reads the listing again.
+    act(() => {
+      client!.setQueryData(["shares-list", "5Acct"], []);
+    });
+    expect(await screen.findAllByText(LINK_TURNED_OFF)).not.toHaveLength(0);
+    expect(screen.getByText(LINK_TURNED_OFF_BODY)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Link settings" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Summary" })).toBeNull();
   });
 
   it("offers Try again when the numbers do not load", async () => {

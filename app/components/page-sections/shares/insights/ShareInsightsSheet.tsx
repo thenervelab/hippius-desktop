@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
@@ -453,8 +453,12 @@ function InsightsPanelFor({
   // device; otherwise worked out from the viewers (`estimateDurationMs`).
   const [mediaMs, setMediaMs] = useState<number | null>(null);
   const durationMs = useDurationMs(shareToken, mediaMs);
-  const queryClient = useQueryClient();
-  const summary = useMemo(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  const summary = useCachedShare(shareToken);
+  // Seen in the listing, then gone from it: the link was revoked (from
+  // Shared Links, say) while its panel was open.
+  const seenInListing = useRef(false);
+  if (summary) seenInListing.current = true;
+  const turnedOff = seenInListing.current && summary === null;
   const subtitle = headerLine({
     sharedAt: summary?.createdAt ?? null,
     durationMs,
@@ -570,32 +574,38 @@ function InsightsPanelFor({
               <span className="sr-only">Insights for </span>
               <MiddleTruncate text={fileName} kind="name" title={null} />
             </h2>
-            {subtitle ? <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p> : null}
+            {turnedOff ? (
+              <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{LINK_TURNED_OFF}</p>
+            ) : subtitle ? (
+              <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p>
+            ) : null}
           </div>
-          <button
-            type="button"
-            {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
-            aria-label="Link settings"
-            aria-haspopup="dialog"
-            aria-expanded={settingsOpen}
-            aria-controls={settingsOpen ? popoverId : undefined}
-            onClick={(e) => (settingsOpen ? setSettingsOpen(false) : openSettings(e.currentTarget))}
-            className={cn(ICON_BUTTON, settingsOpen && "bg-grey-90 text-grey-10 dark:bg-white/10 dark:text-white")}
-          >
-            <Settings className="size-4" aria-hidden />
-          </button>
+          {!turnedOff && (
+            <button
+              type="button"
+              {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
+              aria-label="Link settings"
+              aria-haspopup="dialog"
+              aria-expanded={settingsOpen}
+              aria-controls={settingsOpen ? popoverId : undefined}
+              onClick={(e) => (settingsOpen ? setSettingsOpen(false) : openSettings(e.currentTarget))}
+              className={cn(ICON_BUTTON, settingsOpen && "bg-grey-90 text-grey-10 dark:bg-white/10 dark:text-white")}
+            >
+              <Settings className="size-4" aria-hidden />
+            </button>
+          )}
           <button type="button" aria-label="Close" onClick={onClose} className={ICON_BUTTON}>
             <X className="size-4" />
           </button>
         </div>
-        {settings && (
+        {settings && !turnedOff && (
           <div className="mt-2.5 empty:hidden">
             <StatusPills settings={settings} popoverId={popoverId} open={settingsOpen} onOpen={openSettings} />
           </div>
         )}
       </header>
 
-      {settingsOpen && (
+      {settingsOpen && !turnedOff && (
         <LinkSettingsPopover
           id={popoverId}
           switches={switches}
@@ -606,7 +616,11 @@ function InsightsPanelFor({
         />
       )}
 
-      {loading ? (
+      {turnedOff ? (
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
+          <EmptyBlock icon={<Link2 className="size-[18px]" />} title={LINK_TURNED_OFF} body={LINK_TURNED_OFF_BODY} />
+        </div>
+      ) : loading ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-5 pt-4">
           <InsightsSkeleton />
         </div>
@@ -669,6 +683,23 @@ function InsightsPanelFor({
       )}
     </div>
   );
+}
+
+/** The panel of a link revoked while it was open. */
+export const LINK_TURNED_OFF = "This link is turned off";
+export const LINK_TURNED_OFF_BODY = "People with the link can't open it any more. Share the file again to make a new link.";
+
+/**
+ * A link's row from the share listing already loaded (`findCachedShare`),
+ * kept current: the header shows a new link's date once the listing that
+ * Create link asked for arrives, and a link revoked elsewhere (Shared Links)
+ * drops out. Nothing is fetched for it.
+ */
+function useCachedShare(shareToken: string) {
+  const queryClient = useQueryClient();
+  const subscribe = useCallback((onChange: () => void) => queryClient.getQueryCache().subscribe(onChange), [queryClient]);
+  const read = useCallback(() => findCachedShare(queryClient, shareToken), [queryClient, shareToken]);
+  return useSyncExternalStore(subscribe, read, read);
 }
 
 function Section({ title, aside, children }: { title: string; aside?: ReactNode; children: ReactNode }) {
