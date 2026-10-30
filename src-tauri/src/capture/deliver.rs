@@ -160,11 +160,22 @@ pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureD
         LinkSource::External(placed.placed.clone())
     };
     match mint(state, account_id, &source).await {
-        Ok(link) => Minted {
-            share_url: Some(link.share_url),
-            share_token: Some(link.share_token),
-            link_error: None,
-        },
+        Ok(link) => {
+            remember_origin(
+                state,
+                account_id,
+                &source,
+                &destination.label,
+                &destination.rel_path(&placed.file_name),
+                &link.share_token,
+            )
+            .await;
+            Minted {
+                share_url: Some(link.share_url),
+                share_token: Some(link.share_token),
+                link_error: None,
+            }
+        }
         Err(message) => Minted {
             link_error: Some(message),
             ..Minted::default()
@@ -186,6 +197,30 @@ impl Delivered {
             share_token: minted.share_token.clone(),
             placed: placed.placed.clone(),
         }
+    }
+}
+
+/// After a capture's link is minted from its temp copy (a direct upload,
+/// [`LinkSource::External`]): record which file in the drive it is the link
+/// of, as a link made from a synced file records it (`shares::origin`). That
+/// is how Drive, Insights and deleting the capture find the link by its path
+/// rather than by its name. Best effort: the link is already out.
+pub async fn remember_origin(state: &AppState, account_id: &str, source: &LinkSource, label: &str, rel_path: &str, share_token: &str) {
+    let Ok(pool) = state.pool() else { return };
+    let owner = crate::auth::account_key::account_key(account_id);
+    if let Err(e) = record_origin(pool, &owner, source, label, rel_path, share_token).await {
+        tracing::warn!(error = %e, "capture link's file not recorded; it is found by its name instead");
+    }
+}
+
+/// [`remember_origin`] on a pool: only an external source is recorded here
+/// (a synced file's share records its own origin when it is minted).
+async fn record_origin(pool: &sqlx::SqlitePool, owner: &str, source: &LinkSource, label: &str, rel_path: &str, share_token: &str) -> Result<()> {
+    match source {
+        LinkSource::External(_) if !label.is_empty() && !rel_path.is_empty() => {
+            crate::shares::origin::record(pool, share_token, owner, label, rel_path).await
+        }
+        _ => Ok(()),
     }
 }
 
@@ -564,6 +599,43 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture's link made from its temp copy records the file in the
+    /// drive it belongs to, so it is found by its path (Insights, deleting
+    /// the capture); a synced file's share records its own, elsewhere.
+    #[tokio::test]
+    async fn a_direct_uploads_link_records_its_file_in_the_drive() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("t.db"))
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        let external = LinkSource::External(std::path::PathBuf::from("/tmp/capture-1/Recording.mp4"));
+        record_origin(&pool, "owner", &external, "Hippius Captures", "Captures/Recording.mp4", "tok-ext")
+            .await
+            .unwrap();
+        let synced = LinkSource::Synced {
+            label: "Hippius Captures".into(),
+            rel_path: "Captures/Shot.png".into(),
+        };
+        record_origin(&pool, "owner", &synced, "Hippius Captures", "Captures/Shot.png", "tok-sync")
+            .await
+            .unwrap();
+        let rows = crate::shares::origin::fetch_for_tokens(&pool, "owner", &["tok-ext", "tok-sync"])
+            .await
+            .unwrap();
+        let ext = rows.get("tok-ext").expect("the direct upload's link is recorded");
+        assert_eq!(
+            (ext.folder_label.as_str(), ext.relative_path.as_str()),
+            ("Hippius Captures", "Captures/Recording.mp4")
+        );
+        assert!(!rows.contains_key("tok-sync"), "a synced share records its own origin when minted");
+    }
 
     #[test]
     fn a_link_that_did_not_get_through_is_tried_three_times_in_all() {

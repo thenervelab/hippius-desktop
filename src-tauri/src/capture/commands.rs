@@ -5846,6 +5846,7 @@ pub async fn capture_preview_mint_link(state: tauri::State<'_, AppState>, app: A
     };
     match super::deliver::mint(&state, &account_id, &source).await {
         Ok(link) => {
+            super::deliver::remember_origin(&state, &account_id, &source, &card.drive_label, &card.rel_path, &link.share_token).await;
             let copied = app.clipboard().write_text(link.share_url.clone()).is_ok();
             super::deliver::spawn_preview_if_wanted(&app, &state, &account_id, &source, &link.share_token).await;
             super::deliver::spawn_link_settings(&app, &state, &account_id, &link.share_token).await;
