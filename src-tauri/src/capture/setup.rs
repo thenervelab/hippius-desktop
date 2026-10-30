@@ -373,6 +373,22 @@ pub enum Place {
 /// drives never share files), Hippius's own folder, or a folder inside a
 /// drive whose name the drive cannot hold.
 pub fn check_location(dir: &Path, home: &Path, drives: &[DriveHere]) -> Result<Place> {
+    // Compared where they really are: `a/../.hippius` or a link into a
+    // shared drive must not pass as somewhere else.
+    let dir = &resolved(dir);
+    let home = &resolved(home);
+    let drives: Vec<DriveHere> = drives
+        .iter()
+        .map(|d| DriveHere {
+            path: if d.path.as_os_str().is_empty() {
+                d.path.clone()
+            } else {
+                resolved(&d.path)
+            },
+            ..d.clone()
+        })
+        .collect();
+    let drives = drives.as_slice();
     if dir.starts_with(home.join(".hippius")) {
         return Err(AppError::Validation(
             "That folder is where Hippius keeps its own files. Choose another place.".into(),
@@ -408,6 +424,42 @@ pub fn check_location(dir: &Path, home: &Path, drives: &[DriveHere]) -> Result<P
         )));
     }
     Ok(Place::NewDrive)
+}
+
+/// Where `path` really is: `.` and `..` taken out, and the deepest part of
+/// it that exists resolved through any links (the rest, a folder not made
+/// yet, is kept as written). A relative path is returned as it is.
+pub fn resolved(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut lexical = PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                lexical.pop();
+            }
+            other => lexical.push(other.as_os_str()),
+        }
+    }
+    if !lexical.is_absolute() {
+        return lexical;
+    }
+    let mut existing = lexical.as_path();
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = std::fs::canonicalize(existing) {
+            let mut out = real;
+            out.extend(rest.iter().rev());
+            return out;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => return lexical,
+        }
+    }
 }
 
 /// macOS asks before an app may use Documents, Desktop or Downloads. The
@@ -1062,6 +1114,46 @@ mod tests {
         assert!(refused("/Users/a/.hippius/hippius-captures").contains("its own files"));
         // A hidden folder in a drive would never sync.
         assert!(refused("/Users/a/Hippius/.private").contains("dot"));
+    }
+
+    /// The check compares where folders really are: `..` cannot walk back
+    /// into Hippius's own folder, and a link cannot hide a shared drive.
+    #[test]
+    fn the_folder_check_sees_through_dots_and_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let team = home.join("Team");
+        std::fs::create_dir_all(home.join(".hippius")).unwrap();
+        std::fs::create_dir_all(home.join("Pictures")).unwrap();
+        std::fs::create_dir_all(&team).unwrap();
+        let drives = [DriveHere {
+            label: "Team".into(),
+            path: team.clone(),
+            member: true,
+        }];
+        let refused = |dir: PathBuf| match check_location(&dir, &home, &drives) {
+            Err(AppError::Validation(m)) => m,
+            other => panic!("{}: {other:?}", dir.display()),
+        };
+        assert!(refused(home.join("Pictures/../.hippius/captures")).contains("its own files"));
+        assert!(refused(home.join("Pictures/./../Team/Shots")).contains("shared with you"));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&team, home.join("Pictures/Shortcut")).unwrap();
+            assert!(refused(home.join("Pictures/Shortcut/Shots")).contains("shared with you"));
+        }
+        assert_eq!(
+            check_location(&home.join("Pictures/hippius-captures"), &home, &drives).unwrap(),
+            Place::NewDrive
+        );
+    }
+
+    #[test]
+    fn a_path_is_resolved_as_far_as_it_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = std::fs::canonicalize(tmp.path()).unwrap();
+        assert_eq!(resolved(&tmp.path().join("a/../b/new")), real.join("b/new"));
+        assert_eq!(resolved(Path::new("relative/../x")), PathBuf::from("x"));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { queryOptions, useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { useAtomValue } from "jotai";
@@ -30,16 +30,57 @@ const EMPTY_LABELS: ReadonlySet<string> = new Set();
 export const SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY = "shared-drive-memberships";
 
 /**
+ * The one memberships query. Every reader uses it, the row badges and the
+ * "Shared with me" lists alike, so leaving or joining a drive invalidates
+ * one key and every list on screen follows (see {@link refreshSharedWithMe}).
+ * A Shared Drives page holding its own copy of the listing kept a drive you
+ * had just left on screen, still opening it.
+ *
+ * The fetch THROWS on failure (the data keeps the last answer), so a list
+ * that must not say "none" can tell a failure from an empty account. It runs
+ * in network mode "always": it is a local IPC call that Rust answers offline,
+ * and the default mode would pause it instead of letting it fail.
+ */
+export const sharedDriveMembershipsQueryOptions = queryOptions({
+  queryKey: [SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY],
+  queryFn: async () => {
+    try {
+      return await listMyDriveMemberships();
+    } catch (err) {
+      if (!isSharedDrivesUnavailable(err)) {
+        console.error("Failed to load drive memberships:", err);
+      }
+      throw err;
+    }
+  },
+  staleTime: 60_000,
+  refetchOnWindowFocus: false,
+  networkMode: "always",
+  retry: false,
+});
+
+/**
+ * Read the drives and folders shared with this account again, after this
+ * account joined or left one. Every list of them reads these two queries.
+ */
+export async function refreshSharedWithMe(queryClient: QueryClient): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: [SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY] }),
+    queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] }),
+  ]);
+}
+
+/**
  * The drives shared WITH this account, as the server lists them.
  *
  * One query, so every surface that asks — the drive list's row badge, the
  * header mark inside an open drive — reads one answer rather than each
  * fanning out its own membership listing and drifting.
  *
- * Failures collapse to an empty list on purpose. A missing membership costs a
- * badge detail, whereas surfacing a listing error would put a failure in front
- * of someone who did not ask for this surface; a feature-off server is the
- * expected case, not an exception.
+ * A failure reads as the last answer, or an empty list before the first. A
+ * missing membership costs a badge detail, whereas surfacing a listing error
+ * would put a failure in front of someone who did not ask for this surface;
+ * a feature-off server is the expected case, not an exception.
  */
 export function useSharedDriveMemberships(): readonly DriveMembershipInfo[] {
   return useSharedDriveMembershipsQuery().memberships;
@@ -58,20 +99,8 @@ export function useSharedDriveMembershipsQuery(): {
   isSettled: boolean;
 } {
   const { data, isFetched } = useQuery({
-    queryKey: [SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY],
-    queryFn: async () => {
-      try {
-        return await listMyDriveMemberships();
-      } catch (err) {
-        if (!isSharedDrivesUnavailable(err)) {
-          console.warn("[useSharedDriveMemberships] listing failed:", err);
-        }
-        return [] as DriveMembershipInfo[];
-      }
-    },
+    ...sharedDriveMembershipsQueryOptions,
     enabled: SHARED_DRIVES_ENABLED,
-    staleTime: 60_000,
-    refetchOnWindowFocus: false,
   });
   return {
     memberships: data ?? EMPTY_LIST,
