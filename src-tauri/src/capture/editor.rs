@@ -1206,7 +1206,7 @@ pub async fn capture_editor_copy_saved_link(
                 })
             }
         }
-        Some(SavedEdit::File { label, rel_path }) => crate::shares::quick_link::copy_file_share_link(state, app, label, rel_path, None).await,
+        Some(SavedEdit::File { label, rel_path }) => crate::shares::quick_link::copy_file_share_link(state, app, label, rel_path, None, None).await,
         None => Ok(QuickLinkOutcome::Failed {
             message: "There is no link to copy for this picture.".into(),
         }),

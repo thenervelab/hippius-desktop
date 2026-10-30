@@ -301,7 +301,7 @@ function NoLinkPanel({
     setCreating(true);
     setError(null);
     try {
-      const link = await createCaptureLink(capture.label, capture.relativePath, capture.fileId);
+      const link = await createCaptureLink(capture.label, capture.relativePath, capture.fileId, capture.size);
       // The row's link badge and Insights button, and Shared Links, read the
       // listing: ask it again so they show the new link.
       void queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });

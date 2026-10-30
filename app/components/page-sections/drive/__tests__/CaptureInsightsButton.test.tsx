@@ -100,7 +100,7 @@ describe("CaptureInsightsButton", () => {
     expect(button).toHaveTextContent(/^Insights$/);
     expect(button).toHaveAttribute("data-no-link", "true");
     // The chart icon goes grey: only rows with a link carry the brand colour.
-    expect(button.querySelector("svg")?.getAttribute("class")).toContain("text-grey-50");
+    expect(button.querySelector("svg")?.getAttribute("class")).toContain("text-grey-60");
 
     fireEvent.click(button);
     expect(store.get(insightsSheetAtom)).toEqual({

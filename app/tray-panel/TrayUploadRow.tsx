@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Check, Link2, MoreHorizontal, PenLine, Play } from "lucide-react";
+import { Check, Link as LinkIcon, Link2, MoreHorizontal, PenLine, Play } from "lucide-react";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
 import { getFileIcon, DIRECTORY_SUFFIX } from "@/app/lib/utils/fileTypeUtils";
@@ -27,7 +27,7 @@ const COPIED_MS = 1800;
 const FAILED_MS = 4000;
 
 type Feedback =
-  | { kind: "working" }
+  | { kind: "working"; reusing: boolean }
   | { kind: "copied"; reused: boolean }
   | { kind: "failed"; message: string };
 
@@ -50,7 +50,9 @@ type Feedback =
  *
  * "Copy link" reports on the row itself, in the subtitle's place: the
  * popover has no toaster, and the result must be seen where the button was
- * pressed.
+ * pressed. A row whose file already has a link (`hasLink`, by the rule every
+ * list uses) shows the link icon after its name, as Drive and Recent Files
+ * do, and its Copy link says "Copying link" rather than promising a new one.
  */
 export default function TrayUploadRow({
   item,
@@ -58,6 +60,8 @@ export default function TrayUploadRow({
   isCapture = false,
   siblings,
   editorEnabled = false,
+  hasLink = false,
+  onLinkCopied,
 }: {
   item: UploadFeedItem;
   /** The signed-in account, for revealing a file and fetching its picture. */
@@ -71,6 +75,10 @@ export default function TrayUploadRow({
    * offers Edit (the screenshot editor). Off until Rust has answered.
    */
   editorEnabled?: boolean;
+  /** The file has a live link (`useTrayShareLinks`): the row shows the link icon. */
+  hasLink?: boolean;
+  /** A link was copied: the popover reads the listing again, so a new link's icon shows. */
+  onLinkCopied?: () => void;
 }) {
   const name = displayFileName(item.name);
   const picture = useTrayThumbnail(item, accountId);
@@ -97,14 +105,15 @@ export default function TrayUploadRow({
 
   const copyLink = useCallback(async () => {
     if (feedback?.kind === "working") return;
-    showFeedback({ kind: "working" });
+    showFeedback({ kind: "working", reusing: hasLink });
     const outcome = await copyTrayRowLink(item);
     if (outcome.status === "copied") {
       showFeedback({ kind: "copied", reused: outcome.reused }, COPIED_MS);
+      if (!outcome.reused) onLinkCopied?.();
     } else {
       showFeedback({ kind: "failed", message: outcome.message }, FAILED_MS);
     }
-  }, [feedback, item, showFeedback]);
+  }, [feedback, hasLink, item, onLinkCopied, showFeedback]);
 
   const run = useCallback(
     async (id: TrayRowActionId) => {
@@ -163,7 +172,7 @@ export default function TrayUploadRow({
         >
           <RowThumbnail item={item} picture={picture} />
           <span className="block min-w-0 flex-1">
-            <MiddleEllipsisName name={name} />
+            <RowName name={name} hasLink={hasLink} />
             <RowSubtitle id={subtitleId} item={item} feedback={feedback} isCapture={isCapture} />
           </span>
         </button>
@@ -171,7 +180,7 @@ export default function TrayUploadRow({
         <>
           <RowThumbnail item={item} picture={picture} />
           <div className="min-w-0 flex-1">
-            <MiddleEllipsisName name={name} />
+            <RowName name={name} hasLink={hasLink} />
             <RowSubtitle id={subtitleId} item={item} feedback={feedback} isCapture={isCapture} />
           </div>
         </>
@@ -355,7 +364,11 @@ function RowSubtitle({
     "mt-0.5 block truncate font-geist text-[12px] font-medium leading-4 tracking-[-0.24px]";
   let content: React.ReactNode;
   if (feedback?.kind === "working") {
-    content = <span className={`${base} animate-pulse text-primary-50 dark:text-primary-brand-dark`}>Getting link…</span>;
+    content = (
+      <span className={`${base} animate-pulse text-primary-50 dark:text-primary-brand-dark`}>
+        {feedback.reusing ? "Copying link…" : "Getting link…"}
+      </span>
+    );
   } else if (feedback?.kind === "copied") {
     content = <span className={`${base} text-[#04C870]`}>Link copied</span>;
   } else if (feedback?.kind === "failed") {
@@ -374,6 +387,31 @@ function RowSubtitle({
   return (
     <span id={id} aria-live="polite" className="block min-w-0">
       {content}
+    </span>
+  );
+}
+
+/**
+ * The name, and right after it the link icon when the file has a live link:
+ * the Drive row's link badge (primary icon on a soft round chip), display
+ * only here, since managing the link is a main-window page.
+ */
+function RowName({ name, hasLink }: { name: string; hasLink: boolean }) {
+  if (!hasLink) return <MiddleEllipsisName name={name} />;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <span className="min-w-0">
+        <MiddleEllipsisName name={name} />
+      </span>
+      <span
+        data-testid="tray-row-link"
+        role="img"
+        aria-label="Shared via public link"
+        title="Shared via public link"
+        className="inline-flex shrink-0 items-center justify-center rounded-full bg-primary-95 px-1 pt-1 text-primary-50 dark:bg-primary-50/20 dark:text-primary-brand-dark"
+      >
+        <LinkIcon className="size-3.5" aria-hidden />
+      </span>
     </span>
   );
 }

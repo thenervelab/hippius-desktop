@@ -15,73 +15,16 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import type { ShareSummary } from "@/app/lib/tauri/shares";
 import { cloudFileIdFor } from "@/app/lib/tray/trayRowActions";
-import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
+import { captureSharesFrom, isCaptureMedia, newestShare } from "@/app/lib/utils/fileLinks";
 import { useDriveRoute } from "./driveRoute";
 
 /** The words for opening a capture's Insights, wherever it is offered. */
 export const VIEW_INSIGHTS_LABEL = "View insights";
 
-/** The newest of a file's links: the one its Insights are about. */
-export function newestShare(rows: ShareSummary[]): ShareSummary | null {
-  let newest: ShareSummary | null = null;
-  for (const row of rows) {
-    if (!newest || Date.parse(row.createdAt) > Date.parse(newest.createdAt)) newest = row;
-  }
-  return newest;
-}
+export { captureSharesFrom, isCaptureMedia, isCaptureName, newestShare } from "@/app/lib/utils/fileLinks";
 
 export function newestShareToken(rows: ShareSummary[]): string | null {
   return newestShare(rows)?.shareToken ?? null;
-}
-
-/** A screenshot or a recording: the files Insights are offered for. */
-export function isCaptureMedia(name: string | null | undefined): boolean {
-  const dot = name?.lastIndexOf(".") ?? -1;
-  if (!name || dot < 0) return false;
-  const type = getFileTypeFromExtension(name.slice(dot + 1));
-  return type === "image" || type === "video";
-}
-
-/**
- * A name Hippius gives a capture: "Screenshot " or "Recording ", then
- * `YYYY-MM-DD at HH.MM.SS`, then anything (an extension, " (edited)"). The
- * same rule as Rust's `shares::preview::is_capture_name`. Only such a name,
- * which carries the second it was taken, is specific enough to match a link
- * made elsewhere by name alone: a plain `image.png` is not.
- */
-export function isCaptureName(name: string): boolean {
-  return /^(Screenshot|Recording) \d{4}-\d{2}-\d{2} at \d{2}\.\d{2}\.\d{2}/.test(name);
-}
-
-/** The last part of a drive-relative path. */
-function baseName(relativePath: string): string {
-  return relativePath.slice(relativePath.lastIndexOf("/") + 1);
-}
-
-/**
- * A capture's links: the ones this device made for its path, and the ones
- * made elsewhere (the browser extension, the web console, another
- * computer) from a file of the same name, unless the sizes say it was a
- * different file. The server names a link's file by name and size only, and
- * the console and the extension match links to files the same way. Trusted
- * only for a capture's own name ({@link isCaptureName}), which carries the
- * second it was taken; any other file, a plain `image.png` included, gets
- * only this device's links.
- */
-export function captureSharesFrom(
-  lookups: Pick<ReturnType<typeof useSharedFiles>, "getSharesFor" | "getUnplacedSharesNamed">,
-  label: string | null | undefined,
-  relativePath: string | null | undefined,
-  size?: number,
-): ShareSummary[] {
-  if (!label || !relativePath) return [];
-  const placed = lookups.getSharesFor(label, relativePath);
-  const name = baseName(relativePath);
-  if (!isCaptureMedia(relativePath) || !isCaptureName(name)) return placed;
-  const named = lookups
-    .getUnplacedSharesNamed(name)
-    .filter((row) => !size || !row.plaintextSize || row.plaintextSize === size);
-  return named.length === 0 ? placed : [...placed, ...named];
 }
 
 /**
@@ -152,7 +95,12 @@ export function useCaptureInsightsShare() {
  */
 export function captureLinkSource(file: FormattedUserFile, relativePath: string): CaptureLinkSource | undefined {
   if (!file.label || !relativePath) return undefined;
-  return { label: file.label, relativePath, fileId: cloudFileIdFor(file) };
+  return {
+    label: file.label,
+    relativePath,
+    fileId: cloudFileIdFor(file),
+    ...(file.size ? { size: file.size } : {}),
+  };
 }
 
 /**

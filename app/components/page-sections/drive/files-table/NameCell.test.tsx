@@ -273,7 +273,7 @@ describe("NameCell sync-status badge", () => {
 // It now renders inline inside NameCell, strictly BEFORE the badge in DOM
 // order (i.e. to its left), so the two can never overlap.
 describe("NameCell hover preview icon", () => {
-  it("renders the icon before (left of) the status badge for a previewable image", () => {
+  it("renders the icon in the trailing group, after the status badge, where it never moves the Insights pill", () => {
     render(
       <NameCell
         {...baseProps}
@@ -285,8 +285,11 @@ describe("NameCell hover preview icon", () => {
 
     const icon = screen.getByTestId("hover-preview-icon");
     const badge = screen.getByTestId("sync-status-pending");
+    // The trailing group ends the cell: the hover icon sits inside it, just
+    // before the Insights pill's slot, so the pills line up row to row.
+    expect(screen.getByTestId("name-cell-trailing")).toContainElement(icon);
     expect(
-      icon.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING,
+      badge.compareDocumentPosition(icon) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 

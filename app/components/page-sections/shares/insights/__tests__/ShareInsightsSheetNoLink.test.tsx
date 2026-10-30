@@ -171,6 +171,7 @@ describe("the Insights panel for a capture with no link", () => {
         folderLabel: "Hippius Captures",
         relativePath: NAME,
         fileId: "abc",
+        size: null,
       }),
     );
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_insights", { shareToken: "fresh" }));
