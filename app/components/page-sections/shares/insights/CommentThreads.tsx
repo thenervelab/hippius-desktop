@@ -7,6 +7,7 @@ import { Ban, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import {
   DropdownMenu,
@@ -466,7 +467,7 @@ function CommentRow({
           </button>
         )}
         {asking && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
+          <RowQuestion onCancel={onCancel}>
             <span className="text-xs text-grey-30 dark:text-grey-dark-700">
               {asking === "delete"
                 ? blocked
@@ -487,7 +488,7 @@ function CommentRow({
             <Button variant="defaultStable" size="sm" disabled={busy} onClick={onCancel}>
               Cancel
             </Button>
-          </div>
+          </RowQuestion>
         )}
       </div>
       {!asking && (
@@ -571,6 +572,20 @@ function CommentRow({
         </div>
       )}
     </li>
+  );
+}
+
+/**
+ * The Delete or Block question in a comment row. Escape puts the row back,
+ * as Cancel does, and goes no further: it never closes the whole panel.
+ */
+function RowQuestion({ onCancel, children }: { onCancel: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEscapeFirst(ref, onCancel);
+  return (
+    <div ref={ref} className="mt-2 flex flex-wrap items-center gap-2">
+      {children}
+    </div>
   );
 }
 
