@@ -66,6 +66,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 - **Screen recordings on the Free plan stop at 5 minutes.** The recording is saved, uploaded and shared as usual, the timer shows the time left in the last minute, and an Upgrade button is right there for longer recordings. Paid plans have no limit, and paused time does not count.
 
+- **The Free plan watermark on recordings sits a little higher.** It now shows just above the player's timeline and buttons on a share page, instead of hiding under them while the video plays. Screenshots keep it in the bottom-right corner.
+
 - **Screen recordings are about half the size, so they upload and share faster.** Text stays just as sharp; a 10-minute recording is now at most about 375 MB at 1080p, where it could be about 1 GB before.
 
 - **Screen recordings start playing straight away from a share link.** Recordings made on a Mac are now saved so a player can start from the first part of the file. Before, the browser had to download the whole recording before the first frame showed.
