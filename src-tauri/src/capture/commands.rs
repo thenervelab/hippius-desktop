@@ -4864,11 +4864,13 @@ pub(super) fn notify(app: &AppHandle, title: String, body: String) {
 }
 
 /// Open a capture's new link in the default browser, as Zight does. Best
-/// effort: the link is already on the clipboard and on the card.
+/// effort: the link is already on the clipboard and on the card. Opened as
+/// the owner (`deliver::owner_view_url`), so the share page does not count
+/// this visit as a view; the copied link stays as it is.
 fn open_link_in_browser(app: &AppHandle, url: Option<&str>) {
     use tauri_plugin_opener::OpenerExt;
     let Some(url) = url else { return };
-    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+    if let Err(e) = app.opener().open_url(super::deliver::owner_view_url(url), None::<&str>) {
         tracing::warn!(error = %e, "capture link not opened in the browser");
     }
 }
