@@ -41,6 +41,11 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 const openUrl = vi.fn(() => Promise.resolve());
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...a: unknown[]) => openUrl(...(a as [])) }));
+// Signed out as far as the listing goes: the panel's listing keeper asks for
+// nothing, so each test seeds the listing it needs.
+vi.mock("@/app/lib/wallet-auth-context", () => ({
+  useWalletAuth: () => ({ polkadotAddress: null, authType: "mnemonic" }),
+}));
 
 // jsdom has no matchMedia: the panel is inline (a wide window) unless a test
 // asks for the narrow one, where it is a sheet over the page.
