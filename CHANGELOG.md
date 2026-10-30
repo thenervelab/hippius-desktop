@@ -52,6 +52,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Signing in with your recovery phrase now proves the whole wallet is yours.** Hippius checks this so nobody else can claim your wallet's account, and will soon require it, so update before then to keep signing in from the app.
 - **New invite links no longer contain the key to your drive.** Once Hippius turns this on, a drive or folder invite link holds a key of its own, and Hippius hands over the drive's key only to someone signed in who can still join, so a leaked invite link is useless after it is revoked or used up. Older invite links are marked "Old invite link" in Manage access, and Replace swaps one for a new link with the same access and turns the old one off.
 - **New folder links no longer contain the key to your whole drive.** Once Hippius turns this on, a folder link holds a key of its own, so a link that was forwarded or leaked stops working for good when you revoke it, unless someone had already opened it. Older folder links are marked "Old link" in Shared Links, and Reshare swaps one for a new link to the same folder (with a new password if it had one) and turns the old one off.
+- **"Mentioned you" only shows when a comment really mentions you.** A comment can no longer claim to mention you without your name in its text, and drive and link details are checked before Hippius sends them.
 
 ### Changed
 
