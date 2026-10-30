@@ -16,7 +16,8 @@ export const ANONYMOUS = "Anonymous viewer";
  * Reactions switch is turned on: the same words the web app uses.
  */
 export const LOCKED_PROMPT = "Insights, comments and reactions are available on paid Drive plans";
-export const LOCKED_ACTION = "Upgrade";
+/** Every upgrade button in Insights says this, as the sheet's own does. */
+export const LOCKED_ACTION = "Upgrade plan";
 /** The line under the prompt where a switch was turned on. */
 export const SWITCH_UPGRADE_BODY =
   "Upgrade to see how many people watched your links and for how long, and to let viewers comment and react.";

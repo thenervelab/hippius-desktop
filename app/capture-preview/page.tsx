@@ -718,7 +718,7 @@ export default function CapturePreviewPage() {
                       }}
                       className={MENU_ITEM}
                     >
-                      <BarChart3 aria-hidden className="size-3.5 shrink-0" /> Insights
+                      <BarChart3 aria-hidden className="size-3.5 shrink-0" /> View insights
                     </button>
                   )}
                   {actions.revokeLink && (
