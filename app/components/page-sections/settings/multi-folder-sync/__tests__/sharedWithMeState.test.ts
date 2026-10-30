@@ -10,6 +10,7 @@ import {
   folderGrantRowView,
   getMembershipRowAction,
   getSharedWithMeView,
+  sharedWithMeDataFrom,
   type SharedWithMeData,
 } from "../sharedWithMeState";
 
@@ -41,6 +42,42 @@ describe("getSharedWithMeView", () => {
 
   it("shows rows only when enabled with at least one membership", () => {
     expect(getSharedWithMeView(true, { kind: "ready", memberships: [MEMBERSHIP] })).toBe("rows");
+  });
+});
+
+describe("sharedWithMeDataFrom", () => {
+  const base = {
+    enabled: true,
+    data: undefined,
+    isError: false,
+    isFetching: false,
+    unavailable: false,
+    markedUnavailable: false,
+  };
+
+  it("is idle when nothing is asked, and loading before the first answer", () => {
+    expect(sharedWithMeDataFrom({ ...base, enabled: false })).toEqual({ kind: "idle" });
+    expect(sharedWithMeDataFrom({ ...base, isFetching: true })).toEqual({ kind: "loading" });
+  });
+
+  it("keeps the rows on screen while they refresh", () => {
+    expect(sharedWithMeDataFrom({ ...base, data: [MEMBERSHIP], isFetching: true })).toEqual({
+      kind: "ready",
+      memberships: [MEMBERSHIP],
+    });
+  });
+
+  it("is an error for a failed fetch, even over an older answer, and loading again on a retry", () => {
+    expect(sharedWithMeDataFrom({ ...base, isError: true })).toEqual({ kind: "error" });
+    expect(sharedWithMeDataFrom({ ...base, data: [MEMBERSHIP], isError: true })).toEqual({ kind: "error" });
+    expect(sharedWithMeDataFrom({ ...base, isError: true, isFetching: true })).toEqual({ kind: "loading" });
+  });
+
+  it("hides quietly for a server with shared drives off, or once told so", () => {
+    expect(sharedWithMeDataFrom({ ...base, isError: true, unavailable: true })).toEqual({ kind: "unavailable" });
+    expect(sharedWithMeDataFrom({ ...base, data: [MEMBERSHIP], markedUnavailable: true })).toEqual({
+      kind: "unavailable",
+    });
   });
 });
 
