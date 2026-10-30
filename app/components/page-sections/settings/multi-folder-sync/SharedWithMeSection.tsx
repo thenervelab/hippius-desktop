@@ -322,6 +322,11 @@ export function SharedWithMeSection({
             onKeyDown={
               onOpenDrive
                 ? (e) => {
+                    // Only a key pressed ON the row opens it. Its buttons
+                    // and menu items (portalled, but still React children,
+                    // so their keys bubble here) answer Enter and Space
+                    // themselves: Manage access and Leave opened the drive.
+                    if (e.target !== e.currentTarget) return;
                     if (e.key !== "Enter" && e.key !== " ") return;
                     e.preventDefault();
                     onOpenDrive({
