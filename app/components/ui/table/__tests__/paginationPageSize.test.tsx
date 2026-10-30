@@ -164,3 +164,19 @@ describe("Pagination on a single page", () => {
     expect(screen.getByRole("button", { name: "2" })).toBeInTheDocument();
   });
 });
+
+// The arrows show only an icon, so without a name a screen reader says
+// "button" and nothing else. The page on screen is marked as the current one.
+describe("Pagination for assistive technology", () => {
+  it("names the arrows and marks the current page", () => {
+    const setPage = vi.fn();
+    render(<Pagination currentPage={2} totalPages={3} setPage={setPage} />);
+
+    screen.getByRole("button", { name: "Previous page" }).click();
+    screen.getByRole("button", { name: "Next page" }).click();
+    expect(setPage.mock.calls).toEqual([[1], [3]]);
+
+    expect(screen.getByRole("button", { name: "2" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "1" })).not.toHaveAttribute("aria-current");
+  });
+});
