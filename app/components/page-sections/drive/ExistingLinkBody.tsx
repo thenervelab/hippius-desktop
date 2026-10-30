@@ -32,7 +32,7 @@ export function existingLinkLead(link: ExistingLink): string {
   // Locked or made elsewhere, the note under the link says what to do.
   if (link.state !== "ready") return "The link still works.";
   if (link.isPrivate === true) return `People need the link and its password to open this ${what}.`;
-  return `Anyone with the link can open this ${what}. Copy it to share it again.`;
+  return `Anyone with the link can open this ${what}.`;
 }
 
 export const CREATE_ANOTHER_LABEL = "Create a new link";
@@ -46,11 +46,9 @@ const PRIMARY = cn(
   "dark:hover:bg-[#2a5ad0] dark:hover:border-[#2a5ad0]",
 );
 const SECONDARY = "h-[52px] w-full rounded-[6px] text-base font-normal tracking-[-0.36px]";
-const QUIET_BUTTON = cn(
-  "inline-flex min-h-9 items-center justify-center gap-1.5 rounded-[6px] border px-3 text-sm font-medium transition-colors",
-  "border-grey-80 bg-white text-grey-10 hover:bg-grey-90",
-  "dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-grey-dark-800 dark:hover:bg-[#2c2c2c]",
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
+const TEXT_BUTTON = cn(
+  "inline-flex items-center gap-1.5 rounded text-[13px] font-medium text-primary-50 hover:underline",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-primary-brand-dark",
 );
 const MUTED = "text-grey-50 dark:text-grey-dark-600";
 
@@ -61,7 +59,6 @@ export function ExistingLinkBody({
   onManage,
   onInsights,
   onCreateAnother,
-  onClose,
 }: {
   link: ExistingLink;
   filename: string;
@@ -71,9 +68,8 @@ export function ExistingLinkBody({
   onManage: () => void;
   /** Open the link's Insights, when it has them. */
   onInsights?: () => void;
-  /** Show the create form for a second link. */
+  /** Show the create form for a second link. The dialog's own close button closes it. */
   onCreateAnother: () => void;
-  onClose: () => void;
 }) {
   const [shown, setShown] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -89,20 +85,9 @@ export function ExistingLinkBody({
 
   return (
     <div className="font-geist" data-testid="existing-link">
-      <div className="mb-4 flex items-start gap-3">
-        <span
-          aria-hidden
-          className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary-95 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark"
-        >
-          <Link2 className="size-[18px]" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="text-base font-medium text-grey-10 dark:text-white">{existingLinkHeading(link.kind)}</p>
-          <p className={cn("mt-0.5 text-sm", MUTED)}>{existingLinkLead(link)}</p>
-        </div>
-      </div>
-
-      <p className="mb-2 break-all text-sm text-grey-20 dark:text-grey-dark-800" title={filename}>
+      <p className="text-base font-medium text-grey-10 dark:text-white">{existingLinkHeading(link.kind)}</p>
+      <p className={cn("mt-0.5 text-sm", MUTED)}>{existingLinkLead(link)}</p>
+      <p className="mb-2 mt-3 truncate text-sm text-grey-20 dark:text-grey-dark-800" title={filename}>
         {filename}
       </p>
 
@@ -184,39 +169,31 @@ export function ExistingLinkBody({
         </p>
       )}
 
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" onClick={onManage} className={QUIET_BUTTON}>
-          <Icons.Link className="size-4" aria-hidden />
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <button type="button" onClick={onManage} className={TEXT_BUTTON}>
+          <Icons.Link className="size-3.5" aria-hidden />
           {MANAGE_IN_SHARED_LINKS}
         </button>
         {onInsights && (
-          <button type="button" onClick={onInsights} className={QUIET_BUTTON}>
-            <BarChart3 className="size-4" aria-hidden />
+          <button type="button" onClick={onInsights} className={TEXT_BUTTON}>
+            <BarChart3 className="size-3.5" aria-hidden />
             View insights
           </button>
         )}
       </div>
 
-      <div className="mt-6 flex flex-col gap-3">
+      <div className="mt-4 flex flex-col gap-3">
         {link.state !== "elsewhere" && (
           <Button type="button" variant="primary" size="auto" onClick={copy} className={PRIMARY}>
             {copied ? "Copied" : copyLinkLabel(link)}
           </Button>
         )}
-        <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={SECONDARY}>
-          Done
-        </Button>
-      </div>
-
-      <div className="mt-5 border-t border-grey-80 pt-4 text-center dark:border-[#333]">
-        <button
-          type="button"
-          onClick={onCreateAnother}
-          className="text-sm font-medium text-primary-50 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-primary-brand-dark"
-        >
+        {/* Secondary on purpose: the link above is usually what is wanted,
+            and a second one is a separate link to keep track of. */}
+        <Button type="button" variant="defaultStable" size="auto" onClick={onCreateAnother} className={SECONDARY}>
           {CREATE_ANOTHER_LABEL}
-        </button>
-        <p className={cn("mt-1 text-xs", MUTED)}>{CREATE_ANOTHER_NOTE}</p>
+        </Button>
+        <p className={cn("-mt-1 text-center text-xs", MUTED)}>{CREATE_ANOTHER_NOTE}</p>
       </div>
     </div>
   );

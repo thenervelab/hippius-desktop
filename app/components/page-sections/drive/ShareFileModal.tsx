@@ -510,7 +510,6 @@ export default function ShareFileModal() {
               : undefined
           }
           onCreateAnother={() => setCreateAnother(true)}
-          onClose={close}
         />
       )}
 
