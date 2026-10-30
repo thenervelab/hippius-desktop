@@ -18,6 +18,11 @@ vi.mock("@/app/lib/wallet-auth-context", () => ({ useWalletAuth: () => ({ polkad
 vi.mock("@/app/contexts/FileSelectionContext", () => ({ useFileSelection: () => ({ enterSelectionModeAndSelectFile: vi.fn() }) }));
 vi.mock("../FileViewerThumbnailStrip", () => ({ default: () => null }));
 vi.mock("../FileViewerTitle", () => ({ default: () => null }));
+// The viewer's Copy link is covered by FileViewerLayoutCopyLink.test.tsx.
+vi.mock("../../useExistingLinks", () => ({
+  useExistingLinks: () => ({ linkFor: () => null, isLoadingFor: () => false }),
+}));
+vi.mock("../../useCopyExistingLink", () => ({ useCopyExistingLink: () => vi.fn() }));
 
 import FileViewerLayout from "../FileViewerLayout";
 
