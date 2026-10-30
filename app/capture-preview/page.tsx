@@ -454,13 +454,20 @@ export default function CapturePreviewPage() {
         </button>
 
         <div className="mt-2 flex flex-col gap-1 px-0.5">
-          {/* Only the status line is live: wrapping the card re-announced
-              every button whenever anything on it changed. */}
-          <p role="status" aria-live="polite" className="flex items-center gap-1.5 text-[12px] leading-[18px] text-white/75">
+          {/* Only the status is live: wrapping the card re-announced every
+              button whenever anything on it changed. And only its words, not
+              its percent: the visible line ticks with each update, which a
+              screen reader would read out every time. */}
+          <p className="flex items-center gap-1.5 text-[12px] leading-[18px] text-white/75">
             {uploaded && <Check aria-hidden className="size-3.5 shrink-0 text-[#30D158]" />}
             {waiting && <Clock aria-hidden className="size-3.5 shrink-0 text-white/60" />}
             {failed && !waiting && <AlertCircle aria-hidden className="size-3.5 shrink-0 text-[#FF453A]" />}
-            <span className="truncate">{view.text}</span>
+            <span aria-hidden className="truncate">
+              {view.text}
+            </span>
+            <span role="status" aria-live="polite" className="sr-only">
+              {view.announce}
+            </span>
           </p>
           {asking ? (
             // The question takes the second line's place, so the card keeps

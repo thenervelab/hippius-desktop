@@ -54,6 +54,16 @@ describe("a direct upload", () => {
     expect(cardView(card({ state: "uploading" }), remote(), []).text).toBe("Uploading · 62%");
   });
 
+  // The visible line ticks; a screen reader hears "Uploading" once.
+  it("announces the upload once, not each percent", () => {
+    const at = (bytesTransferred: number) => cardView(card({ state: "uploading" }), remote({ bytesTransferred }), []);
+    expect(at(10).text).toBe("Uploading · 10%");
+    expect(at(62).text).toBe("Uploading · 62%");
+    expect(new Set([at(10).announce, at(40).announce, at(62).announce])).toEqual(new Set(["Uploading"]));
+    const done = cardView(card({ state: "uploaded", linkCopied: true }, { linkText: "Public link copied" }), null, []);
+    expect(done.announce).toBe("Uploaded · Public link copied");
+  });
+
   it("ignores another file's row, or the same name in another drive", () => {
     expect(cardView(card({ state: "uploading" }), remote({ path: "Captures/x.png" }), []).percent).toBeNull();
     expect(cardView(card({ state: "uploading" }), remote({ label: "Photos" }), []).percent).toBeNull();
