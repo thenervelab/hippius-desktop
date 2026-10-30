@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import {
   captureSharesFrom,
+  isCaptureName,
   isCaptureMedia,
   newestShareToken,
   useCaptureInsightsItem,
@@ -101,28 +102,36 @@ describe("captureSharesFrom", () => {
   const elsewhere = {
     shareToken: "ext",
     createdAt: "2026-10-02T10:00:00Z",
-    filename: "Recording 1.mp4",
+    filename: "Recording 2026-10-28 at 16.04.09.mp4",
     plaintextSize: 100,
   } as ShareSummary;
   const lookups = {
     getSharesFor: (label: string | null | undefined, path: string | null | undefined) =>
-      label === "Captures" && path === "Clips/Recording 1.mp4" ? [placed] : [],
+      label === "Captures" && path === "Clips/Recording 2026-10-28 at 16.04.09.mp4" ? [placed] : [],
     getUnplacedSharesNamed: (name: string | null | undefined) =>
-      name === "Recording 1.mp4" || name === "report.pdf" ? [elsewhere] : [],
+      name === "Recording 2026-10-28 at 16.04.09.mp4" || name === "report.pdf" ? [elsewhere] : [],
   };
 
   it("adds links made elsewhere, matched by the capture's own name, to this device's", () => {
-    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 1.mp4", 100)).toEqual([placed, elsewhere]);
+    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 2026-10-28 at 16.04.09.mp4", 100)).toEqual([placed, elsewhere]);
     // A size the listing does not know never rules a link out.
-    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 1.mp4")).toEqual([placed, elsewhere]);
+    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 2026-10-28 at 16.04.09.mp4")).toEqual([placed, elsewhere]);
   });
 
   it("leaves out a link whose file had a different size", () => {
-    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 1.mp4", 101)).toEqual([placed]);
+    expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 2026-10-28 at 16.04.09.mp4", 101)).toEqual([placed]);
   });
 
-  it("matches by name only for screenshots and recordings", () => {
+  it("matches by name only for a capture's own name", () => {
     expect(captureSharesFrom(lookups, "Captures", "report.pdf", 100)).toEqual([]);
+    // A plain picture name is not specific enough: another file's link
+    // made elsewhere under the same name must not show on this one.
+    const plain = { ...lookups, getUnplacedSharesNamed: (name: string | null | undefined) => (name === "image.png" ? [elsewhere] : []) };
+    expect(captureSharesFrom(plain, "Captures", "image.png", 100)).toEqual([]);
+    expect(isCaptureName("Screenshot 2026-10-28 at 16.04.09.png")).toBe(true);
+    expect(isCaptureName("Recording 2026-10-28 at 16.04.09 (edited).mp4")).toBe(true);
+    expect(isCaptureName("Screenshot.png")).toBe(false);
+    expect(isCaptureName("image.png")).toBe(false);
     expect(isCaptureMedia("Screenshot 2026-10-28 at 16.04.09.PNG")).toBe(true);
     expect(isCaptureMedia("Recording.mov")).toBe(true);
     expect(isCaptureMedia("notes")).toBe(false);

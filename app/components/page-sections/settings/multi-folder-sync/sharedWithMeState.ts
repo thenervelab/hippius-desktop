@@ -14,6 +14,31 @@ export type SharedWithMeData =
   | { kind: "unavailable" }
   | { kind: "error" };
 
+/**
+ * The memberships query's state, read as the section's data lifecycle.
+ *
+ * A fetch on its way after a failure, or before any answer, is `loading`;
+ * one that refreshes rows already on screen keeps them (`ready`). A server
+ * with shared drives switched off, or a section told so mid-session
+ * (`markedUnavailable`), is `unavailable`, which hides it quietly.
+ */
+export function sharedWithMeDataFrom(query: {
+  enabled: boolean;
+  data: DriveMembershipInfo[] | undefined;
+  isError: boolean;
+  isFetching: boolean;
+  /** The failure is the server's "shared drives are off". */
+  unavailable: boolean;
+  markedUnavailable: boolean;
+}): SharedWithMeData {
+  if (!query.enabled) return { kind: "idle" };
+  if (query.markedUnavailable) return { kind: "unavailable" };
+  if (query.isFetching && (query.isError || !query.data)) return { kind: "loading" };
+  if (query.isError) return query.unavailable ? { kind: "unavailable" } : { kind: "error" };
+  if (query.data) return { kind: "ready", memberships: query.data };
+  return { kind: "loading" };
+}
+
 export type SharedWithMeView = "hidden" | "loading" | "empty" | "rows";
 
 /**

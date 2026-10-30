@@ -470,9 +470,12 @@ const NameCell: FC<NameCellProps> = ({
               )}
               suffix={
                 <>
+                  {/* Both look the file's links up by its drive-relative
+                      path, as its menu does: a row inside a folder carries
+                      only its own name in `actualName`. */}
                   <SharedLinkBadge
                     label={label}
-                    actualName={actualName}
+                    actualName={fileRelativePath}
                     onManageShare={onManageShare}
                     fileSize={file?.size}
                     className="ml-1.5"
@@ -480,7 +483,7 @@ const NameCell: FC<NameCellProps> = ({
                   {/* Captures page only: opens the link's Insights. */}
                   <CaptureInsightsButton
                     label={label}
-                    actualName={actualName}
+                    actualName={fileRelativePath}
                     fileName={actualName || rawName}
                     file={file}
                     className="ml-1"

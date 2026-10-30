@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
-import ShareFileModal from "../ShareFileModal";
+import ShareFileModal, { PASSWORD_NO_COMMENTS, SWITCHES_NOT_ON } from "../ShareFileModal";
 import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -39,11 +39,14 @@ const setPreviewMock = vi.fn();
 const NO_SWITCHES = { insights: false, comments: false, reactions: false };
 const linkDefaultMock = vi.fn().mockResolvedValue({ offered: NO_SWITCHES, on: NO_SWITCHES });
 const setLinkMock = vi.fn().mockResolvedValue(undefined);
+// The finished link reads its switches back; unanswered unless a test says.
+const getLinkMock = vi.fn().mockRejectedValue(new Error("not read in this test"));
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   hcfs_share_preview_default: previewDefaultMock,
   hcfs_set_share_preview: setPreviewMock,
   share_link_settings_default: linkDefaultMock,
   share_set_link_settings: setLinkMock,
+  share_get_link_settings: getLinkMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
@@ -1193,7 +1196,7 @@ describe("ShareFileModal link switches", () => {
     await waitFor(() =>
       expect(setLinkMock).toHaveBeenCalledWith("share_set_link_settings", {
         shareToken: "tok-rec",
-        settings: { insights: true, comments: true, reactions: false },
+        change: { reactions: false },
       }),
     );
     await waitFor(() =>
@@ -1204,6 +1207,48 @@ describe("ShareFileModal link switches", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The server said no."));
     expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("offers no Comments switch for a password link, says why, and sends comments off", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "hcfs_generate_share_password" ? Promise.resolve("plum-otter-41-lake") : Promise.resolve(LINK),
+    );
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Comments" });
+    fireEvent.click(screen.getByRole("button", { name: "Password protected" }));
+    await waitFor(() => expect(screen.queryByRole("switch", { name: "Comments" })).toBeNull());
+    expect(screen.getByText(PASSWORD_NO_COMMENTS)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Insights" })).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue("plum-otter-41-lake"));
+    confirmChooser();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "hcfs_create_share",
+        expect.objectContaining({ linkSettings: { insights: true, comments: false, reactions: true } }),
+      ),
+    );
+  });
+
+  it("shows the finished link's switches as the server has them, and says when one asked for did not turn on", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getLinkMock.mockResolvedValueOnce({
+      offered: ALL_ON,
+      on: { insights: true, comments: false, reactions: true },
+      switchesInPlan: null,
+    });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "false"),
+    );
+    expect(getLinkMock).toHaveBeenCalledWith("share_get_link_settings", { shareToken: "tok-rec" });
+    expect(screen.getByRole("status")).toHaveTextContent(SWITCHES_NOT_ON);
   });
 
   it("on the free plan, starts every switch off and shows the upgrade prompt instead of turning one on", async () => {

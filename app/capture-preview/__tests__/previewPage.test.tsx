@@ -332,6 +332,10 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(0);
     fireEvent.click(revoke);
     expect(screen.queryByRole("menu")).toBeNull();
+    // The question holds the card however long it takes to answer.
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
     await advance(5_900);
     expect(dismissed()).toBe(0);
     await advance(200);
@@ -380,6 +384,26 @@ describe("the preview card", () => {
     expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
     await act(() => tauri.emitEvent("capture_preview_changed", card({ state: "uploading" }, 2)));
     expect(screen.getByRole("button", { name: "Copy link" })).toBeInTheDocument();
+  });
+
+  it("says when Copy link fails, and the button tries again", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }));
+    tauri.onInvoke("capture_preview_copy_link", () => {
+      throw new Error("Could not copy the link: clipboard unavailable");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Copy link" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("capture-copy-failed")).toHaveTextContent("Couldn't copy the link.");
+    const again = screen.getByRole("button", { name: "Try again" });
+    tauri.onInvoke("capture_preview_copy_link", () => null);
+    fireEvent.click(again);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("capture-copy-failed")).toBeNull();
+    expect(screen.getByRole("button", { name: "Copied" })).toBeInTheDocument();
   });
 
   it("announces only its status line", async () => {
@@ -436,8 +460,33 @@ describe("the card's actions (Rust decides which)", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    // Discard asks first: the file here is the only copy.
+    expect(called("capture_preview_discard")).toBe(0);
+    expect(screen.getByTestId("capture-question")).toHaveTextContent("this is the only copy");
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
     expect(called("capture_preview_retry")).toBe(1);
     expect(called("capture_preview_discard")).toBe(1);
+  });
+
+  it("keeps the capture when the Discard question is answered no, by button or Escape", async () => {
+    await setup(card(failed("offline"), 1, { retry: true, discard: true }));
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    const keep = screen.getByRole("button", { name: "Keep" });
+    expect(keep).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    fireEvent.click(keep);
+    expect(screen.queryByTestId("capture-question")).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByTestId("capture-question")).toBeNull();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_discard")).toBe(0);
   });
 
   it("offers Upgrade when the plan is full, which opens the plans in the main window", async () => {
@@ -507,11 +556,22 @@ describe("the card's actions (Rust decides which)", () => {
     expect(more).toHaveFocus();
     fireEvent.click(more);
     fireEvent.click(screen.getByRole("menuitem", { name: "Revoke link" }));
+    expect(screen.queryByRole("menu")).toBeNull();
+    // Revoking asks first: anyone with the link loses it.
+    expect(screen.getByTestId("capture-question")).toHaveTextContent("Turn off this link?");
+    fireEvent.click(screen.getByRole("button", { name: "Keep link" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_revoke_link")).toBe(0);
+    // The row is drawn again once the question goes.
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Revoke link" }));
+    fireEvent.click(screen.getByRole("button", { name: "Revoke" }));
     await act(async () => {
       await Promise.resolve();
     });
     expect(called("capture_preview_revoke_link")).toBe(1);
-    expect(screen.queryByRole("menu")).toBeNull();
   });
 
   // A capture's link is public and never expires; the card says so in the
@@ -537,7 +597,7 @@ describe("the card's actions (Rust decides which)", () => {
     tauri.onInvoke("capture_preview_open_insights", () => null);
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Insights" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "View insights" }));
     await act(async () => {
       await Promise.resolve();
     });
@@ -550,7 +610,7 @@ describe("the card's actions (Rust decides which)", () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { manageLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
     expect(screen.getByRole("menuitem", { name: "Manage link" })).toBeInTheDocument();
-    expect(screen.queryByRole("menuitem", { name: "Insights" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "View insights" })).toBeNull();
   });
 
   it("offers Manage link only when Rust does", async () => {
@@ -596,6 +656,7 @@ describe("the card's actions (Rust decides which)", () => {
     await pointAt(discard);
     expect(screen.getByRole("tooltip")).toHaveTextContent("Discard");
     fireEvent.click(discard);
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     await act(async () => {
       await Promise.resolve();
     });

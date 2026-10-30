@@ -54,8 +54,20 @@ vi.mock("@/app/utils/hooks/useUrlParams", () => ({
 // `SharedLinkBadge` does its own atom + Tauri-IPC dance. The badge under
 // test sits next to it but doesn't depend on it; stubbing keeps the test
 // hermetic.
+// Both record the path they were handed, so a test can check the row looks
+// its links up by its drive-relative path.
+const linkLookups: Array<[string, unknown]> = [];
 vi.mock("@/components/page-sections/drive/SharedLinkBadge", () => ({
-  default: () => null,
+  default: (props: { actualName?: string }) => {
+    linkLookups.push(["badge", props.actualName]);
+    return null;
+  },
+}));
+vi.mock("@/components/page-sections/drive/CaptureInsightsButton", () => ({
+  default: (props: { actualName?: string }) => {
+    linkLookups.push(["insights", props.actualName]);
+    return null;
+  },
 }));
 
 // The file-status badge subscribes to the sync snapshot. The hook's only
@@ -386,5 +398,24 @@ describe("NameCell failure lookup", () => {
       />,
     );
     expect(failureLookups.at(-1)).toEqual(["drive", "Trips/2024/notes.txt"]);
+  });
+
+  // A row inside a folder carries only its own name; its link badge and
+  // Insights button must look its links up by the drive-relative path, as
+  // its menu does, or a capture in a subfolder reads "No link yet".
+  it("hands the link badge and the Insights button the row's drive-relative path", () => {
+    linkLookups.length = 0;
+    render(
+      <NameCell
+        {...baseProps}
+        rawName="Screenshot 2026-10-28 at 16.10.31.png"
+        actualName="Screenshot 2026-10-28 at 16.10.31.png"
+        label="Hippius Captures"
+        parentSubFolderPath="2026-10"
+        syncStatus="synced"
+      />,
+    );
+    expect(linkLookups).toContainEqual(["badge", "2026-10/Screenshot 2026-10-28 at 16.10.31.png"]);
+    expect(linkLookups).toContainEqual(["insights", "2026-10/Screenshot 2026-10-28 at 16.10.31.png"]);
   });
 });
