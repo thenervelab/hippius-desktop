@@ -476,6 +476,7 @@ async fn endpoint(state: &AppState, account_id: &str, share_token: &str) -> Resu
     let bearer = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
+    let share_token = crate::utils::url_segment::segment(share_token)?;
     Ok((format!("{base}/v1/shares/{share_token}/preview"), bearer))
 }
 
