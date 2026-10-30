@@ -1,7 +1,7 @@
 {
     "$schema": "../gen/schemas/desktop-schema.json",
     "identifier": "default",
-    "description": "Main-window capability: DB read/write, fs/opener/updater/process, event communication. NOT granted to the tray-panel popover (see tray-panel.json) — audit H-13.",
+    "description": "Main-window capability: fs/opener/updater/process, dialogs, event communication. The fs plugin reaches only what the user picks in a dialog or drops on the window (both scoped at runtime by the plugins) and the app's own folders; files open in their app through the open_in_default_app command, which checks the file is in a synced folder. NOT granted to the tray-panel popover (see tray-panel.json).",
     "windows": ["main"],
     "permissions": [
         "core:default",
@@ -11,62 +11,7 @@
         "deep-link:default",
         "deep-link:allow-register",
         "fs:default",
-        {
-            "identifier": "opener:allow-open-path",
-            "allow": [{
-                "path": "/**/*",
-                "recursive": true
-            }],
-            "options": {
-                "ask": {
-                    "message": "Hippius App would like to open your syncing files folder",
-                    "title": "Allow folder access"
-                }
-            }
-        },
-        {
-            "identifier": "fs:allow-exists",
-            "allow": [{
-                "path": "$APPLOCALDATA/hippius-desktop.db"
-            }]
-        },
-        {
-            "identifier": "fs:allow-write-file",
-            "allow": [{
-                "path": "$APPLOCALDATA/hippius-desktop.db"
-            }]
-        },
-        {
-            "identifier": "fs:allow-read-file",
-            "allow": [{
-                "path": "$APPLOCALDATA/hippius-desktop.db"
-            }, {
-                "path": "$HOME/**"
-            }],
-            "deny": [{
-                "path": "$HOME/.hippius/**"
-            }, {
-                "path": "$HOME/.hippius"
-            }]
-        },
-        {
-            "identifier": "fs:allow-applocaldata-read-recursive",
-            "allow": [{
-                "path": "$APPLOCALDATA/hippius-desktop.db"
-            }]
-        },
-        {
-            "identifier": "fs:allow-applocaldata-write-recursive",
-            "allow": [{
-                "path": "$APPLOCALDATA/hippius-desktop.db"
-            }]
-        },
-        {
-            "identifier": "fs:allow-mkdir",
-            "allow": [{
-                "path": "$APPLOCALDATA"
-            }]
-        },
+        "fs:allow-write-file",
         "core:event:allow-listen",
         "core:event:allow-unlisten",
         "core:event:allow-emit",

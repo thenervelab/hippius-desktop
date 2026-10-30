@@ -33,6 +33,7 @@
 //! shows nothing new.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -60,6 +61,14 @@ const MAX_COMMENT_PAGES: usize = 25;
 const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
 const COMMENTS_UNAVAILABLE: &str = "Comments aren't available yet.";
 const LINK_GONE: &str = "This link isn't active any more.";
+/// Shown when the server could not be asked which switches it takes, so a
+/// link's switches can be neither read nor changed. Never "all off": that
+/// would be a guess dressed up as the link's state.
+const SETTINGS_UNREACHABLE: &str = "Couldn't reach Hippius to check this link's settings. Try again.";
+/// Shown when the server could not be asked whether it has Insights or
+/// comments at all. Never "aren't available yet", which reads as a feature
+/// that is missing rather than a connection that failed.
+const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
 const COMMENT_GONE: &str = "That comment isn't on this link any more.";
 
 // ─── Insights ──────────────────────────────────────────────────────────────
@@ -307,6 +316,11 @@ fn owner_mention(m: CommentMention, mine: &HashSet<String>) -> ShareCommentMenti
     }
 }
 
+/// Whether `text` holds `@name`, the way a mention is written.
+fn mentioned_in(text: &str, name: &str) -> bool {
+    !name.is_empty() && text.contains(&format!("@{name}"))
+}
+
 /// A link's comments, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,11 +419,18 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
             let (text, name, mentions) = match opened {
                 // An anonymous comment never shows a name, whatever its
                 // ciphertext carries.
-                Some(p) => (
-                    Some(p.text),
-                    if c.anonymous { None } else { p.name.map(readable_name) },
-                    p.mentions.into_iter().map(|m| owner_mention(m, &mine)).collect::<Vec<_>>(),
-                ),
+                Some(p) => {
+                    // A mention counts only where its `@Name` is in the text:
+                    // the list is sealed with the comment by whoever wrote
+                    // it, so it could claim "mentioned you" over any text.
+                    let mentions = p
+                        .mentions
+                        .into_iter()
+                        .filter(|m| mentioned_in(&p.text, &m.name))
+                        .map(|m| owner_mention(m, &mine))
+                        .collect::<Vec<_>>();
+                    (Some(p.text), if c.anonymous { None } else { p.name.map(readable_name) }, mentions)
+                }
                 None => (None, None, Vec::new()),
             };
             let mentions_you = !c.mine && mentions.iter().any(|m| m.you);
@@ -538,8 +559,10 @@ impl OfferedSwitches {
     }
 }
 
-/// The body of `PATCH /settings`: only the keys this server takes.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+/// The body of `PATCH /settings`: only the keys this server takes. Also what
+/// the app sends to change a link's switches: only the switch the owner
+/// flipped, so a change can never put back another switch it did not touch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub insights: Option<bool>,
@@ -577,6 +600,19 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
         insights: offered.insights.then_some(wanted.insights),
         comments: offered.comments.then_some(wanted.comments),
         reactions: offered.reactions.then_some(wanted.reactions),
+    };
+    (!patch.is_empty()).then_some(patch)
+}
+
+/// `change` cut to the switches a server offering `offered` takes, or `None`
+/// when nothing is left to send. Unlike [`patch_for`], a switch the change
+/// leaves out stays out: the server keeps it as it stands.
+#[must_use]
+pub fn change_for(change: SettingsPatch, offered: OfferedSwitches) -> Option<SettingsPatch> {
+    let patch = SettingsPatch {
+        insights: change.insights.filter(|_| offered.insights),
+        comments: change.comments.filter(|_| offered.comments),
+        reactions: change.reactions.filter(|_| offered.reactions),
     };
     (!patch.is_empty()).then_some(patch)
 }
@@ -858,8 +894,19 @@ async fn read_ok(resp: reqwest::Response) -> Result<String> {
     })
 }
 
-fn transport(what: &str, e: &reqwest::Error) -> AppError {
-    AppError::Hcfs(format!("{what} failed: {e}"))
+/// A request that never got an answer, worded without its URL: reqwest's
+/// `Display` appends the request URL, and every route here carries the
+/// link's token in its path, which opens the link's unencrypted preview.
+/// This text reaches the Insights panel, screenshots of it and the logs.
+fn transport(what: &str, e: reqwest::Error) -> AppError {
+    let reason = if e.is_timeout() {
+        "Hippius took too long to answer".to_string()
+    } else if e.is_connect() {
+        "couldn't reach Hippius".to_string()
+    } else {
+        e.without_url().to_string()
+    };
+    AppError::Hcfs(format!("{what} failed: {reason}"))
 }
 
 async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
@@ -869,7 +916,7 @@ async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Re
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("insights", &e))?;
+        .map_err(|e| transport("insights", e))?;
     read_ok(resp).await
 }
 
@@ -884,7 +931,7 @@ async fn get_all_comments(http: &reqwest::Client, api: &Api, token: &str) -> Res
             url = format!("{url}?after={}", query_value(cursor));
         }
         let req = http.get(url).bearer_auth(&api.bearer).timeout(REQUEST_TIMEOUT);
-        let body = read_ok(req.send().await.map_err(|e| transport("comments", &e))?).await?;
+        let body = read_ok(req.send().await.map_err(|e| transport("comments", e))?).await?;
         let page: WireCommentsPage = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("comments parse failed: {e}")))?;
         let (items, next) = page.into_parts();
         let mut fresh = 0usize;
@@ -911,7 +958,7 @@ async fn delete_comment_at(http: &reqwest::Client, api: &Api, token: &str, comme
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment delete", &e))?;
+        .map_err(|e| transport("comment delete", e))?;
     // Already gone is what the owner asked for.
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(());
@@ -930,7 +977,7 @@ async fn set_comment_author_blocked(http: &reqwest::Client, api: &Api, token: &s
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment block", &e))?;
+        .map_err(|e| transport("comment block", e))?;
     // The bodiless 404 covers a link that is gone and a comment that is no
     // longer there; the sheet re-reads the list either way, so say the one
     // the owner can act on.
@@ -947,7 +994,7 @@ async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> R
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("reactions", &e))?;
+        .map_err(|e| transport("reactions", e))?;
     read_ok(resp).await
 }
 
@@ -959,7 +1006,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("share meta", &e))?;
+        .map_err(|e| transport("share meta", e))?;
     read_ok(resp).await
 }
 
@@ -971,7 +1018,7 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .json(patch)
         .send()
         .await
-        .map_err(|e| transport("share settings", &e))?;
+        .map_err(|e| transport("share settings", e))?;
     read_ok(resp).await.map(|_| ())
 }
 
@@ -982,7 +1029,7 @@ async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<Notificati
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1002,7 +1049,7 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
         .json(&preferences_body(prefs))
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(AppError::Api {
@@ -1037,6 +1084,16 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
     }
 }
 
+/// The server's capabilities for something the owner is looking at: a failed
+/// read is an error the owner sees (`unreachable`), never a server without
+/// the feature.
+async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
+    fetch_capabilities(state, account_id).await.map_err(|e| {
+        debug!(error = %e, "share insights: capabilities unavailable");
+        AppError::Validation(unreachable.into())
+    })
+}
+
 async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapabilities {
     match fetch_capabilities(state, account_id).await {
         Ok(caps) => caps,
@@ -1049,34 +1106,128 @@ async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapab
 
 // ─── After a mint ──────────────────────────────────────────────────────────
 
+/// New links whose switches are still on their way to the server
+/// ([`spawn_apply`]), by token. The owner can open a new link's Insights and
+/// flip a switch before that request lands; landing after the owner's change,
+/// it would put back what they just turned off. Reading or changing a link's
+/// switches waits for it first ([`after_mint_switches_sent`]).
+static SENDING_AFTER_MINT: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// The longest a read or a change waits for a new link's switches. Sending
+/// them is itself bounded (the plan read, the capabilities read and one
+/// request), so this only guards against a send that never ends.
+const AFTER_MINT_WAIT: Duration = Duration::from_secs(45);
+
+/// A new link's switches being sent: registered on creation, released (and
+/// anyone waiting on it let through) when dropped.
+struct SendingSwitches {
+    token: String,
+    lock: Arc<tokio::sync::Mutex<()>>,
+    _held: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl SendingSwitches {
+    fn begin(token: &str) -> Self {
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        let held = Arc::clone(&lock).try_lock_owned().expect("a new lock is free");
+        SENDING_AFTER_MINT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(token.to_string(), Arc::clone(&lock));
+        Self {
+            token: token.to_string(),
+            lock,
+            _held: held,
+        }
+    }
+}
+
+impl Drop for SendingSwitches {
+    fn drop(&mut self) {
+        let mut sending = SENDING_AFTER_MINT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Only this send's entry: a later mint of the same token (never
+        // expected, tokens are random) keeps its own.
+        if sending.get(&self.token).is_some_and(|l| Arc::ptr_eq(l, &self.lock)) {
+            sending.remove(&self.token);
+        }
+    }
+}
+
+/// Wait until `token`'s after-mint switches have been sent, if they are
+/// still on their way; at once otherwise.
+async fn after_mint_switches_sent(token: &str) {
+    let lock = SENDING_AFTER_MINT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(token)
+        .cloned();
+    if let Some(lock) = lock
+        && tokio::time::timeout(AFTER_MINT_WAIT, lock.lock()).await.is_err()
+    {
+        warn!("share settings: a new link's switches took too long; going ahead");
+    }
+}
+
+/// What [`apply_after_mint`] did with a new link's switches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AfterMint {
+    /// Sent: the link has the switches asked for.
+    Sent,
+    /// Nothing to send: none asked for, not on this plan, or a server without
+    /// switches. The link has all three off, as it should.
+    NothingToSend,
+    /// Asked for but not sent: the plan or the server could not be asked, or
+    /// the request failed. The link has all three off, which is not what the
+    /// owner chose, so a caller with someone waiting says so.
+    NotSent,
+}
+
 /// Send a new link's switches, if the server takes them and any is on.
-/// Never returns an error: the link is already live and copied.
-pub(crate) async fn apply_after_mint(state: &AppState, account_id: &str, share_token: &str, wanted: LinkSettings) {
+/// Never fails the share: the link is already live and copied.
+pub(crate) async fn apply_after_mint(state: &AppState, account_id: &str, share_token: &str, wanted: LinkSettings) -> AfterMint {
     if !wanted.any() {
-        return;
+        return AfterMint::NothingToSend;
     }
     // Every new link passes here (a capture's own link, the share dialog, a
     // Finder share), so this is where the plan rule holds for all of them.
-    let wanted = within_plan(wanted, read_switches_in_plan(state, account_id).await);
+    let in_plan = read_switches_in_plan(state, account_id).await;
+    let wanted = within_plan(wanted, in_plan);
     if !wanted.any() {
-        debug!("share settings skipped: not on this plan, or the plan could not be read");
-        return;
+        return if in_plan.is_none() {
+            warn!("share settings not sent: the plan could not be read (the link itself is fine)");
+            AfterMint::NotSent
+        } else {
+            debug!("share settings skipped: not on this plan");
+            AfterMint::NothingToSend
+        };
     }
-    let caps = capabilities_or_none(state, account_id).await;
+    let caps = match fetch_capabilities(state, account_id).await {
+        Ok(caps) => caps,
+        Err(e) => {
+            warn!(error = %e, "share settings not sent: capabilities unavailable (the link itself is fine)");
+            return AfterMint::NotSent;
+        }
+    };
     let Some(patch) = patch_for(wanted, OfferedSwitches::from_caps(&caps), true) else {
         debug!("share settings skipped: the server does not take them");
-        return;
+        return AfterMint::NothingToSend;
     };
     let api = match Api::for_account(state, account_id).await {
         Ok(api) => api,
         Err(e) => {
             warn!(error = %e, "share settings not sent (the link itself is fine)");
-            return;
+            return AfterMint::NotSent;
         }
     };
     match patch_settings(&state.api_client, &api, share_token, &patch).await {
-        Ok(()) => info!("share settings sent"),
-        Err(e) => warn!(error = %e, "share settings not sent (the link itself is fine)"),
+        Ok(()) => {
+            info!("share settings sent");
+            AfterMint::Sent
+        }
+        Err(e) => {
+            warn!(error = %e, "share settings not sent (the link itself is fine)");
+            AfterMint::NotSent
+        }
     }
 }
 
@@ -1086,10 +1237,14 @@ pub(crate) fn spawn_apply(app: &tauri::AppHandle, account_id: &str, share_token:
     if !wanted.any() {
         return;
     }
+    // Registered before the share returns, so a read or change of the new
+    // link's switches can never get in ahead of this send.
+    let sending = SendingSwitches::begin(share_token);
     let (app, account_id, share_token) = (app.clone(), account_id.to_string(), share_token.to_string());
     tauri::async_runtime::spawn(async move {
         let state = app.state::<AppState>();
-        apply_after_mint(&state, &account_id, &share_token, wanted).await;
+        let _ = apply_after_mint(&state, &account_id, &share_token, wanted).await;
+        drop(sending);
     });
 }
 
@@ -1129,7 +1284,7 @@ pub async fn share_engagement_features(state: tauri::State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareInsights> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_insights {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1151,7 +1306,7 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
 #[tauri::command]
 pub async fn share_list_comments(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareComments> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1170,7 +1325,7 @@ pub async fn share_list_comments(state: tauri::State<'_, AppState>, share_token:
 #[tauri::command]
 pub async fn share_delete_comment(state: tauri::State<'_, AppState>, share_token: String, comment_id: String) -> Result<()> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1193,7 +1348,7 @@ pub async fn share_unblock_commenter(state: tauri::State<'_, AppState>, share_to
 
 async fn set_blocked(state: &AppState, share_token: &str, comment_id: &str, blocked: bool) -> Result<()> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(state, &account_id).await.share_comments {
+    if !capabilities_checked(state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(state, &account_id).await?;
@@ -1205,7 +1360,7 @@ async fn set_blocked(state: &AppState, share_token: &str, comment_id: &str, bloc
 #[tauri::command]
 pub async fn share_get_reactions(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareReactions> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_comments {
+    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_comments {
         return Err(AppError::Validation(COMMENTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1217,7 +1372,9 @@ pub async fn share_get_reactions(state: tauri::State<'_, AppState>, share_token:
 #[tauri::command]
 pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_token: String) -> Result<LinkSettingsDefault> {
     let account_id = state.current_account_id()?;
-    let offered = OfferedSwitches::from_caps(&capabilities_or_none(&state, &account_id).await);
+    // A new link's own switches first, so what is read is what it has.
+    after_mint_switches_sent(&share_token).await;
+    let offered = OfferedSwitches::from_caps(&capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?);
     if !offered.insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
@@ -1234,13 +1391,16 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
     })
 }
 
-/// Turn a link's switches on or off (the finished-link view). Only the
-/// switches the server takes are sent.
+/// Turn a link's switches on or off (the finished link, the Insights panel's
+/// Link settings). `change` carries only the switches the owner flipped, and
+/// only those the server takes are sent, so two quick changes can never undo
+/// each other. A new link's own switches are sent first.
 #[tauri::command]
-pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_token: String, settings: LinkSettings) -> Result<()> {
+pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_token: String, change: SettingsPatch) -> Result<()> {
     let account_id = state.current_account_id()?;
-    let caps = capabilities_or_none(&state, &account_id).await;
-    let Some(patch) = patch_for(settings, OfferedSwitches::from_caps(&caps), false) else {
+    after_mint_switches_sent(&share_token).await;
+    let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
+    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps)) else {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
     let api = Api::for_account(&state, &account_id).await?;
@@ -1521,6 +1681,40 @@ mod tests {
         assert_eq!(json["mentions"][0]["kind"], serde_json::json!("owner"));
     }
 
+    /// The mention list is sealed by whoever wrote the comment: one that
+    /// names the owner over text that never says `@Owner` must not flag the
+    /// comment as mentioning them.
+    #[test]
+    fn a_mention_missing_from_the_text_is_dropped() {
+        use base64::Engine as _;
+        let (key, token, _, _) = vector_key();
+        let seal = |plaintext: serde_json::Value| {
+            let nonce = [7u8; 12];
+            let ct =
+                comment_crypto::seal_with_nonce(&key, &token, comment_crypto::Purpose::Comment, &nonce, plaintext.to_string().as_bytes()).unwrap();
+            let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+            (b64(&nonce), b64(&ct))
+        };
+        let (n1, c1) = seal(serde_json::json!({
+            "text": "Mentioned you! Click here",
+            "mentions": [{ "kind": "owner", "name": "Owner" }],
+        }));
+        let (n2, c2) = seal(serde_json::json!({
+            "text": "@Owner have a look",
+            "mentions": [{ "kind": "owner", "name": "Owner" }, { "kind": "commenter", "name": "Grace", "comment": "c-1" }],
+        }));
+        let out = open_comments(
+            &token,
+            vec![wire_comment("1", &n1, &c1, false), wire_comment("2", &n2, &c2, false)],
+            Ok(&key),
+        );
+        assert!(out.comments[0].mentions.is_empty(), "no @Owner in the text");
+        assert!(!out.comments[0].mentions_you);
+        assert_eq!(out.comments[1].mentions.len(), 1, "only the mention the text holds");
+        assert_eq!(out.comments[1].mentions[0].name, "Owner");
+        assert!(out.comments[1].mentions_you);
+    }
+
     #[test]
     fn a_comment_without_mentions_has_none() {
         let (key, token, nonce, ct) = vector_key();
@@ -1760,6 +1954,87 @@ mod tests {
         );
     }
 
+    /// A change sends only the switch the owner flipped, so turning Comments
+    /// off can never put Insights or Reactions back the way an older screen
+    /// had them.
+    #[test]
+    fn a_change_sends_only_the_switch_that_was_flipped() {
+        let all = OfferedSwitches {
+            insights: true,
+            comments: true,
+            reactions: true,
+        };
+        let change: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": false})).unwrap();
+        assert_eq!(
+            serde_json::to_value(change_for(change, all).unwrap()).unwrap(),
+            serde_json::json!({"comments": false})
+        );
+        let insights_only = OfferedSwitches {
+            insights: true,
+            ..Default::default()
+        };
+        assert_eq!(change_for(change, insights_only), None, "a switch the server does not take is not sent");
+        assert_eq!(change_for(SettingsPatch::default(), all), None, "nothing flipped, nothing sent");
+    }
+
+    /// The owner can flip a switch on a link made seconds ago. Its own
+    /// switches, still being sent in the background, must land first, or they
+    /// would put back what the owner just turned off.
+    #[tokio::test]
+    async fn reading_or_changing_a_new_links_switches_waits_for_its_own_to_be_sent() {
+        let sending = SendingSwitches::begin("tok-waits");
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let waiter = {
+            let done = Arc::clone(&done);
+            tokio::spawn(async move {
+                after_mint_switches_sent("tok-waits").await;
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !done.load(std::sync::atomic::Ordering::SeqCst),
+            "held while the new link's switches are on their way"
+        );
+        drop(sending);
+        waiter.await.unwrap();
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            !SENDING_AFTER_MINT.lock().unwrap().contains_key("tok-waits"),
+            "a finished send leaves nothing behind"
+        );
+        // A link with nothing on its way is read or changed at once.
+        tokio::time::timeout(Duration::from_millis(100), after_mint_switches_sent("tok-idle"))
+            .await
+            .expect("no wait");
+    }
+
+    /// Offline, the capabilities read fails. What the owner is looking at
+    /// must then say Hippius couldn't be reached, never "aren't available
+    /// yet" or all switches off, which is what the lenient read gives.
+    #[test]
+    fn what_the_owner_looks_at_treats_a_failed_capabilities_read_as_an_error() {
+        let src = include_str!("insights.rs");
+        for name in [
+            "pub async fn share_get_insights(",
+            "pub async fn share_list_comments(",
+            "pub async fn share_delete_comment(",
+            "async fn set_blocked(",
+            "pub async fn share_get_reactions(",
+            "pub async fn share_get_link_settings(",
+            "pub async fn share_set_link_settings(",
+        ] {
+            let start = src.find(name).unwrap_or_else(|| panic!("{name} is defined"));
+            let body = &src[start..start + src[start..].find("\n}\n").expect("the body ends")];
+            assert!(body.contains("capabilities_checked("), "{name} reads the capabilities strictly");
+            assert!(
+                !body.contains("capabilities_or_none("),
+                "{name} never reads a failure as a missing feature"
+            );
+        }
+        assert_ne!(UNREACHABLE, INSIGHTS_UNAVAILABLE);
+    }
+
     #[test]
     fn notification_preferences_read_leniently_and_write_snake_case() {
         assert_eq!(
@@ -1824,6 +2099,22 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
         (format!("http://{addr}"), seen)
+    }
+
+    /// The token in a share route opens the link's preview, so a request
+    /// that fails must not carry its URL into the panel or the logs.
+    #[tokio::test]
+    async fn a_failed_request_never_names_its_url() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:9/v1/shares/SECRET-LINK-TOKEN/insights")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        let text = transport("insights", e).to_string();
+        assert!(!text.contains("SECRET-LINK-TOKEN"), "token leaked: {text}");
+        assert!(!text.contains("127.0.0.1"), "url leaked: {text}");
+        assert!(text.contains("insights failed: couldn't reach Hippius"), "got: {text}");
     }
 
     #[tokio::test]

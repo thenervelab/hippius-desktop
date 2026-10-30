@@ -25,6 +25,7 @@ pub mod error;
 #[cfg(any(unix, windows))]
 pub mod finder_bridge;
 pub mod infra;
+mod ipc_guard;
 pub mod media_preview;
 pub mod notifications;
 pub mod power;
@@ -87,7 +88,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
+use crate::media_preview::{open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -388,7 +389,8 @@ fn main() {
         // The tray icon's clicks reach Rust here, whatever state the webview
         // that made the icon is in (see `tray::panel::on_tray_icon_event`).
         .on_tray_icon_event(|app, event| crate::tray::panel::on_tray_icon_event(app, &event))
-        .invoke_handler(tauri::generate_handler![
+        // Sensitive commands answer the main window only: see `ipc_guard`.
+        .invoke_handler(crate::ipc_guard::main_window_only(tauri::generate_handler![
             // Team chat (Rust half: gate, OIDC bridge, keyring session, 4S key, native surfaces)
             chat::config::chat_get_config,
             chat::keys::chat_derive_secret_storage_key,
@@ -523,6 +525,7 @@ fn main() {
             prepare_motion_photo_preview,
             read_preview_bytes,
             resolve_drive_file_source,
+            open_in_default_app,
             // The viewer's video source: the asset URL, or on Linux the
             // loopback stream (WebKitGTK cannot play media from `asset://`).
             crate::video_stream::video_playback_source,
@@ -904,7 +907,7 @@ fn main() {
             transform_marketplace_credits,
             calculate_storage_cost,
             calculate_storage_capacity,
-        ]);
+        ]));
 
     let builder = setup(builder);
     let builder = on_window_event(builder);
