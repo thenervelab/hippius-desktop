@@ -52,6 +52,13 @@ interface UseSharedFilesResult {
   getUnplacedSharesNamed: (fileName: string | null | undefined) => ShareSummary[];
   /** True while the first fetch is in flight. */
   isLoading: boolean;
+  /**
+   * The listing could not be read and nothing is known: every file then
+   * looks link-less, which must not be read as "has no link".
+   */
+  isError: boolean;
+  /** Read the listing again. */
+  refetch: () => void;
 }
 
 const EMPTY_INDEX: SharedIndex = { byPath: new Map(), unplacedByName: new Map() };
@@ -84,7 +91,7 @@ export function useSharedFiles(): UseSharedFilesResult {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
@@ -117,7 +124,15 @@ export function useSharedFiles(): UseSharedFilesResult {
       (fileName && index.unplacedByName.get(fileName)) || EMPTY_ROWS;
   }, [index]);
 
-  return { getSharesFor, getUnplacedSharesNamed, isLoading: isLoading && shareEnabled };
+  return {
+    getSharesFor,
+    getUnplacedSharesNamed,
+    isLoading: isLoading && shareEnabled,
+    // Only while nothing is known: a failed refresh of a listing already
+    // read keeps the rows it has.
+    isError: isError && data === undefined,
+    refetch: () => void refetch(),
+  };
 }
 
 /**

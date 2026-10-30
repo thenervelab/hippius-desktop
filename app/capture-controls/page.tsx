@@ -29,7 +29,7 @@ import {
   type CapturePhase,
   type CapturePhaseEvent,
 } from "@/app/lib/tauri/capture";
-import { GLASS_BUTTON, GLASS_FOCUS, GLASS_PILL } from "@/app/lib/capture/glass";
+import { GLASS_BUTTON, GLASS_FOCUS, GLASS_PILL, GLASS_PRIMARY } from "@/app/lib/capture/glass";
 import { mmss } from "@/app/lib/capture/time";
 import { acceleratorKeys, isMacPlatform } from "@/app/lib/capture/shortcutLabel";
 import { discardNeedsConfirm } from "./discard";
@@ -117,6 +117,13 @@ const QUESTION: Record<Question, { title: string; body: string; confirm: string 
   restart: { title: "Restart this recording?", body: "What you recorded is thrown away.", confirm: "Restart" },
 };
 
+/**
+ * What the pill says when one of its own actions did not go through: the
+ * recording carries on as it was, so the line says that, and offers the
+ * action again.
+ */
+type Failed = { message: string; retry: () => Promise<unknown> };
+
 export default function CaptureControlsPage() {
   const [phase, setPhase] = useState<CapturePhase>({ phase: "idle" });
   const [busy, setBusy] = useState(false);
@@ -149,6 +156,7 @@ export default function CaptureControlsPage() {
   const [compact, setCompact] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [failed, setFailed] = useState<Failed | null>(null);
   const collapseTimer = useRef<number | null>(null);
   const keepRef = useRef<HTMLButtonElement | null>(null);
   // The button to give focus back to once the question is answered "keep".
@@ -218,6 +226,15 @@ export default function CaptureControlsPage() {
     const timer = window.setTimeout(() => setNote(null), NOTE_MS);
     return () => window.clearTimeout(timer);
   }, [note, live]);
+  // A failure line goes by itself too, so the pill comes back.
+  useEffect(() => {
+    if (!failed || !live) return;
+    const timer = window.setTimeout(() => setFailed(null), NOTE_MS);
+    return () => window.clearTimeout(timer);
+  }, [failed, live]);
+  useEffect(() => {
+    if (!live) setFailed(null);
+  }, [live]);
   useEffect(
     () => () => {
       if (collapseTimer.current !== null) window.clearTimeout(collapseTimer.current);
@@ -336,6 +353,23 @@ export default function CaptureControlsPage() {
     }
   };
 
+  /**
+   * Pause, Resume and Mute: a refusal is said on the pill, with Try again,
+   * rather than the button just doing nothing.
+   */
+  const attempt = async (action: () => Promise<unknown>, message: string) => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(null);
+    try {
+      await action();
+    } catch {
+      setFailed({ message, retry: action });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const starting = phase.phase === "capturing" && phase.kind === "recording";
   if (starting && countdown !== null) {
     return (
@@ -439,6 +473,33 @@ export default function CaptureControlsPage() {
       void run(question === "restart" ? restartCapture : cancelCapture);
     }
   };
+
+  if (failed) {
+    return (
+      <div className={FILL}>
+        <div data-tauri-drag-region className={`${PILL} max-w-full gap-1.5 py-1.5 pl-3.5 pr-1.5`}>
+          <p role="alert" data-tauri-drag-region className="min-w-0 flex-1 text-[11px] leading-tight text-white/80">
+            {failed.message}
+          </p>
+          <button
+            type="button"
+            onClick={() => setFailed(null)}
+            className={`h-7 shrink-0 rounded-full bg-white/10 px-2.5 text-[11.5px] font-medium ${GLASS_BUTTON}`}
+          >
+            OK
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void attempt(failed.retry, failed.message)}
+            className={`h-7 shrink-0 rounded-full px-2.5 text-[11.5px] font-semibold ${GLASS_PRIMARY}`}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (note) {
     return (
@@ -577,7 +638,14 @@ export default function CaptureControlsPage() {
                   aria-pressed={!!mic?.muted}
                   {...tipProps("mute", { label: mic?.muted ? "Unmute microphone" : "Mute microphone" })}
                   className={ICON_BUTTON}
-                  onClick={() => void run(() => muteCaptureMicrophone(!mic?.muted).then(setMic))}
+                  onClick={() =>
+                    void attempt(
+                      () => muteCaptureMicrophone(!mic?.muted).then(setMic),
+                      mic?.muted
+                        ? "Couldn't turn the microphone back on. It's still muted."
+                        : "Couldn't mute the microphone. It's still recording sound.",
+                    )
+                  }
                 >
                   {mic?.muted ? <MicOff className="size-4 text-[#FF453A]" /> : <Mic className="size-4" />}
                 </button>
@@ -657,7 +725,11 @@ export default function CaptureControlsPage() {
               aria-label={paused ? "Resume recording" : "Pause recording"}
               {...tipProps("pause", { label: paused ? "Resume recording" : "Pause recording" })}
               className={ICON_BUTTON}
-              onClick={() => void run(paused ? resumeCapture : pauseCapture)}
+              onClick={() =>
+                void (paused
+                  ? attempt(resumeCapture, "Couldn't resume the recording. It's still paused.")
+                  : attempt(pauseCapture, "Couldn't pause the recording. It's still recording."))
+              }
             >
               {paused ? <Play className="size-4 fill-current" /> : <Pause className="size-4" />}
             </button>

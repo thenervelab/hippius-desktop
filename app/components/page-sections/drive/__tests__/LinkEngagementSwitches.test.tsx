@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import LinkEngagementSwitches, {
+  FREE_OFF_NOTE,
   INSIGHTS_LOCKED_DESCRIPTION,
   LINK_SWITCHES,
   UPGRADE_NOTICE_LABEL,
@@ -26,6 +27,28 @@ function setup(switchesInPlan: boolean | null, value = OFF) {
   );
   return { onChange, onUpgrade };
 }
+
+describe("turning a switch off on the free plan", () => {
+  it("says before it is turned off that it can't come back without upgrading", () => {
+    setup(false, { insights: false, comments: true, reactions: false });
+    expect(screen.getByText(FREE_OFF_NOTE)).toBeInTheDocument();
+  });
+
+  it("says nothing when nothing is on", () => {
+    setup(false, OFF);
+    expect(screen.queryByText(FREE_OFF_NOTE)).toBeNull();
+  });
+
+  it("says nothing on a paid plan", () => {
+    setup(true, ALL);
+    expect(screen.queryByText(FREE_OFF_NOTE)).toBeNull();
+  });
+
+  it("says nothing on a plan that could not be read", () => {
+    setup(null, ALL);
+    expect(screen.queryByText(FREE_OFF_NOTE)).toBeNull();
+  });
+});
 
 describe("LinkEngagementSwitches and the plan", () => {
   it("turns Insights on for a paid plan", () => {

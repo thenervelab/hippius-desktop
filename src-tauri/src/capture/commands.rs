@@ -4460,6 +4460,11 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             },
         };
         sent_to = Some(destination.clone());
+        // A free plan's recording uploads only while the plan has room: one
+        // that waited (Retry, "Not now", a run that quit) started long ago.
+        // Refused, it stays here with Upgrade and Retry.
+        let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        super::recording_allowance::require_room_to_upload(&state, &account_id, &destination, &file_name).await?;
         let (mint_link, open_link, chat_preview, link_insights) = bar::load_options(pool)
             .await
             .map_or((true, true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview, o.link_insights));
@@ -4494,6 +4499,12 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             link_insights,
             placed,
         }) => {
+            // In the drive: a temp copy kept for the card (Edit, Create link)
+            // is now only that, and goes at launch or sign-out if the card
+            // does not remove it first.
+            if !placed.via_sync {
+                super::screenshot::mark_delivered(&placed.placed);
+            }
             announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
             // A recording counts toward the free plan's limit from now on,
             // before the server lists it (`recording_allowance`).
@@ -4858,11 +4869,13 @@ pub(super) fn notify(app: &AppHandle, title: String, body: String) {
 }
 
 /// Open a capture's new link in the default browser, as Zight does. Best
-/// effort: the link is already on the clipboard and on the card.
+/// effort: the link is already on the clipboard and on the card. Opened as
+/// the owner (`deliver::owner_view_url`), so the share page does not count
+/// this visit as a view; the copied link stays as it is.
 fn open_link_in_browser(app: &AppHandle, url: Option<&str>) {
     use tauri_plugin_opener::OpenerExt;
     let Some(url) = url else { return };
-    if let Err(e) = app.opener().open_url(url, None::<&str>) {
+    if let Err(e) = app.opener().open_url(super::deliver::owner_view_url(url), None::<&str>) {
         tracing::warn!(error = %e, "capture link not opened in the browser");
     }
 }
@@ -6381,10 +6394,21 @@ pub async fn end_for_logout(app: &AppHandle) {
     {
         tracing::warn!(error = %e, "capture not cancelled at sign-out");
     }
+    // A failed capture stays on disk with its marker and comes back after the
+    // next sign-in; the copies of captures already in the drive go now,
+    // rather than piling up until the next launch.
     lock(&state.capture.parked).take();
     lock(&state.capture.preview).take();
     if let Some(w) = app.get_webview_window(PREVIEW_LABEL) {
         let _ = w.close();
+    }
+    if let Ok(root) = super::screenshot::capture_tmp_root() {
+        let removed = tauri::async_runtime::spawn_blocking(move || super::screenshot::reclaim_delivered(&root, &[]))
+            .await
+            .unwrap_or(0);
+        if removed > 0 {
+            tracing::info!(removed, "removed uploaded captures' temp copies at sign-out");
+        }
     }
     for kind in ShortcutKind::ALL {
         if let Err(e) = shortcut::apply(app, kind, None) {
@@ -6393,11 +6417,12 @@ pub async fn end_for_logout(app: &AppHandle) {
     }
 }
 
-/// At launch: remove capture folders a crash or an abandoned start left
-/// empty for a day, or holding only leftovers for a week. A folder holding a
-/// capture (a recording the helper saved when the app died, a screenshot that
-/// never uploaded) is never removed (`screenshot::is_orphan`). Runs on its
-/// own thread; never delays start-up.
+/// At launch: remove the temp copies of captures already in the drive (the
+/// app quit with their card up), and capture folders a crash or an abandoned
+/// start left empty for a day, or holding only leftovers for a week. A folder
+/// holding a capture that did not upload (a recording the helper saved when
+/// the app died, a screenshot that never uploaded) is never removed
+/// (`screenshot::is_orphan`). Runs on its own thread; never delays start-up.
 pub fn reclaim_capture_tmp_at_launch() {
     let spawned = std::thread::Builder::new().name("capture-tmp-reclaim".into()).spawn(|| {
         let Ok(root) = super::screenshot::capture_tmp_root() else { return };

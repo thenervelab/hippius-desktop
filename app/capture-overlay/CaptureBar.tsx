@@ -173,6 +173,9 @@ function MenuRow({
   );
 }
 
+/** Under "Show a preview in chats" while it is on. */
+const CHAT_PREVIEW_NOTE = "Sends a readable preview and the file name with the link.";
+
 function OptionsMenu({
   menuRef,
   kind,
@@ -296,6 +299,13 @@ function OptionsMenu({
       >
         Show a preview in chats
       </MenuRow>
+      {/* The preview is the one part of a capture's link that is not
+          end-to-end encrypted, so it is said where it is switched on. */}
+      {options.chatPreview && (
+        <p data-testid="chat-preview-note" className={`pb-1 pl-[34px] pr-2.5 text-[11.5px] leading-snug ${GLASS_MUTED}`}>
+          {CHAT_PREVIEW_NOTE}
+        </p>
+      )}
     </div>
   );
 }

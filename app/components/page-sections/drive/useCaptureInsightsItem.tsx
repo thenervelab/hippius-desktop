@@ -90,13 +90,13 @@ export function captureSharesFrom(
  * to find a capture's link when it was opened before one was known.
  */
 export function useCaptureShares() {
-  const { getSharesFor, getUnplacedSharesNamed, isLoading } = useSharedFiles();
+  const { getSharesFor, getUnplacedSharesNamed, isLoading, isError, refetch } = useSharedFiles();
   const sharesFor = useCallback(
     (label: string | null | undefined, relativePath: string | null | undefined, size?: number) =>
       captureSharesFrom({ getSharesFor, getUnplacedSharesNamed }, label, relativePath, size),
     [getSharesFor, getUnplacedSharesNamed],
   );
-  return { sharesFor, isLoading };
+  return { sharesFor, isLoading, isError, refetch };
 }
 
 /**
