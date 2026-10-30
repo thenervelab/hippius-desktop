@@ -321,7 +321,11 @@ const UPLOAD_FAILED: &str = "The capture couldn't be uploaded. Retry in a moment
 #[must_use]
 pub fn failure_reason(e: &AppError) -> FailureReason {
     match e {
-        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached) => FailureReason::StorageFull,
+        // The free plan's recordings used up reads like a full plan: Upgrade
+        // is the way on (Retry once an older recording is deleted).
+        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached | crate::error::NotReadyKind::RecordingLimitReached) => {
+            FailureReason::StorageFull
+        }
         other if is_offline_shaped(&other.to_string()) => FailureReason::Offline,
         _ => FailureReason::Other,
     }
@@ -334,9 +338,13 @@ pub fn failure_reason(e: &AppError) -> FailureReason {
 pub fn failure_copy(e: &AppError) -> String {
     match failure_reason(e) {
         FailureReason::Offline => OFFLINE.into(),
+        FailureReason::StorageFull if matches!(e, AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached)) => {
+            super::recording_allowance::LIMIT_KEPT.into()
+        }
         FailureReason::StorageFull => STORAGE_FULL.into(),
         FailureReason::NeedsFolder | FailureReason::Other => match e {
             AppError::Validation(message) => message.clone(),
+            AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable) => super::recording_allowance::COUNT_UNAVAILABLE.into(),
             _ => UPLOAD_FAILED.into(),
         },
     }
@@ -584,6 +592,18 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recording kept back at the free limit says so and offers Upgrade
+    /// (the plan-full reason); one whose count could not be read says that.
+    #[test]
+    fn a_recording_kept_back_at_the_free_limit_says_why() {
+        let limit = AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached);
+        assert_eq!(failure_reason(&limit), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&limit), super::super::recording_allowance::LIMIT_KEPT);
+        let unknown = AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable);
+        assert_eq!(failure_reason(&unknown), FailureReason::Other);
+        assert_eq!(failure_copy(&unknown), super::super::recording_allowance::COUNT_UNAVAILABLE);
+    }
 
     /// The owner's own open carries `owner=1` before the fragment, whatever
     /// the link already has in its query, and the key is untouched.

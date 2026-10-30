@@ -4460,6 +4460,11 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             },
         };
         sent_to = Some(destination.clone());
+        // A free plan's recording uploads only while the plan has room: one
+        // that waited (Retry, "Not now", a run that quit) started long ago.
+        // Refused, it stays here with Upgrade and Retry.
+        let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        super::recording_allowance::require_room_to_upload(&state, &account_id, &destination, &file_name).await?;
         let (mint_link, open_link, chat_preview, link_insights) = bar::load_options(pool)
             .await
             .map_or((true, true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview, o.link_insights));
