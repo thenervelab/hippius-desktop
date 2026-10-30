@@ -130,14 +130,18 @@ const CardView: FC<CardViewProps> = ({
 
   // Handle file deletion with captured files from confirmation dialog
   const handleDeleteSelectedFiles = useCallback(
-    (capturedFiles: FormattedUserFile[]) => {
+    (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][]) => {
       if (capturedFiles.length === 0) return;
+      // Each file's links to turn off ("Also turn off its links").
+      const links = turnOffLinks
+        ? new Map(capturedFiles.map((f, i) => [f, turnOffLinks[i] ?? []] as const))
+        : undefined;
 
       setFilesToDelete(capturedFiles);
 
       // Use setTimeout to ensure the delete hook reinitializes with new files
       setTimeout(() => {
-        deleteFiles(undefined, {
+        deleteFiles({ turnOffLinks: links }, {
           onSuccess: () => {
             setFilesToDelete([]);
           },

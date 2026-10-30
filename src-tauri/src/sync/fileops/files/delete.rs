@@ -11,11 +11,16 @@ use tracing::{info, warn};
 
 /// Request to delete a single file, used by the `delete_files` batch command.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FileDeleteRequest {
     pub name: String,
     pub source: Option<String>,
     pub label: Option<String>,
     pub size: u64,
+    /// The share links to turn off once this file is deleted: "Also turn
+    /// off its links" on a capture's delete. Empty for everything else.
+    #[serde(default)]
+    pub turn_off_links: Vec<String>,
 }
 
 /// Per-file error from a batch delete.
@@ -27,9 +32,30 @@ pub struct FileDeleteError {
 
 /// Result of a batch file deletion.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteFilesResult {
     pub deleted: u32,
     pub failed: Vec<FileDeleteError>,
+    /// Links turned off after their file was deleted.
+    pub links_turned_off: u32,
+    /// Links that should have been turned off but could not be; the user is
+    /// sent to Shared Links for them.
+    pub links_failed: u32,
+}
+
+/// The links to turn off after a batch: those of the files that were
+/// deleted (`deleted[i]` for `files[i]`), each once. A file that could not
+/// be deleted keeps its links: the link still has a file to show.
+fn links_to_turn_off(files: &[FileDeleteRequest], deleted: &[bool]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    files
+        .iter()
+        .zip(deleted)
+        .filter(|(_, ok)| **ok)
+        .flat_map(|(file, _)| file.turn_off_links.iter())
+        .filter(|token| !token.is_empty() && seen.insert(token.as_str()))
+        .cloned()
+        .collect()
 }
 
 /// Delete multiple files in one call, resolving paths internally.
@@ -60,6 +86,8 @@ pub async fn delete_files(
 
     let mut deleted = 0u32;
     let mut failed = Vec::new();
+    // Which files were deleted, for the links to turn off afterwards.
+    let mut deleted_flags = Vec::with_capacity(files.len());
     // Drive labels whose on-disk DIRECTORY tree changed in this batch. Folder
     // entities are a side-channel the file sync plan doesn't model, so they need
     // their own reconcile trigger (see `folder_entity_sync_labels`).
@@ -85,6 +113,7 @@ pub async fn delete_files(
                 name: file.name.clone(),
                 error: error.into(),
             });
+            deleted_flags.push(false);
             continue;
         };
 
@@ -107,6 +136,7 @@ pub async fn delete_files(
                     });
                 }
                 deleted += 1;
+                deleted_flags.push(true);
             }
             Err(e) => {
                 warn!(file = %file.name, error = %e, "Failed to delete file");
@@ -114,6 +144,26 @@ pub async fn delete_files(
                     name: file.name.clone(),
                     error: e.to_string(),
                 });
+                deleted_flags.push(false);
+            }
+        }
+    }
+
+    // "Also turn off its links": only now that the files are gone, each
+    // link's chat preview first (it is reached by the link's token), then
+    // the link itself. A failure is counted for the user, never raised: the
+    // files are deleted either way.
+    let mut links_turned_off = 0u32;
+    let mut links_failed = 0u32;
+    for token in links_to_turn_off(&files, &deleted_flags) {
+        if let Err(e) = crate::shares::preview::remove(&state, &account_id, &token).await {
+            warn!(error = %e, "chat preview not removed before turning off a deleted file's link");
+        }
+        match crate::shares::commands::hcfs_revoke_share(state.clone(), token).await {
+            Ok(()) => links_turned_off += 1,
+            Err(e) => {
+                warn!(error = %e, "a deleted file's link could not be turned off");
+                links_failed += 1;
             }
         }
     }
@@ -149,8 +199,13 @@ pub async fn delete_files(
         );
     }
 
-    info!(deleted, failed = failed.len(), "Batch delete completed");
-    Ok(DeleteFilesResult { deleted, failed })
+    info!(deleted, failed = failed.len(), links_turned_off, links_failed, "Batch delete completed");
+    Ok(DeleteFilesResult {
+        deleted,
+        failed,
+        links_turned_off,
+        links_failed,
+    })
 }
 
 /// What a single delete actually removed.
@@ -227,6 +282,51 @@ const DEFAULT_DRIVE_LABEL: &str = "default";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(name: &str, links: &[&str]) -> FileDeleteRequest {
+        FileDeleteRequest {
+            name: name.into(),
+            source: None,
+            label: Some("Hippius Captures".into()),
+            size: 1,
+            turn_off_links: links.iter().map(|t| (*t).to_string()).collect(),
+        }
+    }
+
+    /// Links are turned off only for files that were deleted, each once: a
+    /// file that could not be deleted keeps its links.
+    #[test]
+    fn only_a_deleted_files_links_are_turned_off() {
+        let files = [
+            request("Recording 1.mp4", &["tok-a", "tok-b"]),
+            request("Screenshot 2.png", &["tok-c"]),
+            request("Recording 3.mp4", &["tok-a", ""]),
+            request("notes.txt", &[]),
+        ];
+        assert_eq!(links_to_turn_off(&files, &[true, false, true, true]), vec!["tok-a", "tok-b"]);
+        assert!(links_to_turn_off(&files, &[false, false, false, false]).is_empty());
+    }
+
+    /// The webview sends the links per file in camelCase; a request without
+    /// them (every delete but a capture's) still parses.
+    #[test]
+    fn the_links_to_turn_off_are_optional_on_the_wire() {
+        let with: FileDeleteRequest =
+            serde_json::from_value(serde_json::json!({ "name": "a.mp4", "source": null, "label": "L", "size": 3, "turnOffLinks": ["tok"] })).unwrap();
+        assert_eq!(with.turn_off_links, vec!["tok"]);
+        let without: FileDeleteRequest =
+            serde_json::from_value(serde_json::json!({ "name": "a.mp4", "source": null, "label": "L", "size": 3 })).unwrap();
+        assert!(without.turn_off_links.is_empty());
+        let result = serde_json::to_value(DeleteFilesResult {
+            deleted: 1,
+            failed: Vec::new(),
+            links_turned_off: 2,
+            links_failed: 1,
+        })
+        .unwrap();
+        assert_eq!(result["linksTurnedOff"], 2);
+        assert_eq!(result["linksFailed"], 1);
+    }
 
     /// The regression this guards: classifying the target AFTER `remove_dir_all`
     /// reports `File`/`Missing` for a directory, so `delete_files` never queues
