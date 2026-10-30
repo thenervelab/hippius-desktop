@@ -168,7 +168,7 @@ export function useCopyLinkItem() {
           icon: <Copy className="size-4" />,
           itemTitle: copyLinkLabel(link),
           onItemClick: (e?: React.MouseEvent) => {
-            e?.preventDefault();
+            // Not `preventDefault`: Radix would then keep the menu open.
             e?.stopPropagation();
             onSelect?.();
             copy(link, { file, relativePath });
