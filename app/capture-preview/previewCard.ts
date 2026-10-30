@@ -28,6 +28,12 @@ export interface CardView {
   percent: number | null;
   /** The status line. */
   text: string;
+  /**
+   * What a screen reader is told: the status line without its percent, so
+   * it hears "Uploading" once, then how the upload ended, not every tick.
+   * The progress bar still carries the percent for anyone who asks.
+   */
+  announce: string;
   /** The file is in the drive. */
   done: boolean;
   /** Rust says the card is finished (in the drive, link settled): it may slide away. */
@@ -65,6 +71,7 @@ export function cardView(
       return {
         percent,
         text: percent === null ? "Preparing upload…" : `Uploading · ${percent}%`,
+        announce: percent === null ? "Preparing upload…" : "Uploading",
         done: false,
         settled: false,
         failed: false,
@@ -77,6 +84,7 @@ export function cardView(
       return {
         percent,
         text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
+        announce: percent === null ? "Saved · waiting for sync" : "Uploading",
         done: false,
         settled: false,
         failed: false,
@@ -87,6 +95,7 @@ export function cardView(
       return {
         percent: 100,
         text: joinLink("Uploaded", card.linkText),
+        announce: joinLink("Uploaded", card.linkText),
         done: true,
         settled: card.settled ?? true,
         failed: false,
@@ -94,8 +103,8 @@ export function cardView(
       };
     case "failed":
       return status.reason === "needsFolder"
-        ? { percent: null, text: "Waiting for a folder", done: false, settled: false, failed: true, waiting: true }
-        : { percent: null, text: "Couldn't upload", done: false, settled: false, failed: true, waiting: false };
+        ? { percent: null, text: "Waiting for a folder", announce: "Waiting for a folder", done: false, settled: false, failed: true, waiting: true }
+        : { percent: null, text: "Couldn't upload", announce: "Couldn't upload", done: false, settled: false, failed: true, waiting: false };
   }
 }
 

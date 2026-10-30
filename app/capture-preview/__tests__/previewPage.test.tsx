@@ -410,6 +410,9 @@ describe("the preview card", () => {
     await setup(linked({ state: "uploaded", linkCopied: true }));
     const live = document.querySelectorAll("[aria-live]");
     expect(live).toHaveLength(1);
+    // Only words: the visible line, which carries the percent while
+    // uploading, is hidden from screen readers.
+    expect(live[0]).toHaveClass("sr-only");
     // Rust words the link; the card says it as it is.
     expect(live[0]).toHaveTextContent("Uploaded · Public link copied");
     // Who can open the link has its own line, with where it went in its
