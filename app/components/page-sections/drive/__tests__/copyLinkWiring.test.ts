@@ -30,6 +30,8 @@ describe("Copy link wiring", () => {
     const source = densified("app/components/page-sections/drive/files-table/index.tsx");
     expect(source).toContain("<RowActionMenubuildItems={buildMenuItems}>");
     expect(source).toContain("items={open?buildItems():NO_ITEMS}");
+    // ...and from the table's latest snapshot, not the one the cell rendered with.
+    expect(source).toContain("constbuildMenuItems=()=>cellCtxRef.current.createTableItems(");
   });
 
   it("puts the card menu's Copy link directly above Share via link", () => {

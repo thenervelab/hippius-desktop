@@ -1697,7 +1697,6 @@ const FilesTable: FC<FilesTableProps> = memo(
               drivePaths,
               enableFolderExpander,
               toggleFolderExpanded,
-              createTableItems,
             } = cellCtxRef.current;
             const file = cell.row.original;
             const { name } = file;
@@ -1712,8 +1711,11 @@ const FilesTable: FC<FilesTableProps> = memo(
               file.isFolder &&
               enableFolderExpander &&
               Boolean(file.label && drivePaths[file.label]);
+            // Read the table's snapshot when the menu opens: the
+            // `createTableItems` this cell rendered with may predate the
+            // share listing (see `RowActionMenu`).
             const buildMenuItems = () =>
-              createTableItems(
+              cellCtxRef.current.createTableItems(
                 file,
                 fileType,
                 true,
