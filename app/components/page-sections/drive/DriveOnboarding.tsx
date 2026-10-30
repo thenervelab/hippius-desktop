@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useQueryClient } from "@tanstack/react-query";
+import { refreshSharedWithMe, useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import {
@@ -98,6 +99,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const driveStatuses = useAtomValue(driveStatusesAtom);
   const { requireUploadRoom } = useCreditCheck();
   const sharedDriveRoles = useSharedDriveRoles();
+  const queryClient = useQueryClient();
   const sharedDrivesInPlan = useSharedDrivesInPlan();
   const setShareDriveTarget = useSetAtom(shareDriveModalAtom);
   const setInviteDialogTarget = useSetAtom(shareDialogAtom);
@@ -271,6 +273,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
         try {
           await leaveSharedDrive(folderId);
           toast.success("Left shared drive");
+          void refreshSharedWithMe(queryClient);
         } catch (error) {
           if (!isSharedDrivesUnavailable(error)) throw error;
           await removeSyncPath(polkadotAddress, folderId);

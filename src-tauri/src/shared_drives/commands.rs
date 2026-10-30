@@ -472,8 +472,8 @@ pub async fn http_put_sealed_token(
             &format!(
                 "{}/v1/drives/{}/invites/{}/sealed-token",
                 base_url.trim_end_matches('/'),
-                folder_hash,
-                invite_id
+                crate::utils::url_segment::segment(folder_hash)?,
+                crate::utils::url_segment::segment(invite_id)?
             ),
             owner,
         )?)
@@ -517,8 +517,8 @@ pub async fn http_put_invite_link_envelope(
             &format!(
                 "{}/v1/drives/{}/invites/{}/link-envelope",
                 base_url.trim_end_matches('/'),
-                folder_hash,
-                mint.invite_id_hex()
+                crate::utils::url_segment::segment(folder_hash)?,
+                crate::utils::url_segment::segment(&mint.invite_id_hex())?
             ),
             owner,
         )?)
@@ -552,7 +552,11 @@ pub async fn http_list_members(
 ) -> Result<DriveMembersResponse> {
     let resp = http
         .get(with_owner(
-            &format!("{}/v1/drives/{}/members", base_url.trim_end_matches('/'), folder_hash),
+            &format!(
+                "{}/v1/drives/{}/members",
+                base_url.trim_end_matches('/'),
+                crate::utils::url_segment::segment(folder_hash)?
+            ),
             owner,
         )?)
         .header("Authorization", format!("Bearer {bearer}"))
@@ -588,8 +592,8 @@ pub async fn http_remove_member(
     let mut url = reqwest::Url::parse(&format!(
         "{}/v1/drives/{}/members/{}",
         base_url.trim_end_matches('/'),
-        folder_hash,
-        member_ss58
+        crate::utils::url_segment::segment(folder_hash)?,
+        crate::utils::url_segment::segment(member_ss58)?
     ))
     .map_err(|e| AppError::Hcfs(format!("invalid remove-member URL: {e}")))?;
     if let Some(owner) = owner {
@@ -637,8 +641,8 @@ pub async fn http_change_member_role(
     let mut url = reqwest::Url::parse(&format!(
         "{}/v1/drives/{}/members/{}",
         base_url.trim_end_matches('/'),
-        folder_hash,
-        member_ss58
+        crate::utils::url_segment::segment(folder_hash)?,
+        crate::utils::url_segment::segment(member_ss58)?
     ))
     .map_err(|e| AppError::Hcfs(format!("invalid change-role URL: {e}")))?;
     if let Some(owner) = owner {
@@ -789,7 +793,11 @@ pub async fn http_list_invites(
 ) -> Result<Vec<DriveInviteInfo>> {
     let resp = http
         .get(with_owner(
-            &format!("{}/v1/drives/{}/invites", base_url.trim_end_matches('/'), folder_hash),
+            &format!(
+                "{}/v1/drives/{}/invites",
+                base_url.trim_end_matches('/'),
+                crate::utils::url_segment::segment(folder_hash)?
+            ),
             owner,
         )?)
         .header("Authorization", format!("Bearer {bearer}"))
@@ -824,7 +832,12 @@ pub async fn http_revoke_invite(
 ) -> Result<()> {
     let resp = http
         .delete(with_owner(
-            &format!("{}/v1/drives/{}/invites/{}", base_url.trim_end_matches('/'), folder_hash, invite_id),
+            &format!(
+                "{}/v1/drives/{}/invites/{}",
+                base_url.trim_end_matches('/'),
+                crate::utils::url_segment::segment(folder_hash)?,
+                crate::utils::url_segment::segment(invite_id)?
+            ),
             owner,
         )?)
         .header("Authorization", format!("Bearer {bearer}"))
@@ -2029,7 +2042,12 @@ pub async fn http_replace_folder_grants(
 ) -> Result<hcfs_shared::network::ReplaceFolderGrantsResponse> {
     let resp = http
         .put(with_owner(
-            &format!("{}/v1/drives/{}/grants/{}", base_url.trim_end_matches('/'), folder_hash, member_ss58),
+            &format!(
+                "{}/v1/drives/{}/grants/{}",
+                base_url.trim_end_matches('/'),
+                crate::utils::url_segment::segment(folder_hash)?,
+                crate::utils::url_segment::segment(member_ss58)?
+            ),
             owner,
         )?)
         .header("Authorization", format!("Bearer {bearer}"))
@@ -3012,8 +3030,8 @@ pub async fn http_put_sealed_key(
             &format!(
                 "{}/v1/drives/{}/invites/{}/sealed-key",
                 base_url.trim_end_matches('/'),
-                folder_hash,
-                invite_id
+                crate::utils::url_segment::segment(folder_hash)?,
+                crate::utils::url_segment::segment(invite_id)?
             ),
             owner,
         )?)

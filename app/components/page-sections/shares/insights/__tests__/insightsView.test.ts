@@ -337,3 +337,16 @@ describe("what a failed request says", () => {
     expect(actionErrorLine("block them", transport, false)).toBe(`Couldn't block them. ${OFFLINE_LINE}`);
   });
 });
+
+describe("what Insights promise the owner", () => {
+  // Owners see how many people viewed, and a name only for someone who
+  // comments under one: never "who viewed".
+  it("never says the owner sees who viewed or watched", async () => {
+    const view = await import("../insightsView");
+    const words: string[] = (Object.values(view) as unknown[]).filter((v): v is string => typeof v === "string");
+    for (const commentsEnabled of [true, false]) words.push(view.emptyInsightsCopy({ notCounting: true, commentsEnabled }).body);
+    for (const video of [true, false])
+      for (const notCounting of [true, false]) words.push(...Object.values(view.lockCopy({ video, notCounting })));
+    for (const w of words) expect(w).not.toMatch(/\bwho (viewed|watched|watches|views|opened)\b/i);
+  });
+});

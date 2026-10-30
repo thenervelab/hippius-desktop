@@ -316,6 +316,11 @@ fn owner_mention(m: CommentMention, mine: &HashSet<String>) -> ShareCommentMenti
     }
 }
 
+/// Whether `text` holds `@name`, the way a mention is written.
+fn mentioned_in(text: &str, name: &str) -> bool {
+    !name.is_empty() && text.contains(&format!("@{name}"))
+}
+
 /// A link's comments, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -414,11 +419,18 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
             let (text, name, mentions) = match opened {
                 // An anonymous comment never shows a name, whatever its
                 // ciphertext carries.
-                Some(p) => (
-                    Some(p.text),
-                    if c.anonymous { None } else { p.name.map(readable_name) },
-                    p.mentions.into_iter().map(|m| owner_mention(m, &mine)).collect::<Vec<_>>(),
-                ),
+                Some(p) => {
+                    // A mention counts only where its `@Name` is in the text:
+                    // the list is sealed with the comment by whoever wrote
+                    // it, so it could claim "mentioned you" over any text.
+                    let mentions = p
+                        .mentions
+                        .into_iter()
+                        .filter(|m| mentioned_in(&p.text, &m.name))
+                        .map(|m| owner_mention(m, &mine))
+                        .collect::<Vec<_>>();
+                    (Some(p.text), if c.anonymous { None } else { p.name.map(readable_name) }, mentions)
+                }
                 None => (None, None, Vec::new()),
             };
             let mentions_you = !c.mine && mentions.iter().any(|m| m.you);
@@ -882,8 +894,19 @@ async fn read_ok(resp: reqwest::Response) -> Result<String> {
     })
 }
 
-fn transport(what: &str, e: &reqwest::Error) -> AppError {
-    AppError::Hcfs(format!("{what} failed: {e}"))
+/// A request that never got an answer, worded without its URL: reqwest's
+/// `Display` appends the request URL, and every route here carries the
+/// link's token in its path, which opens the link's unencrypted preview.
+/// This text reaches the Insights panel, screenshots of it and the logs.
+fn transport(what: &str, e: reqwest::Error) -> AppError {
+    let reason = if e.is_timeout() {
+        "Hippius took too long to answer".to_string()
+    } else if e.is_connect() {
+        "couldn't reach Hippius".to_string()
+    } else {
+        e.without_url().to_string()
+    };
+    AppError::Hcfs(format!("{what} failed: {reason}"))
 }
 
 async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
@@ -893,7 +916,7 @@ async fn get_insights_body(http: &reqwest::Client, api: &Api, token: &str) -> Re
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("insights", &e))?;
+        .map_err(|e| transport("insights", e))?;
     read_ok(resp).await
 }
 
@@ -908,7 +931,7 @@ async fn get_all_comments(http: &reqwest::Client, api: &Api, token: &str) -> Res
             url = format!("{url}?after={}", query_value(cursor));
         }
         let req = http.get(url).bearer_auth(&api.bearer).timeout(REQUEST_TIMEOUT);
-        let body = read_ok(req.send().await.map_err(|e| transport("comments", &e))?).await?;
+        let body = read_ok(req.send().await.map_err(|e| transport("comments", e))?).await?;
         let page: WireCommentsPage = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("comments parse failed: {e}")))?;
         let (items, next) = page.into_parts();
         let mut fresh = 0usize;
@@ -935,7 +958,7 @@ async fn delete_comment_at(http: &reqwest::Client, api: &Api, token: &str, comme
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment delete", &e))?;
+        .map_err(|e| transport("comment delete", e))?;
     // Already gone is what the owner asked for.
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(());
@@ -954,7 +977,7 @@ async fn set_comment_author_blocked(http: &reqwest::Client, api: &Api, token: &s
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("comment block", &e))?;
+        .map_err(|e| transport("comment block", e))?;
     // The bodiless 404 covers a link that is gone and a comment that is no
     // longer there; the sheet re-reads the list either way, so say the one
     // the owner can act on.
@@ -971,7 +994,7 @@ async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> R
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("reactions", &e))?;
+        .map_err(|e| transport("reactions", e))?;
     read_ok(resp).await
 }
 
@@ -983,7 +1006,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("share meta", &e))?;
+        .map_err(|e| transport("share meta", e))?;
     read_ok(resp).await
 }
 
@@ -995,7 +1018,7 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .json(patch)
         .send()
         .await
-        .map_err(|e| transport("share settings", &e))?;
+        .map_err(|e| transport("share settings", e))?;
     read_ok(resp).await.map(|_| ())
 }
 
@@ -1006,7 +1029,7 @@ async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<Notificati
         .timeout(REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -1026,7 +1049,7 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
         .json(&preferences_body(prefs))
         .send()
         .await
-        .map_err(|e| transport("notification preferences", &e))?;
+        .map_err(|e| transport("notification preferences", e))?;
     let status = resp.status();
     if !status.is_success() {
         return Err(AppError::Api {
@@ -1658,6 +1681,40 @@ mod tests {
         assert_eq!(json["mentions"][0]["kind"], serde_json::json!("owner"));
     }
 
+    /// The mention list is sealed by whoever wrote the comment: one that
+    /// names the owner over text that never says `@Owner` must not flag the
+    /// comment as mentioning them.
+    #[test]
+    fn a_mention_missing_from_the_text_is_dropped() {
+        use base64::Engine as _;
+        let (key, token, _, _) = vector_key();
+        let seal = |plaintext: serde_json::Value| {
+            let nonce = [7u8; 12];
+            let ct =
+                comment_crypto::seal_with_nonce(&key, &token, comment_crypto::Purpose::Comment, &nonce, plaintext.to_string().as_bytes()).unwrap();
+            let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+            (b64(&nonce), b64(&ct))
+        };
+        let (n1, c1) = seal(serde_json::json!({
+            "text": "Mentioned you! Click here",
+            "mentions": [{ "kind": "owner", "name": "Owner" }],
+        }));
+        let (n2, c2) = seal(serde_json::json!({
+            "text": "@Owner have a look",
+            "mentions": [{ "kind": "owner", "name": "Owner" }, { "kind": "commenter", "name": "Grace", "comment": "c-1" }],
+        }));
+        let out = open_comments(
+            &token,
+            vec![wire_comment("1", &n1, &c1, false), wire_comment("2", &n2, &c2, false)],
+            Ok(&key),
+        );
+        assert!(out.comments[0].mentions.is_empty(), "no @Owner in the text");
+        assert!(!out.comments[0].mentions_you);
+        assert_eq!(out.comments[1].mentions.len(), 1, "only the mention the text holds");
+        assert_eq!(out.comments[1].mentions[0].name, "Owner");
+        assert!(out.comments[1].mentions_you);
+    }
+
     #[test]
     fn a_comment_without_mentions_has_none() {
         let (key, token, nonce, ct) = vector_key();
@@ -2042,6 +2099,22 @@ mod tests {
             let _ = axum::serve(listener, app).await;
         });
         (format!("http://{addr}"), seen)
+    }
+
+    /// The token in a share route opens the link's preview, so a request
+    /// that fails must not carry its URL into the panel or the logs.
+    #[tokio::test]
+    async fn a_failed_request_never_names_its_url() {
+        let e = reqwest::Client::new()
+            .get("http://127.0.0.1:9/v1/shares/SECRET-LINK-TOKEN/insights")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .expect_err("nothing listens on the discard port");
+        let text = transport("insights", e).to_string();
+        assert!(!text.contains("SECRET-LINK-TOKEN"), "token leaked: {text}");
+        assert!(!text.contains("127.0.0.1"), "url leaked: {text}");
+        assert!(text.contains("insights failed: couldn't reach Hippius"), "got: {text}");
     }
 
     #[tokio::test]
