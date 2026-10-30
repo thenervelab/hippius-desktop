@@ -33,6 +33,8 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
 import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useCopyLinkItem } from "../useCopyExistingLink";
+import { linkPathFor } from "../existingLink";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { useRouter } from "next/navigation";
@@ -105,6 +107,7 @@ const CardView: FC<CardViewProps> = ({
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const captureInsightsItem = useCaptureInsightsItem();
+  const copyLinkItem = useCopyLinkItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
   const { basePath } = useDriveRoute();
@@ -349,6 +352,13 @@ const CardView: FC<CardViewProps> = ({
                               },
                             ];
                           })(),
+                          // Copy link: the link the card already has,
+                          // directly above Share via link.
+                          ...copyLinkItem(
+                            file,
+                            linkPathFor(file, currentSubfolderPath),
+                            () => setOpenMenuIndex(null),
+                          ),
                           // Share via link — same gating as the right-click
                           // context menu and the table-view 3-dots menu: a file
                           // must be fully uploaded, a folder mints a live

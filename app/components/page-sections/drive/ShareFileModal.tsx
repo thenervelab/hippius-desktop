@@ -29,7 +29,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
@@ -44,6 +44,8 @@ import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
+  insightsSheetAtom,
+  shareInsightsEnabledAtom,
   shareModalFileAtom,
   type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -79,6 +81,12 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { isCaptureMedia } from "@/app/lib/utils/fileLinks";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
+import { ExistingLinkBody, ExistingLinkSkeleton } from "./ExistingLinkBody";
+import { useExistingLinks } from "./useExistingLinks";
+import { useCopyExistingLink } from "./useCopyExistingLink";
+import { captureLinkSource } from "./useCaptureInsightsItem";
 
 /**
  * How recently a file must have been touched for the chooser to caution that
@@ -176,6 +184,16 @@ export default function ShareFileModal() {
   // superseded upload cancelled rather than left running unseen. The name
   // is kept for the toast that tells the user the old share stopped.
   const runningFinderRef = useRef<{ id: string; name: string } | null>(null);
+  // An in-app share of something that already has a live link leads with
+  // that link (`ExistingLinkBody`); "Create a new link" sets this and shows
+  // the create form. Reset with every session.
+  const [createAnother, setCreateAnother] = useState(false);
+  const { linkFor, isLoadingFor } = useExistingLinks();
+  const copyExistingLink = useCopyExistingLink();
+  const existingLink = target ? linkFor(target.file, target.relativePath) : null;
+  const existingLinkLoading = target ? isLoadingFor(target.file) : false;
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
+  const openInsights = useSetAtom(insightsSheetAtom);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
@@ -395,6 +413,7 @@ export default function ShareFileModal() {
       toast.error(`Sharing \u201c${running.name}\u201d was stopped to open the new share.`);
     }
     setState({ kind: "choosing" });
+    setCreateAnother(false);
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;
     lastOfferedRef.current = null;
@@ -457,7 +476,45 @@ export default function ShareFileModal() {
       icon={<Icons.Link className="size-4 text-white" />}
       maxWidth="max-w-[585px]"
     >
-      {state.kind === "choosing" && (
+      {state.kind === "choosing" && target && !createAnother && existingLinkLoading && (
+        <ExistingLinkSkeleton />
+      )}
+
+      {state.kind === "choosing" && target && !createAnother && !existingLinkLoading && existingLink && (
+        <ExistingLinkBody
+          link={existingLink}
+          filename={filename}
+          onCopy={() => {
+            // An unlock opens its own dialog, so this one steps aside.
+            if (existingLink.state === "locked") close();
+            copyExistingLink(existingLink, target);
+          }}
+          onManage={() => {
+            close();
+            router.push(sharesPageHref(existingLink.manageRowIds));
+          }}
+          onInsights={
+            insightsEnabled &&
+            existingLink.shareToken &&
+            !target.file.isFolder &&
+            isCaptureMedia(target.relativePath)
+              ? () => {
+                  close();
+                  openInsights({
+                    shareToken: existingLink.shareToken,
+                    fileName: target.file.actualFileName || target.file.name,
+                    file: target.file,
+                    capture: captureLinkSource(target.file, target.relativePath),
+                  });
+                }
+              : undefined
+          }
+          onCreateAnother={() => setCreateAnother(true)}
+        />
+      )}
+
+      {state.kind === "choosing" &&
+        (!target || createAnother || (!existingLinkLoading && !existingLink)) && (
         <ChoosingBody
           // A new session (another file, a new Finder click) starts the
           // chooser afresh, its preview switch included.

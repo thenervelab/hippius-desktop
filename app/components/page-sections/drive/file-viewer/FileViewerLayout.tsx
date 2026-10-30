@@ -9,7 +9,7 @@ import React, {
 } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight, PenLine } from "lucide-react";
+import { Share2, Download, Trash2, X, ArrowLeft, ArrowRight, PenLine, Link2 } from "lucide-react";
 import { toast } from "sonner";
 import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
 import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
@@ -40,6 +40,9 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 
 import FileViewerThumbnailStrip from "./FileViewerThumbnailStrip";
 import FileViewerTitle from "./FileViewerTitle";
+import { copyLinkLabel, linkPathFor } from "../existingLink";
+import { useExistingLinks } from "../useExistingLinks";
+import { useCopyExistingLink } from "../useCopyExistingLink";
 
 /**
  * Stacking order of the full-screen file viewer overlay.
@@ -74,12 +77,15 @@ interface FileViewerLayoutProps {
 const ActionButton: React.FC<{
   onClick: () => void;
   ariaLabel: string;
+  /** Hover text, for a button whose icon alone may not say what it does. */
+  title?: string;
   children: ReactNode;
-}> = ({ onClick, ariaLabel, children }) => (
+}> = ({ onClick, ariaLabel, title, children }) => (
   <button
     type="button"
     onClick={onClick}
     aria-label={ariaLabel}
+    title={title}
     className={cn(
       "flex items-center justify-center p-2 rounded-[8px]",
       "border border-grey-dark-100 bg-white",
@@ -192,6 +198,19 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     // already the full drive-relative path, so there is no base to resolve.
     setShareModalFile(shareTargetFor(file, ""));
   }, [onClose, setShareModalFile, file]);
+
+  // Copy link, when the file already has a live link (the menus' rule). The
+  // viewer only opens files, whose actualFileName is the drive-relative path.
+  // An unlock opens over the page, so the viewer closes first for that.
+  const { linkFor } = useExistingLinks();
+  const copyExistingLink = useCopyExistingLink();
+  const linkPath = linkPathFor(file, "");
+  const existingLink = shareEnabled ? linkFor(file, linkPath) : null;
+  const handleCopyLink = useCallback(() => {
+    if (!existingLink) return;
+    if (existingLink.state === "locked") onClose();
+    copyExistingLink(existingLink, { file, relativePath: linkPath });
+  }, [copyExistingLink, existingLink, file, linkPath, onClose]);
 
   // The screenshot editor, for the same pictures the Drive row's "Edit
   // image" offers (a PNG or JPEG in an own drive). The viewer closes first:
@@ -320,6 +339,15 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   {canEdit && (
                     <ActionButton onClick={handleEdit} ariaLabel="Edit image">
                       <PenLine className="size-[17px]" strokeWidth={1.8} />
+                    </ActionButton>
+                  )}
+                  {existingLink && (
+                    <ActionButton
+                      onClick={handleCopyLink}
+                      ariaLabel={copyLinkLabel(existingLink)}
+                      title={copyLinkLabel(existingLink)}
+                    >
+                      <Link2 className="size-[17px]" strokeWidth={1.8} />
                     </ActionButton>
                   )}
                   {canShare && (
