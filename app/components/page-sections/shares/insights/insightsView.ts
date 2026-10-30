@@ -19,20 +19,20 @@ export const LOCKED_PROMPT = "Insights, comments and reactions are available on 
 export const LOCKED_ACTION = "Upgrade";
 /** The line under the prompt where a switch was turned on. */
 export const SWITCH_UPGRADE_BODY =
-  "Upgrade to see who watched your links and for how long, and to let viewers comment and react.";
+  "Upgrade to see how many people watched your links and for how long, and to let viewers comment and react.";
 
 /** The free plan's lock over the blurred sample, for a recording. */
-export const LOCK_TITLE = "See who watched and where they stopped";
+export const LOCK_TITLE = "See how many watched and where they stopped";
 /** Under the lock while the link is counting views. */
 export const LOCK_BODY =
   "Your views are being counted. Completion, the retention chart and the viewer list come with paid Drive plans.";
 /** Under the lock while the link's Insights switch is off: nothing is counted. */
 export const LOCK_BODY_NOT_COUNTING =
-  "Count this link's views and watch time, and see who watched and where they stopped.";
+  "Count this link's views and watch time, and see how much people watched and where they stopped.";
 /** The lock's words for a picture or any other file, which has no watch time. */
-export const LOCK_TITLE_STILL = "See who viewed it";
+export const LOCK_TITLE_STILL = "See how many people viewed it";
 export const LOCK_BODY_STILL = "Your views are being counted. The viewer list comes with paid Drive plans.";
-export const LOCK_BODY_STILL_NOT_COUNTING = "Count this link's views and see who viewed it.";
+export const LOCK_BODY_STILL_NOT_COUNTING = "Count this link's views and see how many people viewed it.";
 /**
  * The label on the blurred part, so nobody takes its made-up numbers and
  * names for their link's.
@@ -187,8 +187,8 @@ export function emptyInsightsCopy({
     return {
       title: "Not counting views",
       body: commentsEnabled
-        ? "Insights are off for this link. Turn them on to see who watches. Comments and reactions show up here either way."
-        : "Insights are off for this link. Turn them on to see who watches.",
+        ? "Insights are off for this link. Turn them on to count views. Comments and reactions show up here either way."
+        : "Insights are off for this link. Turn them on to count views.",
     };
   }
   return {
