@@ -30,9 +30,6 @@
           "hippiusapp"
         ]
       }
-    },
-    "shell": {
-      "open": true
     }
   },
   "app": {
@@ -66,7 +63,8 @@
         "capture-preview",
         "capture-camera",
         "capture-bubble-controls",
-        "capture-pill-tip"
+        "capture-pill-tip",
+        "capture-area"
       ],
       "dangerousDisableAssetCspModification": [
         "style-src"

@@ -88,7 +88,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
+use crate::media_preview::{open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -525,6 +525,7 @@ fn main() {
             prepare_motion_photo_preview,
             read_preview_bytes,
             resolve_drive_file_source,
+            open_in_default_app,
             // The viewer's video source: the asset URL, or on Linux the
             // loopback stream (WebKitGTK cannot play media from `asset://`).
             crate::video_stream::video_playback_source,
