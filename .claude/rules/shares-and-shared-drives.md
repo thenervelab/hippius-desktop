@@ -289,11 +289,14 @@ itself on reconnect), NEVER an empty state; only then `ShareADriveEmptyState` fo
 button; "Shared by you": Share a drive), docs link
 `https://docs.hippius.com/use/desktop/shared-drives` opened with `openUrl`. An empty state
 also waits for the plan, since it words its button by plan. "Shared by you" is an error, not
-none, when the drive listing threw, the sharing query failed, or own drives exist and not one
-got an answer (`list_owned_drive_sharing` drops a drive whose listings both failed and still
+none, when the drive listing threw or came back with `remoteFailed` (`get_sync_folders_with_stats`
+keeps the local rows when the server listing fails, so a server-only drive is missing), the
+sharing query failed, or own drives exist and not one got an answer (`list_owned_drive_sharing` drops a drive whose listings both failed and still
 answers OK, and own-drive resolution is local and lenient, so only the network drops all).
-"Shared with you" is an error on a failed memberships fetch; a feature-off server is a quiet
-none. Copy lives in `sharedDrivesCopy.ts`. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
+"Shared with you" is an error on a failed memberships or folder-grant fetch (`useMyFolderGrants`'
+`isError`); a feature-off server is a quiet none. The page's queries run with
+`networkMode: "always"`: they are local IPC calls Rust answers offline, and the default mode pauses
+them while the OS reports no connection, which held the skeleton forever. Copy lives in `sharedDrivesCopy.ts`. Settings keeps `SharedWithMeSection`'s own quiet, rows-only card.
 A row opens its drive ON THIS PAGE, never on `/files` (`sharedDrivesDriveRoute`: browse label,
 `openRemote`, plus `openName`, shown in the breadcrumb only for a shared label,
 `browseNameFromUrl`): the page renders `SharedDriveOpenView` (the Drive container under
