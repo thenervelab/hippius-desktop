@@ -295,10 +295,12 @@ fn upload_uses_session(chunk_count: u32) -> bool {
 /// The engine makes the same choice for a synced drive — this is that
 /// decision, for a drive with no local root.
 ///
-/// Chunks go up one at a time. The engine uploads them concurrently under
-/// a global slot budget, which is worth having for a whole sync cycle;
-/// here a single user-initiated file does not justify carrying that
-/// machinery, and serial keeps in-flight bytes to one chunk.
+/// Up to [`CHUNK_UPLOAD_CONCURRENCY`] chunks are in flight at once, each
+/// read from its own offset when its PUT starts, so at most that many
+/// chunk buffers are held. The server accepts chunks in any order. The
+/// first chunk that fails after its retries fails the upload; chunks still
+/// in flight are dropped, and the unfinalized session is discarded
+/// server-side.
 async fn send_in_session<F>(
     client: &hcfs_client::client::HcfsClient,
     manifest: Manifest,
@@ -310,7 +312,7 @@ async fn send_in_session<F>(
 where
     F: Fn(u64, u64),
 {
-    use std::io::Read;
+    use futures_util::{StreamExt, TryStreamExt};
 
     let request = hcfs_shared::network::CreateSessionRequest {
         manifest,
@@ -326,23 +328,33 @@ where
         .await
         .map_err(|e| upload_failure("start", &e))?;
 
-    let mut file = std::io::BufReader::new(std::fs::File::open(ciphertext_path)?);
-    let mut sent = 0u64;
-    for index in 0..chunk_count {
-        let remaining = ciphertext_size - sent;
-        let mut buf = vec![0u8; remaining.min(UPLOAD_CHUNK_SIZE) as usize];
-        file.read_exact(&mut buf)?;
+    let session_id = session.session_id.as_str();
+    let sent = std::sync::atomic::AtomicU64::new(0);
+    futures_util::stream::iter(0..chunk_count)
+        .map(|index| {
+            let sent = &sent;
+            async move {
+                let chunk = read_chunk(ciphertext_path, index, ciphertext_size).await?;
+                let len = chunk.len() as u64;
+                client
+                    .upload_chunk_with_retry(session_id, index, chunk, CHUNK_UPLOAD_ATTEMPTS)
+                    .await
+                    .map_err(|e| upload_failure("chunk", &e))?;
 
-        client
-            .upload_chunk_with_retry(&session.session_id, index, bytes::Bytes::from(buf), CHUNK_UPLOAD_ATTEMPTS)
-            .await
-            .map_err(|e| upload_failure("chunk", &e))?;
-
-        sent += remaining.min(UPLOAD_CHUNK_SIZE);
-        if let Some(report) = progress {
-            report(sent, ciphertext_size);
-        }
-    }
+                // Progress only grows: `buffer_unordered` polls every chunk on
+                // this one task and nothing awaits between the add and the
+                // report, so no other chunk can report a smaller total after
+                // a larger one. Spawning the chunks would break that.
+                let done = sent.fetch_add(len, std::sync::atomic::Ordering::Relaxed) + len;
+                if let Some(report) = progress {
+                    report(done, ciphertext_size);
+                }
+                Ok::<(), AppError>(())
+            }
+        })
+        .buffer_unordered(CHUNK_UPLOAD_CONCURRENCY)
+        .try_for_each(|()| std::future::ready(Ok(())))
+        .await?;
 
     // Only finalize claims the upload succeeded; a session left unfinalized
     // is discarded server-side rather than becoming a partial file.
@@ -369,9 +381,39 @@ fn upload_failure(step: &str, error: &hcfs_client::sync::SyncError) -> AppError 
     AppError::Hcfs(crate::sync::events::FileFailureKindPayload::from(&kind).display_reason())
 }
 
+/// Read chunk `index` of the ciphertext at `path`, on the blocking pool so
+/// an 8 MiB read does not stall the async runtime.
+async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<bytes::Bytes> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let offset = u64::from(index) * UPLOAD_CHUNK_SIZE;
+    let len = ciphertext_size.saturating_sub(offset).min(UPLOAD_CHUNK_SIZE);
+    let path = path.to_path_buf();
+    tokio::task::spawn_blocking(move || -> Result<bytes::Bytes> {
+        let mut file = std::fs::File::open(&path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let len = usize::try_from(len).expect("a chunk is at most UPLOAD_CHUNK_SIZE, 8 MiB");
+        let mut buf = vec![0u8; len];
+        file.read_exact(&mut buf)?;
+        Ok(bytes::Bytes::from(buf))
+    })
+    .await
+    .map_err(|e| AppError::Hcfs(format!("Reading upload chunk {index} stopped: {e}")))?
+}
+
 /// Attempts per chunk before giving up, matching the engine's own retry
 /// posture: transient transport and 5xx/429 are retried, 4xx is not.
 const CHUNK_UPLOAD_ATTEMPTS: u32 = 3;
+
+/// Chunk PUTs one file keeps in flight, matching hcfs-client's per-file
+/// `CHUNK_UPLOAD_CONCURRENCY` (`pub(super)`, so it cannot be imported).
+///
+/// A chunk is acknowledged only after a full round trip plus the server's
+/// synchronous write to object storage, so one chunk at a time leaves the
+/// uplink idle for most of each chunk. Measured from San Diego against the
+/// US endpoint: about 4 s per 8 MiB chunk, under 2 MB/s serially. Memory
+/// cost: this many chunk buffers, 64 MiB.
+const CHUNK_UPLOAD_CONCURRENCY: usize = 8;
 
 /// Send one file to a folder this device does not sync.
 ///
@@ -1215,6 +1257,185 @@ mod tests {
             panic!("expected AppError::Hcfs, got {err:?}");
         };
         assert_eq!(message, "Server error (404). Please try again.");
+        server.server.abort();
+    }
+
+    /// Byte `i` of the multi-chunk test ciphertext. 251 is prime, so no
+    /// chunk starts with the same bytes as another: a chunk sent under the
+    /// wrong index, or read from the wrong offset, does not match.
+    fn pattern_byte(i: u64) -> u8 {
+        u8::try_from(i % 251).expect("a remainder of 251 fits a byte")
+    }
+
+    /// A multi-chunk session stand-in: what it was sent, and its handle.
+    struct ChunkServer {
+        base: String,
+        /// Chunk indices whose body was exactly the expected bytes.
+        intact: std::sync::Arc<std::sync::Mutex<std::collections::BTreeSet<u32>>>,
+        /// Most chunk PUTs the server was handling at one time.
+        max_in_flight: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// Chunks received when each finalize arrived.
+        finalized_after: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+        server: tokio::task::JoinHandle<()>,
+    }
+
+    /// Serves a session of `total_chunks` for [`committed_manifest`].
+    ///
+    /// The first [`CHUNK_UPLOAD_CONCURRENCY`] chunk PUTs wait at a barrier
+    /// until that many are in flight together, so a client that sends one
+    /// chunk at a time never gets an answer. `refuse` answers that chunk
+    /// with a 400, which the client does not retry.
+    async fn serve_chunks(total_chunks: u32, ciphertext_size: u64, refuse: Option<u32>) -> ChunkServer {
+        use axum::extract::{DefaultBodyLimit, Path as UrlPath};
+        use axum::http::StatusCode;
+        use axum::response::IntoResponse;
+        use axum::routing::{get, post, put};
+        use axum::{Json, Router};
+        use serde_json::json;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let intact = Arc::new(std::sync::Mutex::new(std::collections::BTreeSet::new()));
+        let max_in_flight = Arc::new(AtomicUsize::new(0));
+        let finalized_after = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(tokio::sync::Barrier::new(CHUNK_UPLOAD_CONCURRENCY));
+
+        let chunk = {
+            let intact = Arc::clone(&intact);
+            let max_in_flight = Arc::clone(&max_in_flight);
+            move |UrlPath(index): UrlPath<u32>, body: axum::body::Bytes| async move {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(now, Ordering::SeqCst);
+                if refuse.is_none() && (index as usize) < CHUNK_UPLOAD_CONCURRENCY {
+                    barrier.wait().await;
+                }
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+
+                if refuse == Some(index) {
+                    let refused = json!({ "error": "bad_chunk", "message": "refused" });
+                    return (StatusCode::BAD_REQUEST, Json(refused)).into_response();
+                }
+                let offset = u64::from(index) * UPLOAD_CHUNK_SIZE;
+                let len = ciphertext_size.saturating_sub(offset).min(UPLOAD_CHUNK_SIZE);
+                let expected = (offset..offset + len).map(pattern_byte);
+                if body.len() as u64 == len && body.iter().copied().eq(expected) {
+                    intact.lock().expect("intact lock").insert(index);
+                }
+                Json(json!({ "chunk_index": index })).into_response()
+            }
+        };
+        let finalize = {
+            let intact = Arc::clone(&intact);
+            let finalized_after = Arc::clone(&finalized_after);
+            move || async move {
+                let received = intact.lock().expect("intact lock").len();
+                finalized_after.lock().expect("finalize lock").push(received);
+                let done = json!({ "Success": { "upload_id": "u1", "timestamp": 1, "revision_id": vec![9u8; 32] } });
+                Json(done)
+            }
+        };
+        let status = json!({
+            "session_id": "s1",
+            "state": "uploading",
+            "total_chunks": total_chunks,
+            "chunks_received": [],
+            "expires_at": 9_999_999_999_i64,
+            "ciphertext_hash": "aa",
+        });
+        let router = Router::new()
+            .route(
+                "/upload/session",
+                post(|| async {
+                    let created = json!({ "Success": { "session_id": "s1", "expires_at": 9_999_999_999_i64 } });
+                    (StatusCode::CREATED, Json(created))
+                }),
+            )
+            .route("/upload/session/s1/status", get(move || async move { Json(status) }))
+            // axum refuses bodies over 2 MB by default; a chunk is 8 MiB.
+            .route("/upload/session/s1/chunk/{index}", put(chunk).layer(DefaultBodyLimit::disable()))
+            .route("/upload/session/s1/finalize", post(finalize));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        ChunkServer {
+            base: format!("http://{addr}"),
+            intact,
+            max_in_flight,
+            finalized_after,
+            server,
+        }
+    }
+
+    /// Runs `send_in_session` for a ciphertext of `size` pattern bytes
+    /// against `server`, returning the progress totals it reported.
+    async fn send_pattern(server: &ChunkServer, size: u64) -> (Result<()>, Vec<u64>) {
+        let identity = DriveIdentity::own("5Owner", "0123456789abcdef");
+        let config = crate::sync::drive::config::build_hcfs_config(&server.base, "bearer", &identity);
+        let client = hcfs_client::client::HcfsClient::new(config).expect("client");
+        let dir = tempfile::tempdir().expect("temp dir");
+        let ciphertext = dir.path().join("ciphertext");
+        std::fs::write(&ciphertext, (0..size).map(pattern_byte).collect::<Vec<u8>>()).expect("write ciphertext");
+        let chunks = transport_chunk_count(size).expect("chunk count");
+
+        let reports = std::sync::Mutex::new(Vec::new());
+        let report = |sent: u64, _total: u64| reports.lock().expect("reports lock").push(sent);
+        // A bound on the whole upload, not a wait for anything: the serial
+        // regression never fills the barrier and would otherwise hang.
+        let sending = send_in_session(&client, committed_manifest(), &ciphertext, size, chunks, Some(&report));
+        let outcome = tokio::time::timeout(std::time::Duration::from_mins(1), sending)
+            .await
+            .expect("chunks overlap: a client sending one at a time never fills the server's barrier");
+        let reports = reports.into_inner().expect("reports lock");
+        (outcome, reports)
+    }
+
+    /// A large file keeps several chunks in flight instead of waiting out
+    /// each one's round trip, every chunk arrives intact under its own
+    /// index (the short last one included), finalize comes only after all
+    /// of them, and progress only grows and ends at the full size.
+    #[tokio::test]
+    async fn a_large_file_sends_its_chunks_concurrently_and_intact() {
+        let size = 9 * UPLOAD_CHUNK_SIZE + 1_000;
+        let server = serve_chunks(10, size, None).await;
+
+        let (outcome, reports) = send_pattern(&server, size).await;
+
+        outcome.expect("upload succeeds");
+        let intact = server.intact.lock().expect("intact lock").clone();
+        assert_eq!(intact, (0..10).collect(), "every chunk arrived intact");
+        assert_eq!(
+            server.max_in_flight.load(std::sync::atomic::Ordering::SeqCst),
+            CHUNK_UPLOAD_CONCURRENCY,
+            "as many chunks in flight as the limit, never more"
+        );
+        assert_eq!(
+            *server.finalized_after.lock().expect("finalize lock"),
+            vec![10],
+            "one finalize, after every chunk"
+        );
+        assert_eq!(reports.len(), 10, "one progress report per chunk");
+        assert!(reports.is_sorted(), "progress only grows: {reports:?}");
+        assert_eq!(reports.last(), Some(&size));
+        server.server.abort();
+    }
+
+    /// A chunk the server refuses fails the upload, and the session is
+    /// never finalized into a file with a hole in it.
+    #[tokio::test]
+    async fn a_refused_chunk_fails_the_upload_without_finalizing() {
+        let size = 4 * UPLOAD_CHUNK_SIZE;
+        let server = serve_chunks(4, size, Some(2)).await;
+
+        let (outcome, _) = send_pattern(&server, size).await;
+
+        assert!(matches!(outcome, Err(AppError::Hcfs(_))), "{outcome:?}");
+        assert!(
+            server.finalized_after.lock().expect("finalize lock").is_empty(),
+            "no finalize after a failed chunk"
+        );
         server.server.abort();
     }
 }
