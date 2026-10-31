@@ -60,6 +60,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Large files upload faster to drives you don't sync on this computer.** A big file added to a Drive folder that isn't synced here now goes up several pieces at a time instead of one after another, which is much quicker on connections far from our servers.
 - **Insights buttons line up.** On the Captures page each capture's Insights button sits at the end of its name, so the buttons form one tidy column instead of following each name's length, and the link icon stays right after the name. The button looks the same as on the web app, and shows just its icon when the window is narrow so long names stay readable.
 - **Shared Drives is easier to scan.** Your drives and the ones shared with you are now one list, with tabs to show just one kind when you have both, and the total size and number of files for what you are looking at. "Share a drive" now sits at the top of the page, and choosing a drive to share offers "New drive" beside the search, with the list scrolling cleanly beside its scrollbar instead of under it.
 - **The capture card asks before throwing something away.** Discard on a capture that didn't upload, and Revoke link, now ask first, and Copy link says when it couldn't copy, with Try again.
