@@ -357,11 +357,16 @@ where
     if let Err(e) = chunks_sent {
         // The chunks still in flight were dropped with the stream above. A
         // session left open holds one of the drive's upload-session slots on
-        // the server until it expires a day later, so it is deleted now. A
-        // failed delete is only logged: the upload already failed with the
-        // error the person needs, and expiry still removes the session.
-        if let Err(delete_error) = client.delete_session(session_id).await {
-            tracing::debug!(error = %delete_error, "could not delete a failed remote upload's session");
+        // the server until it expires a day later, so it is deleted now. The
+        // row shows the error only once this returns, and hcfs-client retries
+        // a delete for up to a minute, which is likely when the chunk failed
+        // because the network went away; so the delete is bounded and its
+        // failure only logged. Expiry still removes a session it missed.
+        let delete = tokio::time::timeout(SESSION_DELETE_TIMEOUT, client.delete_session(session_id)).await;
+        match delete {
+            Ok(Ok(())) => {}
+            Ok(Err(delete_error)) => tracing::debug!(error = %delete_error, "could not delete a failed remote upload's session"),
+            Err(_) => tracing::debug!("deleting a failed remote upload's session timed out"),
         }
         return Err(e);
     }
@@ -400,7 +405,7 @@ async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<byt
     let len = ciphertext_size.saturating_sub(offset).min(UPLOAD_CHUNK_SIZE);
     let len = usize::try_from(len).expect("a chunk is at most UPLOAD_CHUNK_SIZE, 8 MiB");
     let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || -> Result<bytes::Bytes> {
+    let read = tokio::task::spawn_blocking(move || -> std::io::Result<bytes::Bytes> {
         let mut file = std::fs::File::open(&path)?;
         file.seek(SeekFrom::Start(offset))?;
         let mut buf = vec![0u8; len];
@@ -408,13 +413,22 @@ async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<byt
         Ok(bytes::Bytes::from(buf))
     })
     .await
-    .map_err(|e| {
-        // A panic or cancellation inside the read task; its text is not
-        // for the person reading the upload row.
-        tracing::debug!(index, error = %e, "remote upload chunk read did not finish");
-        AppError::Hcfs("Could not read the file to upload. Please try again.".into())
-    })?
+    .unwrap_or_else(|join_error| Err(std::io::Error::other(join_error)));
+    read.map_err(|e| {
+        // The cause (a file shorter than its ciphertext, a permission change,
+        // a panic in the task) is for the log, not the upload row.
+        tracing::debug!(index, error = %e, "remote upload chunk read failed");
+        AppError::Hcfs(CHUNK_READ_FAILED.into())
+    })
 }
+
+/// What the person reads when a chunk of the encrypted copy cannot be read.
+const CHUNK_READ_FAILED: &str = "Could not read the file to upload. Please try again.";
+
+/// Longest a failed upload waits to delete its session before the error is
+/// shown. Arbitrary: long enough for one round trip to the server from far
+/// away, short enough that the row does not look stuck.
+const SESSION_DELETE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Attempts per chunk before giving up, matching the engine's own retry
 /// posture: transient transport and 5xx/429 are retried, 4xx is not.
@@ -1293,6 +1307,8 @@ mod tests {
         finalized_after: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
         /// Session DELETEs received.
         deletes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        /// Once set, a session DELETE is never answered, as over a dead link.
+        hang_deletes: std::sync::Arc<std::sync::atomic::AtomicBool>,
         server: tokio::task::JoinHandle<()>,
     }
 
@@ -1317,6 +1333,7 @@ mod tests {
         let max_in_flight = Arc::new(AtomicUsize::new(0));
         let finalized_after = Arc::new(std::sync::Mutex::new(Vec::new()));
         let deletes = Arc::new(AtomicUsize::new(0));
+        let hang_deletes = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let in_flight = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(tokio::sync::Barrier::new(CHUNK_UPLOAD_CONCURRENCY));
         let fills_the_window = total_chunks as usize >= CHUNK_UPLOAD_CONCURRENCY;
@@ -1379,8 +1396,12 @@ mod tests {
                 "/upload/session/s1",
                 axum::routing::delete({
                     let deletes = Arc::clone(&deletes);
+                    let hang_deletes = Arc::clone(&hang_deletes);
                     move || async move {
                         deletes.fetch_add(1, Ordering::SeqCst);
+                        if hang_deletes.load(Ordering::SeqCst) {
+                            std::future::pending::<()>().await;
+                        }
                         StatusCode::OK
                     }
                 }),
@@ -1396,6 +1417,7 @@ mod tests {
             max_in_flight,
             finalized_after,
             deletes,
+            hang_deletes,
             server,
         }
     }
@@ -1419,12 +1441,13 @@ mod tests {
 
         let reports = std::sync::Mutex::new(Vec::new());
         let report = |sent: u64, _total: u64| reports.lock().expect("reports lock").push(sent);
-        // A bound on the whole upload, not a wait for anything: the serial
-        // regression never fills the barrier and would otherwise hang.
+        // A bound on the whole upload, not a wait for anything: where the
+        // server has a barrier, the serial regression never fills it and
+        // would otherwise hang.
         let sending = send_in_session(&client, committed_manifest(), &ciphertext, size, chunks, Some(&report));
         let outcome = tokio::time::timeout(std::time::Duration::from_mins(1), sending)
             .await
-            .expect("chunks overlap: a client sending one at a time never fills the server's barrier");
+            .expect("the upload finishes within a minute; where there is a barrier, a serial client never fills it");
         let reports = reports.into_inner().expect("reports lock");
         (outcome, reports)
     }
@@ -1483,6 +1506,25 @@ mod tests {
         server.server.abort();
     }
 
+    /// A session delete that never gets an answer does not hold back the
+    /// failed upload's error: hcfs-client would retry it for about a minute,
+    /// and the delete is bounded well under the 30 s allowed here.
+    #[tokio::test]
+    async fn a_hung_session_delete_does_not_hold_back_the_error() {
+        let size = 4 * UPLOAD_CHUNK_SIZE;
+        let server = serve_chunks(4, size, Some(2)).await;
+        server.hang_deletes.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let sending = send_pattern(&server, size);
+        let (outcome, _) = tokio::time::timeout(std::time::Duration::from_secs(30), sending)
+            .await
+            .expect("the error comes back without waiting out the delete");
+
+        assert!(matches!(outcome, Err(AppError::Hcfs(_))), "{outcome:?}");
+        assert_eq!(server.deletes.load(std::sync::atomic::Ordering::SeqCst), 1, "the delete was attempted");
+        server.server.abort();
+    }
+
     /// A chunk that cannot be read from disk fails the upload the same way
     /// a refused one does: no finalize, and the session is deleted.
     #[tokio::test]
@@ -1492,7 +1534,10 @@ mod tests {
 
         let (outcome, _) = send_pattern_written(&server, size, size - 1).await;
 
-        assert!(outcome.is_err(), "the last chunk is one byte short on disk");
+        let Err(AppError::Hcfs(message)) = &outcome else {
+            panic!("expected the read failure's sentence, got {outcome:?}");
+        };
+        assert_eq!(message, CHUNK_READ_FAILED, "the last chunk is one byte short on disk");
         assert!(
             server.finalized_after.lock().expect("finalize lock").is_empty(),
             "no finalize after a failed read"
