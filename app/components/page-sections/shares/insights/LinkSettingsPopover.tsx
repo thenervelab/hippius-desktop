@@ -11,14 +11,16 @@ import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   getLinkSettings,
   setLinkSettings,
-  type LinkSettings,
+  switchChange,
+  type LinkSettingsChange,
   type LinkSettingsDefault,
 } from "@/app/lib/tauri/shareInsights";
-import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
-import { linkSettingsQueryKey } from "./queryKeys";
-import { DEFINITIONS, switchPills } from "./insightsView";
+import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
+import { actionErrorLine, DEFINITIONS, loadErrorLine, switchPills } from "./insightsView";
+import { LoadError } from "./LoadError";
 import { FLOATING, FOCUS, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /** Marks what opens Link settings, so a press on it is not "outside". */
@@ -26,8 +28,9 @@ export const SETTINGS_TRIGGER_ATTR = "data-link-settings-trigger";
 
 /**
  * A link's Insights, Comments and Reactions switches: what the status row
- * shows and what Link settings changes. Each change is sent at once, shows at
- * once, and is put back if the server refuses it.
+ * shows and what Link settings changes. Each change sends only the switch
+ * flipped, shows at once, is put back if the server refuses it, and is then
+ * read back from the server, so what shows is what the link has.
  */
 export function useLinkSwitches(shareToken: string) {
   const queryClient = useQueryClient();
@@ -35,19 +38,23 @@ export function useLinkSwitches(shareToken: string) {
   const current = useQuery({
     queryKey: key,
     queryFn: () => getLinkSettings(shareToken),
-    retry: false,
+    ...PANEL_QUERY,
   });
   const save = useMutation({
-    mutationFn: (next: LinkSettings) => setLinkSettings(shareToken, next),
-    onMutate: (next) => {
+    ...PANEL_MUTATION,
+    mutationFn: (change: LinkSettingsChange) => setLinkSettings(shareToken, change),
+    onMutate: async (change) => {
+      // A read still in flight would land over the change shown here.
+      await queryClient.cancelQueries({ queryKey: key });
       const before = queryClient.getQueryData<LinkSettingsDefault>(key);
-      if (before) queryClient.setQueryData<LinkSettingsDefault>(key, { ...before, on: next });
+      if (before) queryClient.setQueryData<LinkSettingsDefault>(key, { ...before, on: { ...before.on, ...change } });
       return { before };
     },
-    onError: (err, _next, ctx) => {
+    onError: (err, _change, ctx) => {
       if (ctx?.before) queryClient.setQueryData(key, ctx.before);
-      toast.error(`Couldn't change that setting. ${errorMessage(err)}`);
+      toast.error(actionErrorLine("change that setting", err, navigator.onLine));
     },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
   return { current, save };
 }
@@ -140,6 +147,7 @@ export function LinkSettingsPopover({
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const { current, save } = switches;
+  const online = useIsOnline();
 
   // The panel hands a new `onClose` every render; the listeners read the latest.
   const onCloseRef = useRef(onClose);
@@ -200,7 +208,7 @@ export function LinkSettingsPopover({
       {current.isPending ? (
         <div className={cn(SKELETON, "h-[150px] rounded-[12px]")} />
       ) : current.isError ? (
-        <p className={cn("text-sm", MUTED)}>Couldn&apos;t load this link&apos;s settings. {errorMessage(current.error)}</p>
+        <LoadError line={loadErrorLine("this link's settings", current.error, online)} onRetry={() => void current.refetch()} />
       ) : current.data.offered.insights ? (
         <LinkEngagementSwitches
           layout="list"
@@ -208,7 +216,7 @@ export function LinkSettingsPopover({
           value={current.data.on}
           disabled={save.isPending}
           switchesInPlan={current.data.switchesInPlan ?? null}
-          onChange={(next) => save.mutate(next)}
+          onChange={(next) => save.mutate(switchChange(current.data.on, next))}
           onUpgrade={() => {
             onLeave();
             router.push(BILLING_ROUTE);

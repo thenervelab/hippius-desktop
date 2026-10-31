@@ -239,6 +239,21 @@ fn list_for_run(root: &Path, account: &str, except: &[PathBuf], run: &str) -> Ve
     found.into_iter().map(|(_, file, kept)| (file, kept)).collect()
 }
 
+/// How many recordings of `account` under `root` still have to reach the
+/// drive: failed ones, and ones an earlier run of the app quit on. Ones this
+/// run is still recording or sending are left out, as [`list`] leaves them;
+/// they count once delivered (`recording_allowance::note_delivered`).
+#[must_use]
+pub fn waiting_recordings(root: &Path, account: &str) -> usize {
+    list(root, account, &[])
+        .iter()
+        .filter(|(file, _)| {
+            file.file_name()
+                .is_some_and(|n| super::recording_allowance::is_video_name(&n.to_string_lossy()))
+        })
+        .count()
+}
+
 /// The card a kept failure comes back as: failed, with Retry (and Upgrade
 /// when the plan was full), sent to the drive it was going to.
 #[must_use]
@@ -333,6 +348,32 @@ mod tests {
         clear(root, &file);
         assert!(list(root, "alice", &[]).is_empty());
         assert!(file.exists(), "the capture itself is never removed");
+    }
+
+    /// The free plan's gate counts the recordings that still have to upload:
+    /// failed ones and ones a run that ended was sending, for this account
+    /// only, never screenshots nor what this run is still recording.
+    #[test]
+    fn waiting_recordings_are_the_accounts_unsent_videos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let video = |kind| KeptFailed { kind, ..kept("alice") };
+        write(root, &capture_in(root, "capture-1", "Recording 1.mp4"), &video(CaptureKind::Recording));
+        write(root, &capture_in(root, "capture-2", "Recording 2.mov"), &video(CaptureKind::Recording));
+        write(root, &capture_in(root, "capture-3", "Screenshot.png"), &kept("alice"));
+        write(
+            root,
+            &capture_in(root, "capture-4", "Recording 4.mp4"),
+            &KeptFailed {
+                kind: CaptureKind::Recording,
+                ..kept("bob")
+            },
+        );
+        let this_run = KeptFailed::in_flight("alice", CaptureKind::Recording, kept("alice").destination, false, None);
+        write(root, &capture_in(root, "capture-5", "Recording 5.mp4"), &this_run);
+        assert_eq!(waiting_recordings(root, "alice"), 2);
+        assert_eq!(waiting_recordings(root, "bob"), 1);
+        assert_eq!(waiting_recordings(&root.join("missing"), "alice"), 0);
     }
 
     /// Only a capture's own temp folder gets a marker, never a folder of

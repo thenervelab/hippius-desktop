@@ -153,6 +153,10 @@ const MiddleTruncatedName: FC<MiddleTruncatedNameProps> = ({
 
     const ro = new ResizeObserver(() => update());
     ro.observe(container);
+    // The suffix (a link icon) often arrives after the first pass, once the
+    // share listing loads: re-truncate when it does, or it is clipped off
+    // the end of a name that only just fitted.
+    if (suffixRef.current) ro.observe(suffixRef.current);
 
     return () => {
       cancelled = true;

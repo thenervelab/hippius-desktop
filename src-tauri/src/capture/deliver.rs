@@ -55,6 +55,26 @@ pub fn keep_temp_after_upload(via_sync: bool, has_link: bool, editable: bool) ->
     !via_sync && (!has_link || editable)
 }
 
+/// The query parameter that tells the share page a load is the owner's own:
+/// it records no view or viewer for it and takes the parameter out of the
+/// address bar.
+pub const OWNER_VIEW_PARAM: &str = "owner=1";
+
+/// `url` as the app opens it for its owner: [`OWNER_VIEW_PARAM`] added to
+/// the query, before the `#` fragment, which holds the link's key and is
+/// left exactly as it is. Only for the app opening the link itself; a copied
+/// link never carries it.
+#[must_use]
+pub fn owner_view_url(url: &str) -> String {
+    let (base, fragment) = url.find('#').map_or((url, ""), |i| url.split_at(i));
+    let separator = match base.find('?') {
+        None => "?",
+        Some(_) if base.ends_with('?') || base.ends_with('&') => "",
+        Some(_) => "&",
+    };
+    format!("{base}{separator}{OWNER_VIEW_PARAM}{fragment}")
+}
+
 /// Where a capture is once it has been put in the drive, before any link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
@@ -160,11 +180,22 @@ pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureD
         LinkSource::External(placed.placed.clone())
     };
     match mint(state, account_id, &source).await {
-        Ok(link) => Minted {
-            share_url: Some(link.share_url),
-            share_token: Some(link.share_token),
-            link_error: None,
-        },
+        Ok(link) => {
+            remember_origin(
+                state,
+                account_id,
+                &source,
+                &destination.label,
+                &destination.rel_path(&placed.file_name),
+                &link.share_token,
+            )
+            .await;
+            Minted {
+                share_url: Some(link.share_url),
+                share_token: Some(link.share_token),
+                link_error: None,
+            }
+        }
         Err(message) => Minted {
             link_error: Some(message),
             ..Minted::default()
@@ -186,6 +217,30 @@ impl Delivered {
             share_token: minted.share_token.clone(),
             placed: placed.placed.clone(),
         }
+    }
+}
+
+/// After a capture's link is minted from its temp copy (a direct upload,
+/// [`LinkSource::External`]): record which file in the drive it is the link
+/// of, as a link made from a synced file records it (`shares::origin`). That
+/// is how Drive, Insights and deleting the capture find the link by its path
+/// rather than by its name. Best effort: the link is already out.
+pub async fn remember_origin(state: &AppState, account_id: &str, source: &LinkSource, label: &str, rel_path: &str, share_token: &str) {
+    let Ok(pool) = state.pool() else { return };
+    let owner = crate::auth::account_key::account_key(account_id);
+    if let Err(e) = record_origin(pool, &owner, source, label, rel_path, share_token).await {
+        tracing::warn!(error = %e, "capture link's file not recorded; it is found by its name instead");
+    }
+}
+
+/// [`remember_origin`] on a pool: only an external source is recorded here
+/// (a synced file's share records its own origin when it is minted).
+async fn record_origin(pool: &sqlx::SqlitePool, owner: &str, source: &LinkSource, label: &str, rel_path: &str, share_token: &str) -> Result<()> {
+    match source {
+        LinkSource::External(_) if !label.is_empty() && !rel_path.is_empty() => {
+            crate::shares::origin::record(pool, share_token, owner, label, rel_path).await
+        }
+        _ => Ok(()),
     }
 }
 
@@ -301,7 +356,11 @@ const UPLOAD_FAILED: &str = "The capture couldn't be uploaded. Retry in a moment
 #[must_use]
 pub fn failure_reason(e: &AppError) -> FailureReason {
     match e {
-        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached) => FailureReason::StorageFull,
+        // The free plan's recordings used up reads like a full plan: Upgrade
+        // is the way on (Retry once an older recording is deleted).
+        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached | crate::error::NotReadyKind::RecordingLimitReached) => {
+            FailureReason::StorageFull
+        }
         other if is_offline_shaped(&other.to_string()) => FailureReason::Offline,
         _ => FailureReason::Other,
     }
@@ -314,9 +373,13 @@ pub fn failure_reason(e: &AppError) -> FailureReason {
 pub fn failure_copy(e: &AppError) -> String {
     match failure_reason(e) {
         FailureReason::Offline => OFFLINE.into(),
+        FailureReason::StorageFull if matches!(e, AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached)) => {
+            super::recording_allowance::LIMIT_KEPT.into()
+        }
         FailureReason::StorageFull => STORAGE_FULL.into(),
         FailureReason::NeedsFolder | FailureReason::Other => match e {
             AppError::Validation(message) => message.clone(),
+            AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable) => super::recording_allowance::COUNT_UNAVAILABLE.into(),
             _ => UPLOAD_FAILED.into(),
         },
     }
@@ -564,6 +627,76 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A capture's link made from its temp copy records the file in the
+    /// drive it belongs to, so it is found by its path (Insights, deleting
+    /// the capture); a synced file's share records its own, elsewhere.
+    #[tokio::test]
+    async fn a_direct_uploads_link_records_its_file_in_the_drive() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("t.db"))
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
+        let external = LinkSource::External(std::path::PathBuf::from("/tmp/capture-1/Recording.mp4"));
+        record_origin(&pool, "owner", &external, "Hippius Captures", "Captures/Recording.mp4", "tok-ext")
+            .await
+            .unwrap();
+        let synced = LinkSource::Synced {
+            label: "Hippius Captures".into(),
+            rel_path: "Captures/Shot.png".into(),
+        };
+        record_origin(&pool, "owner", &synced, "Hippius Captures", "Captures/Shot.png", "tok-sync")
+            .await
+            .unwrap();
+        let rows = crate::shares::origin::fetch_for_tokens(&pool, "owner", &["tok-ext", "tok-sync"])
+            .await
+            .unwrap();
+        let ext = rows.get("tok-ext").expect("the direct upload's link is recorded");
+        assert_eq!(
+            (ext.folder_label.as_str(), ext.relative_path.as_str()),
+            ("Hippius Captures", "Captures/Recording.mp4")
+        );
+        assert!(!rows.contains_key("tok-sync"), "a synced share records its own origin when minted");
+    }
+
+    /// A recording kept back at the free limit says so and offers Upgrade
+    /// (the plan-full reason); one whose count could not be read says that.
+    #[test]
+    fn a_recording_kept_back_at_the_free_limit_says_why() {
+        let limit = AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached);
+        assert_eq!(failure_reason(&limit), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&limit), super::super::recording_allowance::LIMIT_KEPT);
+        let unknown = AppError::NotReady(crate::error::NotReadyKind::RecordingCountUnavailable);
+        assert_eq!(failure_reason(&unknown), FailureReason::Other);
+        assert_eq!(failure_copy(&unknown), super::super::recording_allowance::COUNT_UNAVAILABLE);
+    }
+
+    /// The owner's own open carries `owner=1` before the fragment, whatever
+    /// the link already has in its query, and the key is untouched.
+    #[test]
+    fn the_owners_open_marks_the_query_and_keeps_the_key() {
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok#k=AbC-_9"),
+            "https://console.hippius.com/share/tok?owner=1#k=AbC-_9"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok?lang=en#p=salt.key"),
+            "https://console.hippius.com/share/tok?lang=en&owner=1#p=salt.key"
+        );
+        assert_eq!(
+            owner_view_url("https://console.hippius.com/share/tok"),
+            "https://console.hippius.com/share/tok?owner=1"
+        );
+        assert_eq!(owner_view_url("https://x/share/tok?#k=1"), "https://x/share/tok?owner=1#k=1");
+        // A `?` inside the fragment is the key's, not a query.
+        assert_eq!(owner_view_url("https://x/share/tok#k=a?b"), "https://x/share/tok?owner=1#k=a?b");
+    }
 
     #[test]
     fn a_link_that_did_not_get_through_is_tried_three_times_in_all() {

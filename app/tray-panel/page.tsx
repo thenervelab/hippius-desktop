@@ -12,6 +12,7 @@ import TrayUploadRow, { ProgressRing } from "./TrayUploadRow";
 import { openMainUpload, openMainWindow, revealMain } from "./trayMainWindow";
 import { useTrayCaptureView } from "./useTrayCaptureView";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
+import { useTrayShareLinks } from "@/app/lib/tray/useTrayShareLinks";
 import { getTraySyncLine } from "@/app/lib/tray/traySyncSummary";
 import { trayRowOpensViewer } from "@/app/lib/tray/trayRowActions";
 import {
@@ -79,6 +80,8 @@ export default function TrayPanelPage() {
     chatUnread,
     loading,
   } = useTrayPanelData(capturesOn);
+  // Which rows have a link, by the rule every other list uses.
+  const { linksFor, reload: reloadLinks } = useTrayShareLinks(Boolean(menu?.sessionReady));
   // Where capture is off or unsupported there is no Captures tab: the list
   // is every upload, as before the tabs.
   const hasCapturesTab = captureView.state !== "hidden";
@@ -228,6 +231,8 @@ export default function TrayPanelPage() {
                       isCapture={tab === "captures" || captureKeys.has(dedupKey(item))}
                       siblings={viewable}
                       editorEnabled={capturesOn}
+                      hasLink={linksFor(item).length > 0}
+                      onLinkCopied={reloadLinks}
                     />
                   ))}
                 </ul>

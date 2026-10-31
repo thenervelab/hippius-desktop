@@ -23,6 +23,8 @@ export const OWNED_DRIVE_SHARING_QUERY_KEY = "owned-drive-sharing";
 
 const EMPTY: ReadonlyMap<string, DriveSharing> = new Map();
 
+const isOnline = () => typeof navigator === "undefined" || navigator.onLine !== false;
+
 /**
  * Sharing state for each OWN drive, by local label.
  *
@@ -79,8 +81,14 @@ export function useOwnedDriveSharingState(ownLabels: readonly string[]): {
     // navigation onto the list picks up.
     staleTime: 60_000,
     refetchOnWindowFocus: false,
+    // The fetch is a local IPC call, and Rust answers offline too. Under
+    // the default "online" mode a query that starts while the OS reports
+    // no connection is paused, never failed, so the Shared Drives page
+    // held its skeleton for as long as the computer stayed offline.
+    networkMode: "always",
     // A boot-time miss must not hide the badge for the whole session.
-    retry: 2,
+    // Offline, retrying only delays the error the page explains.
+    retry: (failures) => failures < 2 && isOnline(),
   });
 
   const byLabel = useMemo(() => {

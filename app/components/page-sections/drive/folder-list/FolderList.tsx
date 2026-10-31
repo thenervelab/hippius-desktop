@@ -385,6 +385,8 @@ const FolderList: React.FC<FolderListProps> = ({
                   <Button
                     variant="ghost"
                     size="auto"
+                    // An icon alone: without a name a screen reader says only "button".
+                    aria-label={`Actions for ${row.folderName}`}
                     className="action-menu-area mt-0.5 h-8 w-8 flex-shrink-0 rounded-md p-0 text-grey-70 transition-colors hover:bg-grey-90 hover:text-grey-30 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white"
                   >
                     <Icons.EllipsisVertical className="size-[18px]" />
