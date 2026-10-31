@@ -1507,8 +1507,8 @@ mod tests {
     }
 
     /// A session delete that never gets an answer does not hold back the
-    /// failed upload's error: hcfs-client would retry it for about a minute,
-    /// and the delete is bounded well under the 30 s allowed here.
+    /// failed upload's error: hcfs-client would wait out its 60 s read
+    /// timeout, and the delete is bounded well under the 30 s allowed here.
     #[tokio::test]
     async fn a_hung_session_delete_does_not_hold_back_the_error() {
         let size = 4 * UPLOAD_CHUNK_SIZE;
