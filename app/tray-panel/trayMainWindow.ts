@@ -120,7 +120,10 @@ export type QuickLinkOutcome =
 /**
  * "Copy link": Rust reuses the file's existing public link or makes one
  * (public, until revoked), and puts it on the clipboard itself, so the copy
- * lands even if the popover lost focus while a link was being made.
+ * lands even if the popover lost focus while a link was being made. The
+ * file's size lets Rust find a capture's link made in the web console or the
+ * extension, as the row's link icon does, so that link is copied rather than
+ * a second one made.
  */
 export async function copyTrayRowLink(
   item: UploadFeedItem,
@@ -130,6 +133,7 @@ export async function copyTrayRowLink(
       folderLabel: item.label ?? "",
       relativePath: trayRowRelativePath(item),
       fileId: cloudFileIdFor(item),
+      size: item.size ? item.size : null,
     });
   } catch (error) {
     console.error("[TrayPanel] copy link failed:", error);

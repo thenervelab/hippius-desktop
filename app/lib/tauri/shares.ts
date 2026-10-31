@@ -398,6 +398,13 @@ export interface CaptureLink {
   shareUrl: string;
   /** The link was also put on the clipboard. */
   copied: boolean;
+  /**
+   * Its Insights, Comments and Reactions were asked for but could not be
+   * turned on, so the link has them off.
+   */
+  switchesNotSent: boolean;
+  /** The capture already had a link, and that one was copied instead. */
+  reused: boolean;
 }
 
 /**
@@ -405,17 +412,21 @@ export interface CaptureLink {
  * a public link that lasts until it is revoked, through the same funnels as
  * the tray's Copy link, turns on its insights, comments and reactions where
  * the plan includes them, and copies it. `fileId` only for a capture with no
- * copy on this computer. Rejects with Rust's sentence.
+ * copy on this computer, `size` when known (a link made elsewhere is matched
+ * by name and size, as the row's link icon matches it). Rejects with Rust's
+ * sentence.
  */
 export async function createCaptureLink(
   folderLabel: string,
   relativePath: string,
   fileId?: string | null,
+  size?: number,
 ): Promise<CaptureLink> {
   return invoke<CaptureLink>("create_capture_link", {
     folderLabel,
     relativePath,
     fileId: fileId ?? null,
+    size: size ?? null,
   });
 }
 

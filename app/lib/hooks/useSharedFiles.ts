@@ -26,18 +26,13 @@ import { useQuery, type QueryClient } from "@tanstack/react-query";
 import { useAtomValue } from "jotai";
 
 import { listShares, type ShareSummary } from "@/app/lib/tauri/shares";
+import { buildShareIndex, EMPTY_SHARE_INDEX, shareLookups } from "@/app/lib/utils/fileLinks";
 import { shareFeatureEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
 
 /** The share listing's query key, shared with the `/shares` page. */
 export const SHARES_QUERY_KEY = "shares-list";
-
-interface SharedIndex {
-  byPath: Map<string, Map<string, ShareSummary[]>>;
-  /** Links this device has no origin for, by `filename`. */
-  unplacedByName: Map<string, ShareSummary[]>;
-}
 
 interface UseSharedFilesResult {
   /** Active share rows for this `(label, relativePath)` pair. Empty array for unshared files. */
@@ -52,39 +47,20 @@ interface UseSharedFilesResult {
   getUnplacedSharesNamed: (fileName: string | null | undefined) => ShareSummary[];
   /** True while the first fetch is in flight. */
   isLoading: boolean;
-}
-
-const EMPTY_INDEX: SharedIndex = { byPath: new Map(), unplacedByName: new Map() };
-const EMPTY_ROWS: ShareSummary[] = [];
-
-function pushTo(map: Map<string, ShareSummary[]>, key: string, row: ShareSummary) {
-  const list = map.get(key);
-  if (list) list.push(row);
-  else map.set(key, [row]);
-}
-
-function buildIndex(rows: ShareSummary[]): SharedIndex {
-  const index: SharedIndex = { byPath: new Map(), unplacedByName: new Map() };
-  for (const row of rows) {
-    if (!row.folderLabel || !row.relativePath) {
-      if (row.filename) pushTo(index.unplacedByName, row.filename, row);
-      continue;
-    }
-    let folder = index.byPath.get(row.folderLabel);
-    if (!folder) {
-      folder = new Map();
-      index.byPath.set(row.folderLabel, folder);
-    }
-    pushTo(folder, row.relativePath, row);
-  }
-  return index;
+  /**
+   * The listing could not be read and nothing is known: every file then
+   * looks link-less, which must not be read as "has no link".
+   */
+  isError: boolean;
+  /** Read the listing again. */
+  refetch: () => void;
 }
 
 export function useSharedFiles(): UseSharedFilesResult {
   const { polkadotAddress } = useWalletAuth();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [SHARES_QUERY_KEY, polkadotAddress],
     queryFn: () => listShares(),
     enabled: Boolean(polkadotAddress) && shareEnabled,
@@ -94,30 +70,24 @@ export function useSharedFiles(): UseSharedFilesResult {
     staleTime: 0,
     refetchOnWindowFocus: true,
     refetchInterval: LIVE_DATA_REFRESH_MS,
-    select: buildIndex,
+    select: buildShareIndex,
   });
 
-  const index = data ?? EMPTY_INDEX;
+  const index = data ?? EMPTY_SHARE_INDEX;
 
   // Stable identity per `index` so callers that pass `getSharesFor`
   // into a memo dependency don't churn unnecessarily.
-  const getSharesFor = useMemo(() => {
-    return (
-      label: string | null | undefined,
-      relativePath: string | null | undefined,
-    ): ShareSummary[] => {
-      if (!label || !relativePath) return EMPTY_ROWS;
-      const folder = index.byPath.get(label);
-      if (!folder) return EMPTY_ROWS;
-      return folder.get(relativePath) ?? EMPTY_ROWS;
-    };
-  }, [index]);
-  const getUnplacedSharesNamed = useMemo(() => {
-    return (fileName: string | null | undefined): ShareSummary[] =>
-      (fileName && index.unplacedByName.get(fileName)) || EMPTY_ROWS;
-  }, [index]);
+  const { getSharesFor, getUnplacedSharesNamed } = useMemo(() => shareLookups(index), [index]);
 
-  return { getSharesFor, getUnplacedSharesNamed, isLoading: isLoading && shareEnabled };
+  return {
+    getSharesFor,
+    getUnplacedSharesNamed,
+    isLoading: isLoading && shareEnabled,
+    // Only while nothing is known: a failed refresh of a listing already
+    // read keeps the rows it has.
+    isError: isError && data === undefined,
+    refetch: () => void refetch(),
+  };
 }
 
 /**

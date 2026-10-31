@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
 const listOwnedDriveSharingMock = vi.hoisted(() => vi.fn());
@@ -209,6 +209,26 @@ describe("useOwnedDriveSharingState", () => {
     await waitFor(() => expect(result.current.byLabel.size).toBe(1));
     expect(result.current.isPending).toBe(false);
     expect(result.current.isError).toBe(false);
+  });
+
+  // The fetch is a local IPC call that Rust answers offline too. Paused
+  // instead, the Shared Drives page held its skeleton for as long as the
+  // computer stayed offline.
+  it("asks, and fails without retrying, while the computer is offline", async () => {
+    const onLine = vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    onlineManager.setOnline(false);
+    try {
+      listOwnedDriveSharingMock.mockRejectedValue(new Error("offline"));
+      const { result } = renderHook(() => useOwnedDriveSharingState(["team-docs"]), {
+        wrapper: wrapperFor(makeClient()),
+      });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(result.current.isPending).toBe(false);
+      expect(listOwnedDriveSharingMock).toHaveBeenCalledTimes(1);
+    } finally {
+      onlineManager.setOnline(true);
+      onLine.mockRestore();
+    }
   });
 
   it("is neither pending nor failed with no drives to ask about", () => {

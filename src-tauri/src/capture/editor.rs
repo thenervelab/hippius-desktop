@@ -381,16 +381,29 @@ pub fn saved_message(link: LinkResult) -> String {
 }
 
 /// Check the editor's PNG and turn it into the bytes to save: the PNG as
-/// it came for a PNG, re-encoded for a JPEG. Returns the bytes and the
+/// it came for a PNG, re-encoded for a JPEG. With `watermark` (a Free plan,
+/// [`free_plan_watermark`]) the Free watermark is stamped on the edited
+/// picture first, so cropping or covering it in the editor never saves a
+/// clean copy; the PNG is then encoded again. Returns the bytes and the
 /// decoded picture (for the card's new thumbnail).
 ///
 /// # Errors
 ///
 /// [`AppError::Validation`] for anything that is not a sane PNG.
-pub fn prepare_edited(bytes: &[u8], format: EditableFormat) -> Result<(Vec<u8>, image::RgbaImage)> {
-    let rgba = decode_checked(bytes)?;
+pub fn prepare_edited(bytes: &[u8], format: EditableFormat, watermark: bool) -> Result<(Vec<u8>, image::RgbaImage)> {
+    let mut rgba = decode_checked(bytes)?;
+    if watermark {
+        super::watermark::stamp_image(&mut rgba);
+    }
     let encoded = match format {
-        EditableFormat::Png => bytes.to_vec(),
+        EditableFormat::Png if !watermark => bytes.to_vec(),
+        EditableFormat::Png => {
+            let mut out = Vec::new();
+            image::DynamicImage::ImageRgba8(rgba.clone())
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .map_err(|e| AppError::Other(format!("Could not encode the edited picture: {e}")))?;
+            out
+        }
         EditableFormat::Jpeg => {
             let rgb = image::DynamicImage::ImageRgba8(rgba.clone()).to_rgb8();
             let mut out = Vec::new();
@@ -404,6 +417,20 @@ pub fn prepare_edited(bytes: &[u8], format: EditableFormat) -> Result<(Vec<u8>, 
 }
 
 const JPEG_QUALITY: u8 = 92;
+
+/// Whether what the editor saves or copies gets the Free watermark: on the
+/// plan as it is now, read the way a capture reads it. A plan that cannot be
+/// read refuses, as it refuses a capture: neither a mark on a paid user's
+/// picture nor a clean picture for a free one.
+async fn free_plan_watermark(state: &AppState) -> Result<bool> {
+    let account = state.current_session_account()?;
+    match super::allowance::recording_tier(state, &account).await {
+        Ok(tier) => Ok(super::watermark::applies(tier)),
+        // No Drive plan at all is not a paid plan.
+        Err(super::allowance::PlanRefusal::NoDrivePlan) => Ok(true),
+        Err(refusal @ super::allowance::PlanRefusal::Unreachable) => Err(refusal.into()),
+    }
+}
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
@@ -963,7 +990,8 @@ pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHand
     let account_id = state.current_account_id()?;
     let bytes = bytes.clone();
     let format = session.format;
-    let (encoded, rgba) = tokio::task::spawn_blocking(move || prepare_edited(&bytes, format))
+    let watermark = free_plan_watermark(&state).await?;
+    let (encoded, rgba) = tokio::task::spawn_blocking(move || prepare_edited(&bytes, format, watermark))
         .await
         .map_err(|e| AppError::Other(format!("editor save task failed: {e}")))??;
     lock(&state.capture.editor_saved).take();
@@ -1178,7 +1206,7 @@ pub async fn capture_editor_copy_saved_link(
                 })
             }
         }
-        Some(SavedEdit::File { label, rel_path }) => crate::shares::quick_link::copy_file_share_link(state, app, label, rel_path, None).await,
+        Some(SavedEdit::File { label, rel_path }) => crate::shares::quick_link::copy_file_share_link(state, app, label, rel_path, None, None).await,
         None => Ok(QuickLinkOutcome::Failed {
             message: "There is no link to copy for this picture.".into(),
         }),
@@ -1186,17 +1214,24 @@ pub async fn capture_editor_copy_saved_link(
 }
 
 /// Copy: the editor's flattened PNG (the raw request body) on the clipboard
-/// as a picture.
+/// as a picture, with the Free watermark on a Free plan, as a save has it.
 #[tauri::command]
-pub async fn capture_editor_copy(app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<()> {
+pub async fn capture_editor_copy(state: tauri::State<'_, AppState>, app: AppHandle, request: tauri::ipc::Request<'_>) -> Result<()> {
     use tauri_plugin_clipboard_manager::ClipboardExt;
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err(AppError::Validation(NOT_A_PICTURE.into()));
     };
     let bytes = bytes.clone();
-    let rgba = tokio::task::spawn_blocking(move || decode_checked(&bytes))
-        .await
-        .map_err(|e| AppError::Other(format!("editor copy task failed: {e}")))??;
+    let watermark = free_plan_watermark(&state).await?;
+    let rgba = tokio::task::spawn_blocking(move || {
+        let mut rgba = decode_checked(&bytes)?;
+        if watermark {
+            super::watermark::stamp_image(&mut rgba);
+        }
+        Ok::<_, AppError>(rgba)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("editor copy task failed: {e}")))??;
     let (w, h) = (rgba.width(), rgba.height());
     app.clipboard()
         .write_image(&tauri::image::Image::new_owned(rgba.into_raw(), w, h))
@@ -1668,7 +1703,7 @@ mod tests {
     #[test]
     fn the_editors_png_is_saved_as_it_came_for_a_png() {
         let bytes = png(4, 3);
-        let (saved, rgba) = prepare_edited(&bytes, EditableFormat::Png).unwrap();
+        let (saved, rgba) = prepare_edited(&bytes, EditableFormat::Png, false).unwrap();
         assert_eq!(saved, bytes);
         assert_eq!((rgba.width(), rgba.height()), (4, 3));
     }
@@ -1677,7 +1712,7 @@ mod tests {
     /// viewer agrees about.
     #[test]
     fn a_jpeg_is_saved_as_a_jpeg() {
-        let (saved, _) = prepare_edited(&png(8, 8), EditableFormat::Jpeg).unwrap();
+        let (saved, _) = prepare_edited(&png(8, 8), EditableFormat::Jpeg, false).unwrap();
         assert_eq!(&saved[..3], &[0xFF, 0xD8, 0xFF], "JPEG start-of-image");
         assert_eq!(image::guess_format(&saved).unwrap(), image::ImageFormat::Jpeg);
     }
@@ -1693,8 +1728,28 @@ mod tests {
             assert!(matches!(e, AppError::Validation(_)), "{e:?}");
         }
         // A JPEG is not what the editor sends.
-        let (jpeg, _) = prepare_edited(&png(2, 2), EditableFormat::Jpeg).unwrap();
+        let (jpeg, _) = prepare_edited(&png(2, 2), EditableFormat::Jpeg, false).unwrap();
         assert!(decode_checked(&jpeg).is_err());
+    }
+
+    /// A Free plan's edit is saved with the watermark stamped again: a crop
+    /// that cut the original mark off still carries one. The pixels differ
+    /// from the editor's where the mark goes and nowhere else's size.
+    #[test]
+    fn a_free_plans_edit_is_saved_with_the_watermark() {
+        let bytes = png(400, 300);
+        let (clean, clean_rgba) = prepare_edited(&bytes, EditableFormat::Png, false).unwrap();
+        assert_eq!(clean, bytes, "a paid plan's PNG is saved as it came");
+        let (marked, marked_rgba) = prepare_edited(&bytes, EditableFormat::Png, true).unwrap();
+        assert_ne!(marked, bytes, "the stamped picture is encoded again");
+        assert_eq!(marked_rgba.dimensions(), clean_rgba.dimensions());
+        assert_ne!(marked_rgba, clean_rgba, "the mark is in the pixels");
+        let mut expected = clean_rgba.clone();
+        super::super::watermark::stamp_image(&mut expected);
+        assert_eq!(marked_rgba, expected, "the same mark a capture gets");
+        assert_eq!(decode_checked(&marked).unwrap(), expected, "the saved file holds it");
+        let (jpeg, _) = prepare_edited(&bytes, EditableFormat::Jpeg, true).unwrap();
+        assert_eq!(image::guess_format(&jpeg).unwrap(), image::ImageFormat::Jpeg);
     }
 
     /// The limit applies to the header, before the pixels are allocated.

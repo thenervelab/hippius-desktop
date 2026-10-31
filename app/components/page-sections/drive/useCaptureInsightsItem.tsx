@@ -15,60 +15,16 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import type { ShareSummary } from "@/app/lib/tauri/shares";
 import { cloudFileIdFor } from "@/app/lib/tray/trayRowActions";
-import { getFileTypeFromExtension } from "@/app/lib/utils/getTileTypeFromExtension";
+import { captureSharesFrom, isCaptureMedia, newestShare } from "@/app/lib/utils/fileLinks";
 import { useDriveRoute } from "./driveRoute";
 
 /** The words for opening a capture's Insights, wherever it is offered. */
 export const VIEW_INSIGHTS_LABEL = "View insights";
 
-/** The newest of a file's links: the one its Insights are about. */
-export function newestShare(rows: ShareSummary[]): ShareSummary | null {
-  let newest: ShareSummary | null = null;
-  for (const row of rows) {
-    if (!newest || Date.parse(row.createdAt) > Date.parse(newest.createdAt)) newest = row;
-  }
-  return newest;
-}
+export { captureSharesFrom, isCaptureMedia, isCaptureName, newestShare } from "@/app/lib/utils/fileLinks";
 
 export function newestShareToken(rows: ShareSummary[]): string | null {
   return newestShare(rows)?.shareToken ?? null;
-}
-
-/** A screenshot or a recording: the files Insights are offered for. */
-export function isCaptureMedia(name: string | null | undefined): boolean {
-  const dot = name?.lastIndexOf(".") ?? -1;
-  if (!name || dot < 0) return false;
-  const type = getFileTypeFromExtension(name.slice(dot + 1));
-  return type === "image" || type === "video";
-}
-
-/** The last part of a drive-relative path. */
-function baseName(relativePath: string): string {
-  return relativePath.slice(relativePath.lastIndexOf("/") + 1);
-}
-
-/**
- * A capture's links: the ones this device made for its path, and the ones
- * made elsewhere (the browser extension, the web console, another
- * computer) from a file of the same name, unless the sizes say it was a
- * different file. The server names a link's file by name and size only, and
- * the console and the extension match links to files the same way. Trusted
- * only for screenshots and recordings, whose names carry the second they
- * were taken; any other file gets only this device's links.
- */
-export function captureSharesFrom(
-  lookups: Pick<ReturnType<typeof useSharedFiles>, "getSharesFor" | "getUnplacedSharesNamed">,
-  label: string | null | undefined,
-  relativePath: string | null | undefined,
-  size?: number,
-): ShareSummary[] {
-  if (!label || !relativePath) return [];
-  const placed = lookups.getSharesFor(label, relativePath);
-  if (!isCaptureMedia(relativePath)) return placed;
-  const named = lookups
-    .getUnplacedSharesNamed(baseName(relativePath))
-    .filter((row) => !size || !row.plaintextSize || row.plaintextSize === size);
-  return named.length === 0 ? placed : [...placed, ...named];
 }
 
 /**
@@ -77,13 +33,31 @@ export function captureSharesFrom(
  * to find a capture's link when it was opened before one was known.
  */
 export function useCaptureShares() {
-  const { getSharesFor, getUnplacedSharesNamed, isLoading } = useSharedFiles();
+  const { getSharesFor, getUnplacedSharesNamed, isLoading, isError, refetch } = useSharedFiles();
   const sharesFor = useCallback(
     (label: string | null | undefined, relativePath: string | null | undefined, size?: number) =>
       captureSharesFrom({ getSharesFor, getUnplacedSharesNamed }, label, relativePath, size),
     [getSharesFor, getUnplacedSharesNamed],
   );
-  return { sharesFor, isLoading };
+  return { sharesFor, isLoading, isError, refetch };
+}
+
+/**
+ * The tokens of a capture's links, by the same lookup as its Insights
+ * ({@link captureSharesFrom}), for "Also turn off its links" when it is
+ * deleted. Nothing for a folder or a file that is not a screenshot or a
+ * recording.
+ */
+export function useCaptureLinkTokens() {
+  const { sharesFor } = useCaptureShares();
+  return useCallback(
+    (file: FormattedUserFile): string[] => {
+      const relativePath = file.actualFileName || file.name;
+      if (file.isFolder || !isCaptureMedia(relativePath)) return [];
+      return [...new Set(sharesFor(file.label, relativePath, file.size).map((row) => row.shareToken))];
+    },
+    [sharesFor],
+  );
 }
 
 /**
@@ -121,7 +95,12 @@ export function useCaptureInsightsShare() {
  */
 export function captureLinkSource(file: FormattedUserFile, relativePath: string): CaptureLinkSource | undefined {
   if (!file.label || !relativePath) return undefined;
-  return { label: file.label, relativePath, fileId: cloudFileIdFor(file) };
+  return {
+    label: file.label,
+    relativePath,
+    fileId: cloudFileIdFor(file),
+    ...(file.size ? { size: file.size } : {}),
+  };
 }
 
 /**

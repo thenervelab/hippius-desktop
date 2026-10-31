@@ -135,6 +135,8 @@ export interface CaptureLinkSource {
   label: string;
   relativePath: string;
   fileId?: string | null;
+  /** The capture's size, when known: Rust matches a link made elsewhere by name and size. */
+  size?: number;
 }
 
 /**
