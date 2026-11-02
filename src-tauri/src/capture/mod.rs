@@ -17,6 +17,7 @@ pub mod deliver;
 pub mod desktop_shortcut;
 pub mod destination;
 pub mod device_watch;
+pub mod drag_out;
 pub mod editor;
 #[cfg(target_os = "linux")]
 mod focus_watch_gtk;

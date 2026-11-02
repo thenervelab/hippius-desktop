@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import {
   AlertCircle,
@@ -30,6 +30,7 @@ import {
   editCapturePreview,
   getCapturePreview,
   getCapturePreviewPointer,
+  startCapturePreviewDrag,
   manageCapturePreviewLink,
   mintCapturePreviewLink,
   openCapturePreviewInsights,
@@ -161,6 +162,9 @@ export default function CapturePreviewPage() {
   const [countdown, setCountdown] = useState<Countdown | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The picture is being dragged out as a file: the card holds until Rust
+  // says the drag is over, so it never slides away under a drag.
+  const [dragging, setDragging] = useState(false);
   // Discard and Revoke link ask first, in the card itself.
   const [asking, setAsking] = useState<CardQuestion | null>(null);
   const keepButton = useRef<HTMLButtonElement | null>(null);
@@ -234,6 +238,14 @@ export default function CapturePreviewPage() {
   }, [card, clearCopied]);
 
   useEffect(() => clearCopied, [clearCopied]);
+
+  // Rust's word that a drag of the picture is over (dropped or cancelled).
+  useEffect(() => {
+    const unlisten = onTauriEvent("capture_preview_drag_ended", () => setDragging(false));
+    return () => {
+      unlisten();
+    };
+  }, []);
 
   const hasLinkToManage = card?.actions.manageLink ?? false;
   useEffect(() => {
@@ -346,7 +358,7 @@ export default function CapturePreviewPage() {
 
   // A question, or a failed copy, holds the card too: it must not slide
   // away mid-answer or before Try again.
-  const held = hovered || keyboardIn || asking !== null || copyFailed;
+  const held = hovered || keyboardIn || asking !== null || copyFailed || dragging;
   const countingFor = settled && card ? card.id : null;
   // Before paint, so the timer bar is never drawn a frame behind the hold.
   useLayoutEffect(() => {
@@ -380,6 +392,15 @@ export default function CapturePreviewPage() {
   };
 
   const showInFolder = () => void showCapturePreviewInFolder().catch(() => undefined);
+  // Dragging the picture: the webview's own drag would hand other apps the
+  // picture's data: URL (a long string of text in a chat app), so it is
+  // cancelled and Rust starts the system's drag of the capture's file.
+  const dragOut = (e: DragEvent) => {
+    e.preventDefault();
+    if (!actions.dragOut) return;
+    setDragging(true);
+    void startCapturePreviewDrag().catch(() => setDragging(false));
+  };
   // A screenshot's picture opens the editor, as macOS's thumbnail opens
   // Markup; anything else (a recording) still shows its folder.
   const canEdit = actions.edit === true;
@@ -453,6 +474,7 @@ export default function CapturePreviewPage() {
         <button
           type="button"
           onClick={failed ? undefined : canEdit ? edit : showInFolder}
+          onDragStart={dragOut}
           aria-label={canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
           // Its hover face says what a click does; no tooltip repeats it.
           data-card-tip="picture"

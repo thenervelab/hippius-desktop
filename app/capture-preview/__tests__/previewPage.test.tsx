@@ -142,6 +142,40 @@ describe("the preview card", () => {
     expect(dismissed()).toBe(1);
   });
 
+  // Dragging the picture must drop the capture's file, not the picture's
+  // data: URL: the webview's drag is cancelled and Rust starts the system's
+  // file drag; the card holds until Rust says the drag is over.
+  it("drags its picture out as the file and holds until the drag is over", async () => {
+    tauri.onInvoke("capture_preview_start_drag", () => null);
+    await setup(card({ state: "uploaded", linkCopied: true }, 1, { dragOut: true }));
+    const picture = screen.getByRole("button", { name: `Show ${FILE} in its folder` });
+    const drag = new Event("dragstart", { bubbles: true, cancelable: true });
+    // From the picture inside the button, where a real drag starts.
+    const img = picture.querySelector("img") ?? picture;
+    act(() => {
+      img.dispatchEvent(drag);
+    });
+    expect(drag.defaultPrevented).toBe(true);
+    await advance(0);
+    expect(called("capture_preview_start_drag")).toBe(1);
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    await act(() => tauri.emitEvent("capture_preview_drag_ended", null));
+    await advance(AUTO_HIDE_MS + 10);
+    expect(dismissed()).toBe(1);
+  });
+
+  it("never hands the webview's drag of its picture to another app, even with nothing to drag", async () => {
+    await setup(card({ state: "uploading" }));
+    const picture = screen.getByRole("button", { name: `Show ${FILE} in its folder` });
+    const drag = new Event("dragstart", { bubbles: true, cancelable: true });
+    act(() => {
+      picture.dispatchEvent(drag);
+    });
+    expect(drag.defaultPrevented).toBe(true);
+    expect(called("capture_preview_start_drag")).toBe(0);
+  });
+
   // Reaching for a button must never race the card, and leaving it must not
   // start the wait over: it goes when the time it had left runs out.
   it("holds while the pointer is on it and runs on with the time it had left", async () => {

@@ -768,6 +768,7 @@ fn main() {
             crate::capture::setup::capture_drive_create,
             crate::capture::commands::capture_preview_context,
             crate::capture::commands::capture_preview_pointer,
+            crate::capture::commands::capture_preview_start_drag,
             crate::capture::commands::capture_preview_copy_link,
             crate::capture::commands::capture_preview_show_in_folder,
             crate::capture::commands::capture_preview_dismiss,

@@ -392,6 +392,8 @@ export interface CapturePreviewActions {
   upgrade: boolean;
   /** Open the screenshot in the editor. Absent from an older backend = no. */
   edit?: boolean;
+  /** Drag the picture into another app as the file. Absent from an older backend = no. */
+  dragOut?: boolean;
 }
 
 /** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
@@ -622,6 +624,15 @@ export function getCapturePreview(): Promise<CapturePreviewCard | null> {
  */
 export function getCapturePreviewPointer(): Promise<[number, number] | null> {
   return invoke("capture_preview_pointer");
+}
+
+/**
+ * The card's picture is being dragged: Rust starts the system's file drag of
+ * the capture's own file, so the drop is the PNG or MP4, not the picture's
+ * `data:` URL. Rust emits `capture_preview_drag_ended` once it is over.
+ */
+export function startCapturePreviewDrag(): Promise<void> {
+  return invoke("capture_preview_start_drag");
 }
 
 export function copyCapturePreviewLink(): Promise<void> {
