@@ -3337,3 +3337,36 @@ fn no_password_share_sends_a_chat_preview() {
         "turning it back on checks the link has no password"
     );
 }
+
+/// "Also save a copy to the Desktop" copies a NEW capture before its
+/// delivery moves it into the drive (a local-first delivery moves the file,
+/// so a copy after it would find nothing), and never on a retry, which would
+/// put a second copy there. The card's Save to Desktop copies the file the
+/// card knows, never a path from the page.
+#[test]
+fn a_new_capture_is_copied_to_the_desktop_before_it_is_delivered() {
+    let src = read("src/capture/commands.rs");
+    for sig in [
+        "async fn finish_screenshot(",
+        "async fn take_with_system_picker(",
+        "pub(crate) async fn stop_inner(",
+    ] {
+        let body = fn_body(&src, sig);
+        let copy = body
+            .find("copy_new_capture_to_desktop(&app, &path, CaptureKind::")
+            .unwrap_or_else(|| panic!("{sig} copies a new capture to the Desktop when asked"));
+        let deliver = body.find("deliver_and_announce(&app, &path, card_id)").expect("then delivers it");
+        assert!(copy < deliver, "{sig}: the copy is made before delivery moves the file");
+    }
+    for sig in ["pub fn capture_preview_retry(", "pub(super) fn redeliver_kept_card("] {
+        assert!(
+            !fn_body(&src, sig).contains("copy_new_capture_to_desktop"),
+            "{sig} sends again, it copies nothing"
+        );
+    }
+    let helper = fn_body(&src, "async fn copy_new_capture_to_desktop(");
+    assert!(helper.contains("copies_to_desktop(kind)"), "the options decide, per kind");
+    let card = fn_body(&src, "pub async fn capture_preview_save_to_desktop(");
+    assert!(card.contains("c.actions.save_to_desktop"), "only when the card offers it");
+    assert!(card.contains("desktop_copy::save_to_desktop("));
+}

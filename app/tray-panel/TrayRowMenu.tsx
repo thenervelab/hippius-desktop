@@ -8,6 +8,7 @@ import {
   FolderOpen,
   HardDrive,
   Link2,
+  MonitorDown,
   Pencil,
   PenLine,
   Share2,
@@ -28,6 +29,7 @@ export const TRAY_ACTION_ICONS: Record<TrayRowActionId, LucideIcon> = {
   insights: BarChart3,
   "show-in-drive": HardDrive,
   reveal: FolderOpen,
+  "save-to-desktop": MonitorDown,
   rename: Pencil,
   delete: Trash2,
 };

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, Link2, Trash2, FolderOpen, Pencil, FolderInput } from "lucide-react";
+import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -26,6 +26,7 @@ import {
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
 import { useAtomValue, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
@@ -173,6 +174,22 @@ export default function FileContextMenu({
     onClose();
   };
 
+  const saveToDesktop = async () => {
+    onClose();
+    try {
+      toast.success(
+        await saveFileToDesktop({
+          sourcePath: file.source,
+          label: file.label,
+          accountId: polkadotAddress ?? undefined,
+          fileName: file.actualFileName || file.name,
+        }),
+      );
+    } catch (error) {
+      toast.error(tauriErrorMessage(error));
+    }
+  };
+
   const { url: folderUrl } = generateFolderUrl(file, getParam, undefined, driveRoute.basePath);
   const fileManagerName = fileManagerLabel();
 
@@ -234,6 +251,13 @@ export default function FileContextMenu({
             <button className={menuItemClass} onClick={revealInFileManager}>
               <FolderOpen className="size-4" />
               <span>Reveal in {fileManagerName}</span>
+            </button>
+          )}
+
+          {!isCloudOnlyRow(file) && !file.isFolder && (
+            <button className={menuItemClass} onClick={() => void saveToDesktop()}>
+              <MonitorDown className="size-4" />
+              <span>Save to Desktop</span>
             </button>
           )}
 

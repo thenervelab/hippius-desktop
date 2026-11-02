@@ -864,7 +864,22 @@ through `PreviewCard::refreshed`; every change goes through
 "Uploaded". `upgrade` (a `storageFull` failure) calls `capture_preview_upgrade`,
 which brings the main window forward and emits `capture_open_plans`;
 `CaptureHost` routes it to `BILLING_ROUTE`, where every upgrade prompt goes.
-Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). Failure copy is `deliver::failure_copy` (offline / storage full
+Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). **Save to Desktop** (More menu, `actions.saveToDesktop`: a
+placed or kept file, or a failed capture's waiting file;
+`capture_preview_save_to_desktop` copies the card's own file, never a path
+from the page) and the drive menus' item next to Reveal
+(`save_file_to_desktop`, gated by `reveal::in_account_sync_folder`, found
+like Reveal by `saveFileToDesktop.ts`) go through
+`utils::desktop_copy::copy_into`: staged hidden `.part` file, then a
+no-clobber move to the first free "<name> (n).<ext>", so nothing on the
+Desktop is ever replaced. `CaptureOptions.desktopCopy` /
+`desktopCopyRecordings` ("Also save a copy to the Desktop", recordings a
+second choice under it, both off) copy a NEW capture in
+`copy_new_capture_to_desktop` BEFORE `deliver_and_announce` (a local-first
+delivery moves the file), never on a retry; a failed copy is logged and the
+capture delivered as usual. Pinned by `desktop_copy::tests`,
+`bar::tests::only_the_chosen_kinds_are_copied_to_the_desktop` and
+`capture_wiring::a_new_capture_is_copied_to_the_desktop_before_it_is_delivered`. Failure copy is `deliver::failure_copy` (offline / storage full
 / Rust's own `Validation` text; never a transport error), with `reason` and
 `retryable`. `capture_failed` carries `cardShowing`, and `CaptureHost` shows no toast
 when it is true (the card already says it); the notification never names a

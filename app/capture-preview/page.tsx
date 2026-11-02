@@ -11,6 +11,7 @@ import {
   Clock,
   FolderSearch,
   Link2,
+  MonitorDown,
   MoreHorizontal,
   Pencil,
   RotateCw,
@@ -35,6 +36,7 @@ import {
   retryCapturePreview,
   revealCapturePreview,
   revokeCapturePreviewLink,
+  saveCapturePreviewToDesktop,
   showCapturePreviewInFolder,
   upgradeFromCapturePreview,
   type CapturePreviewCard,
@@ -51,6 +53,19 @@ import { barOffsetMs, nextCountdown, timeLeft, type Countdown } from "./autoHide
 
 /** How long "Copied" shows before the button reads "Copy link" again. */
 const COPIED_MS = 1500;
+/** How long "Saved to your Desktop as ..." stays in the card's second line. */
+const DESKTOP_NOTE_MS = 4000;
+const DESKTOP_FAILED = "Couldn't save to your Desktop.";
+
+/**
+ * Save to Desktop's refusal: Rust's own sentence for a refusal it explains
+ * (`Validation`: the file is gone, no Desktop folder), else a plain line
+ * rather than a system error's text.
+ */
+function desktopFailureText(error: unknown): string {
+  const e = error as { kind?: unknown; message?: unknown } | null;
+  return e?.kind === "Validation" && typeof e.message === "string" && e.message ? e.message : DESKTOP_FAILED;
+}
 
 /**
  * Focus the keyboard put there, the kind that draws the focus ring. A
@@ -162,12 +177,18 @@ export default function CapturePreviewPage() {
   const menu = useRef<HTMLDivElement | null>(null);
   const cardId = useRef<number | null>(null);
   const copiedTimer = useRef<number | null>(null);
+  // Save to Desktop's outcome, in Rust's words, for a moment in the second line.
+  const [desktopNote, setDesktopNote] = useState<{ text: string; failed: boolean } | null>(null);
+  const desktopTimer = useRef<number | null>(null);
 
   const clearCopied = useCallback(() => {
     if (copiedTimer.current !== null) window.clearTimeout(copiedTimer.current);
     copiedTimer.current = null;
     setCopied(false);
     setCopyFailed(false);
+    if (desktopTimer.current !== null) window.clearTimeout(desktopTimer.current);
+    desktopTimer.current = null;
+    setDesktopNote(null);
   }, []);
 
   useEffect(() => {
@@ -364,6 +385,21 @@ export default function CapturePreviewPage() {
   const canEdit = actions.edit === true;
   const edit = () => run(editCapturePreview);
 
+  const saveToDesktop = () =>
+    run(() =>
+      saveCapturePreviewToDesktop()
+        .then((text) => ({ text, failed: false }))
+        .catch((error: unknown) => ({ text: desktopFailureText(error), failed: true }))
+        .then((note) => {
+          if (desktopTimer.current !== null) window.clearTimeout(desktopTimer.current);
+          setDesktopNote(note);
+          desktopTimer.current = window.setTimeout(() => {
+            desktopTimer.current = null;
+            setDesktopNote(null);
+          }, DESKTOP_NOTE_MS);
+        }),
+    );
+
   const copy = () => {
     setCopyFailed(false);
     void copyCapturePreviewLink()
@@ -478,6 +514,18 @@ export default function CapturePreviewPage() {
           ) : copyFailed ? (
             <p role="alert" className="truncate text-[11.5px] leading-4 text-[#FF8A80]" data-testid="capture-copy-failed">
               Couldn&apos;t copy the link.
+            </p>
+          ) : desktopNote ? (
+            // Save to Desktop's outcome takes the second line for a moment.
+            // A long name is cut short; the card's own tooltip shows it whole.
+            <p
+              role={desktopNote.failed ? "alert" : "status"}
+              data-card-tip="desktop"
+              {...tipProps("desktop", { label: desktopNote.text })}
+              className={`truncate text-[11.5px] leading-4 ${desktopNote.failed ? "text-[#FF8A80]" : "text-white/85"}`}
+              data-testid="capture-desktop-note"
+            >
+              {desktopNote.text}
             </p>
           ) : card.notice ? (
             // Rust's line about the capture (a Free plan recording stopped at
@@ -648,7 +696,7 @@ export default function CapturePreviewPage() {
                   {copied ? "Copied" : copyFailed ? "Try again" : "Copy link"}
                 </button>
               )}
-              {(actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
+              {(actions.reveal || actions.saveToDesktop || actions.revokeLink || actions.manageLink || canEdit) && (
                 <button
                   ref={menuButton}
                   type="button"
@@ -663,7 +711,7 @@ export default function CapturePreviewPage() {
                   <MoreHorizontal aria-hidden className="size-4" />
                 </button>
               )}
-              {menuOpen && (actions.reveal || actions.revokeLink || actions.manageLink || canEdit) && (
+              {menuOpen && (actions.reveal || actions.saveToDesktop || actions.revokeLink || actions.manageLink || canEdit) && (
                 // Opens upward over the picture: the card sits at the window's
                 // bottom edge, so there is no room below.
                 <div
@@ -698,6 +746,20 @@ export default function CapturePreviewPage() {
                       className={MENU_ITEM}
                     >
                       <FolderSearch aria-hidden className="size-3.5 shrink-0" /> Show in {fileManager}
+                    </button>
+                  )}
+                  {actions.saveToDesktop && (
+                    <button
+                      type="button"
+                      role="menuitem"
+                      disabled={busy}
+                      onClick={() => {
+                        setMenuOpen(false);
+                        saveToDesktop();
+                      }}
+                      className={MENU_ITEM}
+                    >
+                      <MonitorDown aria-hidden className="size-3.5 shrink-0" /> Save to Desktop
                     </button>
                   )}
                   {actions.manageLink && (
