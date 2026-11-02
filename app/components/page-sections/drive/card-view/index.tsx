@@ -3,7 +3,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { FileCardSkeleton } from "./CardViewSkeleton";
 import { useLoadMoreSentinel } from "@/app/lib/hooks/use-load-more-sentinel";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Download, FolderOpen, Link2, Pencil } from "lucide-react";
+import { MoreVertical, Download, FolderOpen, Link2, MonitorDown, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
   folderShareFeatureEnabledAtom,
@@ -49,6 +49,7 @@ import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
@@ -308,6 +309,33 @@ const CardView: FC<CardViewProps> = ({
                                     }
                                   },
                                 },
+                                ...(file.isFolder
+                                  ? []
+                                  : [
+                                      {
+                                        icon: <MonitorDown className="size-4" />,
+                                        itemTitle: "Save to Desktop",
+                                        onItemClick: async (e?: React.MouseEvent) => {
+                                          if (e) {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                          }
+                                          setOpenMenuIndex(null);
+                                          try {
+                                            toast.success(
+                                              await saveFileToDesktop({
+                                                sourcePath: file.source,
+                                                label: file.label,
+                                                accountId: polkadotAddress ?? undefined,
+                                                fileName: file.actualFileName || file.name,
+                                              }),
+                                            );
+                                          } catch (error) {
+                                            toast.error(tauriErrorMessage(error));
+                                          }
+                                        },
+                                      },
+                                    ]),
                               ]),
                           {
                             icon: <Icons.InfoCircle className="size-4" />,
