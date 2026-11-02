@@ -799,7 +799,19 @@ Discard) and at most one 32 pt icon button with an `aria-label`. Show in
 Finder / Explorer, Manage link and Revoke link live in the "More" menu (opens upward over
 the picture, focus on its first item, arrows move, Escape closes and refocuses
 More); with Upgrade, Retry and Discard all present, Discard is the icon.
-Pinned by `previewPage.test.tsx` across every state. It listens to upload progress only while `uploading` / `syncing`
+Pinned by `previewPage.test.tsx` across every state. **Dragging the picture drops the FILE** (`drag_out.rs`, `drag` crate
+pinned `=2.1.1`: NSDraggingSession / OLE DoDragDrop / GTK drag): the
+webview's own drag of the `<img>` handed other apps its `data:` URL (a
+huge text string in a chat app), so `onDragStart` on the picture always
+`preventDefault`s and, when `actions.dragOut` (a placed or kept file, or a
+failed capture's waiting file), calls `capture_preview_start_drag`, which
+drags the card's own file (`file_to_drag`, never a path from the page) with
+a 160 px PNG of the thumbnail (`drag_icon`, the app icon without one). The
+card holds (`dragging` in `held`) until `capture_preview_drag_ended`, also
+sent when the drag could not start. Rows on the Captures page and Recent
+Files have no native drag yet. Pinned by `drag_out::tests`,
+`capture_wiring::the_cards_picture_is_dragged_out_as_the_file` and
+`previewPage.test.tsx`. It listens to upload progress only while `uploading` / `syncing`
 (`wantsProgress`): it is prewarmed hidden at every capture start. The page
 only draws the percent of a row joined on label + `relPath`; it never decides
 from a progress row that a capture is done or failed (a "completed" row still
