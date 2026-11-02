@@ -745,8 +745,30 @@ pub const fn refuses_switching_on(wanted: LinkSettings, was: LinkSettings, switc
 
 /// The refusal for turning a switch on from the free plan, in the upgrade
 /// prompt's words. The app shows that prompt before asking, so only a stale
-/// screen reaches this.
+/// screen reaches this, or a plan the server reads as free when this app
+/// read it as paid (`403 paid_plan_required`).
 pub const SWITCHES_NOT_IN_PLAN: &str = "Insights, comments and reactions are available on paid Drive plans.";
+
+/// The server could not read the Drive plan to check a switch turned on
+/// (`502 billing_unavailable`). Nothing changed, and trying again may work.
+const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
+
+/// The server's refusals of a settings change, in the app's words: turning a
+/// switch on without a paid plan is the upgrade prompt's sentence, and a plan
+/// the server could not read says so. Anything else is left as it was.
+fn settings_refusal(err: AppError) -> AppError {
+    let AppError::Api { status, body } = &err else {
+        return err;
+    };
+    let code = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v.get("error").and_then(serde_json::Value::as_str).map(str::to_owned));
+    match (*status, code.as_deref()) {
+        (403, Some("paid_plan_required")) => AppError::Validation(SWITCHES_NOT_IN_PLAN.into()),
+        (502, Some("billing_unavailable")) => AppError::Validation(PLAN_UNREADABLE.into()),
+        _ => err,
+    }
+}
 
 /// How long the plan read may take for the share dialog or a new link. A
 /// read that takes longer counts as "could not tell".
@@ -1056,7 +1078,7 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .send()
         .await
         .map_err(|e| transport("share settings", e))?;
-    read_ok(resp).await.map(|_| ())
+    read_ok(resp).await.map(|_| ()).map_err(settings_refusal)
 }
 
 async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<NotificationPreferences> {
@@ -2243,6 +2265,42 @@ mod tests {
             Err(AppError::Api { status: 500, .. })
         ));
         assert!(matches!(patch_settings(&http, &api, "gone", &patch).await, Err(AppError::NotFound(m)) if m == LINK_GONE));
+    }
+
+    /// The server checks the plan too (hcfs `paid_plan_required`): its
+    /// refusal reads as the upgrade prompt's sentence, never a raw error.
+    #[tokio::test]
+    async fn the_servers_plan_refusal_reads_as_the_upgrade_prompt() {
+        let (base, _) = mock(|s| {
+            if s.path.contains("free") {
+                (
+                    403,
+                    r#"{"error":"paid_plan_required","message":"insights, comments and reactions need a paid Drive plan; upgrade the plan to turn them on"}"#.into(),
+                )
+            } else if s.path.contains("down") {
+                (502, r#"{"error":"billing_unavailable","message":"Failed to reach Drive entitlement service"}"#.into())
+            } else {
+                (403, r#"{"error":"account_suspended","message":"x"}"#.into())
+            }
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "b"));
+        let patch = SettingsPatch {
+            comments: Some(true),
+            ..Default::default()
+        };
+        assert!(matches!(
+            patch_settings(&http, &api, "free", &patch).await,
+            Err(AppError::Validation(m)) if m == SWITCHES_NOT_IN_PLAN
+        ));
+        assert!(matches!(
+            patch_settings(&http, &api, "down", &patch).await,
+            Err(AppError::Validation(m)) if m == PLAN_UNREADABLE
+        ));
+        assert!(matches!(
+            patch_settings(&http, &api, "other", &patch).await,
+            Err(AppError::Api { status: 403, .. })
+        ));
     }
 
     #[tokio::test]
