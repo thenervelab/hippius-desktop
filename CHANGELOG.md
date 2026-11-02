@@ -17,17 +17,20 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [0.6.17] - 2026-11-02
 
-Large files upload faster to drives you don't sync on this computer. Deleting a capture can turn off its
-links too, Insights let you copy a capture's link and preview it, and links you already made show everywhere.
+Large files upload faster to drives you don't sync on this computer. Every file with a share link has Copy link
+in its menu, deleting a capture can turn off its links too, Insights let you copy a capture's link and preview
+it, links you already made show everywhere, and the sidebar is laid out like the web app's.
 This release also tightens what the main window can reach and fixes many small things in Insights and Shared Drives.
 
 ### Added
 
+- **Copy a file's link from its menu, and see the link it already has before sharing again.** Every file and folder that already has a share link now has "Copy link" in its menu, just above Share via link: on the Drive, the Captures page, Recent Files on Overview, folders, Shared Drives, the right-click menu and the file viewer. It copies the link you already have and never makes a new one. If Hippius is locked on this computer it reads "Unlock to copy link" and copies the link once you unlock. Share via link now opens on the existing link, with a Copy button, when it was made, when it expires, whether it has a password, and a way to manage it in Shared Links. You can still make a separate link from there.
 - **Copy a link and see the capture from its Insights.** Insights now has a Copy link button beside Link settings, and shows the link itself, hidden until you choose to show it in full, so it stays private if the panel is on screen while you record. If Hippius is locked on this computer, Unlock to copy brings the link back without closing Insights; a link whose key isn't on this computer says so. Screenshots and recordings also get a larger preview at the top of Insights: the picture, or the recording muted with its controls, with a button to open it full size. Select the thumbnail to hide or show the preview.
 - **Deleting a capture can turn off its links too.** When a screenshot or recording you delete has share links, the delete dialog offers "Also turn off its links", ticked, so nobody can open them afterwards. If a link can't be turned off, Hippius says so and points you to Shared Links.
 
 ### Changed
 
+- **A tidier sidebar, laid out like the web app's.** Drive is its own section with My Drive, Shared Drives and Captures. Plans & Billing moves out of Settings into Account, above Wallet and Referrals. Documentation shows that it opens in your browser, and Settings puts related options together.
 - **Large files upload faster to drives you don't sync on this computer.** A big file added to a Drive folder that isn't synced here now goes up several pieces at a time instead of one after another, which is much quicker on connections far from our servers.
 - **Insights buttons line up.** On the Captures page each capture's Insights button sits at the end of its name, so the buttons form one tidy column instead of following each name's length, and the link icon stays right after the name. The button looks the same as on the web app, and shows just its icon when the window is narrow so long names stay readable.
 - **The capture card asks before throwing something away.** Discard on a capture that didn't upload, and Revoke link, now ask first, and Copy link says when it couldn't copy, with Try again.
