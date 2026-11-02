@@ -102,10 +102,10 @@ const Sidebar: React.FC = () => {
 
               {visibleSections.map((section) => (
                 <div
-                  key={section.label}
+                  key={section.key}
                   className="flex flex-col gap-y-1.5 w-full pt-[10px]"
                 >
-                  {!collapsed && (
+                  {!collapsed && section.label && (
                     <div className="flex items-center justify-start px-2.5 py-1.5">
                       <span className="text-[10px] font-medium tracking-[-0.2px] text-[rgba(0,0,0,0.4)] dark:text-white/40 uppercase whitespace-nowrap overflow-hidden text-ellipsis">
                         {section.label}
@@ -135,7 +135,7 @@ const Sidebar: React.FC = () => {
 
                       return (
                         <NavItem
-                          key={`${section.label}-${item.path}-${item.label}`}
+                          key={`${section.key}-${item.path}-${item.label}`}
                           icon={item.icon}
                           label={item.label}
                           href={item.path}
