@@ -18,8 +18,12 @@
 //!   owner wrap.
 //! - `POST` / `DELETE .../comments/{id}/block`: block or unblock the author
 //!   of a comment on this link. The server keys the block on the author
-//!   without ever naming them, and lists no block state, so whether someone
-//!   is blocked is only known to the sheet that just did it.
+//!   without ever naming them. The owner's listing marks blocked comments
+//!   (`blocked`), and gives each named comment an opaque per-link
+//!   `author_key`, the same on all of one account's named comments on the
+//!   link: a block through a named comment marks all of them, and an unblock
+//!   through any of them clears them all. Anonymous comments carry no key
+//!   and are marked one by one. Older servers send neither.
 //! - `GET /v1/shares/{token}/reactions`: the totals per emoji.
 //! - `GET /v1/shares/{token}/meta`: the link's switches as they stand
 //!   (`settings`), for the sheet's Link settings.
@@ -283,6 +287,15 @@ pub struct ShareComment {
     pub mentions: Vec<ShareCommentMention>,
     /// It mentions the owner reading it (never true on the owner's own).
     pub mentions_you: bool,
+    /// The server marks its author blocked on this link. `false` from a
+    /// server that does not say.
+    pub blocked: bool,
+    /// Groups one person's named comments on this link (the wire's
+    /// `author_key`), so the sheet can mark all of them when that person is
+    /// blocked. Opaque and per link; never on an anonymous comment, absent
+    /// from older servers, and never shown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author_key: Option<String>,
 }
 
 /// Someone a comment @mentions, as the owner's panel draws it.
@@ -347,6 +360,27 @@ struct WireComment {
     /// Written by the signed-in account, here the owner.
     #[serde(default)]
     mine: bool,
+    /// Its author is blocked on this link; sent to the owner only, and only
+    /// when true.
+    #[serde(default)]
+    blocked: bool,
+    /// The per-link author key of a named comment, sent to the owner only.
+    #[serde(default)]
+    author_key: Option<String>,
+}
+
+/// Far above the server's 22 characters: anything longer is not a key.
+const MAX_AUTHOR_KEY: usize = 128;
+
+impl WireComment {
+    /// The author key to group by: only on a named comment, where the
+    /// server sends it, and only when it looks like one.
+    fn author_key(&self) -> Option<String> {
+        if self.anonymous {
+            return None;
+        }
+        self.author_key.as_ref().filter(|k| !k.is_empty() && k.len() <= MAX_AUTHOR_KEY).cloned()
+    }
 }
 
 impl WireComment {
@@ -434,8 +468,11 @@ fn open_comments(token: &str, items: Vec<WireComment>, key: std::result::Result<
                 None => (None, None, Vec::new()),
             };
             let mentions_you = !c.mine && mentions.iter().any(|m| m.you);
+            let author_key = c.author_key();
             ShareComment {
                 id: c.id(),
+                blocked: c.blocked,
+                author_key,
                 text,
                 name,
                 at_ms: c.at_ms,
@@ -1595,6 +1632,8 @@ mod tests {
             created_at: "2026-10-13T10:00:00Z".into(),
             anonymous,
             mine: false,
+            blocked: false,
+            author_key: None,
         }
     }
 
@@ -1635,6 +1674,53 @@ mod tests {
         assert_eq!(out.comments[0].at_ms, Some(83_000));
         assert_eq!(out.comments[1].name, None, "an anonymous comment never shows a name");
         assert_eq!(out.comments[2].text, None, "one that does not open is kept, unread");
+    }
+
+    /// The owner's listing as hcfs sends it (`docs/public/api/shares.md`):
+    /// `blocked` and the per-link `author_key` reach the sheet in camelCase,
+    /// and an anonymous comment never carries a key, even if one were sent.
+    #[test]
+    fn the_owners_comment_listing_carries_block_marks_and_author_keys_over_ipc() {
+        let body = r#"{"comments":[
+            {"id":"41","parent_id":null,"ciphertext":"x","nonce":"y","at_ms":83000,"created_at":"2026-10-13T10:00:00Z",
+             "anonymous":false,"mine":false,"owner":false,"author_key":"q3LkV0Xp2b9nYt1sZx8wAg","blocked":true},
+            {"id":"43","ciphertext":"x","nonce":"y","at_ms":null,"created_at":"2026-10-13T10:01:00Z",
+             "anonymous":false,"mine":false,"author_key":"q3LkV0Xp2b9nYt1sZx8wAg","blocked":true},
+            {"id":"42","ciphertext":"x","nonce":"y","at_ms":91000,"created_at":"2026-10-13T10:02:00Z",
+             "anonymous":true,"mine":false,"owner":false,"blocked":true,"author_key":"q3LkV0Xp2b9nYt1sZx8wAg"},
+            {"id":"44","ciphertext":"x","nonce":"y","at_ms":null,"created_at":"2026-10-13T10:03:00Z",
+             "anonymous":false,"mine":false,"author_key":"Zm9vYmFyYmF6cXV4cXV1dQ"}
+        ],"next_after":null}"#;
+        let page: WireCommentsPage = serde_json::from_str(body).unwrap();
+        let (items, next) = page.into_parts();
+        assert_eq!(next, None);
+        let out = open_comments("tok", items, Err(KeyUnavailable::NotOnDevice));
+        let json = serde_json::to_value(&out.comments).unwrap();
+        assert_eq!(json[0]["blocked"], serde_json::json!(true));
+        assert_eq!(json[0]["authorKey"], serde_json::json!("q3LkV0Xp2b9nYt1sZx8wAg"));
+        assert_eq!(json[1]["authorKey"], json[0]["authorKey"], "one person, one key");
+        assert_eq!(json[2]["blocked"], serde_json::json!(true));
+        assert!(json[2].get("authorKey").is_none(), "an anonymous comment is never grouped");
+        assert_eq!(json[3]["blocked"], serde_json::json!(false));
+        assert_eq!(json[3]["authorKey"], serde_json::json!("Zm9vYmFyYmF6cXV4cXV1dQ"));
+        assert!(json[0].get("author_key").is_none(), "camelCase only");
+    }
+
+    /// A server from before block marks and author keys: every comment is
+    /// unblocked and ungrouped, and nothing fails to parse.
+    #[test]
+    fn an_older_servers_comments_have_no_block_marks_or_author_keys() {
+        let body = r#"{"comments":[{"id":7,"ciphertext":"x","nonce":"y","created_at":"t","anonymous":false},
+            {"id":"8","ciphertext":"x","nonce":"y","created_at":"t","author_key":""}]}"#;
+        let page: WireCommentsPage = serde_json::from_str(body).unwrap();
+        let out = open_comments("tok", page.into_parts().0, Err(KeyUnavailable::NotOnDevice));
+        for c in &out.comments {
+            assert!(!c.blocked);
+            assert_eq!(c.author_key, None, "an empty key is no key");
+        }
+        let json = serde_json::to_value(&out.comments[0]).unwrap();
+        assert!(json.get("authorKey").is_none());
+        assert_eq!(json["blocked"], serde_json::json!(false));
     }
 
     /// The console's comment with mentions: both come through, the owner's
