@@ -53,9 +53,9 @@ pub(crate) const NAME_NEEDS_LETTER: &str = "Use at least one letter or number in
 pub(crate) const OFFLINE: &str = "Couldn't reach Hippius, so the drive wasn't created. Try again in a moment.";
 pub(crate) const BUSY: &str = "Hippius is busy right now, so the drive wasn't created. Try again in a moment.";
 pub(crate) const SESSION_EXPIRED: &str = "Your session has expired. Sign in again to create a drive.";
-pub(crate) const READ_ONLY: &str = "Your account is read-only right now, so new drives can't be created. Check your plan in Settings > Billing.";
+pub(crate) const READ_ONLY: &str = "Your account is read-only right now, so new drives can't be created. Check your plan in Plans & Billing.";
 pub(crate) const SUSPENDED: &str = "Your account is suspended, so new drives can't be created.";
-pub(crate) const PLAN_REFUSED: &str = "Your plan doesn't allow a new drive right now. Check your plan in Settings > Billing.";
+pub(crate) const PLAN_REFUSED: &str = "Your plan doesn't allow a new drive right now. Check your plan in Plans & Billing.";
 pub(crate) const CREATE_FAILED: &str = "Hippius couldn't create the drive just now. Try again in a moment.";
 
 /// The drive that was made: its name, which is also its label everywhere,

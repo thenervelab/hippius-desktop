@@ -1,5 +1,6 @@
 "use client";
 
+import { Fragment } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "./sideBarAtoms";
@@ -21,61 +22,70 @@ import { BELOW_TITLEBAR_TOP_54 } from "@/app/lib/utils/platformChrome";
 
 const ICON_CLASS = "size-[18px]";
 
-// Exported so the nav-shape tests can assert where Billing lives.
+// Exported so the nav-shape tests can assert the order and the groups.
+// Items sharing a `group` sit together, and a divider sets each group off:
+// this computer's files, then how the app tells and looks, then keys and
+// access, then the app itself. Billing is not here: it is Plans & Billing in
+// the main sidebar's Account section, as in the console.
 export const settingsNavItems = [
   {
     label: "Sync & Storage",
     section: "sync",
+    group: 0,
     icon: <Icons.Folder className={ICON_CLASS} />,
   },
   {
     label: "Screenshots & Recording",
     section: CAPTURE_SETTINGS_SECTION,
+    group: 0,
     icon: <Camera className={ICON_CLASS} strokeWidth={2} />,
-  },
-  {
-    label: "Wallets",
-    section: "wallets",
-    icon: <Icons.Wallet className={ICON_CLASS} />,
-  },
-  {
-    label: "Security",
-    section: "security",
-    icon: <Icons.KeySquare className={ICON_CLASS} />,
   },
   {
     label: "Notifications",
     section: "notifications",
+    group: 1,
     icon: <Icons.Notification className={ICON_CLASS} />,
-  },
-  {
-    label: "Billing",
-    section: "billing",
-    icon: <Icons.CreditCard className={ICON_CLASS} />,
   },
   {
     label: "Appearance",
     section: "appearance",
+    group: 1,
     icon: <SunMoon className={ICON_CLASS} strokeWidth={2} />,
+  },
+  {
+    label: "Security",
+    section: "security",
+    group: 2,
+    icon: <Icons.KeySquare className={ICON_CLASS} />,
+  },
+  {
+    label: "Wallets",
+    section: "wallets",
+    group: 2,
+    icon: <Icons.Wallet className={ICON_CLASS} />,
   },
   {
     label: "API Token",
     section: "api-key",
+    group: 2,
     icon: <Icons.Key className={ICON_CLASS} />,
   },
   {
     label: "Updates",
     section: "updates",
+    group: 3,
     icon: <Icons.Star className={ICON_CLASS} />,
   },
   {
     label: "VPN Settings",
     section: "vpn",
+    group: 3,
     icon: <Icons.ShieldSecurity className={ICON_CLASS} />,
   },
   {
     label: "Customize RPC",
     section: "customize-rpc",
+    group: 3,
     icon: <Icons.SquareDashedKanban className={ICON_CLASS} />,
   },
 ];
@@ -153,55 +163,66 @@ const SettingsSidebar: React.FC = () => {
               apiTokenEnabled: API_TOKEN_FEATURE_ENABLED,
               captureEnabled: SCREEN_CAPTURE_ENABLED && captureSupported,
             })
-              .map((item) => {
+              .map((item, index, visible) => {
                 const isActive = activeSection === item.section;
+                // Judged on what is shown, so a group whose items are all
+                // gated off leaves no doubled divider behind.
+                const startsGroup =
+                  index > 0 && item.group !== visible[index - 1].group;
                 return (
-                  <CustomTooltip2
-                    key={item.section}
-                    tooltipContent={item.label}
-                    side="right"
-                    disabled={!collapsed}
-                  >
-                    <button
-                      type="button"
-                      onClick={() =>
-                        router.replace(`/settings?section=${item.section}`)
-                      }
-                      className="transition-all duration-300 relative group w-full text-left"
-                    >
+                  <Fragment key={item.section}>
+                    {startsGroup && (
                       <div
-                        className={cn(
-                          "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
-                          isActive
-                            ? "bg-white/60 dark:bg-white/20 rounded-[12px]"
-                            : "rounded-[6px] hover:bg-white/30 dark:hover:bg-white/10",
-                        )}
+                        aria-hidden
+                        className="mx-2.5 my-1 h-px bg-[#0000000F] dark:bg-white/10"
+                      />
+                    )}
+                    <CustomTooltip2
+                      tooltipContent={item.label}
+                      side="right"
+                      disabled={!collapsed}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          router.replace(`/settings?section=${item.section}`)
+                        }
+                        className="transition-all duration-300 relative group w-full text-left"
                       >
-                        <span
+                        <div
                           className={cn(
-                            "size-[18px] flex-shrink-0 flex items-center justify-center",
+                            "flex items-center gap-2 p-[10px] w-full overflow-hidden transition-colors duration-200",
                             isActive
-                              ? "text-primary-50 dark:text-primary-brand-dark"
-                              : "text-[#606060] dark:text-grey-dark-600",
+                              ? "bg-white/60 dark:bg-white/20 rounded-[12px]"
+                              : "rounded-[6px] hover:bg-white/30 dark:hover:bg-white/10",
                           )}
                         >
-                          {item.icon}
-                        </span>
-                        {!collapsed && (
                           <span
                             className={cn(
-                              "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis",
+                              "size-[18px] flex-shrink-0 flex items-center justify-center",
                               isActive
-                                ? "text-[#0a0a0a] dark:text-grey-light-100"
+                                ? "text-primary-50 dark:text-primary-brand-dark"
                                 : "text-[#606060] dark:text-grey-dark-600",
                             )}
                           >
-                            {item.label}
+                            {item.icon}
                           </span>
-                        )}
-                      </div>
-                    </button>
-                  </CustomTooltip2>
+                          {!collapsed && (
+                            <span
+                              className={cn(
+                                "text-[14px] font-medium leading-5 tracking-[-0.28px] whitespace-nowrap overflow-hidden text-ellipsis",
+                                isActive
+                                  ? "text-[#0a0a0a] dark:text-grey-light-100"
+                                  : "text-[#606060] dark:text-grey-dark-600",
+                              )}
+                            >
+                              {item.label}
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    </CustomTooltip2>
+                  </Fragment>
                 );
               })}
           </div>
