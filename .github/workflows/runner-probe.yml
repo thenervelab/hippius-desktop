@@ -1,0 +1,56 @@
+name: runner-probe
+
+# TEMPORARY: reports what our own runners offer this repo. Runs only on a
+# push to this branch (code already in the repo, never a fork). Removed
+# before the PR is merged.
+on:
+  push:
+    branches: [ci/linux-hippius-runners]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [hippius-medium, hippius-large]
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 10
+    steps:
+      - name: Workspace state before checkout
+        run: |
+          echo "runner: $RUNNER_NAME ($RUNNER_ENVIRONMENT) os=$RUNNER_OS arch=$RUNNER_ARCH"
+          echo "workspace: $GITHUB_WORKSPACE"
+          ls -la "$GITHUB_WORKSPACE" 2>&1 | head -20 || true
+          echo "home: $HOME"
+          ls -la "$HOME" 2>&1 | head -30 || true
+          ls -la "$HOME/.ssh" "$HOME/.cargo" 2>&1 | head -20 || true
+          ls -la "$RUNNER_TOOL_CACHE" 2>&1 | head -20 || true
+          uptime
+
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: System
+        run: |
+          cat /etc/os-release
+          uname -a
+          echo "nproc: $(nproc)"
+          free -h
+          df -h
+          ldd --version | head -1
+          id
+          if sudo -n true 2>/dev/null; then echo "passwordless sudo: yes"; else echo "passwordless sudo: no"; fi
+          if command -v docker >/dev/null; then docker version --format '{{.Server.Version}}' 2>&1 || echo "docker cli present, daemon not reachable"; docker info 2>&1 | grep -iE 'rootless|storage driver|cgroup' || true; else echo "docker: not installed"; fi
+          [ -f /.dockerenv ] && echo "inside a container" || echo "not inside a docker container"
+          systemd-detect-virt 2>/dev/null || true
+          for tool in git curl python3 node pnpm rustup cargo shellcheck xvfb-run pulseaudio ffprobe ssh-agent ssh-keyscan sha256sum jq zstd; do
+            printf '%-12s %s\n' "$tool" "$(command -v "$tool" || echo missing)"
+          done
+          swapon --show || true
+          ls /etc/apt/sources.list.d 2>&1 || true
+          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-unset}"
