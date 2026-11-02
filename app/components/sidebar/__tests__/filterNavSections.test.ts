@@ -7,11 +7,13 @@ import {
   REFERRALS_FEATURE_ENABLED,
   SCREEN_CAPTURE_ENABLED,
 } from "@/app/lib/featureFlags";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Minimal fixture — gates only, no icons (icon is typed ReactNode but the
 // filter never touches it, so undefined-free literals keep the test focused).
 const sections: NavSection[] = [
   {
+    key: "account",
     label: "ACCOUNT",
     items: [
       { label: "Billing", path: "/billing", icon: null },
@@ -26,6 +28,7 @@ const sections: NavSection[] = [
     ],
   },
   {
+    key: "only-gated",
     label: "ONLY-GATED",
     items: [
       { label: "Wallet2", path: "/wallet", icon: null, featureFlag: "wallet" },
@@ -96,38 +99,42 @@ describe("filterNavSections", () => {
     expect(labels({ shareEnabled: true, chatEnabled: true })).toContain("Chat");
   });
 
-  it("routes the Chat entry to /chat under INFRASTRUCTURE", () => {
-    const infra = filterNavSections(navSections, { shareEnabled: true, chatEnabled: true }).find(
-      (s) => s.label === "INFRASTRUCTURE",
-    );
-    expect(infra?.items.find((i) => i.label === "Chat")?.path).toBe("/chat");
+  it("routes the Chat entry to /chat, in Account after Wallet", () => {
+    const account = filterNavSections(navSections, {
+      shareEnabled: true,
+      chatEnabled: true,
+      walletEnabled: true,
+    }).find((s) => s.key === "account");
+    const rows = account?.items.map((i) => `${i.label} ${i.path}`) ?? [];
+    expect(rows).toContain("Chat /chat");
+    expect(rows.indexOf("Chat /chat")).toBe(rows.indexOf("Wallet /wallet") + 1);
   });
 
-  // Captures is a view of Drive: it sits under Drive (after Shared Drives, as
+  // Captures is a view of Drive: it sits in Drive (after Shared Drives, as
   // the console orders them) and follows the capture feature flag like every
   // other capture surface.
-  it("puts Captures under Drive and Shared Drives, behind the capture flag", () => {
-    const infra = (captureEnabled: boolean) =>
+  it("puts Captures under My Drive and Shared Drives, behind the capture flag", () => {
+    const drive = (captureEnabled: boolean) =>
       filterNavSections(navSections, { shareEnabled: true, chatEnabled: true, captureEnabled })
-        .find((s) => s.label === "INFRASTRUCTURE")
+        .find((s) => s.key === "drive")
         ?.items.map((i) => `${i.label} ${i.path}`);
-    expect(infra(true)?.slice(0, 3)).toEqual([
-      "Drive /files",
+    expect(drive(true)).toEqual([
+      "My Drive /files",
       "Shared Drives /shared-drives",
       "Captures /captures",
     ]);
-    expect(infra(false)).not.toContain("Captures /captures");
+    expect(drive(false)).not.toContain("Captures /captures");
   });
 
-  // Shared drives have a page of their own, right under Drive, and follow the
-  // shared drives flag.
-  it("puts Shared Drives right under Drive, behind the shared drives flag", () => {
-    const infra = (sharedDrivesEnabled: boolean) =>
+  // Shared drives have a page of their own, right under My Drive, and follow
+  // the shared drives flag.
+  it("puts Shared Drives right under My Drive, behind the shared drives flag", () => {
+    const drive = (sharedDrivesEnabled: boolean) =>
       filterNavSections(navSections, { shareEnabled: true, sharedDrivesEnabled })
-        .find((s) => s.label === "INFRASTRUCTURE")
+        .find((s) => s.key === "drive")
         ?.items.map((i) => `${i.label} ${i.path}`);
-    expect(infra(true)?.slice(0, 2)).toEqual(["Drive /files", "Shared Drives /shared-drives"]);
-    expect(infra(false)).not.toContain("Shared Drives /shared-drives");
+    expect(drive(true)?.slice(0, 2)).toEqual(["My Drive /files", "Shared Drives /shared-drives"]);
+    expect(drive(false)).not.toContain("Shared Drives /shared-drives");
   });
 
   // The flag is on in production for every platform, but Rust turns capture
@@ -171,24 +178,57 @@ describe("filterNavSections", () => {
     expect(paths.filter((p) => p === "/vm")).toHaveLength(0);
   });
 
-  // Billing owns plan detail, and Billing lives in Settings. The two used
-  // to sit adjacent in the main sidebar as one subject split by tense —
-  // what you could buy vs what you have paid. Neither may return here
-  // without moving the destination too, or the app offers two routes to
-  // the same thing again.
-  it("keeps Billing and plan detail out of the main sidebar", () => {
+  // The sidebar's layout, one logic with the console's: the product first,
+  // then the account, then help, with no ESSENTIALS or INFRASTRUCTURE titles.
+  it("runs product, account, help, with the console's names", () => {
+    const out = filterNavSections(navSections, {
+      shareEnabled: true,
+      chatEnabled: true,
+      walletEnabled: true,
+      referralsEnabled: true,
+      captureEnabled: true,
+      sharedDrivesEnabled: true,
+    });
+    expect(out.map((s) => [s.label ?? `(${s.key})`, ...s.items.map((i) => i.label)])).toEqual([
+      ["(overview)", "Overview"],
+      ["DRIVE", "My Drive", "Shared Drives", "Captures"],
+      ["ACCOUNT", "Plans & Billing", "Wallet", "Chat", "Referrals"],
+      ["SUPPORT", "Documentation", "Help & Support"],
+    ]);
+  });
+
+  // One entry for plans and billing, named as in the console, opening the
+  // page that holds the plan catalogue, the subscription and the credits.
+  // "Billing" and "Subscription Plans" were once two entries for that one
+  // subject; neither may come back beside it.
+  it("opens Settings → Billing from Plans & Billing, first in Account", () => {
+    const account = filterNavSections(navSections, { shareEnabled: true }).find(
+      (s) => s.key === "account",
+    );
+    expect(account?.items[0]).toMatchObject({ label: "Plans & Billing", path: BILLING_ROUTE });
     const labels = filterNavSections(navSections, { shareEnabled: true })
       .flatMap((s) => s.items.map((i) => i.label));
     expect(labels).not.toContain("Billing");
     expect(labels).not.toContain("Subscription Plans");
   });
 
-  it("offers Billing in the settings nav instead", () => {
-    const labels = settingsNavItems.map((i) => i.label);
-    expect(labels).toContain("Billing");
-    // Not at the top: Settings is opened for the device-scoped items, so
-    // Billing sits with them rather than above them.
-    expect(labels.indexOf("Billing")).toBeGreaterThan(labels.indexOf("Notifications"));
+  // Offered once: Plans & Billing in the main sidebar, so not in Settings.
+  it("takes Billing out of the settings nav", () => {
+    expect(settingsNavItems.map((i) => i.section)).not.toContain("billing");
+    expect(settingsNavItems.map((i) => i.label)).not.toContain("Billing");
+  });
+
+  it("orders the settings nav in its four groups", () => {
+    const groups: string[][] = [];
+    for (const item of settingsNavItems) (groups[item.group] ??= []).push(item.label);
+    expect(groups).toEqual([
+      ["Sync & Storage", "Screenshots & Recording"],
+      ["Notifications", "Appearance"],
+      ["Security", "Wallets", "API Token"],
+      ["Updates", "VPN Settings", "Customize RPC"],
+    ]);
+    // Each group in one run, never split across the list.
+    expect(settingsNavItems.map((i) => i.group)).toEqual([...settingsNavItems.map((i) => i.group)].sort());
   });
 
   // Every capture setting has its own tab, right after Sync & Storage,
