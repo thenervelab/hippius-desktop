@@ -80,7 +80,9 @@ import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import { useLoadMoreSentinel } from "@/app/lib/hooks/use-load-more-sentinel";
 import SelectionActionBar from "../SelectionActionBar";
 import { SelectionColumn, SelectionHeaderColumn } from "../SelectionColumn";
-import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
+import TableActionMenu, {
+  type ActionItem,
+} from "@/app/components/ui/alt-table/TableActionMenu";
 import {
   getFileTypeFromExtension,
   getFileTypeDisplayLabel,
@@ -121,6 +123,8 @@ import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
 import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useCopyLinkItem } from "../useCopyExistingLink";
+import { linkPathFor } from "../existingLink";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const columnHelper = createColumnHelper<FormattedUserFile>();
@@ -327,6 +331,37 @@ interface DriveFileRowProps {
   hasAnyFolder: boolean;
   normalizedSubfolderPath: string;
   ctxRef: React.MutableRefObject<DriveRowCtx>;
+}
+
+const NO_ITEMS: ActionItem[] = [];
+
+/**
+ * A top-level row's three-dots menu, its items built when it opens.
+ *
+ * `DriveFileRow` is memoized on the row's file, so a row is not re-rendered
+ * when something else its menu depends on changes: the share listing
+ * arriving after the rows (Copy link, View insights) or the app unlocking.
+ * Building the items at open time reads the table's latest snapshot instead
+ * of the one the row last rendered with.
+ */
+function RowActionMenu({
+  buildItems,
+  children,
+}: {
+  buildItems: () => ActionItem[];
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <TableActionMenu
+      dropdownTitle=""
+      items={open ? buildItems() : NO_ITEMS}
+      open={open}
+      onOpenChange={setOpen}
+    >
+      {children}
+    </TableActionMenu>
+  );
 }
 
 /**
@@ -659,6 +694,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
     const captureInsightsItem = useCaptureInsightsItem();
+    const copyLinkItem = useCopyLinkItem();
     const setInviteDialogTarget = useSetAtom(shareDialogAtom);
     const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
     // The folders of this listing's drive shared on their own, for the
@@ -1194,6 +1230,12 @@ const FilesTable: FC<FilesTableProps> = memo(
               },
             ];
           })(),
+          // Copy link: the link the row already has, directly above Share
+          // via link (which makes a new one). Nothing for a row with no link.
+          ...copyLinkItem(
+            file,
+            linkPathFor(file, parentSubFolderPath ?? normalizedSubfolderPath),
+          ),
           // Share via link — same gating as the right-click context menu in
           // `app/components/ui/context-menu/index.tsx`. A FILE must be fully
           // uploaded so the recipient's anonymous fetch succeeds. A FOLDER
@@ -1398,6 +1440,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         writableMemberDriveLabels,
         manageableLabels,
         setShareModalFile,
+        copyLinkItem,
         setInviteDialogTarget,
         setManageAccessTarget,
         listingDriveLabel,
@@ -1682,7 +1725,6 @@ const FilesTable: FC<FilesTableProps> = memo(
               drivePaths,
               enableFolderExpander,
               toggleFolderExpanded,
-              createTableItems,
             } = cellCtxRef.current;
             const file = cell.row.original;
             const { name } = file;
@@ -1697,21 +1739,25 @@ const FilesTable: FC<FilesTableProps> = memo(
               file.isFolder &&
               enableFolderExpander &&
               Boolean(file.label && drivePaths[file.label]);
-            const menuItems = createTableItems(
-              file,
-              fileType,
-              true,
-              canExpand
-                ? {
-                    expanded: isExpanded,
-                    onToggle: () => toggleFolderExpanded(folderKey),
-                  }
-                : undefined,
-            );
+            // Read the table's snapshot when the menu opens: the
+            // `createTableItems` this cell rendered with may predate the
+            // share listing (see `RowActionMenu`).
+            const buildMenuItems = () =>
+              cellCtxRef.current.createTableItems(
+                file,
+                fileType,
+                true,
+                canExpand
+                  ? {
+                      expanded: isExpanded,
+                      onToggle: () => toggleFolderExpanded(folderKey),
+                    }
+                  : undefined,
+              );
 
             return (
               <div className="flex justify-center items-center">
-                <TableActionMenu dropdownTitle="" items={menuItems}>
+                <RowActionMenu buildItems={buildMenuItems}>
                   <Button
                     variant="ghost"
                     size="auto"
@@ -1719,7 +1765,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                   >
                     <MoreVertical className="size-4" />
                   </Button>
-                </TableActionMenu>
+                </RowActionMenu>
               </div>
             );
           },
