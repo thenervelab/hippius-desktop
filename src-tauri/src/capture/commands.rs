@@ -5791,6 +5791,31 @@ pub fn capture_preview_pointer(app: AppHandle) -> Option<(f64, f64)> {
     pointer_in_window(&app, &window)
 }
 
+/// The card's picture is being dragged out as a file and the drag is over
+/// (dropped or cancelled): the card lets go of its hold and counts down again.
+pub const PREVIEW_DRAG_ENDED_EVENT: &str = "capture_preview_drag_ended";
+
+/// Dragging the card's picture: the system's own file drag of the capture's
+/// file on this computer (`drag_out`), so another app receives the PNG or
+/// MP4 itself, never the picture's `data:` URL. The file is the card's own:
+/// the page names none. The card holds itself up until
+/// [`PREVIEW_DRAG_ENDED_EVENT`]. Not async: it runs on the main thread, while
+/// the mouse button that began the drag is still down.
+#[tauri::command]
+pub fn capture_preview_start_drag(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = card_for(&state.capture, |c| c.actions.drag_out, "This capture isn't on this computer.")?;
+    let file = super::drag_out::file_to_drag(card.placed_path.as_ref(), &card.file_path)
+        .ok_or_else(|| AppError::Validation("This capture isn't on this computer any more.".into()))?;
+    let window = app
+        .get_webview_window(PREVIEW_LABEL)
+        .ok_or_else(|| AppError::Validation("The capture card isn't open.".into()))?;
+    let icon = super::drag_out::drag_icon(card.thumbnail.as_deref());
+    let ended = move || {
+        let _ = app.emit_to(PREVIEW_LABEL, PREVIEW_DRAG_ENDED_EVENT, ());
+    };
+    super::drag_out::start(&window, file, icon, ended)
+}
+
 #[cfg(target_os = "macos")]
 fn pointer_in_window(_app: &AppHandle, window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
     use cocoa::foundation::{NSPoint, NSRect};

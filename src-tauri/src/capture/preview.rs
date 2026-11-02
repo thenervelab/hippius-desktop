@@ -133,6 +133,10 @@ pub struct CardActions {
     /// Open the screenshot in the editor: a screenshot in the drive, with a
     /// file here to read, and no link being made from the unedited picture.
     pub edit: bool,
+    /// Drag the picture into another app as the file itself: a file of this
+    /// capture is on this computer (placed in its drive, kept for a link,
+    /// or waiting to be sent again).
+    pub drag_out: bool,
 }
 
 /// Everything the card shows, plus what its buttons need.
@@ -367,6 +371,7 @@ impl PreviewCard {
                 && self.placed_path.is_some()
                 && self.link != LinkState::Creating
                 && super::editor::EditableFormat::from_name(&self.file_name).is_some(),
+            drag_out: self.placed_path.is_some() || retryable,
         }
     }
 
@@ -580,6 +585,7 @@ mod tests {
         assert_eq!(
             c.actions,
             CardActions {
+                drag_out: true,
                 copy_link: true,
                 revoke_link: true,
                 manage_link: true,
@@ -605,6 +611,7 @@ mod tests {
         assert_eq!(
             c.actions,
             CardActions {
+                drag_out: true,
                 mint_link: true,
                 ..CardActions::default()
             }
@@ -614,6 +621,7 @@ mod tests {
         let c = card(3).with_outcome(3, failed(true), None).unwrap();
         assert!(c.actions.retry && c.actions.discard && !c.actions.mint_link);
         assert!(c.is_parkable());
+        assert!(c.actions.drag_out, "its file waits here, so it can be dragged out");
         let c = card(3).with_outcome(3, failed(false), None).unwrap();
         assert_eq!(c.actions, CardActions::default());
         assert!(!c.is_parkable());
@@ -737,6 +745,7 @@ mod tests {
                 "linkText": "Public link copied",
                 "linkNote": "Anyone with the link can view. Never expires.",
                 "actions": {
+                    "dragOut": true,
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
                     "revokeLink": true, "manageLink": true, "reveal": true, "upgrade": false, "edit": false
                 },
