@@ -1433,6 +1433,10 @@ async fn create_member_folder_share(
 /// link survives whose token exists nowhere else. A failure is logged: the
 /// caller is already returning the error that explains the mint.
 async fn revoke_member_mint(state: &AppState, ctx: &crate::shared_drives::commands::ApiCtx, share_token: &str) {
+    if !crate::utils::url_segment::is_segment(share_token) {
+        warn!("not revoking a member folder share whose token is not a token");
+        return;
+    }
     let result = state
         .api_client
         .delete(format!("{}/v1/folder-shares/{share_token}", ctx.base_url().trim_end_matches('/')))

@@ -16,23 +16,24 @@ export const ANONYMOUS = "Anonymous viewer";
  * Reactions switch is turned on: the same words the web app uses.
  */
 export const LOCKED_PROMPT = "Insights, comments and reactions are available on paid Drive plans";
-export const LOCKED_ACTION = "Upgrade";
+/** Every upgrade button in Insights says this, as the sheet's own does. */
+export const LOCKED_ACTION = "Upgrade plan";
 /** The line under the prompt where a switch was turned on. */
 export const SWITCH_UPGRADE_BODY =
-  "Upgrade to see who watched your links and for how long, and to let viewers comment and react.";
+  "Upgrade to see how many people watched your links and for how long, and to let viewers comment and react.";
 
 /** The free plan's lock over the blurred sample, for a recording. */
-export const LOCK_TITLE = "See who watched and where they stopped";
+export const LOCK_TITLE = "See how many watched and where they stopped";
 /** Under the lock while the link is counting views. */
 export const LOCK_BODY =
   "Your views are being counted. Completion, the retention chart and the viewer list come with paid Drive plans.";
 /** Under the lock while the link's Insights switch is off: nothing is counted. */
 export const LOCK_BODY_NOT_COUNTING =
-  "Count this link's views and watch time, and see who watched and where they stopped.";
+  "Count this link's views and watch time, and see how much people watched and where they stopped.";
 /** The lock's words for a picture or any other file, which has no watch time. */
-export const LOCK_TITLE_STILL = "See who viewed it";
+export const LOCK_TITLE_STILL = "See how many people viewed it";
 export const LOCK_BODY_STILL = "Your views are being counted. The viewer list comes with paid Drive plans.";
-export const LOCK_BODY_STILL_NOT_COUNTING = "Count this link's views and see who viewed it.";
+export const LOCK_BODY_STILL_NOT_COUNTING = "Count this link's views and see how many people viewed it.";
 /**
  * The label on the blurred part, so nobody takes its made-up numbers and
  * names for their link's.
@@ -187,8 +188,8 @@ export function emptyInsightsCopy({
     return {
       title: "Not counting views",
       body: commentsEnabled
-        ? "Insights are off for this link. Turn them on to see who watches. Comments and reactions show up here either way."
-        : "Insights are off for this link. Turn them on to see who watches.",
+        ? "Insights are off for this link. Turn them on to count views. Comments and reactions show up here either way."
+        : "Insights are off for this link. Turn them on to count views.",
     };
   }
   return {
@@ -482,3 +483,39 @@ export function threadsMentioningYou<T extends { mentionsYou?: boolean; replies?
   return threads.filter((t) => t.mentionsYou === true || (t.replies ?? []).some((r) => r.mentionsYou === true));
 }
 
+// ─── When something does not load ──────────────────────────────────────────
+
+/** Said when this computer is offline. */
+export const OFFLINE_LINE = "You're offline. Try again once you're connected.";
+/** Said when Hippius could not be reached, or answered with no sentence of its own. */
+export const UNREACHABLE_LINE = "Couldn't reach Hippius. Try again.";
+
+/**
+ * Rust's own sentence for a failed request, when it wrote one for the user
+ * (a `Validation` or `NotFound` refusal, such as "This link isn't active any
+ * more."), else `null`: a transport or server error's text is never shown.
+ */
+function wordedByRust(err: unknown): string | null {
+  if (!err || typeof err !== "object") return null;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  if ((kind === "Validation" || kind === "NotFound") && typeof message === "string" && message.trim()) return message;
+  return null;
+}
+
+/**
+ * The line where something in the panel did not load (`what`: "insights",
+ * "comments", ...), always shown with Try again: offline says so, a refusal
+ * Rust worded is shown in its words, anything else is "Couldn't reach
+ * Hippius". Never the request's own text.
+ */
+export function loadErrorLine(what: string, err: unknown, online: boolean): string {
+  if (!online) return OFFLINE_LINE;
+  const worded = wordedByRust(err);
+  return worded ? `Couldn't load ${what}. ${worded}` : UNREACHABLE_LINE;
+}
+
+/** The toast after an action failed (`doing`: "delete the comment", ...). */
+export function actionErrorLine(doing: string, err: unknown, online: boolean): string {
+  if (!online) return `Couldn't ${doing}. ${OFFLINE_LINE}`;
+  return `Couldn't ${doing}. ${wordedByRust(err) ?? UNREACHABLE_LINE}`;
+}

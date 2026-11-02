@@ -110,7 +110,8 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
     remote: [],
   });
   const [foldersLoading, setFoldersLoading] = useState(true);
-  // The drive listing threw: "Shared by you" cannot answer, which is not
+  // The drive listing threw, or came back without the server's half
+  // (offline, a server error): "Shared by you" cannot answer, which is not
   // the same as having shared nothing.
   const [foldersFailed, setFoldersFailed] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -123,8 +124,11 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
       return;
     }
     try {
-      setFolders(await fetchSyncFoldersWithStats(polkadotAddress));
-      setFoldersFailed(false);
+      const { local, remote, remoteFailed } = await fetchSyncFoldersWithStats(polkadotAddress);
+      setFolders({ local, remote });
+      // A drive that lives only on the server is missing from a listing
+      // whose server half failed, so the list cannot vouch for itself.
+      setFoldersFailed(remoteFailed);
     } catch (error) {
       console.error("Failed to load drives:", error);
       setFoldersFailed(true);
@@ -169,14 +173,19 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
 
   // Shared with you: drives (one fetch, handed to the rows below) and folders.
   const memberships = useDriveMemberships();
-  const { grants: folderGrants, isSettled: grantsSettled, refetch: refetchGrants } = useMyFolderGrants();
+  const {
+    grants: folderGrants,
+    isSettled: grantsSettled,
+    isError: grantsFailed,
+    refetch: refetchGrants,
+  } = useMyFolderGrants();
   const joined = useMemo(
     () => (memberships.data.kind === "ready" ? memberships.data.memberships : []),
     [memberships.data],
   );
   const withYou: SharedKind = {
     status: SHARED_DRIVES_ENABLED
-      ? sharedWithYouStatus({ memberships: memberships.data.kind, grantsSettled })
+      ? sharedWithYouStatus({ memberships: memberships.data.kind, grantsSettled, grantsFailed })
       : "ready",
     // Folder grants are rows of their own, shown even while the drive
     // memberships are still on their way (or failed), as the section

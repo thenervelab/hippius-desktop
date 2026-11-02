@@ -117,14 +117,17 @@ export function sharedByYouStatus(input: {
 /**
  * Where "Shared with you" stands. A server with shared drives switched off
  * is a real "none" (the quiet degrade), not an error; a fetch that failed
- * is an error, never folded into "none" the way Settings folds it.
+ * is an error, never folded into "none" the way Settings folds it. That
+ * goes for the folders shared with you as much as the drives: a failed
+ * folder listing would otherwise read as "Nothing shared with you yet".
  */
 export function sharedWithYouStatus(input: {
   memberships: "idle" | "loading" | "ready" | "unavailable" | "error";
   grantsSettled: boolean;
+  grantsFailed?: boolean;
 }): SharedKindStatus {
   if (input.memberships === "idle" || input.memberships === "loading") return "loading";
-  if (input.memberships === "error") return "error";
+  if (input.memberships === "error" || input.grantsFailed) return "error";
   return input.grantsSettled ? "ready" : "loading";
 }
 

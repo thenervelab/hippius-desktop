@@ -44,11 +44,7 @@ import { toast } from "sonner";
 import { Button, Icons, Skeleton } from "@/components/ui";
 import { SidePanel } from "@/components/ui/SidePanel";
 import { invalidateOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
-import {
-  MY_FOLDER_GRANTS_QUERY_KEY,
-  SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY,
-  useSharedDriveMemberships,
-} from "@/app/lib/hooks/useSharedDriveRoles";
+import { refreshSharedWithMe, useSharedDriveMemberships } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useStorageOverview } from "@/app/lib/hooks/api/useStorageOverview";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import { canManageDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
@@ -327,8 +323,9 @@ function AccessPanelBody({ target, onClose }: { target: ShareDriveModalTarget; o
         await leaveSharedDrive(target.label);
       }
       toast.success(`Left "${title}"`);
-      void queryClient.invalidateQueries({ queryKey: [SHARED_DRIVE_MEMBERSHIPS_QUERY_KEY] });
-      void queryClient.invalidateQueries({ queryKey: [MY_FOLDER_GRANTS_QUERY_KEY] });
+      // Every list of drives shared with this account reads these queries,
+      // the Shared Drives page included, so the row goes as the panel closes.
+      void refreshSharedWithMe(queryClient);
       refreshSyncPaths((n) => n + 1);
       onClose();
     } catch (err) {

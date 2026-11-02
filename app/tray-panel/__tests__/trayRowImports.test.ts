@@ -45,6 +45,9 @@ const ROW_FILES = [
   "app/lib/tray/trayRowDisplay.ts",
   "app/tray-panel/useTrayThumbnail.ts",
   "app/lib/tray/trayDrop.ts",
+  // The rows' link icon: the share listing and the one matching rule.
+  "app/lib/tray/useTrayShareLinks.ts",
+  "app/lib/utils/fileLinks.ts",
   // Helpers the row calls at run time.
   "app/lib/utils/revealFile.ts",
   "app/lib/utils/renameGating.ts",

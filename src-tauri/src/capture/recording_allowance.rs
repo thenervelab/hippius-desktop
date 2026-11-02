@@ -82,6 +82,14 @@ pub const LIMITED_TIERS: &[RecordingTier] = &[RecordingTier::Free];
 pub const LIMIT_TITLE: &str = "You've used your 25 free recordings";
 pub const LIMIT_BODY: &str = "Upgrade your plan to record more, or delete an older recording.";
 
+/// A recording kept on this computer because the free plan has no room to
+/// upload it (Retry, one kept while no folder was chosen, one an earlier run
+/// quit on): the card's line, with Upgrade and Retry beside it.
+pub const LIMIT_KEPT: &str =
+    "You've used your 25 free recordings, so this one is kept on this computer. Upgrade, or delete an older recording and retry.";
+/// The notification for waiting recordings kept back the same way.
+pub const LIMIT_KEPT_NOTICE: &str = "You've used your 25 free recordings. Upgrade, or delete an older recording, to upload the rest.";
+
 /// The refusal when a Free plan's recordings could not be counted
 /// (`RecordingCountUnavailable`).
 pub const COUNT_UNAVAILABLE: &str = "We couldn't check how many free recordings you've used. Check your connection and try again.";
@@ -452,7 +460,8 @@ pub fn clear(state: &AppState) {
 pub async fn require_can_start(state: &AppState) -> Result<()> {
     let tier = super::allowance::session_tier(state).await?;
     let counted = if is_limited(tier) {
-        recording_count(state, &state.current_account_id()?).await
+        let account_id = state.current_account_id()?;
+        with_waiting(recording_count(state, &account_id).await, waiting_here(state, &account_id).await)
     } else {
         None
     };
@@ -521,7 +530,110 @@ pub async fn current_free_plan_notice(state: &AppState) -> Option<FreePlanNotice
     if !is_limited(tier) {
         return None;
     }
-    free_plan_notice(Some(tier), recording_count(state, &account_id).await)
+    let counted = with_waiting(recording_count(state, &account_id).await, waiting_here(state, &account_id).await);
+    free_plan_notice(Some(tier), counted)
+}
+
+/// The recordings the server lists (`counted`) and the ones waiting on this
+/// computer to upload, which will count once they do: unknown when the
+/// listing is.
+#[must_use]
+pub fn with_waiting(counted: Option<usize>, waiting: usize) -> Option<usize> {
+    counted.map(|n| n + waiting)
+}
+
+/// Recordings of this account that are on this computer and upload later:
+/// in Hippius's waiting folder (taken before a captures folder was chosen,
+/// "Not now"), in a chosen folder whose drive is not added yet, and failed
+/// or interrupted uploads waiting for Retry. Each will count once it
+/// uploads, so the gate counts them now: otherwise "Not now" and Retry let a
+/// free account record past its limit.
+pub async fn waiting_here(state: &AppState, account_id: &str) -> usize {
+    let dirs = match state.pool() {
+        Ok(pool) => super::setup::waiting_dirs(pool, account_id).await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let root = super::screenshot::capture_tmp_root().ok();
+    let account = account_key(account_id);
+    tokio::task::spawn_blocking(move || {
+        dirs.iter().map(|d| super::setup::waiting_recordings_in(d)).sum::<usize>()
+            + root.map_or(0, |r| super::kept_failed::waiting_recordings(&r, &account))
+    })
+    .await
+    .unwrap_or(0)
+}
+
+/// How many waiting recordings may go into the captures drive now (where
+/// they upload): no limit on a plan without one, or one that cannot be read
+/// (the server still gates storage); the room left on a limited plan; none
+/// while its count cannot be read.
+pub async fn room_for_waiting(state: &AppState, account_id: &str) -> Option<usize> {
+    let account = state.current_session_account().ok()?;
+    let tier = super::allowance::recording_tier(state, &account).await.ok()?;
+    if !is_limited(tier) {
+        return None;
+    }
+    Some(
+        recording_count(state, account_id)
+            .await
+            .map_or(0, |n| FREE_RECORDING_LIMIT.saturating_sub(n)),
+    )
+}
+
+/// Whether a free plan's recording may upload to `destination` now: checked
+/// before every delivery, since a recording that waited (Retry, "Not now",
+/// an earlier run that quit) was allowed to start long before.
+///
+/// # Errors
+///
+/// [`NotReadyKind::RecordingLimitReached`] when the plan has no room left;
+/// [`NotReadyKind::RecordingCountUnavailable`] when its recordings cannot
+/// be counted. Either way the file stays on this computer for Retry.
+pub async fn require_room_to_upload(
+    state: &AppState,
+    account_id: &str,
+    destination: &super::destination::CaptureDestination,
+    file_name: &str,
+) -> Result<()> {
+    // Someone else's drive is not this account's plan.
+    if !is_video_name(file_name) || destination.owner_ss58.is_some() {
+        return Ok(());
+    }
+    let Ok(account) = state.current_session_account() else {
+        return Ok(());
+    };
+    let Ok(tier) = super::allowance::recording_tier(state, &account).await else {
+        return Ok(());
+    };
+    if !is_limited(tier) {
+        return Ok(());
+    }
+    match upload_verdict(recording_count(state, account_id).await) {
+        UploadVerdict::Allowed => Ok(()),
+        UploadVerdict::LimitReached => {
+            tracing::info!("recording kept on this computer: the free plan's recordings are used up");
+            Err(AppError::NotReady(NotReadyKind::RecordingLimitReached))
+        }
+        UploadVerdict::CountUnavailable => Err(AppError::NotReady(NotReadyKind::RecordingCountUnavailable)),
+    }
+}
+
+/// What [`require_room_to_upload`] decides for a limited plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadVerdict {
+    Allowed,
+    LimitReached,
+    CountUnavailable,
+}
+
+/// One more recording fits while fewer than the limit are counted.
+#[must_use]
+pub fn upload_verdict(counted: Option<usize>) -> UploadVerdict {
+    match counted {
+        Some(n) if n < FREE_RECORDING_LIMIT => UploadVerdict::Allowed,
+        Some(_) => UploadVerdict::LimitReached,
+        None => UploadVerdict::CountUnavailable,
+    }
 }
 
 /// Whether a file at `path` can never be picked up by the sync engine of any
@@ -543,6 +655,27 @@ pub fn unsynced_by_every_drive(path: &Path, drive_roots: &[PathBuf]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A recording that waited uploads only while the plan has room, and an
+    /// unknown count keeps it here rather than letting it through.
+    #[test]
+    fn a_waiting_recording_uploads_only_while_there_is_room() {
+        assert_eq!(upload_verdict(Some(0)), UploadVerdict::Allowed);
+        assert_eq!(upload_verdict(Some(FREE_RECORDING_LIMIT - 1)), UploadVerdict::Allowed);
+        assert_eq!(upload_verdict(Some(FREE_RECORDING_LIMIT)), UploadVerdict::LimitReached);
+        assert_eq!(upload_verdict(Some(FREE_RECORDING_LIMIT + 3)), UploadVerdict::LimitReached);
+        assert_eq!(upload_verdict(None), UploadVerdict::CountUnavailable);
+    }
+
+    /// Recordings waiting on this computer count toward the limit at the
+    /// start: 24 listed and one kept after "Not now" leaves no room.
+    #[test]
+    fn the_start_gate_counts_recordings_waiting_here() {
+        assert_eq!(with_waiting(Some(24), 1), Some(25));
+        assert_eq!(decide_start(RecordingTier::Free, with_waiting(Some(24), 1)), StartVerdict::LimitReached);
+        assert_eq!(decide_start(RecordingTier::Free, with_waiting(Some(23), 1)), StartVerdict::Allowed);
+        assert_eq!(with_waiting(None, 3), None, "an unknown listing stays unknown");
+    }
 
     fn listed(names: &[&str]) -> Vec<RemoteFileInfo> {
         names

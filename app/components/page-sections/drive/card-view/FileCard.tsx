@@ -17,6 +17,7 @@ import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
@@ -86,6 +87,7 @@ const FileCard: React.FC<FileCardProps> = ({
   const mainFolderHash = getParam("mainFolderCid", "");
   const mainFolderActualName = getParam("mainFolderActualName", folderActualName);
   const subFolderPath = getParam("subFolderPath", "");
+  const fileRelativePath = resolveRowRelativePath(subFolderPath, file.actualFileName || file.name);
   const effectiveMainFolderHash = mainFolderHash || file.arionHash;
   const effectiveMainFolderActualName = mainFolderActualName || folderActualName;
 
@@ -350,9 +352,12 @@ const FileCard: React.FC<FileCardProps> = ({
             )}
             <Icon className={cn("size-5 mr-1 flex-shrink-0", color)} />
             <span className="text-sm text-grey-20 dark:text-grey-light-100 truncate">{displayName}</span>
+            {/* Both look the file's links up by its drive-relative path, as
+                its menu does: a card inside a folder carries only its own
+                name in `actualFileName`. */}
             <SharedLinkBadge
               label={file.label}
-              actualName={file.actualFileName}
+              actualName={fileRelativePath}
               onManageShare={(ids) => router.push(sharesPageHref(ids))}
               fileSize={file.size}
               className="ml-1.5"
@@ -360,7 +365,7 @@ const FileCard: React.FC<FileCardProps> = ({
             {/* Captures page only: opens the link's Insights. */}
             <CaptureInsightsButton
               label={file.label}
-              actualName={file.actualFileName}
+              actualName={fileRelativePath}
               fileName={file.actualFileName || file.name}
               file={file}
               className="ml-1"

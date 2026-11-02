@@ -96,6 +96,7 @@ import {
   type ActiveShareRow,
 } from "./shareRowDisplay";
 import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
+import { VIEW_INSIGHTS_LABEL } from "@/components/page-sections/drive/useCaptureInsightsItem";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
@@ -896,7 +897,7 @@ function ActiveActionsCell({
       ? [
           {
             icon: <BarChart3 className="size-4" />,
-            itemTitle: "Insights",
+            itemTitle: VIEW_INSIGHTS_LABEL,
             onItemClick: () => openInsights({ shareToken: row.shareToken, fileName: row.filename }),
           },
         ]

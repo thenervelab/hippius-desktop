@@ -12,4 +12,5 @@ pub mod reveal;
 pub mod schema;
 pub mod support;
 pub mod tray_menu;
+pub mod url_segment;
 pub mod zip_entry;

@@ -228,6 +228,48 @@ fn redact_ss58_addresses(line: &str) -> Cow<'_, str> {
     })
 }
 
+/// A share token in a URL path: the segment after `/shares/` or
+/// `/folder-shares/` (the server's routes) or after `/share/` or
+/// `/share/folder/` (the link people open). The token alone opens a link's
+/// unencrypted chat preview, and inside a URL it carries no `share_token=`
+/// label for the table to catch. Group 1 keeps the route, group 2 is the
+/// candidate token.
+static SHARE_PATH_TOKEN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(/(?:folder-shares|shares|share)/(?:folder/)?)([A-Za-z0-9._~%-]+)").expect("share path regex"));
+
+/// Route words that follow `/shares/` or `/folder-shares/` and are not a
+/// token (`/shares/owner-wraps`, `/folder-shares/by-hash/{hash}`). Kept so
+/// support can still read which call failed; the hash after `by-hash` is
+/// the server's correlation handle, loggable like `token_hash`.
+const SHARE_ROUTE_WORDS: &[&str] = &["owner-wraps", "by-hash", "uploads", "folder"];
+
+/// The key in a link's fragment: `#k=…`, or `#p=…` on a password link.
+static SHARE_LINK_FRAGMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"#([kp])=[^\s&"'<>)]+"#).expect("share fragment regex"));
+
+/// Mask share tokens in URL paths and the key in a link's fragment. Runs
+/// before the table, so the file-name rule never half-eats a token that
+/// holds a dot. Every replacement starts with `[`, which no token can, so a
+/// second pass changes nothing.
+fn redact_share_links(line: &str) -> Cow<'_, str> {
+    let mut current = Cow::Borrowed(line);
+    if SHARE_PATH_TOKEN.is_match(&current) {
+        let replaced = SHARE_PATH_TOKEN
+            .replace_all(&current, |caps: &regex::Captures<'_>| {
+                if SHARE_ROUTE_WORDS.contains(&&caps[2]) {
+                    caps[0].to_string()
+                } else {
+                    format!("{}[REDACTED_TOKEN]", &caps[1])
+                }
+            })
+            .into_owned();
+        current = Cow::Owned(replaced);
+    }
+    if SHARE_LINK_FRAGMENT.is_match(&current) {
+        current = Cow::Owned(SHARE_LINK_FRAGMENT.replace_all(&current, "#${1}=[REDACTED]").into_owned());
+    }
+    current
+}
+
 /// Resolves the log directory (`$HOME/.hippius/logs`).
 fn logs_dir() -> Result<PathBuf, AppError> {
     dirs::home_dir()
@@ -241,7 +283,7 @@ fn logs_dir() -> Result<PathBuf, AppError> {
 /// Returns `Cow::Borrowed` unchanged when the line is clean (the common case),
 /// allocating only when a redaction actually fires.
 fn redact_log_line(line: &str) -> Cow<'_, str> {
-    let mut current = Cow::Borrowed(line);
+    let mut current = redact_share_links(line);
     for (re, replacement) in LINE_REDACTORS.iter() {
         if re.is_match(&current) {
             current = Cow::Owned(re.replace_all(&current, *replacement).into_owned());
@@ -525,6 +567,79 @@ mod tests {
         ] {
             let out = redact_log_line(line);
             assert_eq!(out, line, "token_hash must survive redaction: {out}");
+        }
+    }
+
+    #[test]
+    fn redacts_share_tokens_inside_urls() {
+        // A reqwest error renders its URL, and a share route carries the
+        // token in the path with no `share_token=` label in front of it.
+        for (line, kept) in [
+            (
+                "WARN share settings not sent error=HCFS client error: insights failed: error sending request for url (https://api.hippius.com/v1/shares/AbCd12efGh34ijKl56/insights)",
+                "/v1/shares/[REDACTED_TOKEN]/insights",
+            ),
+            (
+                "WARN preview error=PUT https://api.hippius.com/v1/shares/AbCd12efGh34.ijKl56/preview failed",
+                "/v1/shares/[REDACTED_TOKEN]/preview",
+            ),
+            (
+                "INFO revoked https://api.hippius.com/v1/folder-shares/AbCd12efGh34ijKl56",
+                "/v1/folder-shares/[REDACTED_TOKEN]",
+            ),
+            (
+                "INFO link https://console.hippius.com/share/AbCd12efGh34ijKl56",
+                "/share/[REDACTED_TOKEN]",
+            ),
+            (
+                "INFO link https://console.hippius.com/share/folder/AbCd12efGh34ijKl56",
+                "/share/folder/[REDACTED_TOKEN]",
+            ),
+        ] {
+            let out = redact_log_line(line);
+            assert!(!out.contains("AbCd12"), "share token leaked: {out}");
+            assert!(out.contains(kept), "expected {kept} in: {out}");
+        }
+    }
+
+    #[test]
+    fn redacts_the_key_in_a_share_links_fragment() {
+        for line in [
+            "INFO copied https://console.hippius.com/share/tok#k=SecretKeyMaterial123",
+            "INFO copied https://console.hippius.com/share/tok#p=SaltAndWrappedKey456 next=1",
+        ] {
+            let out = redact_log_line(line);
+            assert!(
+                !out.contains("SecretKeyMaterial") && !out.contains("SaltAndWrappedKey"),
+                "link key leaked: {out}"
+            );
+            assert!(out.contains("=[REDACTED]"), "expected a redaction marker: {out}");
+        }
+        let out = redact_log_line("INFO copied https://console.hippius.com/share/tok#p=SaltAndWrappedKey456 next=1");
+        assert!(out.ends_with(" next=1"), "the next field must survive: {out}");
+    }
+
+    #[test]
+    fn keeps_share_route_words_that_are_not_tokens() {
+        // (The host is eaten by the file-name rule, which reads `api.hippius.com`
+        // as a file; only the route matters here.)
+        for (line, route) in [
+            (
+                "WARN owner wraps not synced: GET /v1/shares/owner-wraps failed",
+                "/v1/shares/owner-wraps failed",
+            ),
+            (
+                "WARN revoke failed: POST /v1/folder-shares/by-hash/af1349b9f5f9a1a6 status=500",
+                "/v1/folder-shares/by-hash/af1349b9f5f9a1a6 status=500",
+            ),
+            (
+                "WARN upload failed: POST /v1/folder-shares/uploads status=500",
+                "/v1/folder-shares/uploads status=500",
+            ),
+            ("INFO listing GET /v1/shares?limit=50", "/v1/shares?limit=50"),
+        ] {
+            let out = redact_log_line(line);
+            assert!(out.contains(route), "route words must survive: {out}");
         }
     }
 

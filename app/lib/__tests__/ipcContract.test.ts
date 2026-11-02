@@ -87,8 +87,9 @@ function registeredCommands(): Set<string> {
   const main = readFileSync(join(ROOT, "src-tauri", "src", "main.rs"), "utf8");
   const start = main.indexOf("generate_handler![");
   expect(start, "generate_handler![ not found in main.rs").toBeGreaterThan(-1);
-  const end = main.indexOf("]);", start);
-  expect(end, "generate_handler! close ]); not found").toBeGreaterThan(start);
+  // `])`, not `]);`: the macro sits inside `main_window_only(...)`.
+  const end = main.indexOf("])", start);
+  expect(end, "generate_handler! close ]) not found").toBeGreaterThan(start);
   const block = main.slice(start + "generate_handler![".length, end);
 
   const commands = new Set<string>();

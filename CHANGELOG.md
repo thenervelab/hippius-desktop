@@ -15,6 +15,58 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.17] - 2026-11-02
+
+Large files upload faster to drives you don't sync on this computer. Every file with a share link has Copy link
+in its menu, deleting a capture can turn off its links too, Insights let you copy a capture's link and preview
+it, links you already made show everywhere, and the sidebar is laid out like the web app's.
+This release also tightens what the main window can reach and fixes many small things in Insights and Shared Drives.
+
+### Added
+
+- **Copy a file's link from its menu, and see the link it already has before sharing again.** Every file and folder that already has a share link now has "Copy link" in its menu, just above Share via link: on the Drive, the Captures page, Recent Files on Overview, folders, Shared Drives, the right-click menu and the file viewer. It copies the link you already have and never makes a new one. If Hippius is locked on this computer it reads "Unlock to copy link" and copies the link once you unlock. Share via link now opens on the existing link, with a Copy button, when it was made, when it expires, whether it has a password, and a way to manage it in Shared Links. You can still make a separate link from there.
+- **Copy a link and see the capture from its Insights.** Insights now has a Copy link button beside Link settings, and shows the link itself, hidden until you choose to show it in full, so it stays private if the panel is on screen while you record. If Hippius is locked on this computer, Unlock to copy brings the link back without closing Insights; a link whose key isn't on this computer says so. Screenshots and recordings also get a larger preview at the top of Insights: the picture, or the recording muted with its controls, with a button to open it full size. Select the thumbnail to hide or show the preview.
+- **Deleting a capture can turn off its links too.** When a screenshot or recording you delete has share links, the delete dialog offers "Also turn off its links", ticked, so nobody can open them afterwards. If a link can't be turned off, Hippius says so and points you to Shared Links.
+
+### Changed
+
+- **A tidier sidebar, laid out like the web app's.** Drive is its own section with My Drive, Shared Drives and Captures. Plans & Billing moves out of Settings into Account, above Wallet and Referrals. Documentation shows that it opens in your browser, and Settings puts related options together.
+- **Large files upload faster to drives you don't sync on this computer.** A big file added to a Drive folder that isn't synced here now goes up several pieces at a time instead of one after another, which is much quicker on connections far from our servers.
+- **Insights buttons line up.** On the Captures page each capture's Insights button sits at the end of its name, so the buttons form one tidy column instead of following each name's length, and the link icon stays right after the name. The button looks the same as on the web app, and shows just its icon when the window is narrow so long names stay readable.
+- **The capture card asks before throwing something away.** Discard on a capture that didn't upload, and Revoke link, now ask first, and Copy link says when it couldn't copy, with Try again.
+- **The capture bar says what a chat preview sends.** Under "Show a preview in chats" in its Options menu, a short line says a readable preview and the file name go with the link, so you can turn previews off right there.
+- **The Free plan watermark on recordings sits a little higher.** It now shows just above the player's timeline and buttons on a share page, instead of hiding under them while the video plays. Screenshots keep it in the bottom-right corner.
+
+### Fixed
+
+- **Links you already made show everywhere, and Copy link copies them.** A screenshot or recording shared from the web app, the browser extension or another computer now shows its link icon in Recent Files on the Overview and in the menu bar window, not only on the Captures page. Copy link in the menu bar window copies that link straight away instead of making a second one, so you no longer end up with two links and a second upload counted against your storage. If the link was made somewhere this computer can't copy it from, Hippius says so rather than making another.
+- **Free plan screenshots keep their watermark after editing.** Cropping or drawing over the corner in the screenshot editor no longer saves or copies a picture without it.
+- **The recording controls say when Pause, Resume or Mute didn't work.** The pill tells you the recording carries on as it was and offers Try again, and the captures folder dialog offers Try again when it can't check the folder.
+- **Create link in Insights always gives the link to the right capture.** If you opened another capture's Insights while a link was still being made, the new link could show on that other capture instead. It now stays with the capture you made it for.
+- **Copies of uploaded captures no longer pile up on your computer.** The temporary copy Hippius keeps while a capture's card is open is removed when you sign out or next open Hippius, once the capture is in your drive. Captures that didn't upload are always kept.
+- **Opening your own capture's link no longer counts as a view.** When Hippius opens a new capture's link in your browser, that visit is marked as yours, so the view count starts at zero.
+- **Shared Drives says when it can't load, instead of saying nothing is shared.** Offline or when Hippius can't be reached, the page used to show loading rows forever, or say you haven't shared a drive or that nothing is shared with you. It now says the list couldn't load, says when you're offline, and Try again (or getting back online) brings your drives back.
+- **The free plan's 25 recordings include ones still waiting on this computer.** Recordings kept after "Not now" or waiting for Retry now count before you start another, and once you have 25, the rest stay safely on this computer with Upgrade and Retry instead of uploading.
+- **A link's Insights, Comments and Reactions switches stay the way you set them.** Turning one off right after making a link could be undone a moment later, and a change sent from a screen that was out of date could put back another switch. Each change now sends only the switch you flipped, waits for the link's own settings to be saved first, and the switches then show what the link really has. When Hippius can't be reached to check them, or can't turn them on for a new link, it says so instead of showing them all off.
+- **Insights and Settings no longer say you can see who viewed a link.** You see how many people viewed and for how long, and a name only when someone comments under one. Settings, Screenshots & Recording, and the free plan's Insights preview now say that.
+- **Create link in Insights no longer makes a second link for a capture that already has one.** If Hippius couldn't load your links, Insights used to say the capture had no link and offer to make one, which uploaded it again as a second public link. It now says it couldn't check, with Try again, and Create link gives the capture's existing link when it has one. The panel also says plainly that anyone with the link can open it and that it keeps working until you turn it off, promises views, comments and reactions only when your plan and Settings include them, and Create link follows Settings, Screenshots & Recording, "Track views, comments and reactions".
+- **Screen readers hear the capture card's upload once, not every percent.** The card after a screenshot or recording used to read out each step of the upload, several times a second. It now says "Uploading" once and then how the upload ended, while the bar still shows the percent.
+- **The Insights button and link badge find a capture's link inside folders.** A screenshot or recording in a folder on the Captures page said "No link yet" even when it had a link, and a file with a plain name like image.png could show another file's link. Links are now matched by where the file is, and only real capture names are matched to links made elsewhere.
+- **Leaving a shared drive takes it off Shared Drives straight away.** Leaving from Manage access said the drive was left, but its row stayed on the page and still opened the drive until you came back later. The list now updates as soon as you leave a drive or folder, or start syncing one, wherever you do it.
+- **Clearer words around share links.** Every menu now says "View insights", every upgrade button in Insights says "Upgrade plan", the drive's file count reads "Files:", and a password link no longer offers a Comments switch, since its comments could only be read on the link's page.
+- **Insights keep up with the link.** After Create link the panel now shows when the link was made, and a link you revoke in Shared Links while its Insights are open now shows as turned off instead of its old numbers and switches.
+- **The free plan says before you turn a link switch off that it's one way.** On the free plan, under a link's Insights, Comments and Reactions switches, a short line now says a switch you turn off can't be turned back on unless you upgrade. It shows in the share dialog and in Link settings in Insights.
+- **Insights say plainly when something didn't load.** Offline, the panel kept loading for ever, and a failed request showed its raw technical text or said Insights "aren't available yet". It now says you're offline or that Hippius couldn't be reached, and the numbers, comments, reactions and link settings each offer Try again.
+- **Enter on Manage access or Leave in Shared Drives does what it says.** Pressing Enter or Space on a shared drive's Manage access button, or on Leave in its menu, opened the drive instead. Those keys now work on the button you're on, and still open the drive when the row itself is selected.
+- **Escape backs out of deleting or blocking a comment.** Pressing Escape while Insights asked whether to delete a comment or block its author closed the whole panel. It now just puts the question away.
+- **Screen readers name the page arrows and each drive's menu.** On Drive and Shared Drives, the previous and next page buttons and the three-dot menu on each drive were read out only as "button". They now say "Previous page", "Next page" and "Actions for" the drive's name, and the page you're on is announced as the current page.
+
+### Security
+
+- **Share link addresses stay out of error messages and support logs.** When Insights or a chat preview can't reach Hippius, the message no longer shows the link's address, and logs you attach to a support ticket hide share links and their keys.
+- **Hippius's main window can only reach the files you choose.** It can no longer read other files in your home folder or open any file on your computer; files you pick or drop, and files in your synced folders, work as before.
+- **"Mentioned you" only shows when a comment really mentions you.** A comment can no longer claim to mention you without your name in its text, and drive and link details are checked before Hippius sends them.
+
 ## [0.6.16] - 2026-10-27
 
 See who watched the screenshots, recordings and files you share, read what

@@ -63,6 +63,29 @@ beforeEach(() => {
   for (const fn of Object.values(h.toast)) fn.mockReset();
 });
 
+describe("when where captures go cannot be read", () => {
+  it("says so and reads it again on Try again", async () => {
+    let fail = true;
+    tauri.onInvoke("capture_drive_status", () => {
+      if (fail) throw { kind: "NotReady", message: "Hippius is still starting. Try again in a moment." };
+      return READY;
+    });
+    const store = createStore();
+    store.set(captureDialogAtom, { kind: "captureDrive" });
+    render(
+      <Provider store={store}>
+        <CaptureDriveDialog />
+      </Provider>,
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Hippius is still starting.");
+    expect(screen.getByText("Couldn't check your captures folder.")).toBeInTheDocument();
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Documents › hippius-captures")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
 describe("the first capture's question", () => {
   it("says where the folder goes and what macOS will ask, and creates it there", async () => {
     tauri.onInvoke("capture_drive_create", () => READY);

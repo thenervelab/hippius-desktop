@@ -80,12 +80,17 @@ fn logout_stops_the_stream() {
 }
 
 /// The viewer asks Rust and gives the token back; it never builds a stream
-/// URL or decides support itself.
+/// URL or decides support itself. The asking lives in `videoPlayback.ts`
+/// (`useVideoPlayback`), shared by the viewer and the Insights panel.
 #[test]
 fn the_viewer_asks_rust_how_to_play() {
+    let hook = read("../app/components/page-sections/drive/file-preview/videoPlayback.ts");
+    assert!(hook.contains(r#"invoke<VideoPlayback>("video_playback_source", { sourcePath: localPath })"#));
+    assert!(hook.contains(r#"invoke("video_stream_release", { url: streamUrl })"#));
     let body = read("../app/components/page-sections/drive/file-preview/VideoPreviewBody.tsx");
-    assert!(body.contains(r#"invoke<VideoPlayback>("video_playback_source", { sourcePath: localPath })"#));
-    assert!(body.contains(r#"invoke("video_stream_release", { url: streamUrl })"#));
-    assert!(!body.contains("127.0.0.1"));
-    assert!(!body.contains("supportsInAppVideo"));
+    assert!(body.contains("useVideoPlayback("), "the viewer plays through the shared hook");
+    for src in [&hook, &body] {
+        assert!(!src.contains("127.0.0.1"));
+        assert!(!src.contains("supportsInAppVideo"));
+    }
 }

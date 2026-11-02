@@ -1,19 +1,18 @@
 "use client";
 
-// The memberships fetch behind "Shared with me", lifted out of
-// `SharedWithMeSection` so the Shared Drives page can read the same answer
-// (its tab counts and totals) without a second `list_my_drive_memberships`
-// call. The section still owns it on its own where nobody else needs it
-// (Settings).
+// The memberships behind "Shared with me", for the sections that list them
+// (the Shared Drives page, which also reads them for its tab counts, and
+// Settings). It reads the ONE memberships query every other surface reads
+// (`sharedDriveMembershipsQueryOptions`), so leaving or joining a drive
+// anywhere, which invalidates that query, updates these lists too.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import {
-  isSharedDrivesUnavailable,
-  listMyDriveMemberships,
-} from "@/app/lib/tauri/sharedDrives";
-import type { SharedWithMeData } from "./sharedWithMeState";
+import { sharedDriveMembershipsQueryOptions } from "@/app/lib/hooks/useSharedDriveRoles";
+import { isSharedDrivesUnavailable } from "@/app/lib/tauri/sharedDrives";
+import { sharedWithMeDataFrom, type SharedWithMeData } from "./sharedWithMeState";
 
 export interface DriveMemberships {
   data: SharedWithMeData;
@@ -24,34 +23,38 @@ export interface DriveMemberships {
 }
 
 /**
- * Load the drives shared with this account once, when `enabled`. A
- * passive mount-time fetch: a failure is logged and settles as `error`,
- * never a toast.
+ * The drives shared with this account, when `enabled`. Asked again each
+ * time a list mounts, so a page visit shows what the server says now. A
+ * passive fetch: a failure is logged and settles as `error`, never a toast.
  */
 export function useDriveMemberships(enabled = true): DriveMemberships {
-  const [data, setData] = useState<SharedWithMeData>({ kind: "idle" });
+  const on = SHARED_DRIVES_ENABLED && enabled;
+  const { data, error, isError, isFetching, refetch } = useQuery({
+    ...sharedDriveMembershipsQueryOptions,
+    enabled: on,
+    refetchOnMount: "always",
+  });
+  const [markedUnavailable, setMarkedUnavailable] = useState(false);
 
   const reload = useCallback(async () => {
-    setData((prev) => (prev.kind === "ready" ? prev : { kind: "loading" }));
-    try {
-      const memberships = await listMyDriveMemberships();
-      setData({ kind: "ready", memberships });
-    } catch (err) {
-      if (isSharedDrivesUnavailable(err)) {
-        setData({ kind: "unavailable" });
-      } else {
-        console.error("Failed to load drive memberships:", err);
-        setData({ kind: "error" });
-      }
-    }
-  }, []);
+    setMarkedUnavailable(false);
+    await refetch();
+  }, [refetch]);
 
-  const markUnavailable = useCallback(() => setData({ kind: "unavailable" }), []);
+  const markUnavailable = useCallback(() => setMarkedUnavailable(true), []);
 
-  useEffect(() => {
-    if (!SHARED_DRIVES_ENABLED || !enabled) return;
-    void reload();
-  }, [enabled, reload]);
+  const state = useMemo(
+    () =>
+      sharedWithMeDataFrom({
+        enabled: on,
+        data,
+        isError,
+        isFetching,
+        unavailable: isError && isSharedDrivesUnavailable(error),
+        markedUnavailable,
+      }),
+    [on, data, isError, isFetching, error, markedUnavailable],
+  );
 
-  return { data, reload, markUnavailable };
+  return { data: state, reload, markUnavailable };
 }

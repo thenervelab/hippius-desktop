@@ -157,7 +157,7 @@ describe("tray file actions in the main window", () => {
       shareToken: null,
       fileName: "Recording 1.mp4",
       file: capture,
-      capture: { label: "Hippius Captures", relativePath: "Recording 1.mp4", fileId: null },
+      capture: { label: "Hippius Captures", relativePath: "Recording 1.mp4", fileId: null, size: 1 },
     });
   });
 
@@ -166,7 +166,7 @@ describe("tray file actions in the main window", () => {
     const capture = file({ name: "Shot.png", actualFileName: "Captures/Shot.png", source: "/Users/me/Docs/Captures/Shot.png" });
     await send({ action: "insights", file: capture });
     expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openSubfolder=Captures&openFile=Shot.png");
-    expect(store.get(insightsSheetAtom)?.capture).toEqual({ label: "Docs", relativePath: "Captures/Shot.png", fileId: null });
+    expect(store.get(insightsSheetAtom)?.capture).toEqual({ label: "Docs", relativePath: "Captures/Shot.png", fileId: null, size: 1 });
   });
 
   it("says Insights are unavailable on a server without them, and opens nothing", async () => {

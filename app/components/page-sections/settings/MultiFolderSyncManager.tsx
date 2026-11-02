@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
+import { refreshSharedWithMe, useSharedDriveRoles } from "@/app/lib/hooks/useSharedDriveRoles";
 import { useOwnedDriveSharing } from "@/app/lib/hooks/useOwnedDriveSharing";
 import { useSharedDrivesInPlan } from "@/app/lib/hooks/useSharedDrivesInPlan";
 import {
@@ -296,6 +296,7 @@ function openTarget(row: FolderRow): string {
         try {
           await leaveSharedDrive(folderId);
           toast.success("Left shared drive");
+          void refreshSharedWithMe(queryClient);
         } catch (error) {
           if (!isSharedDrivesUnavailable(error)) throw error;
           await removeSyncPath(polkadotAddress, folderId);

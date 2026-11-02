@@ -158,9 +158,36 @@ fn the_popover_copy_link_mints_through_the_share_dialog_funnels() {
     assert!(command.contains("app.clipboard().write_text("), "the link is copied in Rust");
 }
 
-/// "Create link" in a capture's Insights panel makes its link through the
-/// same `mint` as the tray's Copy link (so the storage gate, the origin row
-/// that matches the link to the capture's row and the owner wrap apply), and
+/// Both quick actions take one decision about a file's links
+/// (`decide_reuse`), so neither can make a second link for a file that has
+/// one, and the tray's Copy link no longer makes one when the links could not
+/// be read: that is how a capture ended up with a duplicate public link and a
+/// second upload.
+#[test]
+fn both_quick_actions_share_one_reuse_decision_and_never_mint_blind() {
+    let quick = read("src/shares/quick_link.rs");
+    for sig in ["pub async fn copy_file_share_link(", "pub async fn create_capture_link("] {
+        let command = fn_body(&quick, sig);
+        let decided = command
+            .find("decide_reuse(&existing")
+            .unwrap_or_else(|| panic!("{sig} decides through decide_reuse"));
+        let minted = command.find("mint(&state").unwrap_or_else(|| panic!("{sig} mints"));
+        assert!(decided < minted, "{sig}: the decision comes before any mint");
+        assert!(!command.contains("pick_reusable("), "{sig}: no second, private reuse rule");
+    }
+    let copy = fn_body(&quick, "pub async fn copy_file_share_link(");
+    assert!(copy.contains("FILE_LINKS_UNREADABLE"), "a failed lookup makes nothing");
+    let existing = fn_body(&quick, "async fn existing_links(");
+    assert!(
+        existing.contains("link_belongs_to_file("),
+        "links are matched by the Captures page's rule, links made elsewhere included"
+    );
+}
+
+/// "Create link" in a capture's Insights panel first looks for the capture's
+/// own link, then makes one through the same `mint` as the tray's Copy link
+/// (so the storage gate, the origin row that matches the link to the
+/// capture's row and the owner wrap apply), and
 /// sends the link's switches BEFORE answering: the panel opens on the new link
 /// straight away and reads its settings, so switches sent in the background
 /// would race that read and show the link as not counting views.
@@ -173,7 +200,15 @@ fn the_insights_panels_create_link_mints_like_the_tray_and_turns_insights_on_fir
     );
     let quick = read("src/shares/quick_link.rs");
     let command = fn_body(&quick, "pub async fn create_capture_link(");
+    let looked_up = command
+        .find("existing_links(&state")
+        .expect("looks for the capture's own link before making one");
     let minted = command.find("mint(&state").expect("mints through the tray's funnels");
+    assert!(looked_up < minted, "an existing link is given again rather than a second one made");
+    assert!(
+        command.contains("insights::captures_default(&state)"),
+        "the switches follow Settings' choice, like every capture link"
+    );
     let settings = command
         .find("insights::apply_after_mint(")
         .expect("sends the switches, through the plan rule, awaited");

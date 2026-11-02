@@ -1,15 +1,22 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 
 import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
+import TurnOffLinksOption from "./TurnOffLinksOption";
+import { useCaptureLinkTokens } from "./useCaptureInsightsItem";
 
 interface DeleteConfirmationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onConfirm: (filesToDelete: FormattedUserFile[]) => void;
+  /**
+   * `turnOffLinks[i]` are the links to turn off once `filesToDelete[i]` is
+   * deleted ("Also turn off its links"); `undefined` when there are none
+   * or the box was unticked.
+   */
+  onConfirm: (filesToDelete: FormattedUserFile[], turnOffLinks?: string[][]) => void;
   isLoading?: boolean;
 }
 
@@ -30,6 +37,15 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
   isLoading = false,
 }) => {
   const { selectedFiles, clearSelection } = useFileSelection();
+  // A capture's links, found the way its Insights find them.
+  const linkTokens = useCaptureLinkTokens();
+  const links = useMemo(() => selectedFiles.map(linkTokens), [selectedFiles, linkTokens]);
+  const linkCount = useMemo(() => new Set(links.flat()).size, [links]);
+  // Ticked by default each time the dialog opens.
+  const [turnOff, setTurnOff] = useState(true);
+  useEffect(() => {
+    if (open) setTurnOff(true);
+  }, [open]);
 
   const handleCancel = () => {
     if (isLoading) return;
@@ -39,9 +55,10 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
   const handleConfirm = () => {
     const filesToDelete = [...selectedFiles];
+    const turnOffLinks = turnOff && linkCount > 0 ? links : undefined;
     clearSelection();
     onOpenChange(false);
-    onConfirm(filesToDelete);
+    onConfirm(filesToDelete, turnOffLinks);
   };
 
   const fileCount = selectedFiles.length;
@@ -65,7 +82,8 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           cannot be undone.
         </>
       }
-      helperText={deleteShareLinksNote(selectedFiles)}
+      // The box says what happens to the links when there are any to find.
+      helperText={linkCount > 0 ? undefined : deleteShareLinksNote(selectedFiles)}
       button={confirmLabel}
       icon={<Trash2 className="size-[18px] text-white" strokeWidth={2.5} />}
       iconBgColor={DESTRUCTIVE_BG}
@@ -98,6 +116,13 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
           </ul>
         </div>
       )}
+      <TurnOffLinksOption
+        checked={turnOff}
+        onChange={setTurnOff}
+        linkCount={linkCount}
+        multiple={isMultiple}
+        disabled={isLoading}
+      />
     </ConfirmationDialog>
   );
 };

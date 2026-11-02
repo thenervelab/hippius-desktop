@@ -12,10 +12,14 @@ import type { RemoteFolder, SyncFolder } from "@/app/lib/types/sync-folder";
  * inline next to the status pill, and dropping them was once the difference
  * between a row reading "default · Syncing" and one with its size, file
  * count and date.
+ *
+ * `remoteFailed` says the server's half could not be read (offline, or a
+ * server error): `remote` is then empty because nothing is known, not
+ * because there are no drives on the server.
  */
 export async function fetchSyncFoldersWithStats(
   accountId: string,
-): Promise<{ local: SyncFolder[]; remote: RemoteFolder[] }> {
+): Promise<{ local: SyncFolder[]; remote: RemoteFolder[]; remoteFailed: boolean }> {
   const result = await invoke<{
     local: Array<{
       id: string;
@@ -35,6 +39,7 @@ export async function fetchSyncFoldersWithStats(
       lastModified: number;
       origin: { kind: "locallyRemoved" } | { kind: "otherDevice" };
     }>;
+    remoteFailed?: boolean;
   }>("get_sync_folders_with_stats", { accountId });
 
   return {
@@ -57,6 +62,7 @@ export async function fetchSyncFoldersWithStats(
       lastModified: f.lastModified,
       origin: f.origin,
     })),
+    remoteFailed: result.remoteFailed === true,
   };
 }
 

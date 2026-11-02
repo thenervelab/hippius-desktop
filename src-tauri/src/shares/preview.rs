@@ -476,6 +476,7 @@ async fn endpoint(state: &AppState, account_id: &str, share_token: &str) -> Resu
     let bearer = get_api_token(pool, account_id)
         .await?
         .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
+    let share_token = crate::utils::url_segment::segment(share_token)?;
     Ok((format!("{base}/v1/shares/{share_token}/preview"), bearer))
 }
 
@@ -516,7 +517,9 @@ pub async fn upload(state: &AppState, account_id: &str, share_token: &str, jpeg:
         .multipart(form)
         .send()
         .await
-        .map_err(|e| AppError::Hcfs(format!("share preview upload failed: {e}")))?;
+        // Without the URL: its path carries the link's token, which alone
+        // opens this unencrypted preview.
+        .map_err(|e| AppError::Hcfs(format!("share preview upload failed: {}", e.without_url())))?;
     if !resp.status().is_success() {
         return Err(AppError::Api {
             status: resp.status().as_u16(),
@@ -545,7 +548,7 @@ pub async fn remove(state: &AppState, account_id: &str, share_token: &str) -> Re
         .timeout(UPLOAD_TIMEOUT)
         .send()
         .await
-        .map_err(|e| AppError::Hcfs(format!("share preview removal failed: {e}")))?;
+        .map_err(|e| AppError::Hcfs(format!("share preview removal failed: {}", e.without_url())))?;
     if !resp.status().is_success() {
         return Err(AppError::Api {
             status: resp.status().as_u16(),

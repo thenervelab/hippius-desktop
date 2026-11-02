@@ -11,8 +11,13 @@ import "@testing-library/jest-dom";
 import SharedLinkBadge from "../SharedLinkBadge";
 
 const getSharesForMock = vi.fn();
+const getUnplacedSharesNamedMock = vi.fn();
 vi.mock("@/app/lib/hooks/useSharedFiles", () => ({
-  useSharedFiles: () => ({ getSharesFor: getSharesForMock, isLoading: false }),
+  useSharedFiles: () => ({
+    getSharesFor: getSharesForMock,
+    getUnplacedSharesNamed: getUnplacedSharesNamedMock,
+    isLoading: false,
+  }),
 }));
 
 const useFolderShareBadgeMock = vi.fn();
@@ -44,6 +49,7 @@ const LIVE_FOLDER_ROW = {
 describe("SharedLinkBadge", () => {
   beforeEach(() => {
     getSharesForMock.mockReset().mockReturnValue([]);
+    getUnplacedSharesNamedMock.mockReset().mockReturnValue([]);
     useFolderShareBadgeMock.mockReset().mockReturnValue([]);
   });
 
@@ -63,6 +69,29 @@ describe("SharedLinkBadge", () => {
     // The lookup must use the caller-resolved rel-path (the mint's own
     // derivation), never the row's bare basename.
     expect(useFolderShareBadgeMock).toHaveBeenCalledWith("Drive", "Trips/Photos", true);
+  });
+
+  // Recent Files on the Overview and the Drive, not only the Captures page:
+  // a capture's link made in the web console has no origin on this computer
+  // and is found by its capture name, which used to badge only the top rows
+  // (the links made here) in Recent Files.
+  it("badges a capture whose link was made elsewhere, on any page", () => {
+    const name = "Recording 2026-10-30 at 11.09.18.mp4";
+    getUnplacedSharesNamedMock.mockImplementation((n: string) =>
+      n === name
+        ? [{ shareToken: "web", filename: name, plaintextSize: 320870, createdAt: "2026-10-30T09:00:00Z", expiresAt: null }]
+        : [],
+    );
+    render(<SharedLinkBadge label="Hippius Captures" actualName={name} fileSize={320870} />);
+    expect(screen.getByLabelText(/shared via public link/i)).toBeInTheDocument();
+  });
+
+  it("does not badge a plain file from another file's link of the same name", () => {
+    getUnplacedSharesNamedMock.mockReturnValue([
+      { shareToken: "web", filename: "image.png", plaintextSize: 1, createdAt: "2026-10-30T09:00:00Z", expiresAt: null },
+    ]);
+    render(<SharedLinkBadge label="Drive" actualName="image.png" fileSize={1} />);
+    expect(screen.queryByLabelText(/shared/i)).not.toBeInTheDocument();
   });
 
   it("renders nothing for an unshared folder", () => {

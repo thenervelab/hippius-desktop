@@ -43,6 +43,12 @@ export const LINK_SWITCHES: ReadonlyArray<{
   },
 ];
 
+/**
+ * Under the switches on the free plan while one is on: turning it off is
+ * allowed, turning it back on is not.
+ */
+export const FREE_OFF_NOTE = "On the free plan, a switch you turn off can't be turned back on unless you upgrade.";
+
 /** The Insights switch's line while the plan does not include it. */
 export const INSIGHTS_LOCKED_DESCRIPTION = LINK_SWITCHES[0].locked;
 
@@ -126,6 +132,13 @@ export default function LinkEngagementSwitches({
           );
         })}
       </div>
+      {/* On the free plan an older link can keep a switch it has on, but one
+          turned off cannot come back without upgrading: say so before it is. */}
+      {locked && shown.some(({ key }) => value[key]) && (
+        <p className={cn("text-xs leading-[1.45] text-grey-50 dark:text-grey-dark-600", list && "mt-2.5")}>
+          {FREE_OFF_NOTE}
+        </p>
+      )}
       <div aria-live="polite">
         {asking && locked && <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />}
       </div>

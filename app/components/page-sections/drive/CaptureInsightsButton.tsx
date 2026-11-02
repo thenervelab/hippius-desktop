@@ -82,6 +82,12 @@ interface CaptureInsightsButtonProps {
   /** The row's file, for the sheet's thumbnail. */
   file?: FormattedUserFile;
   className?: string;
+  /**
+   * Drop the words for the icon alone when the row's name cell (the nearest
+   * `@container`) is narrow, so a long name is not crushed. The name stays in
+   * the accessible name and the tooltip.
+   */
+  collapsible?: boolean;
 }
 
 /**
@@ -95,7 +101,7 @@ const CaptureInsightsButton: FC<CaptureInsightsButtonProps> = (props) => {
   return <InsightsButtonForLink {...props} />;
 };
 
-const InsightsButtonForLink: FC<CaptureInsightsButtonProps> = ({ label, actualName, fileName, file, className }) => {
+const InsightsButtonForLink: FC<CaptureInsightsButtonProps> = ({ label, actualName, fileName, file, className, collapsible }) => {
   const shareFor = useCaptureInsightsShare();
   const { offered, share } = shareFor(label, actualName, false, file?.size);
   if (!offered) return null;
@@ -105,7 +111,16 @@ const InsightsButtonForLink: FC<CaptureInsightsButtonProps> = ({ label, actualNa
         ? captureLinkSource({ ...file, label }, actualName)
         : { label, relativePath: actualName }
       : undefined;
-  return <InsightsButton share={share} capture={capture} fileName={fileName} file={file} className={className} />;
+  return (
+    <InsightsButton
+      share={share}
+      capture={capture}
+      fileName={fileName}
+      file={file}
+      className={className}
+      collapsible={collapsible}
+    />
+  );
 };
 
 /**
@@ -119,7 +134,8 @@ export const InsightsButton: FC<{
   fileName: string;
   file?: FormattedUserFile;
   className?: string;
-}> = ({ share, capture, fileName, file, className }) => {
+  collapsible?: boolean;
+}> = ({ share, capture, fileName, file, className, collapsible = false }) => {
   const open = useSetAtom(insightsSheetAtom);
   const listingCounts = useAtomValue(shareListingCountsEnabledAtom);
   const insightsSeen = useAtomValue(shareInsightsSeenEnabledAtom);
@@ -174,31 +190,39 @@ export const InsightsButton: FC<{
               if (e.key === "Enter" || e.key === " ") activate(e);
             }}
             className={cn(
-              "relative inline-flex h-6 flex-shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[7px] border pl-1.5 pr-2",
-              "text-xs font-semibold tabular-nums transition-colors",
-              "border-grey-80 bg-white text-grey-10 hover:bg-grey-100",
-              "dark:border-[#494949] dark:bg-[#1f1f1f] dark:text-white dark:hover:bg-[#2a2a2a]",
-              view.off && "border-dashed font-medium text-grey-50 dark:text-grey-dark-600",
-              // No link yet: the same button, quieter, so the rows that have
+              // The web console's row pill, to the pixel: height, radius,
+              // padding, type and focus ring, so the two apps read as one.
+              "relative inline-flex h-[30px] flex-shrink-0 cursor-pointer items-center gap-[7px] whitespace-nowrap rounded-[8px] border",
+              "text-[12.5px] font-semibold tabular-nums transition-colors",
+              collapsible
+                ? "w-[30px] justify-center px-0 @[26rem]:w-auto @[26rem]:justify-start @[26rem]:pl-2 @[26rem]:pr-2.5"
+                : "pl-2 pr-2.5",
+              "border-grey-80 bg-white text-grey-10 hover:bg-grey-90",
+              "dark:border-black-300 dark:bg-black-600 dark:text-white dark:hover:bg-black-400",
+              view.off &&
+                "border-dashed border-grey-70 font-medium text-grey-60 dark:border-black-100 dark:text-grey-dark-800",
+              // No link yet: the same pill, quieter, so the rows that have
               // numbers to show still stand out.
-              noLink && "font-medium text-grey-50 dark:text-grey-dark-600",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
+              noLink && "font-medium text-grey-60 dark:text-grey-dark-800",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50",
               className,
             )}
           >
             <BarChart3
               className={cn(
-                "size-3.5",
-                view.off || noLink ? "text-grey-50 dark:text-grey-dark-600" : "text-primary-50 dark:text-primary-brand-dark",
+                "size-[15px] shrink-0",
+                view.off || noLink ? "text-grey-60 dark:text-grey-dark-800" : "text-primary-50 dark:text-primary-60",
               )}
               aria-hidden
             />
-            {view.label}
+            <span aria-hidden className={cn(collapsible && "hidden @[26rem]:inline")}>
+              {view.label}
+            </span>
             {view.newSinceSeen && (
               <span
                 aria-hidden
                 data-testid="insights-new-dot"
-                className="absolute -right-[3px] -top-[3px] size-[9px] rounded-full bg-primary-50 ring-2 ring-white dark:bg-primary-brand-dark dark:ring-[#1f1f1f]"
+                className="absolute -right-[3px] -top-[3px] size-[9px] rounded-full bg-primary-50 ring-2 ring-white dark:bg-primary-60 dark:ring-black-600"
               />
             )}
           </span>

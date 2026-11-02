@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
 
 import PreviewSurface from "./PreviewSurface";
+import { openInDefaultApp } from "./previewBytes";
 import { PreviewFallback } from "./PreviewState";
 
 const LOAD_TIMEOUT_MS = 15000;
@@ -16,8 +17,7 @@ const LOAD_TIMEOUT_MS = 15000;
 // waiting for the load timeout to fire.
 async function openInSystemViewer(filePath: string) {
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(filePath);
+    await openInDefaultApp(filePath);
   } catch (err) {
     console.error("Failed to open PDF in system viewer:", err);
   }

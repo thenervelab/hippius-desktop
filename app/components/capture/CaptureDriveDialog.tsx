@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useAtom } from "jotai";
 import { toast } from "sonner";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
@@ -66,16 +66,28 @@ export default function CaptureDriveDialog() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  // Reading where captures go can fail (the app is still starting, say):
+  // the dialog then says so and offers to read it again, rather than
+  // waiting forever with its buttons off.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const load = useCallback(() => {
+    setError(null);
+    setLoadFailed(false);
+    setStatus(null);
+    getCaptureDriveStatus()
+      .then(setStatus)
+      .catch((e) => {
+        setError(errorMessage(e));
+        setLoadFailed(true);
+      });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     setPicked(null);
     setPickedFolder(null);
-    setError(null);
-    setStatus(null);
-    getCaptureDriveStatus()
-      .then(setStatus)
-      .catch((e) => setError(errorMessage(e)));
-  }, [open]);
+    load();
+  }, [open, load]);
 
   const ready = status?.state === "ready";
   const waiting = status?.state === "needsSetup" ? status.waiting : 0;
@@ -186,6 +198,10 @@ export default function CaptureDriveDialog() {
               </div>
             ) : status?.state === "ready" ? (
               <p className="min-w-0 flex-1 truncate text-sm text-grey-10 dark:text-white">{status.name}</p>
+            ) : loadFailed ? (
+              <p className="min-w-0 flex-1 truncate text-sm text-grey-50 dark:text-grey-dark-600">
+                Couldn&apos;t check your captures folder.
+              </p>
             ) : (
               <span
                 aria-hidden
@@ -222,9 +238,20 @@ export default function CaptureDriveDialog() {
         )}
 
         {error && (
-          <p role="alert" className="text-sm text-error-50">
-            {error}
-          </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <p role="alert" className="text-sm text-error-50">
+              {error}
+            </p>
+            {loadFailed && (
+              <button
+                type="button"
+                onClick={load}
+                className="text-sm font-medium text-primary-50 underline-offset-2 hover:underline dark:text-primary-brand-dark"
+              >
+                Try again
+              </button>
+            )}
+          </div>
         )}
 
         <div className="flex flex-wrap gap-3">

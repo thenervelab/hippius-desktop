@@ -1,6 +1,8 @@
 //! The Free plan's watermark: the Hippius mark and the word "Hippius" in the
 //! bottom-right corner of every screenshot and recording, burned into the
-//! pixels so it stays on a file that is shared or downloaded.
+//! pixels so it stays on a file that is shared or downloaded. On a recording
+//! it sits higher ([`RECORDING_LIFT_SHARE`]), above the share page player's
+//! controls, which cover the bottom of the video while it plays.
 //!
 //! Only the Free tier gets one. The tier is the one the recording limits use
 //! (`allowance::session_tier`), read once per capture. There is no unknown
@@ -40,6 +42,12 @@ pub const MAX_HEIGHT: u32 = 44;
 pub const MARGIN_SHARE: f64 = 0.02;
 pub const MIN_MARGIN: u32 = 12;
 pub const MAX_MARGIN: u32 = 32;
+/// On a recording, the mark's bottom edge sits this share of the frame's
+/// height above its bottom edge (or the margin, when that is larger), so it
+/// clears the share page player's controls.
+pub const RECORDING_LIFT_SHARE: f64 = 0.12;
+/// [`RECORDING_LIFT_SHARE`] in thousandths, as the macOS helper reads it.
+const RECORDING_LIFT_PERMILLE: u32 = 120;
 /// The white's opacity.
 pub const OPACITY: f32 = 0.7;
 /// The shadow's opacity where it is fullest.
@@ -49,7 +57,7 @@ const SHADOW_OPACITY: f32 = 0.45;
 const LAYOUT_SETTLED_FROM: u32 = 2000;
 
 /// The first bytes of an [`atlas`].
-pub const ATLAS_MAGIC: &[u8; 4] = b"HWM1";
+pub const ATLAS_MAGIC: &[u8; 4] = b"HWM2";
 
 static MASTER_PNG: &[u8] = include_bytes!("../../icons/watermark.png");
 
@@ -157,10 +165,35 @@ pub fn mark(height: u32) -> Mark {
 /// blend draws what lands on it.
 #[must_use]
 pub fn origin(width: u32, height: u32, mark: &Mark, margin: u32) -> (i64, i64) {
-    let inset = i64::from(margin) - i64::from(mark.pad);
+    place(width, height, mark, margin, margin)
+}
+
+/// The gap from a recording's bottom edge to the mark's:
+/// [`RECORDING_LIFT_SHARE`] of its `height`, or `margin` when that is larger.
+/// Whole thousandths, rounded half up, so the macOS helper works out the
+/// same pixel from the atlas.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn recording_bottom_gap(height: u32, margin: u32) -> u32 {
+    let lift = (u64::from(height) * u64::from(RECORDING_LIFT_PERMILLE) + 500) / 1000;
+    (lift as u32).max(margin)
+}
+
+/// Where `mark`'s top-left goes on a `width` x `height` recording frame: the
+/// mark `margin` px in from the right edge, as on a screenshot, and
+/// [`recording_bottom_gap`] above the bottom edge.
+#[must_use]
+pub fn recording_origin(width: u32, height: u32, mark: &Mark, margin: u32) -> (i64, i64) {
+    place(width, height, mark, margin, recording_bottom_gap(height, margin))
+}
+
+/// `mark`'s top-left for the mark (not its shadow) to sit `right` px in from
+/// the right edge and `bottom` px up from the bottom edge.
+fn place(width: u32, height: u32, mark: &Mark, right: u32, bottom: u32) -> (i64, i64) {
+    let pad = i64::from(mark.pad);
     (
-        i64::from(width) - inset - i64::from(mark.width),
-        i64::from(height) - inset - i64::from(mark.height),
+        i64::from(width) - (i64::from(right) - pad) - i64::from(mark.width),
+        i64::from(height) - (i64::from(bottom) - pad) - i64::from(mark.height),
     )
 }
 
@@ -250,7 +283,7 @@ impl Nv12Stamp {
         }
         let Layout { height: size, margin } = layout(width, height);
         let mark = mark(size);
-        let (ax, ay) = origin(width, height, &mark, margin);
+        let (ax, ay) = recording_origin(width, height, &mark, margin);
         let (x0, y0, x1, y1) = visible(width, height, &mark, (ax, ay))?;
         // Out to whole 2x2 blocks; the picture's sides are even, so this
         // stays on it.
@@ -331,7 +364,9 @@ impl Nv12Stamp {
 }
 
 /// One row of an [`atlas`]'s table: from this shorter side up, use this
-/// mark, its bitmap this far in from the right and bottom edges.
+/// mark, its bitmap this far in from the right and bottom edges. The bottom
+/// inset is the floor: a frame tall enough lifts the mark higher (see
+/// [`atlas`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AtlasStep {
     pub short_from: u32,
@@ -370,25 +405,30 @@ pub fn atlas_steps() -> (Vec<AtlasStep>, Vec<Mark>) {
 /// learns its frames' size only once its stream runs. Little-endian:
 ///
 /// ```text
-/// "HWM1"
-/// u32 marks;  per mark:  u32 width, u32 height, width*height*4 bytes
+/// "HWM2"
+/// u32 lift_permille  (RECORDING_LIFT_SHARE in thousandths)
+/// u32 marks;  per mark:  u32 width, u32 height, u32 pad, width*height*4 bytes
 ///             (premultiplied, the same read as BGRA or RGBA)
 /// u32 steps;  per step:  u32 short_from, u32 mark, i32 inset_right, i32 inset_bottom
 /// ```
 ///
 /// A frame uses the last step whose `short_from` is at most its shorter
-/// side; the mark's top-left is then at (`width - inset_right - mark
-/// width`, `height - inset_bottom - mark height`).
+/// side. Its bottom inset is the larger of `inset_bottom` and
+/// `(height * lift_permille + 500) / 1000 - pad` ([`recording_origin`]);
+/// the mark's top-left is then at (`width - inset_right - mark width`,
+/// `height - bottom inset - mark height`).
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
 pub fn atlas() -> Vec<u8> {
     let (steps, marks) = atlas_steps();
-    let mut out = Vec::with_capacity(marks.iter().map(|m| m.pixels.len() + 8).sum::<usize>() + steps.len() * 16 + 12);
+    let mut out = Vec::with_capacity(marks.iter().map(|m| m.pixels.len() + 12).sum::<usize>() + steps.len() * 16 + 16);
     out.extend_from_slice(ATLAS_MAGIC);
+    out.extend_from_slice(&RECORDING_LIFT_PERMILLE.to_le_bytes());
     out.extend_from_slice(&(marks.len() as u32).to_le_bytes());
     for m in &marks {
         out.extend_from_slice(&m.width.to_le_bytes());
         out.extend_from_slice(&m.height.to_le_bytes());
+        out.extend_from_slice(&m.pad.to_le_bytes());
         out.extend_from_slice(&m.pixels);
     }
     out.extend_from_slice(&(steps.len() as u32).to_le_bytes());
@@ -569,14 +609,46 @@ mod tests {
     }
 
     #[test]
-    fn a_recording_frame_matches_the_screenshot_of_the_same_picture() {
+    fn the_recording_mark_is_lifted_above_the_player_controls() {
+        // 12 % of the height, the right margin as on a screenshot.
+        assert_eq!(recording_bottom_gap(1080, 22), 130);
+        assert_eq!(recording_bottom_gap(720, 14), 86);
+        assert_eq!(recording_bottom_gap(1920, 22), 230, "portrait reads the height");
+        // A short frame keeps the margin when 12 % is smaller.
+        assert_eq!(recording_bottom_gap(100, MIN_MARGIN), MIN_MARGIN);
+        assert_eq!(recording_bottom_gap(0, MIN_MARGIN), MIN_MARGIN);
+        // The thousandths the helper reads are the share, and round as it does.
+        assert!((f64::from(RECORDING_LIFT_PERMILLE) / 1000.0 - RECORDING_LIFT_SHARE).abs() < 1e-9);
+        for h in 1..=8640u32 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let want = (f64::from(h) * RECORDING_LIFT_SHARE).round() as u32;
+            assert_eq!(recording_bottom_gap(h, 0), want, "{h}");
+        }
+        // Same size and right edge as a screenshot's mark, only higher.
+        for (w, h) in [(1280, 720), (1920, 1080), (1080, 1920), (3840, 2160)] {
+            let Layout { height, margin } = layout(w, h);
+            let m = mark(height);
+            let shot = origin(w, h, &m, margin);
+            let rec = recording_origin(w, h, &m, margin);
+            assert_eq!(rec.0, shot.0, "{w}x{h}");
+            let mark_bottom = rec.1 + i64::from(m.height) - i64::from(m.pad);
+            assert_eq!(i64::from(h) - mark_bottom, i64::from(recording_bottom_gap(h, margin)), "{w}x{h}");
+            assert!(i64::from(h) - mark_bottom >= i64::from(h) * 12 / 100, "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn a_recording_frame_matches_the_same_mark_blended_into_a_picture() {
         let (w, h) = (1280, 720);
         let mut frame = nv12(w, h, 90);
         let stamp = Nv12Stamp::new(w, h).unwrap();
         stamp.apply(&mut frame);
-        // The same picture stamped as a screenshot, then converted.
+        // The same mark blended at the recording's place, then converted.
         let mut shot = picture(w, h, GREY);
-        stamp_image(&mut shot);
+        let Layout { height, margin } = layout(w, h);
+        let m = mark(height);
+        let at = recording_origin(w, h, &m, margin);
+        blend(shot.as_mut(), w, h, w as usize * 4, &m, at);
         let mut expected = Vec::new();
         crate::capture::recorder_child::frame::to_nv12(
             crate::capture::recorder_child::frame::Bgra {
@@ -591,10 +663,17 @@ mod tests {
         );
         let worst = frame.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
         assert!(worst <= 3, "luma and chroma within rounding, worst {worst}");
-        // And only the corner changed.
+        // And only the mark's rectangle changed: near the bottom, with the
+        // mark's edge 12 % of the height up and only its soft shadow (within
+        // its pad) below that.
         let plain = nv12(w, h, 90);
-        let first = frame.iter().zip(&plain).position(|(a, b)| a != b).unwrap();
-        assert!(first / w as usize > h as usize - 80, "first change on row {}", first / w as usize);
+        let luma = (w * h) as usize;
+        let rows: Vec<usize> = (0..luma).filter(|&i| frame[i] != plain[i]).map(|i| i / w as usize).collect();
+        let (top, bottom) = (rows[0], *rows.last().unwrap());
+        let gap = recording_bottom_gap(h, margin) as usize;
+        assert!(top > h as usize - 200, "first change on row {top}");
+        assert!(bottom < h as usize - gap + m.pad as usize, "last change on row {bottom}");
+        assert!(bottom >= h as usize - gap - 1, "last change on row {bottom}");
     }
 
     #[test]
@@ -614,8 +693,11 @@ mod tests {
         assert_ne!(frame, before);
     }
 
+    /// An atlas's mark as read back: width, height, pad, where its pixels start.
+    type AtlasMark = (u32, u32, u32, usize);
+
     /// Reads an atlas back the way the Swift helper does.
-    fn read_atlas(bytes: &[u8]) -> (Vec<(u32, u32, usize)>, Vec<AtlasStep>) {
+    fn read_atlas(bytes: &[u8]) -> (Vec<AtlasMark>, Vec<AtlasStep>) {
         let mut at = 4;
         let u32_at = |at: &mut usize| {
             let v = u32::from_le_bytes(bytes[*at..*at + 4].try_into().unwrap());
@@ -623,10 +705,11 @@ mod tests {
             v
         };
         assert_eq!(&bytes[..4], ATLAS_MAGIC);
+        assert_eq!(u32_at(&mut at), RECORDING_LIFT_PERMILLE);
         let mut marks = Vec::new();
         for _ in 0..u32_at(&mut at) {
-            let (w, h) = (u32_at(&mut at), u32_at(&mut at));
-            marks.push((w, h, at));
+            let (w, h, pad) = (u32_at(&mut at), u32_at(&mut at), u32_at(&mut at));
+            marks.push((w, h, pad, at));
             at += w as usize * h as usize * 4;
         }
         let mut steps = Vec::new();
@@ -647,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn the_macos_atlas_places_every_size_as_the_screenshot_does() {
+    fn the_macos_atlas_places_every_size_as_the_other_recorders_do() {
         let bytes = atlas();
         let (marks, steps) = read_atlas(&bytes);
         assert_eq!(marks.len() as u32, MAX_HEIGHT - MIN_HEIGHT + 1);
@@ -663,19 +746,24 @@ mod tests {
             (3024, 1964),
             (3840, 2160),
             (7680, 4320),
+            (1080, 1920),
+            (200, 120),
         ] {
             let short = w.min(h);
             let step = steps.iter().rev().find(|s| s.short_from <= short).unwrap();
-            let (mw, mh, start) = marks[step.mark as usize];
+            let (mw, mh, pad, start) = marks[step.mark as usize];
             let want = layout(w, h);
             let m = mark(want.height);
-            assert_eq!((mw, mh), (m.width, m.height), "{w}x{h}");
+            assert_eq!((mw, mh, pad), (m.width, m.height, m.pad), "{w}x{h}");
             assert_eq!(&bytes[start..start + m.pixels.len()], m.pixels.as_slice());
+            // As the helper works it out.
+            let lift = (i64::from(h) * i64::from(RECORDING_LIFT_PERMILLE) + 500) / 1000 - i64::from(pad);
+            let inset_bottom = i64::from(step.inset_bottom).max(lift);
             let at = (
                 i64::from(w) - i64::from(step.inset_right) - i64::from(mw),
-                i64::from(h) - i64::from(step.inset_bottom) - i64::from(mh),
+                i64::from(h) - inset_bottom - i64::from(mh),
             );
-            assert_eq!(at, origin(w, h, &m, want.margin), "{w}x{h}");
+            assert_eq!(at, recording_origin(w, h, &m, want.margin), "{w}x{h}");
         }
     }
 
@@ -683,7 +771,12 @@ mod tests {
     #[test]
     fn the_swift_helper_reads_this_atlas() {
         let swift = include_str!("../../../macos/HippiusCapture/Sources/HippiusCapture.swift");
-        for literal in [r#"obj["watermarkAtlas"] as? String"#, r#"Array("HWM1".utf8)"#, "stamp(pixelBuffer)"] {
+        for literal in [
+            r#"obj["watermarkAtlas"] as? String"#,
+            r#"Array("HWM2".utf8)"#,
+            "liftPermille",
+            "stamp(pixelBuffer)",
+        ] {
             assert!(swift.contains(literal), "HippiusCapture.swift no longer says `{literal}`");
         }
     }

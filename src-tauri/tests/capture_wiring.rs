@@ -257,10 +257,14 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     let plan = check
         .find("allowance::session_tier(state).await?")
         .expect("the session's plan, refusals passed on");
-    let count = check
-        .find("recording_count(state, &state.current_account_id()?)")
-        .expect("then the count");
+    let count = check.find("recording_count(state, &account_id)").expect("then the count");
     assert!(plan < count);
+    // Recordings waiting on this computer to upload count too, or "Not now"
+    // and Retry would let a free account record past its limit.
+    assert!(
+        check.contains("with_waiting(recording_count(state, &account_id).await, waiting_here(state, &account_id).await)"),
+        "the waiting recordings are counted"
+    );
     assert!(check.contains("StartVerdict::CountUnavailable => {"), "an unread count is refused");
     assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
     let list = fn_body(&allowance, "async fn list_recordings(");
@@ -600,7 +604,7 @@ fn the_captures_drive_is_asked_for_made_and_fed_through_the_usual_paths() {
     let setup = read("src/capture/setup.rs");
     let create = fn_body(&setup, "pub async fn capture_drive_create(");
     let card = create.find("redeliver_kept_card(").expect("the card's capture is sent");
-    let rest = create.find("move_waiting(").expect("the other waiting captures are moved in");
+    let rest = create.find("move_waiting_within(").expect("the other waiting captures are moved in");
     assert!(card < rest, "the card's capture is claimed before the rest are moved");
     assert!(create.contains("on_card.as_deref()"), "the card's capture is left for its own delivery");
     assert!(create.contains("ENSURE_LOCK"), "one setup at a time");

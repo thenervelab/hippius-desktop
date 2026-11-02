@@ -22,9 +22,7 @@ import {
   folderShareRowId,
 } from "@/app/lib/utils/sharesPageLink";
 import { cn } from "@/lib/utils";
-import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import { buildSharedBadgeTooltip } from "./sharedBadgeTooltip";
-import { useDriveRoute } from "./driveRoute";
 import { captureSharesFrom } from "./useCaptureInsightsItem";
 
 interface SharedLinkBadgeProps {
@@ -54,9 +52,9 @@ interface SharedLinkBadgeProps {
    */
   onManageShare?: (shareRowIds: string[]) => void;
   /**
-   * The file's size, when known. On the Captures page a link made elsewhere
-   * is matched to its capture by name (`captureSharesFrom`), and a size that
-   * differs rules the match out.
+   * The file's size, when known. A link made elsewhere is matched to its
+   * capture by name (`captureSharesFrom`), and a size that differs rules the
+   * match out.
    */
   fileSize?: number;
 }
@@ -71,7 +69,6 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   fileSize,
 }) => {
   const { getSharesFor, getUnplacedSharesNamed } = useSharedFiles();
-  const { basePath } = useDriveRoute();
 
   // Folder badges key on the share's server-side `(folderHash, pathPrefix)`
   // identity from the folder-share LISTING — never on `share_origin` rows,
@@ -87,14 +84,15 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   // origin row keyed by the folder's path, so a folder row still consults
   // the file index too until those links age out.
   //
-  // A capture on the Captures page also shows links made for it elsewhere
-  // (the browser extension, the web console, another computer), the same
-  // links its Insights button opens.
+  // A file's links come from the one matching rule (`captureSharesFrom`) on
+  // every page, so a capture also shows links made for it elsewhere (the
+  // browser extension, the web console, another computer) in Recent Files
+  // and Drive as it does on the Captures page, and its Copy link (Rust's
+  // `link_belongs_to_file`, the same rule) copies that link rather than
+  // making another.
   const fileRows = isFolder
     ? getSharesFor(label, folderRelativePath ?? actualName)
-    : basePath === CAPTURES_ROUTE
-      ? captureSharesFrom({ getSharesFor, getUnplacedSharesNamed }, label, actualName, fileSize)
-      : getSharesFor(label, actualName);
+    : captureSharesFrom({ getSharesFor, getUnplacedSharesNamed }, label, actualName, fileSize);
   const rows = isFolder ? [...folderRows, ...fileRows] : fileRows;
   const tooltipLines = buildSharedBadgeTooltip(rows);
   // `buildSharedBadgeTooltip` returns null for unshared files, which

@@ -452,12 +452,15 @@ const NameCell: FC<NameCellProps> = ({
           </div>
         </Link>
       ) : (
-        // Status badge sits at the right edge of the name cell. The hover
-        // preview icon (eye / play) renders as a flex sibling directly to its
-        // LEFT — it used to be an absolutely-positioned overlay in the dialog
-        // triggers, which faded in on top of the Pending/Failed pills. The
-        // slot is always reserved (opacity, not display) so the badge doesn't
-        // jump when the icon fades in; `group` comes from the trigger button.
+        // One layout for every file row, in Drive, Captures and Recent Files:
+        // type icon, the name (middle-truncated, full name in its tooltip),
+        // the link icon right after it, then a trailing group at the cell's
+        // right edge. The Insights pill ends that group, so every row's pill
+        // lines up in one column whatever the name's length; the hover
+        // preview icon (eye / play) sits just to its left inside the group,
+        // with its slot always reserved (opacity, not display), so it never
+        // moves the pill; the sync status badge comes before the group.
+        // `group` comes from the trigger button.
         <div className="flex items-center min-w-0 w-full gap-2">
           <div className="flex items-center min-w-0 flex-1">
             <Icon className={cn("size-5 mr-2 flex-shrink-0", color)} />
@@ -469,43 +472,19 @@ const NameCell: FC<NameCellProps> = ({
                   "group-hover:text-primary-50 group-hover:underline cursor-pointer",
               )}
               suffix={
-                <>
-                  <SharedLinkBadge
-                    label={label}
-                    actualName={actualName}
-                    onManageShare={onManageShare}
-                    fileSize={file?.size}
-                    className="ml-1.5"
-                  />
-                  {/* Captures page only: opens the link's Insights. */}
-                  <CaptureInsightsButton
-                    label={label}
-                    actualName={actualName}
-                    fileName={actualName || rawName}
-                    file={file}
-                    className="ml-1"
-                  />
-                </>
+                // Looks the file's links up by its drive-relative path, as
+                // its menu does: a row inside a folder carries only its own
+                // name in `actualName`.
+                <SharedLinkBadge
+                  label={label}
+                  actualName={fileRelativePath}
+                  onManageShare={onManageShare}
+                  fileSize={file?.size}
+                  className="ml-1.5"
+                />
               }
             />
           </div>
-          {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows
-              by asking the same classifier, so a row's hover affordance and
-              whether it actually opens the viewer can never disagree. */}
-          {isPreviewable &&
-            isPreviewableFileName(rawName) && (
-              <span
-                aria-hidden="true"
-                data-testid="hover-preview-icon"
-                className="inline-flex shrink-0 items-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-              >
-                {fileType === "video" ? (
-                  <Video className="size-4 text-primary-60" />
-                ) : (
-                  <Icons.EyeOutline className="size-4 text-primary-60" />
-                )}
-              </span>
-            )}
           <FileStatusBadge
             status={badgeStatus}
             progressPercent={live.progressPercent}
@@ -522,6 +501,36 @@ const NameCell: FC<NameCellProps> = ({
             }
             retrying={retryFile.isPending}
           />
+          <div data-testid="name-cell-trailing" className="flex shrink-0 items-center gap-2">
+            {/* Mirrors the trigger-wrap gate in FilesTable/ExpandedFolderRows
+                by asking the same classifier, so a row's hover affordance and
+                whether it actually opens the viewer can never disagree. */}
+            {isPreviewable &&
+              isPreviewableFileName(rawName) && (
+                <span
+                  aria-hidden="true"
+                  data-testid="hover-preview-icon"
+                  className="inline-flex shrink-0 items-center opacity-0 transition-opacity duration-300 group-hover:opacity-100"
+                >
+                  {fileType === "video" ? (
+                    <Video className="size-4 text-primary-60" />
+                  ) : (
+                    <Icons.EyeOutline className="size-4 text-primary-60" />
+                  )}
+                </span>
+              )}
+            {/* Captures page only: opens the link's Insights. */}
+            <CaptureInsightsButton
+              label={label}
+              actualName={fileRelativePath}
+              fileName={actualName || rawName}
+              file={file}
+              collapsible
+              // The pill is the web app's 30px; the row keeps its height
+              // (the cell's padding has the room), as with the old 24px one.
+              className="-my-[3px]"
+            />
+          </div>
         </div>
       )}
     </div>

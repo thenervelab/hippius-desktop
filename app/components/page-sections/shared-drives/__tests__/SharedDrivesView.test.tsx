@@ -36,7 +36,7 @@ vi.mock("@/app/lib/wallet-auth-context", () => ({
 }));
 
 const folders = vi.hoisted(() => ({
-  value: { local: [] as unknown[], remote: [] as unknown[] },
+  value: { local: [], remote: [] } as { local: unknown[]; remote: unknown[]; remoteFailed?: boolean },
 }));
 const foldersFail = vi.hoisted(() => ({ value: false }));
 const fetchFolders = vi.hoisted(() =>
@@ -65,6 +65,7 @@ const withMe = vi.hoisted(() => ({
   data: { kind: "ready", memberships: [] } as SharedWithMeData,
   grants: [] as MyFolderGrantInfo[],
   grantsSettled: true,
+  grantsFailed: false,
   stats: new Map<string, SharedDriveStats>(),
   grantStats: [] as FolderGrantStatsState[],
   reload: vi.fn(async () => {}),
@@ -74,7 +75,12 @@ vi.mock("@/components/page-sections/settings/multi-folder-sync/useDriveMembershi
 }));
 const refetchGrants = vi.hoisted(() => vi.fn());
 vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({
-  useMyFolderGrants: () => ({ grants: withMe.grants, isSettled: withMe.grantsSettled, refetch: refetchGrants }),
+  useMyFolderGrants: () => ({
+    grants: withMe.grants,
+    isSettled: withMe.grantsSettled,
+    isError: withMe.grantsFailed,
+    refetch: refetchGrants,
+  }),
 }));
 
 // This account's plan: true shares, false is Free or Starter, undefined is
@@ -208,7 +214,7 @@ const totals = () => screen.getByTestId("shared-drives-totals");
 beforeEach(() => {
   push.mockReset();
   pickerProps.value = null;
-  folders.value = { local: [], remote: [] };
+  folders.value = { local: [], remote: [], remoteFailed: false };
   sharing.byLabel = new Map();
   sharing.isPending = false;
   sharing.isError = false;
@@ -221,6 +227,7 @@ beforeEach(() => {
   withMe.data = { kind: "ready", memberships: [] };
   withMe.grants = [];
   withMe.grantsSettled = true;
+  withMe.grantsFailed = false;
   withMe.stats = new Map();
   withMe.grantStats = [];
   withMeProps.value = null;
@@ -626,6 +633,51 @@ describe("a list that could not load", () => {
     });
     expect(await screen.findByText("Team")).toBeInTheDocument();
     expect(screen.queryByTestId("shared-drives-error")).not.toBeInTheDocument();
+  });
+
+  // Offline or on a server error the listing still answers, with this
+  // computer's drives only. A drive that lives only on the server is then
+  // missing, so "Shared by you" cannot say there is none.
+  it("says so when the server's half of the drive listing failed, and Try again asks for it again", async () => {
+    withMe.data = { kind: "ready", memberships: [membership("Design", "aa".repeat(8))] };
+    folders.value = { local: [], remote: [], remoteFailed: true };
+    renderPage();
+    expect(await screen.findByText("Design")).toBeInTheDocument();
+    expect(screen.getByTestId("shared-drives-partial-error")).toHaveTextContent(/you've shared couldn't load/);
+
+    fireEvent.click(screen.getByRole("tab", { name: "Shared by you" }));
+    const alert = screen.getByTestId("shared-drives-error");
+    expect(alert).toHaveTextContent(sharedDrivesErrorCopy("by-you", false).title);
+    expect(screen.queryByText(sharedDrivesEmptyCopy("by-you", true).title)).not.toBeInTheDocument();
+
+    folders.value = {
+      local: [],
+      remote: [{ folderName: "Team", deviceName: "Work Mac", fileCount: 3, totalBytes: GB, lastModified: 1, origin: { kind: "otherDevice" } }],
+      remoteFailed: false,
+    };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    await act(async () => {
+      fireEvent.click(within(alert).getByRole("button", { name: /Try again/ }));
+    });
+    expect(fetchFolders).toHaveBeenCalledTimes(2);
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    expect(screen.queryByTestId("shared-drives-error")).not.toBeInTheDocument();
+  });
+
+  it("says so, never Nothing shared with you yet, when the folders shared with you failed", async () => {
+    folders.value = { local: [local("Team")], remote: [] };
+    sharing.byLabel = new Map([["Team", shared(2)]]);
+    withMe.grantsFailed = true;
+    renderPage();
+    expect(await screen.findByText("Team")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Shared with you" }));
+    expect(screen.getByTestId("shared-drives-error")).toHaveTextContent(sharedDrivesErrorCopy("with-you", false).title);
+    expect(screen.queryByText(sharedDrivesEmptyCopy("with-you", true).title)).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId("shared-drives-error")).getByRole("button", { name: /Try again/ }));
+    });
+    expect(refetchGrants).toHaveBeenCalled();
   });
 
   it("says so when no own drive's sharing could be read", async () => {

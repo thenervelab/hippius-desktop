@@ -77,6 +77,30 @@ pub enum DirContents {
     /// poster). The recorder keeps a playable MP4 when the app dies
     /// mid-recording; such a directory is NEVER removed automatically.
     Media,
+    /// A capture already in the drive ([`DELIVERED`] beside it, no failed
+    /// marker): the copy only its card still used, for Edit or Create link.
+    /// Removed at launch and at sign-out, when no card can be using it.
+    Delivered,
+}
+
+/// Written beside a capture once it is in the drive, so its temp copy can be
+/// told from one that never uploaded (which is kept, always).
+pub const DELIVERED: &str = ".delivered";
+
+/// Mark `file`'s capture folder as delivered ([`DELIVERED`]). Only a
+/// `capture-…` folder directly under the temp root is marked; a synced
+/// capture's file is the drive's own and is never touched.
+pub fn mark_delivered(file: &Path) {
+    let Ok(root) = capture_tmp_root() else { return };
+    mark_delivered_in(&root, file);
+}
+
+fn mark_delivered_in(root: &Path, file: &Path) {
+    let Some(dir) = file.parent() else { return };
+    let ours = dir.parent() == Some(root) && dir.file_name().is_some_and(|n| n.to_string_lossy().starts_with(DIR_PREFIX));
+    if ours && let Err(e) = std::fs::write(dir.join(DELIVERED), b"") {
+        tracing::warn!(error = %e, "uploaded capture's temp copy not marked; it stays until removed by hand");
+    }
 }
 
 /// What `dir` holds (see [`DirContents`]). Unreadable reads as media, so a
@@ -86,6 +110,9 @@ pub fn dir_contents(dir: &Path) -> DirContents {
         return DirContents::Media;
     };
     let mut any = false;
+    let mut media = false;
+    let mut delivered = false;
+    let mut failed = false;
     for entry in entries.flatten() {
         any = true;
         let path = entry.path();
@@ -93,28 +120,56 @@ pub fn dir_contents(dir: &Path) -> DirContents {
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         let size = entry.metadata().map_or(1, |m| m.len());
         if ["mp4", "mov", "png"].contains(&ext.as_str()) && name != "poster.png" && size > 0 {
-            return DirContents::Media;
+            media = true;
         }
+        delivered |= name == DELIVERED;
+        failed |= name == super::kept_failed::MARKER;
     }
-    if any { DirContents::OnlyLeftovers } else { DirContents::Empty }
+    match (media, delivered && !failed, any) {
+        (_, true, _) => DirContents::Delivered,
+        (true, false, _) => DirContents::Media,
+        (false, false, true) => DirContents::OnlyLeftovers,
+        (false, false, false) => DirContents::Empty,
+    }
 }
 
 /// Whether a capture-tmp entry can be removed at launch: one of ours (a
 /// directory named `capture-…`), not the file of a card still showing, and
-/// either empty for [`ORPHAN_AGE`] or only leftovers for [`LEFTOVER_AGE`].
-/// A directory with a capture in it is never removed, and one whose age is
-/// unknown stays.
+/// either already in the drive ([`DirContents::Delivered`], at any age),
+/// empty for [`ORPHAN_AGE`] or only leftovers for [`LEFTOVER_AGE`]. A
+/// directory with a capture that did not upload is never removed, and one
+/// whose age is unknown stays.
 #[must_use]
 pub fn is_orphan(name: &str, is_dir: bool, age: Option<std::time::Duration>, referenced: bool, contents: DirContents) -> bool {
     if !is_dir || !name.starts_with(DIR_PREFIX) || referenced {
         return false;
     }
+    if contents == DirContents::Delivered {
+        return true;
+    }
     let Some(age) = age else { return false };
     match contents {
         DirContents::Empty => age >= ORPHAN_AGE,
         DirContents::OnlyLeftovers => age >= LEFTOVER_AGE,
-        DirContents::Media => false,
+        DirContents::Media | DirContents::Delivered => false,
     }
+}
+
+/// Remove the capture directories under `root` whose capture is already in
+/// the drive ([`DirContents::Delivered`]), except `referenced`; returns how
+/// many. At sign-out, so a signed-out account's plaintext copies do not
+/// wait for the next launch.
+pub fn reclaim_delivered(root: &Path, referenced: &[PathBuf]) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let ours = path.is_dir() && entry.file_name().to_string_lossy().starts_with(DIR_PREFIX);
+        if ours && !referenced.contains(&path) && dir_contents(&path) == DirContents::Delivered && std::fs::remove_dir_all(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 /// Remove the orphaned capture directories under `root`; returns how many.
@@ -312,7 +367,7 @@ mod tests {
 
     #[test]
     fn only_old_unreferenced_capture_dirs_without_a_capture_are_orphans() {
-        use DirContents::{Empty, Media, OnlyLeftovers};
+        use DirContents::{Delivered, Empty, Media, OnlyLeftovers};
         let day = ORPHAN_AGE;
         let hour = std::time::Duration::from_hours(1);
         assert!(is_orphan("capture-abc", true, Some(day + hour), false, Empty));
@@ -326,6 +381,54 @@ mod tests {
         assert!(!is_orphan("capture-abc", true, Some(day * 3), false, OnlyLeftovers));
         assert!(is_orphan("capture-abc", true, Some(LEFTOVER_AGE), false, OnlyLeftovers));
         assert!(!is_orphan("capture-abc", true, Some(day * 365), false, Media));
+        // One already in the drive goes at once, unless a card uses it.
+        assert!(is_orphan("capture-abc", true, Some(hour), false, Delivered));
+        assert!(is_orphan("capture-abc", true, None, false, Delivered));
+        assert!(!is_orphan("capture-abc", true, Some(day * 3), true, Delivered));
+    }
+
+    /// Only a capture that reached the drive is marked delivered, and a
+    /// failed marker beside it always wins: that copy is kept.
+    #[test]
+    fn a_delivered_copy_is_told_from_one_that_never_uploaded() {
+        let root = tempfile::TempDir::new().unwrap();
+        let dir = fresh_capture_dir(root.path()).unwrap();
+        let shot = dir.join("Screenshot.png");
+        std::fs::write(&shot, b"png").unwrap();
+        assert_eq!(dir_contents(&dir), DirContents::Media);
+        mark_delivered_in(root.path(), &shot);
+        assert_eq!(dir_contents(&dir), DirContents::Delivered);
+        std::fs::write(dir.join(super::super::kept_failed::MARKER), b"{}").unwrap();
+        assert_eq!(dir_contents(&dir), DirContents::Media, "a failed marker keeps it");
+        // A file outside a capture folder of the root is never marked.
+        let elsewhere = tempfile::TempDir::new().unwrap();
+        let synced = elsewhere.path().join("Screenshot.png");
+        std::fs::write(&synced, b"png").unwrap();
+        mark_delivered_in(root.path(), &synced);
+        assert!(!elsewhere.path().join(DELIVERED).exists());
+    }
+
+    /// Sign-out and launch remove the copies already in the drive, at any
+    /// age, and keep every capture that did not upload.
+    #[test]
+    fn delivered_copies_are_removed_and_unsent_captures_kept() {
+        let root = tempfile::TempDir::new().unwrap();
+        let delivered = fresh_capture_dir(root.path()).unwrap();
+        std::fs::write(delivered.join("Recording.mp4"), b"moov").unwrap();
+        mark_delivered_in(root.path(), &delivered.join("Recording.mp4"));
+        let showing = fresh_capture_dir(root.path()).unwrap();
+        std::fs::write(showing.join("Screenshot.png"), b"png").unwrap();
+        mark_delivered_in(root.path(), &showing.join("Screenshot.png"));
+        let unsent = fresh_capture_dir(root.path()).unwrap();
+        std::fs::write(unsent.join("Recording 2.mp4"), b"moov").unwrap();
+        assert_eq!(reclaim_delivered(root.path(), std::slice::from_ref(&showing)), 1);
+        assert!(!delivered.exists() && showing.exists() && unsent.exists());
+        assert_eq!(
+            reclaim_orphans(root.path(), std::time::SystemTime::now(), &[]),
+            1,
+            "launch takes the rest at once"
+        );
+        assert!(!showing.exists() && unsent.exists(), "a capture that never uploaded is never removed");
     }
 
     #[test]

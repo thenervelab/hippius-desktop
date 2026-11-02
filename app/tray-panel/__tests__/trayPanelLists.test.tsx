@@ -19,6 +19,10 @@ const data = vi.hoisted(() => ({
   loading: false,
 }));
 
+// The rows' link state has its own tests (useTrayShareLinks.test.tsx).
+vi.mock("@/app/lib/tray/useTrayShareLinks", () => ({
+  useTrayShareLinks: () => ({ linksFor: () => [], reload: () => undefined }),
+}));
 vi.mock("@/app/lib/tray/useTrayPanelData", () => ({
   useTrayPanelData: () => ({
     menu: {

@@ -29,7 +29,7 @@ import React, {
   useRef,
   useState,
 } from "react";
-import { useAtom, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { useRouter } from "next/navigation";
 import { AlertCircle, Check, Loader2 } from "lucide-react";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
@@ -44,6 +44,8 @@ import { Select } from "@/components/ui/select/Select";
 import { cn } from "@/lib/utils";
 import {
   finderShareAtom,
+  insightsSheetAtom,
+  shareInsightsEnabledAtom,
   shareModalFileAtom,
   type FinderShareState,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -65,8 +67,10 @@ import {
 } from "@/app/lib/tauri/shares";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import {
+  getLinkSettings,
   getLinkSettingsDefault,
   setLinkSettings,
+  switchChange,
   type LinkSettings,
   type LinkSettingsDefault,
   type OfferedSwitches,
@@ -77,6 +81,12 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import { formatBytes } from "@/app/lib/utils/formatBytes";
+import { isCaptureMedia } from "@/app/lib/utils/fileLinks";
+import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
+import { ExistingLinkBody, ExistingLinkSkeleton } from "./ExistingLinkBody";
+import { useExistingLinks } from "./useExistingLinks";
+import { useCopyExistingLink } from "./useCopyExistingLink";
+import { captureLinkSource } from "./useCaptureInsightsItem";
 
 /**
  * How recently a file must have been touched for the chooser to caution that
@@ -114,6 +124,20 @@ type ModalState =
  * the plan includes them (Rust's `switchesInPlan`).
  */
 type Engagement = { offered: OfferedSwitches; value: LinkSettings; switchesInPlan: boolean | null };
+
+/**
+ * A password link's comments are sealed with a key the app never keeps (the
+ * password is not stored), so they can only be read on the link's page.
+ * The Comments switch is not offered for one, and this says why.
+ */
+export const PASSWORD_NO_COMMENTS = "Comments aren't offered for a password link, because they could only be read on the link's page.";
+
+function withoutPasswordComments(offered: OfferedSwitches, isPassword: boolean): OfferedSwitches {
+  return isPassword ? { ...offered, comments: false } : offered;
+}
+
+/** Under the finished link's switches when one asked for did not turn on. */
+export const SWITCHES_NOT_ON = "Some of the settings you chose couldn't be turned on. Check them below and try again.";
 
 /** What the chooser's switches were drawn from: carried into the done view. */
 type SwitchSource = Pick<LinkSettingsDefault, "offered" | "switchesInPlan">;
@@ -160,6 +184,16 @@ export default function ShareFileModal() {
   // superseded upload cancelled rather than left running unseen. The name
   // is kept for the toast that tells the user the old share stopped.
   const runningFinderRef = useRef<{ id: string; name: string } | null>(null);
+  // An in-app share of something that already has a live link leads with
+  // that link (`ExistingLinkBody`); "Create a new link" sets this and shows
+  // the create form. Reset with every session.
+  const [createAnother, setCreateAnother] = useState(false);
+  const { linkFor, isLoadingFor } = useExistingLinks();
+  const copyExistingLink = useCopyExistingLink();
+  const existingLink = target ? linkFor(target.file, target.relativePath) : null;
+  const existingLinkLoading = target ? isLoadingFor(target.file) : false;
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
+  const openInsights = useSetAtom(insightsSheetAtom);
 
   // The Finder flow has no `FormattedUserFile`, so fall back to the name the
   // backend sent with the choosing event for the label shown in every state.
@@ -379,6 +413,7 @@ export default function ShareFileModal() {
       toast.error(`Sharing \u201c${running.name}\u201d was stopped to open the new share.`);
     }
     setState({ kind: "choosing" });
+    setCreateAnother(false);
     autoCopiedRef.current = false;
     lastChoiceRef.current = null;
     lastOfferedRef.current = null;
@@ -441,7 +476,45 @@ export default function ShareFileModal() {
       icon={<Icons.Link className="size-4 text-white" />}
       maxWidth="max-w-[585px]"
     >
-      {state.kind === "choosing" && (
+      {state.kind === "choosing" && target && !createAnother && existingLinkLoading && (
+        <ExistingLinkSkeleton />
+      )}
+
+      {state.kind === "choosing" && target && !createAnother && !existingLinkLoading && existingLink && (
+        <ExistingLinkBody
+          link={existingLink}
+          filename={filename}
+          onCopy={() => {
+            // An unlock opens its own dialog, so this one steps aside.
+            if (existingLink.state === "locked") close();
+            copyExistingLink(existingLink, target);
+          }}
+          onManage={() => {
+            close();
+            router.push(sharesPageHref(existingLink.manageRowIds));
+          }}
+          onInsights={
+            insightsEnabled &&
+            existingLink.shareToken &&
+            !target.file.isFolder &&
+            isCaptureMedia(target.relativePath)
+              ? () => {
+                  close();
+                  openInsights({
+                    shareToken: existingLink.shareToken,
+                    fileName: target.file.actualFileName || target.file.name,
+                    file: target.file,
+                    capture: captureLinkSource(target.file, target.relativePath),
+                  });
+                }
+              : undefined
+          }
+          onCreateAnother={() => setCreateAnother(true)}
+        />
+      )}
+
+      {state.kind === "choosing" &&
+        (!target || createAnother || (!existingLinkLoading && !existingLink)) && (
         <ChoosingBody
           // A new session (another file, a new Finder click) starts the
           // chooser afresh, its preview switch included.
@@ -707,7 +780,7 @@ function ChoosingBody({
         <p className="text-xs text-grey-50 dark:text-grey-dark-600">
           {visibility === "public"
             ? `Anyone with the link can view and download this ${folderKind !== null ? "folder" : "file"}.`
-            : "The link can't be opened without this password. Send it separately — it can't be recovered or changed later."}
+            : "The link can't be opened without this password. Send it separately. It can't be recovered or changed later."}
         </p>
 
         {visibility === "private" && (
@@ -754,13 +827,18 @@ function ChoosingBody({
         )}
 
         {switchesShown && (
-          <LinkEngagementSwitches
-            offered={offered}
-            value={engagement}
-            switchesInPlan={switchesInPlan}
-            onChange={setEngagement}
-            onUpgrade={onUpgrade}
-          />
+          <>
+            <LinkEngagementSwitches
+              offered={withoutPasswordComments(offered, visibility === "private")}
+              value={engagement}
+              switchesInPlan={switchesInPlan}
+              onChange={setEngagement}
+              onUpgrade={onUpgrade}
+            />
+            {visibility === "private" && offered.comments && (
+              <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">{PASSWORD_NO_COMMENTS}</p>
+            )}
+          </>
         )}
 
         <p
@@ -821,7 +899,11 @@ function ChoosingBody({
               // unambiguous at the boundary.
               password: visibility === "private" ? password : undefined,
               chatPreview: previewShown && chatPreview,
-              linkSettings: switchesShown ? engagement : undefined,
+              linkSettings: switchesShown
+                ? visibility === "private"
+                  ? { ...engagement, comments: false }
+                  : engagement
+                : undefined,
             }, switchesShown ? { offered, switchesInPlan } : null)
           }
           className={cn(
@@ -1113,14 +1195,44 @@ function DoneBody({
   const [previewSaving, setPreviewSaving] = useState(false);
   const [switches, setSwitches] = useState<LinkSettings | null>(engagement?.value ?? null);
   const [switchesSaving, setSwitchesSaving] = useState(false);
+  const [switchesNote, setSwitchesNote] = useState<string | null>(null);
+  const switchesTouched = useRef(false);
 
-  // Shown as changed at once, put back if the server refuses.
+  // The switches asked for are sent just after the link is made, in the
+  // background. Read them back (Rust answers once that send is done), so the
+  // switches show what the link has, and say so when one did not turn on. A
+  // change the user already made wins over this read.
+  useEffect(() => {
+    const asked = engagement?.value;
+    if (!asked || !(asked.insights || asked.comments || asked.reactions)) return;
+    let alive = true;
+    getLinkSettings(link.shareToken)
+      .then((real) => {
+        if (!alive || switchesTouched.current) return;
+        setSwitches(real.on);
+        const missed = (["insights", "comments", "reactions"] as const).some(
+          (key) => asked[key] && real.offered[key] && !real.on[key],
+        );
+        if (missed) setSwitchesNote(SWITCHES_NOT_ON);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+    // Once, for the link just made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link.shareToken]);
+
+  // Shown as changed at once, put back if the server refuses. Only the
+  // switch flipped is sent.
   const changeSwitches = async (next: LinkSettings) => {
     const before = switches;
+    switchesTouched.current = true;
+    setSwitchesNote(null);
     setSwitches(next);
     setSwitchesSaving(true);
     try {
-      await setLinkSettings(link.shareToken, next);
+      await setLinkSettings(link.shareToken, before ? switchChange(before, next) : next);
     } catch (err) {
       setSwitches(before);
       toast.error(errorMessage(err));
@@ -1240,13 +1352,18 @@ function DoneBody({
       {engagement && switches && (
         <div className="-mt-3 mb-6">
           <LinkEngagementSwitches
-            offered={engagement.offered}
+            offered={withoutPasswordComments(engagement.offered, Boolean(password))}
             value={switches}
             disabled={switchesSaving}
             switchesInPlan={engagement.switchesInPlan}
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
           />
+          {switchesNote && (
+            <p role="status" className="mt-2 text-xs leading-[1.45] text-error-50 dark:text-error-70">
+              {switchesNote}
+            </p>
+          )}
         </div>
       )}
 
@@ -1294,7 +1411,7 @@ function DoneBody({
             </button>
           </div>
           <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
-            Send this password separately — the link can&apos;t be opened
+            Send this password separately. The link can&apos;t be opened
             without it.
           </p>
         </div>

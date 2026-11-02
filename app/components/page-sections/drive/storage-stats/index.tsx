@@ -34,7 +34,7 @@ const StorageStateList: FC<StorageStateListProps> = ({
       <StorageStateItem
         icon={<Folders className="size-[14px]" strokeWidth={1.5} />}
         value={numberOfFiles}
-        label="File No:"
+        label="Files:"
       />
     </div>
   );

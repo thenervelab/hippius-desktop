@@ -25,11 +25,16 @@ type Choices = Pick<
 const COUNTDOWN_OPTIONS = RECORD_COUNTDOWN_OPTIONS.map((t) => ({ value: String(t.secs), label: t.label }));
 
 const TRACK_TITLE = "Track views, comments and reactions";
+/**
+ * What tracking shows the owner: how many people viewed and for how long,
+ * and a name only for someone who comments under one. Never "who viewed":
+ * viewers are not identified.
+ */
 const TRACK_DESCRIPTION =
-  "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. You can turn this off for any link.";
+  "Links to your screenshots and recordings count how many people view them and for how long, and let viewers comment and react. You see a name only when someone comments under one. You can turn this off for any link.";
 /** The tracking card's line on the free plan, where Rust gives new links none of the three. */
 export const TRACK_LOCKED_DESCRIPTION =
-  "Links to your screenshots and recordings show who viewed them and for how long, and let viewers comment and react. On paid Drive plans.";
+  "Links to your screenshots and recordings count how many people view them and for how long, and let viewers comment and react. On paid Drive plans.";
 
 /**
  * The capture bar's own options that carry over from one capture to the

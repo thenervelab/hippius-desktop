@@ -360,6 +360,7 @@ describe("copy link", () => {
       folderLabel: "Docs",
       relativePath: "Work/report.pdf",
       fileId: null,
+      size: 15_340_000,
     });
     await waitFor(() => expect(screen.getByText("PDF · 15.3 MB · 2d ago")).toBeInTheDocument());
   });
@@ -374,7 +375,56 @@ describe("copy link", () => {
       folderLabel: "Photos",
       relativePath: "Work/report.pdf",
       fileId: cloud.fileId,
+      size: 15_340_000,
     });
+  });
+
+  it("shows the link icon after the name of a file that has a link, and none otherwise", () => {
+    const { unmount } = render(
+      <ul>
+        <TrayUploadRow item={row()} accountId={ACCOUNT} hasLink />
+      </ul>,
+    );
+    expect(screen.getByTestId("tray-row-link")).toHaveAccessibleName("Shared via public link");
+    unmount();
+    renderRow();
+    expect(screen.queryByTestId("tray-row-link")).not.toBeInTheDocument();
+  });
+
+  it("says it is copying, not making, the link of a file that has one", async () => {
+    let resolve: (v: unknown) => void = () => {};
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "copy_file_share_link" ? new Promise((r) => (resolve = r)) : Promise.resolve(null),
+    );
+    const onLinkCopied = vi.fn();
+    render(
+      <ul>
+        <TrayUploadRow item={row()} accountId={ACCOUNT} hasLink onLinkCopied={onLinkCopied} />
+      </ul>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy link: report.pdf" }));
+    expect(await screen.findByText("Copying link…")).toBeInTheDocument();
+    resolve({ status: "copied", url: "u", reused: true });
+    await screen.findByText("Link copied");
+    // The existing link was copied: nothing changed in the listing.
+    expect(onLinkCopied).not.toHaveBeenCalled();
+  });
+
+  it("asks the popover to read the links again after a new link is made", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "copy_file_share_link"
+        ? Promise.resolve({ status: "copied", url: "u", reused: false })
+        : Promise.resolve(null),
+    );
+    const onLinkCopied = vi.fn();
+    render(
+      <ul>
+        <TrayUploadRow item={row()} accountId={ACCOUNT} onLinkCopied={onLinkCopied} />
+      </ul>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy link: report.pdf" }));
+    await screen.findByText("Link copied");
+    expect(onLinkCopied).toHaveBeenCalledTimes(1);
   });
 
   it("shows Rust's sentence when no link could be made", async () => {

@@ -620,12 +620,15 @@ describe("the Options menu", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Options/ }));
     const preview = await screen.findByRole("menuitemcheckbox", { name: "Show a preview in chats" });
     expect(preview).toHaveAttribute("aria-checked", "true");
+    // While on, the menu says what goes with the link unencrypted.
+    expect(screen.getByTestId("chat-preview-note")).toHaveTextContent("Sends a readable preview and the file name with the link.");
     fireEvent.click(preview);
     await waitFor(() =>
       expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
         options: expect.objectContaining({ chatPreview: false }),
       }),
     );
+    await waitFor(() => expect(screen.queryByTestId("chat-preview-note")).toBeNull());
   });
 
   it("turns copying a share link after capture on and off", async () => {

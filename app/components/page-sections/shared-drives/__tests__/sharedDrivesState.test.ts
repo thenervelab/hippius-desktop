@@ -119,6 +119,15 @@ describe("sharedWithYouStatus", () => {
     expect(sharedWithYouStatus({ memberships: "error", grantsSettled: true })).toBe("error");
     expect(sharedWithYouStatus({ memberships: "unavailable", grantsSettled: true })).toBe("ready");
   });
+
+  it("is an error when the folders shared with you could not be listed, never none", () => {
+    expect(sharedWithYouStatus({ memberships: "ready", grantsSettled: true, grantsFailed: true })).toBe("error");
+    expect(sharedWithYouStatus({ memberships: "unavailable", grantsSettled: true, grantsFailed: true })).toBe(
+      "error",
+    );
+    // Still waiting on the drives: that comes first.
+    expect(sharedWithYouStatus({ memberships: "loading", grantsSettled: true, grantsFailed: true })).toBe("loading");
+  });
 });
 
 describe("routes into a drive", () => {

@@ -63,6 +63,15 @@ export function abortError(): DOMException {
  * aborted read still completes in Rust but its bytes are dropped here rather
  * than being handed to a renderer whose file is no longer on screen.
  */
+/**
+ * Open a file in the system's own app for it (a video player, a PDF viewer).
+ * Rust checks the file is in a synced folder or the preview cache first; the
+ * webview cannot open paths itself.
+ */
+export function openInDefaultApp(localPath: string): Promise<void> {
+  return invoke("open_in_default_app", { path: localPath });
+}
+
 export async function readPreviewBytes(
   localPath: string,
   maxBytes: number,

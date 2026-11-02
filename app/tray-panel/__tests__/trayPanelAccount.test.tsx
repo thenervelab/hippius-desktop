@@ -12,6 +12,10 @@ const ADDRESS = "5CPQ46eGx7nRkTyY2pV9wH3aLmZcQ1uS8bDfJ4kN6tWqFdJ";
 
 let menu: TrayMenuData | null = null;
 
+// The rows' link state has its own tests (useTrayShareLinks.test.tsx).
+vi.mock("@/app/lib/tray/useTrayShareLinks", () => ({
+  useTrayShareLinks: () => ({ linksFor: () => [], reload: () => undefined }),
+}));
 vi.mock("@/app/lib/tray/useTrayPanelData", () => ({
   useTrayPanelData: () => ({
     menu,

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // Folder grants held by this account (folder roles): fetched
 // with the flag, never waiting on a capability, and found by `grant:` label.
+// A listing that failed says so, never passing for an empty one.
 import React, { type ReactNode } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import { Provider, createStore } from "jotai";
 
 const listMyFolderGrantsMock = vi.hoisted(() => vi.fn());
@@ -26,6 +27,7 @@ vi.mock("@/app/lib/featureFlags", () => ({
 
 import {
   useFolderGrantForLabel,
+  useMyFolderGrants,
   useWritableMemberDriveLabels,
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
@@ -94,5 +96,57 @@ describe("useFolderGrantForLabel", () => {
   it("makes a writable grant's label writable", async () => {
     const { result } = renderHook(() => useWritableMemberDriveLabels(), { wrapper: wrapper(true) });
     await waitFor(() => expect(result.current.has(makeFolderGrantLabel(GRANT))).toBe(true));
+  });
+});
+
+// The Shared Drives page reads `isError` to show an error with Try again.
+// Folded into an empty list, a failed listing read as "Nothing shared with
+// you yet" until the cached answer went stale a minute later.
+describe("useMyFolderGrants", () => {
+  function grantsWrapper() {
+    const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return Wrapper;
+  }
+
+  it("reports a failed listing as an error, and clears it once Try again answers", async () => {
+    listMyFolderGrantsMock.mockRejectedValue({ kind: "Network", message: "offline" });
+    const { result } = renderHook(() => useMyFolderGrants(), { wrapper: grantsWrapper() });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.isSettled).toBe(true);
+    expect(result.current.grants).toEqual([]);
+
+    listMyFolderGrantsMock.mockResolvedValue([GRANT]);
+    act(() => result.current.refetch());
+    await waitFor(() => expect(result.current.grants).toHaveLength(1));
+    expect(result.current.isError).toBe(false);
+  });
+
+  it("treats a server without shared drives as nothing shared, not as an error", async () => {
+    listMyFolderGrantsMock.mockRejectedValue({
+      kind: "NotReady",
+      subkind: "SHARED_DRIVES_UNAVAILABLE",
+      message: "Shared drives are not available on this server",
+    });
+    const { result } = renderHook(() => useMyFolderGrants(), { wrapper: grantsWrapper() });
+    await waitFor(() => expect(result.current.isSettled).toBe(true));
+    expect(result.current.isError).toBe(false);
+    expect(result.current.grants).toEqual([]);
+  });
+
+  it("asks and fails while the computer is offline, instead of waiting for a connection", async () => {
+    const onLine = vi.spyOn(window.navigator, "onLine", "get").mockReturnValue(false);
+    onlineManager.setOnline(false);
+    try {
+      listMyFolderGrantsMock.mockRejectedValue({ kind: "Network", message: "offline" });
+      const { result } = renderHook(() => useMyFolderGrants(), { wrapper: grantsWrapper() });
+      await waitFor(() => expect(result.current.isError).toBe(true));
+      expect(listMyFolderGrantsMock).toHaveBeenCalledTimes(1);
+    } finally {
+      onlineManager.setOnline(true);
+      onLine.mockRestore();
+    }
   });
 });

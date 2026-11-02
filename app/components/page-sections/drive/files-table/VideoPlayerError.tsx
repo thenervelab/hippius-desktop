@@ -5,6 +5,7 @@ import { Icons } from "@/components/ui";
 import { AlertCircle, RefreshCw, ExternalLink } from "lucide-react";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/lib/utils";
+import { openInDefaultApp } from "@/app/components/page-sections/drive/file-preview/previewBytes";
 
 interface VideoPlayerErrorProps {
   message: string;
@@ -21,8 +22,7 @@ interface VideoPlayerErrorProps {
  */
 async function openInSystemPlayer(filePath: string) {
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(filePath);
+    await openInDefaultApp(filePath);
   } catch (err) {
     console.error("Failed to open in system player:", err);
   }

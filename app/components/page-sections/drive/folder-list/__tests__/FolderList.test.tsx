@@ -184,6 +184,20 @@ describe("a drive the owner has shared", () => {
   });
 });
 
+describe("the row's menu", () => {
+  // An icon alone: without a name a screen reader says only "button".
+  it("is named for the drive it acts on", () => {
+    render(
+      <FolderList
+        rows={[localRow({ id: "a", folderName: "team-docs" }), localRow({ id: "b", folderName: "Photos" })]}
+        buildActions={() => [{ icon: null, itemTitle: "Open", onItemClick: vi.fn() }]}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Actions for team-docs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Actions for Photos" })).toBeInTheDocument();
+  });
+});
+
 describe("Manage access on the row", () => {
   it("offers it on an own drive that has members", () => {
     const onManageAccess = vi.fn();

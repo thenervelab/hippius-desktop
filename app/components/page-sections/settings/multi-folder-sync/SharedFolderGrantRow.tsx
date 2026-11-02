@@ -64,6 +64,9 @@ export default function SharedFolderGrantRow({
       onKeyDown={
         onOpen
           ? (e) => {
+              // Only a key pressed ON the row opens it; its Leave button and
+              // menu items answer Enter and Space themselves.
+              if (e.target !== e.currentTarget) return;
               if (e.key !== "Enter" && e.key !== " ") return;
               e.preventDefault();
               onOpen();

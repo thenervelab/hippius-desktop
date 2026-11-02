@@ -128,6 +128,24 @@ pub async fn read_preview_bytes(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// Open a file in the app the system uses for it (a video player, a PDF
+/// viewer): the viewer's way out when the webview cannot play or show it.
+/// The path goes through the same gate as the preview reads, so only a file
+/// in this account's synced folders or the preview cache opens; the main
+/// window's capability no longer lets the webview open any path itself.
+#[tauri::command]
+pub async fn open_in_default_app(app: tauri::AppHandle, state: tauri::State<'_, crate::app_state::AppState>, path: String) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let source = validate_preview_source(&state, Path::new(&path)).await?;
+    if !source.is_file() {
+        return Err(AppError::Validation("Only a file can be opened in its app.".into()));
+    }
+    app.opener().open_path(source.to_string_lossy(), None::<&str>).map_err(|e| {
+        tracing::warn!(error = %e, "file not opened in its app");
+        AppError::Validation("The file couldn't be opened in its app.".into())
+    })
+}
+
 /// Restrict the caller-provided source path to this account's registered sync
 /// roots or the dedicated remote-preview cache. Without this gate a compromised
 /// renderer could use either preview command as an arbitrary filesystem reader.

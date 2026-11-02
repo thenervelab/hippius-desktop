@@ -29,10 +29,10 @@ const getSharesFor = vi.fn((label: string, path: string) =>
 const EXTENSION_ROW = {
   shareToken: "ext",
   createdAt: "2026-10-20T10:00:00Z",
-  filename: "Elsewhere.mp4",
+  filename: "Recording 2026-10-20 at 09.15.02.mp4",
   plaintextSize: 2048,
 } as ShareSummary;
-const getUnplacedSharesNamed = vi.fn((name: string) => (name === "Elsewhere.mp4" ? [EXTENSION_ROW] : []));
+const getUnplacedSharesNamed = vi.fn((name: string) => (name === "Recording 2026-10-20 at 09.15.02.mp4" ? [EXTENSION_ROW] : []));
 vi.mock("@/app/lib/hooks/useSharedFiles", () => ({
   useSharedFiles: () => ({ getSharesFor, getUnplacedSharesNamed, isLoading: false }),
 }));
@@ -100,7 +100,7 @@ describe("CaptureInsightsButton", () => {
     expect(button).toHaveTextContent(/^Insights$/);
     expect(button).toHaveAttribute("data-no-link", "true");
     // The chart icon goes grey: only rows with a link carry the brand colour.
-    expect(button.querySelector("svg")?.getAttribute("class")).toContain("text-grey-50");
+    expect(button.querySelector("svg")?.getAttribute("class")).toContain("text-grey-60");
 
     fireEvent.click(button);
     expect(store.get(insightsSheetAtom)).toEqual({
@@ -114,14 +114,25 @@ describe("CaptureInsightsButton", () => {
   });
 
   it("finds a link made elsewhere by the capture's name, unless the sizes differ", () => {
-    const first = setup({ actualName: "Elsewhere.mp4", size: 2048 });
+    const first = setup({ actualName: "Recording 2026-10-20 at 09.15.02.mp4", size: 2048 });
     fireEvent.click(screen.getByRole("button", { name: VIEW_INSIGHTS_LABEL }));
     expect(first.store.get(insightsSheetAtom)?.shareToken).toBe("ext");
   });
 
   it("does not take a link made from a different file of the same name", () => {
-    setup({ actualName: "Elsewhere.mp4", size: 999 });
+    setup({ actualName: "Recording 2026-10-20 at 09.15.02.mp4", size: 999 });
     expect(screen.getByRole("button", { name: `${VIEW_INSIGHTS_LABEL}, no link yet` })).toBeInTheDocument();
+  });
+
+  it("does not take another file's link by a plain name", () => {
+    const real = getUnplacedSharesNamed.getMockImplementation()!;
+    getUnplacedSharesNamed.mockImplementation((name: string) => (name === "image.png" ? [EXTENSION_ROW] : []));
+    try {
+      setup({ actualName: "image.png", size: 2048 });
+      expect(screen.getByRole("button", { name: `${VIEW_INSIGHTS_LABEL}, no link yet` })).toBeInTheDocument();
+    } finally {
+      getUnplacedSharesNamed.mockImplementation(real);
+    }
   });
 
   it("is hidden for a file that is not a screenshot or recording", () => {

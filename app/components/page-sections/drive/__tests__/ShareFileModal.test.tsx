@@ -17,7 +17,7 @@ import type { ReactNode } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
-import ShareFileModal from "../ShareFileModal";
+import ShareFileModal, { PASSWORD_NO_COMMENTS, SWITCHES_NOT_ON } from "../ShareFileModal";
 import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
@@ -39,11 +39,14 @@ const setPreviewMock = vi.fn();
 const NO_SWITCHES = { insights: false, comments: false, reactions: false };
 const linkDefaultMock = vi.fn().mockResolvedValue({ offered: NO_SWITCHES, on: NO_SWITCHES });
 const setLinkMock = vi.fn().mockResolvedValue(undefined);
+// The finished link reads its switches back; unanswered unless a test says.
+const getLinkMock = vi.fn().mockRejectedValue(new Error("not read in this test"));
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   hcfs_share_preview_default: previewDefaultMock,
   hcfs_set_share_preview: setPreviewMock,
   share_link_settings_default: linkDefaultMock,
   share_set_link_settings: setLinkMock,
+  share_get_link_settings: getLinkMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
@@ -69,6 +72,15 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
+// Whether the item already has a live link (`useExistingLinks`): none, and
+// known, unless a test says so, so the create flow is what opens.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const existing = vi.hoisted(() => ({ link: null as any, loading: false }));
+vi.mock("../useExistingLinks", () => ({
+  useExistingLinks: () => ({ linkFor: () => existing.link, isLoadingFor: () => existing.loading }),
+}));
+const copyExisting = vi.hoisted(() => vi.fn());
+vi.mock("../useCopyExistingLink", () => ({ useCopyExistingLink: () => copyExisting }));
 // The Insights upgrade prompt's Upgrade goes to the plans page.
 const routerPush = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: routerPush }) }));
@@ -1193,7 +1205,7 @@ describe("ShareFileModal link switches", () => {
     await waitFor(() =>
       expect(setLinkMock).toHaveBeenCalledWith("share_set_link_settings", {
         shareToken: "tok-rec",
-        settings: { insights: true, comments: true, reactions: false },
+        change: { reactions: false },
       }),
     );
     await waitFor(() =>
@@ -1204,6 +1216,48 @@ describe("ShareFileModal link switches", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("The server said no."));
     expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("offers no Comments switch for a password link, says why, and sends comments off", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    invokeMock.mockImplementation((cmd: string) =>
+      cmd === "hcfs_generate_share_password" ? Promise.resolve("plum-otter-41-lake") : Promise.resolve(LINK),
+    );
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Comments" });
+    fireEvent.click(screen.getByRole("button", { name: "Password protected" }));
+    await waitFor(() => expect(screen.queryByRole("switch", { name: "Comments" })).toBeNull());
+    expect(screen.getByText(PASSWORD_NO_COMMENTS)).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Insights" })).toBeInTheDocument();
+    expect(screen.queryByText(/—/)).toBeNull();
+    await waitFor(() => expect(screen.getByLabelText("Password")).toHaveValue("plum-otter-41-lake"));
+    confirmChooser();
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "hcfs_create_share",
+        expect.objectContaining({ linkSettings: { insights: true, comments: false, reactions: true } }),
+      ),
+    );
+  });
+
+  it("shows the finished link's switches as the server has them, and says when one asked for did not turn on", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getLinkMock.mockResolvedValueOnce({
+      offered: ALL_ON,
+      on: { insights: true, comments: false, reactions: true },
+      switchesInPlan: null,
+    });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: "Comments" })).toHaveAttribute("aria-checked", "false"),
+    );
+    expect(getLinkMock).toHaveBeenCalledWith("share_get_link_settings", { shareToken: "tok-rec" });
+    expect(screen.getByRole("status")).toHaveTextContent(SWITCHES_NOT_ON);
   });
 
   it("on the free plan, starts every switch off and shows the upgrade prompt instead of turning one on", async () => {
@@ -1272,5 +1326,101 @@ describe("ShareFileModal link switches", () => {
       "hcfs_finder_confirm_share",
       expect.objectContaining({ requestId: "req-1", linkSettings: ALL_ON }),
     );
+  });
+});
+
+describe("ShareFileModal on a file that already has a link", () => {
+  const FILE = { name: "Screenshot 2026-10-30 at 11.58.27.png", actualFileName: "Screenshot 2026-10-30 at 11.58.27.png", label: "Captures" };
+  const READY = {
+    state: "ready",
+    url: "https://console.hippius.com/s/tok#k=KEY",
+    needsPassword: false,
+    isPrivate: false,
+    createdAt: "2026-10-30T10:00:00Z",
+    expiresAt: null,
+    count: 1,
+    kind: "file",
+    shareToken: "tok",
+    manageRowIds: ["file:tok"],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installClipboard();
+    existing.link = null;
+    existing.loading = false;
+  });
+
+  it("leads with the existing link instead of the create form", () => {
+    existing.link = READY;
+    render(withProvider(<ShareFileModal />, FILE));
+    expect(screen.getByText("This file already has a link")).toBeInTheDocument();
+    // Masked until asked for, like the Insights panel.
+    expect(screen.getByTestId("existing-link-text")).toHaveTextContent("console.hippius.com/");
+    expect(screen.getByTestId("existing-link-text")).not.toHaveTextContent("KEY");
+    expect(screen.getByTestId("existing-link-facts")).toHaveTextContent("Never expires");
+    expect(screen.getByTestId("existing-link-facts")).toHaveTextContent("No password");
+    expect(screen.queryByRole("button", { name: /create share link/i })).toBeNull();
+  });
+
+  it("copies the existing link and makes nothing", () => {
+    existing.link = READY;
+    render(withProvider(<ShareFileModal />, FILE));
+    // The field's copy button and the main button do the same.
+    const buttons = screen.getAllByRole("button", { name: "Copy link" });
+    expect(buttons).toHaveLength(2);
+    buttons.forEach((b) => fireEvent.click(b));
+    expect(copyExisting).toHaveBeenCalledTimes(2);
+    expect(copyExisting).toHaveBeenCalledWith(READY, expect.objectContaining({ relativePath: FILE.actualFileName }));
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the full link only when asked", () => {
+    existing.link = READY;
+    render(withProvider(<ShareFileModal />, FILE));
+    fireEvent.click(screen.getByRole("button", { name: "Show full link" }));
+    expect(screen.getByTestId("existing-link-text")).toHaveTextContent(READY.url);
+  });
+
+  it("offers Unlock to copy link while Hippius is locked", () => {
+    existing.link = { ...READY, state: "locked", url: null, isPrivate: null };
+    render(withProvider(<ShareFileModal />, FILE));
+    expect(screen.getByTestId("existing-link-text")).not.toHaveTextContent("console");
+    fireEvent.click(screen.getByRole("button", { name: "Unlock to copy link" }));
+    expect(copyExisting).toHaveBeenCalled();
+  });
+
+  it("opens Shared Links at the file's links", () => {
+    existing.link = READY;
+    render(withProvider(<ShareFileModal />, FILE));
+    fireEvent.click(screen.getByRole("button", { name: "Manage in Shared Links" }));
+    expect(routerPush).toHaveBeenCalledWith("/shares?highlight=file%3Atok");
+  });
+
+  it("still makes a separate link, through the unchanged create form", async () => {
+    existing.link = READY;
+    invokeMock.mockResolvedValueOnce({
+      shareToken: "tok-2",
+      shareUrl: "https://console.hippius.com/share/tok-2#k=TWO",
+      expiresAt: null,
+    });
+    render(withProvider(<ShareFileModal />, FILE));
+    fireEvent.click(screen.getByRole("button", { name: "Create a new link" }));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-2#k=TWO/);
+    expect(invokeMock).toHaveBeenCalledWith("hcfs_create_share", expect.anything());
+  });
+
+  it("holds a placeholder while the listing loads, never flashing the create form", () => {
+    existing.loading = true;
+    render(withProvider(<ShareFileModal />, FILE));
+    expect(screen.getByTestId("existing-link-loading")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create share link/i })).toBeNull();
+  });
+
+  it("opens straight on the create form for a file with no link", () => {
+    render(withProvider(<ShareFileModal />, FILE));
+    expect(screen.getByRole("button", { name: /create share link/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("existing-link")).toBeNull();
   });
 });

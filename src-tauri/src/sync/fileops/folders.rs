@@ -118,6 +118,13 @@ pub struct RemoteFolderDisplay {
 pub struct SyncFoldersResult {
     pub local: Vec<SyncFolderInfo>,
     pub remote: Vec<RemoteFolderDisplay>,
+    /// The server's folder listing could not be read (offline, or the server
+    /// answered with an error), so `remote` is empty because nothing is
+    /// KNOWN, not because the account has no drives there. The local rows
+    /// still come back, which keeps the Drive page usable offline; a page
+    /// that lists server drives (Shared Drives) shows an error instead of
+    /// "none" for it.
+    pub remote_failed: bool,
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -585,11 +592,12 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
 
     // Parallel fetch: local paths + remote folders + this machine's
     // registered device name (the discriminator for H-077).
-    let (sync_paths, remote_folders, local_device_name) = tokio::join!(
+    let (sync_paths, remote_listing, local_device_name) = tokio::join!(
         get_all_sync_paths_internal(pool, &account_id),
-        async { list_remote_folders_internal(pool, &account_id).await.unwrap_or_default() },
+        list_remote_folders_internal(pool, &account_id),
         crate::sync::device::get_device_name_internal(pool),
     );
+    let (remote_folders, remote_failed) = remote_listing_or_failed(remote_listing);
     let sync_paths = sync_paths.unwrap_or_default();
     // Fail CLOSED on a read failure. `"My Device"` is `get_device_name_internal`'s
     // DEFAULT for a machine that never set a name, not a sentinel — substituting it
@@ -716,7 +724,26 @@ pub async fn get_sync_folders_with_stats(state: tauri::State<'_, crate::app_stat
     Ok(SyncFoldersResult {
         local,
         remote: remote_display,
+        remote_failed,
     })
+}
+
+/// The server's folder listing, or an empty one marked as failed.
+///
+/// A failure must not read as "no drives on the server": that is how an
+/// offline Shared Drives page said "You haven't shared a drive yet" and its
+/// Try again had nothing to retry. The empty list keeps the local half of
+/// the listing working; the flag tells the caller it is incomplete.
+fn remote_listing_or_failed<E: std::fmt::Display>(
+    listing: std::result::Result<Vec<RemoteFolderInfoResult>, E>,
+) -> (Vec<RemoteFolderInfoResult>, bool) {
+    match listing {
+        Ok(folders) => (folders, false),
+        Err(e) => {
+            warn!("Remote folder listing failed; listing local drives only: {e}");
+            (Vec::new(), true)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -765,6 +792,37 @@ mod tests {
         // second drive ("tags-2") would have matched nothing.
         let by_label: HashMap<String, &RemoteFolderInfoResult> = remotes.iter().map(|f| (f.label.clone(), f)).collect();
         assert_eq!(by_label.len(), 1, "label keying collapses same-basename folders (the bug)");
+    }
+
+    // ── a failed server listing is not an empty one ─────────────────
+
+    #[test]
+    fn a_failed_server_listing_is_marked_failed_not_empty() {
+        let (folders, failed) = remote_listing_or_failed::<&str>(Err("error sending request"));
+        assert!(folders.is_empty());
+        assert!(failed, "an unread listing must not pass for an account with no server drives");
+
+        let (folders, failed) = remote_listing_or_failed::<&str>(Ok(vec![remote("tags", "tags", 3)]));
+        assert_eq!(folders.len(), 1);
+        assert!(!failed);
+
+        // An account that really has no drives on the server is a success.
+        let (folders, failed) = remote_listing_or_failed::<&str>(Ok(Vec::new()));
+        assert!(folders.is_empty());
+        assert!(!failed);
+    }
+
+    /// The FE reads the flag as `remoteFailed`; a rename would silently
+    /// bring back "nothing shared" for a listing that failed.
+    #[test]
+    fn the_listing_carries_remote_failed_to_the_fe() {
+        let json = serde_json::to_value(SyncFoldersResult {
+            local: Vec::new(),
+            remote: Vec::new(),
+            remote_failed: true,
+        })
+        .unwrap();
+        assert_eq!(json, serde_json::json!({ "local": [], "remote": [], "remoteFailed": true }));
     }
 
     // ── remote origin (H-077: remove_drive is not another device) ───

@@ -33,6 +33,8 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
 import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useCopyLinkItem } from "../useCopyExistingLink";
+import { linkPathFor } from "../existingLink";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
 import { useRouter } from "next/navigation";
@@ -105,6 +107,7 @@ const CardView: FC<CardViewProps> = ({
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const captureInsightsItem = useCaptureInsightsItem();
+  const copyLinkItem = useCopyLinkItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
   const { basePath } = useDriveRoute();
@@ -130,14 +133,18 @@ const CardView: FC<CardViewProps> = ({
 
   // Handle file deletion with captured files from confirmation dialog
   const handleDeleteSelectedFiles = useCallback(
-    (capturedFiles: FormattedUserFile[]) => {
+    (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][]) => {
       if (capturedFiles.length === 0) return;
+      // Each file's links to turn off ("Also turn off its links").
+      const links = turnOffLinks
+        ? new Map(capturedFiles.map((f, i) => [f, turnOffLinks[i] ?? []] as const))
+        : undefined;
 
       setFilesToDelete(capturedFiles);
 
       // Use setTimeout to ensure the delete hook reinitializes with new files
       setTimeout(() => {
-        deleteFiles(undefined, {
+        deleteFiles({ turnOffLinks: links }, {
           onSuccess: () => {
             setFilesToDelete([]);
           },
@@ -345,6 +352,13 @@ const CardView: FC<CardViewProps> = ({
                               },
                             ];
                           })(),
+                          // Copy link: the link the card already has,
+                          // directly above Share via link.
+                          ...copyLinkItem(
+                            file,
+                            linkPathFor(file, currentSubfolderPath),
+                            () => setOpenMenuIndex(null),
+                          ),
                           // Share via link — same gating as the right-click
                           // context menu and the table-view 3-dots menu: a file
                           // must be fully uploaded, a folder mints a live

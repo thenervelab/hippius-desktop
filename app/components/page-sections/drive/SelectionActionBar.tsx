@@ -6,7 +6,8 @@ import { Trash2 } from "lucide-react";
 import DeleteConfirmationDialog from "./DeleteConfirmationDialog";
 
 interface SelectionActionBarProps {
-  onDelete: (files: FormattedUserFile[]) => void;
+  /** `turnOffLinks[i]`: the links to turn off once `files[i]` is deleted. */
+  onDelete: (files: FormattedUserFile[], turnOffLinks?: string[][]) => void;
   isDeleting?: boolean;
 }
 
@@ -34,8 +35,8 @@ const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
     }
   };
 
-  const handleConfirmDelete = (filesToDelete: FormattedUserFile[]) => {
-    onDelete(filesToDelete);
+  const handleConfirmDelete = (filesToDelete: FormattedUserFile[], turnOffLinks?: string[][]) => {
+    onDelete(filesToDelete, turnOffLinks);
     // Don't close dialog here - it will close automatically when selection is cleared after successful deletion
   };
 
