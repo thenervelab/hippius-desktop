@@ -32,6 +32,7 @@ export type TrayRowActionId =
   | "insights"
   | "show-in-drive"
   | "reveal"
+  | "save-to-desktop"
   | "rename"
   | "delete";
 
@@ -265,6 +266,8 @@ export function getTrayRowActions(
   }
   if (canRevealTrayRow(item)) {
     actions.push({ id: "reveal", label: `Reveal in ${fileManager}` });
+    // The same file on this computer, copied to the Desktop.
+    if (!item.isFolder) actions.push({ id: "save-to-desktop", label: "Save to Desktop" });
   }
   if (completed && hasDrive(item)) {
     const renameable = canRenameFile(item);

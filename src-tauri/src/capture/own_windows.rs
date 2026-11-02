@@ -113,7 +113,7 @@ pub enum OverlayShow {
 /// On macOS every overlay, the bar's included, is ordered front without
 /// taking the keyboard, and the bar's is then made the key window by
 /// `overlay_panel::make_key`, which does not activate Hippius (the overlays
-/// are non-activating panels, [`overlay_is_panel`]). A plain show there
+/// are non-activating panels, [`capture_windows_are_panels`]). A plain show there
 /// made the window key, and a WKWebView whose window is not key gets no
 /// mouse hover: an overlay shown after the bar's (another display, or one
 /// plugged in while choosing) left the bar with no tooltips and no Escape
@@ -130,8 +130,9 @@ pub const fn overlay_show(platform: Platform, hosts_bar: bool) -> OverlayShow {
     }
 }
 
-/// Whether the selection overlays are non-activating panels
-/// (`overlay_panel`): macOS only.
+/// Whether the capture windows (the selection overlays, the pill and its
+/// tooltip, the camera bubble and its controls, the card) and the tray
+/// popover are non-activating panels (`overlay_panel`): macOS only.
 ///
 /// WebKit gives a page hover, mouse moves and keys only while its window is
 /// the key window, and an ordinary window is only key while Hippius is the
@@ -143,8 +144,13 @@ pub const fn overlay_show(platform: Platform, hosts_bar: bool) -> OverlayShow {
 /// non-activating panel becomes key without activating Hippius, so the bar
 /// has hover and keys whichever app is frontmost, and the user's app stays
 /// active (its menu bar, its Space) while they choose.
+///
+/// It is also the only kind of window that shows on another app's
+/// full-screen Space: an ordinary one stays on the desktop's Space, so over
+/// a full-screen app the crosshairs, the pill and the card were nowhere to
+/// be seen until the user left full screen.
 #[must_use]
-pub const fn overlay_is_panel(platform: Platform) -> bool {
+pub const fn capture_windows_are_panels(platform: Platform) -> bool {
     matches!(platform, Platform::MacOs)
 }
 
@@ -330,15 +336,17 @@ mod tests {
         }
     }
 
-    /// The overlays are non-activating panels on macOS only: WebKit gives
-    /// hover and keys only to the key window, and only a panel can be key
-    /// while another app is frontmost. Windows and Linux keep ordinary
-    /// windows (their webviews get hover without the keyboard).
+    /// The capture windows are non-activating panels on macOS only: WebKit
+    /// gives hover and keys only to the key window, only a panel can be key
+    /// while another app is frontmost, and only a panel shows on another
+    /// app's full-screen Space. Windows and Linux keep ordinary windows
+    /// (their webviews get hover without the keyboard, and topmost windows
+    /// already show over a full-screen app there).
     #[test]
-    fn only_macos_overlays_are_non_activating_panels() {
-        assert!(overlay_is_panel(Platform::MacOs));
+    fn only_macos_capture_windows_are_non_activating_panels() {
+        assert!(capture_windows_are_panels(Platform::MacOs));
         for platform in [Platform::Windows, Platform::LinuxX11, Platform::LinuxWayland] {
-            assert!(!overlay_is_panel(platform), "{platform:?}");
+            assert!(!capture_windows_are_panels(platform), "{platform:?}");
         }
     }
 

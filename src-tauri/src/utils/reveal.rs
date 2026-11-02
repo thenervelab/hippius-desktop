@@ -80,7 +80,7 @@ fn linux_xdg_open(path: &Path) -> Result<()> {
 
 fn require_nonempty_path(path: &str) -> Result<()> {
     if path.is_empty() {
-        return Err(AppError::Validation("No path to reveal".into()));
+        return Err(AppError::Validation("No path was given.".into()));
     }
     Ok(())
 }
@@ -91,15 +91,17 @@ fn path_is_under_root(canonical: &Path, root: &Path) -> bool {
     canonical.starts_with(root)
 }
 
-/// Reveal an on-disk path in this account's synced folders.
+/// `path`, canonicalised, when it sits in one of this account's synced
+/// folders. The gate for every IPC that acts on a path the renderer names
+/// (reveal it, copy it to the Desktop), so a compromised renderer cannot
+/// reach a URL or a file outside the account's drives.
 ///
-/// Canonicalise + prefix against `sync_paths` so a compromised renderer
-/// cannot `xdg-open` a URL or a path outside the account's drives.
-/// Same opener as [`crate::sync::control::reveal_drive_in_finder`].
-#[tauri::command]
-pub async fn reveal_path_in_file_manager(state: tauri::State<'_, crate::app_state::AppState>, path: String) -> Result<()> {
-    require_nonempty_path(&path)?;
-    let canonical = tokio::fs::canonicalize(&path).await.map_err(AppError::Io)?;
+/// # Errors
+/// [`AppError::Validation`] for an empty path or one outside every synced
+/// folder; [`AppError::Io`] when the path does not exist.
+pub(crate) async fn in_account_sync_folder(state: &crate::app_state::AppState, path: &str) -> Result<std::path::PathBuf> {
+    require_nonempty_path(path)?;
+    let canonical = tokio::fs::canonicalize(path).await.map_err(AppError::Io)?;
     let account_id = state.current_account_id()?;
     let sync_paths = crate::sync::folders::get_all_sync_paths_internal(state.pool()?, &account_id).await?;
     for sync_path in &sync_paths {
@@ -109,15 +111,27 @@ pub async fn reveal_path_in_file_manager(state: tauri::State<'_, crate::app_stat
         if let Ok(root) = tokio::fs::canonicalize(&sync_path.path).await
             && path_is_under_root(&canonical, &root)
         {
-            return match tokio::task::spawn_blocking(move || reveal_path(&canonical)).await {
-                Ok(inner) => inner,
-                Err(join_err) => Err(AppError::Other(format!("Reveal cancelled: {join_err}"))),
-            };
+            return Ok(canonical);
         }
     }
     Err(AppError::Validation(
         "That location is not in one of this account's synced folders.".into(),
     ))
+}
+
+/// Reveal an on-disk path in this account's synced folders.
+///
+/// Canonicalise + prefix against `sync_paths` ([`in_account_sync_folder`])
+/// so a compromised renderer cannot `xdg-open` a URL or a path outside the
+/// account's drives. Same opener as
+/// [`crate::sync::control::reveal_drive_in_finder`].
+#[tauri::command]
+pub async fn reveal_path_in_file_manager(state: tauri::State<'_, crate::app_state::AppState>, path: String) -> Result<()> {
+    let canonical = in_account_sync_folder(state.inner(), &path).await?;
+    match tokio::task::spawn_blocking(move || reveal_path(&canonical)).await {
+        Ok(inner) => inner,
+        Err(join_err) => Err(AppError::Other(format!("Reveal cancelled: {join_err}"))),
+    }
 }
 
 #[cfg(test)]

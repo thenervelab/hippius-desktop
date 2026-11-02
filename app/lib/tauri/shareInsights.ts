@@ -83,6 +83,14 @@ export interface ShareComment {
   mentions?: ShareCommentMention[];
   /** It mentions the owner reading it; never on the owner's own comment. */
   mentionsYou?: boolean;
+  /** The server marks its author blocked on this link. Absent or false when it does not say. */
+  blocked?: boolean;
+  /**
+   * Groups one person's named comments on this link, so a block shows on all
+   * of them. Opaque and per link; never on an anonymous comment, absent from
+   * older servers, and never shown.
+   */
+  authorKey?: string;
 }
 
 /** Someone a comment @mentions, as Rust opened it. */
@@ -154,8 +162,9 @@ export function deleteShareComment(shareToken: string, commentId: string): Promi
 
 /**
  * Block the author of a comment from commenting and reacting on this link.
- * Their comments stay; the server never says who they are, and lists no
- * block state, so only the sheet that blocked them knows.
+ * Their comments stay, and the server never says who they are. The listing
+ * marks them `blocked`: every named comment of that person, or the one
+ * anonymous comment the block went through.
  */
 export function blockShareCommenter(shareToken: string, commentId: string): Promise<void> {
   return invoke<void>("share_block_commenter", { shareToken, commentId });

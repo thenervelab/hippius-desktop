@@ -81,6 +81,40 @@ export function tabLabel(name: string, count: number | null): string {
 
 export type CommentOrder = "newest" | "oldest";
 
+type BlockableComment = Pick<ShareComment, "id" | "blocked" | "authorKey">;
+
+/**
+ * Who a block or unblock through this comment reaches, as the server applies
+ * it: every named comment of the person when the server keys them by author,
+ * else this one comment (an anonymous comment, or an older server).
+ */
+export function blockSubject(c: Pick<ShareComment, "id" | "authorKey">): string {
+  return c.authorKey ? `author:${c.authorKey}` : `comment:${c.id}`;
+}
+
+/** The author keys of people the listing marks blocked on any comment. */
+export function blockedAuthorKeys(comments: readonly BlockableComment[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const c of comments) if (c.blocked && c.authorKey) keys.add(c.authorKey);
+  return keys;
+}
+
+/**
+ * Whether a comment reads as blocked: the panel's last block or unblock of
+ * its author, then the listing's mark on any comment of theirs, then the
+ * mark on this comment alone.
+ */
+export function isCommentBlocked(
+  c: BlockableComment,
+  changedHere: ReadonlyMap<string, boolean>,
+  blockedAuthors: ReadonlySet<string>,
+): boolean {
+  const changed = changedHere.get(blockSubject(c));
+  if (changed !== undefined) return changed;
+  if (c.authorKey && blockedAuthors.has(c.authorKey)) return true;
+  return c.blocked === true;
+}
+
 /**
  * Comment threads newest or oldest first, by when each was written. A time
  * that does not parse sorts as the oldest; ties keep the server's order.

@@ -95,6 +95,13 @@ export interface CaptureOptions {
   linkInsights: boolean;
   /** Recording countdown: 0, 3 or 5 seconds (default 3; anything else reads as 3). */
   recordCountdownSecs: number;
+  /**
+   * "Also save a copy to the Desktop": every new screenshot is copied there
+   * as soon as it is saved (default off). Absent from an older backend = off.
+   */
+  desktopCopy?: boolean;
+  /** Recordings too, under `desktopCopy` (default off). */
+  desktopCopyRecordings?: boolean;
 }
 
 /** `capture_set_options` (via `saveCaptureOptions`). Mirrors Rust's `SavedOptions`. */
@@ -379,10 +386,14 @@ export interface CapturePreviewActions {
   manageLink?: boolean;
   /** Reveal in Finder / Show in Explorer. */
   reveal: boolean;
+  /** Put a copy on the Desktop. Absent from an older backend = no. */
+  saveToDesktop?: boolean;
   /** Open the storage plans: the upload failed because the plan is full. */
   upgrade: boolean;
   /** Open the screenshot in the editor. Absent from an older backend = no. */
   edit?: boolean;
+  /** Drag the picture into another app as the file. Absent from an older backend = no. */
+  dragOut?: boolean;
 }
 
 /** The preview card in the corner. Mirrors Rust's `PreviewCard`. */
@@ -615,6 +626,15 @@ export function getCapturePreviewPointer(): Promise<[number, number] | null> {
   return invoke("capture_preview_pointer");
 }
 
+/**
+ * The card's picture is being dragged: Rust starts the system's file drag of
+ * the capture's own file, so the drop is the PNG or MP4, not the picture's
+ * `data:` URL. Rust emits `capture_preview_drag_ended` once it is over.
+ */
+export function startCapturePreviewDrag(): Promise<void> {
+  return invoke("capture_preview_start_drag");
+}
+
 export function copyCapturePreviewLink(): Promise<void> {
   return invoke("capture_preview_copy_link");
 }
@@ -659,6 +679,11 @@ export interface CaptureManageLink {
 /** Reveal the capture's file in Finder / Explorer (a drive synced here). */
 export function revealCapturePreview(): Promise<void> {
   return invoke("capture_preview_reveal");
+}
+
+/** The card's Save to Desktop: Rust copies the capture there and says where, in its own words. */
+export function saveCapturePreviewToDesktop(): Promise<string> {
+  return invoke<string>("capture_preview_save_to_desktop");
 }
 
 /** Throw away a capture that could not be uploaded (its file is deleted). */
