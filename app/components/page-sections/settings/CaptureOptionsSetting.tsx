@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { BarChart3, ExternalLink, Image as ImageIcon, Link2, Timer, Volume2 } from "lucide-react";
+import { BarChart3, ExternalLink, Image as ImageIcon, Link2, MonitorDown, Timer, Video, Volume2 } from "lucide-react";
 import { useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -19,7 +19,14 @@ import { SwitchesUpgradeNotice } from "@/app/components/page-sections/drive/Link
 
 type Choices = Pick<
   CaptureOptions,
-  "copyLink" | "openLink" | "chatPreview" | "linkInsights" | "recordCountdownSecs" | "systemAudio"
+  | "copyLink"
+  | "openLink"
+  | "chatPreview"
+  | "linkInsights"
+  | "recordCountdownSecs"
+  | "systemAudio"
+  | "desktopCopy"
+  | "desktopCopyRecordings"
 >;
 
 const COUNTDOWN_OPTIONS = RECORD_COUNTDOWN_OPTIONS.map((t) => ({ value: String(t.secs), label: t.label }));
@@ -40,7 +47,7 @@ export const TRACK_LOCKED_DESCRIPTION =
  * The capture bar's own options that carry over from one capture to the
  * next, offered here as well: copying a share link after a capture,
  * opening it in the browser, showing a preview in chats, the recording
- * countdown and the computer's sound. Rust keeps them (`capture_get_options` / `capture_set_options`,
+ * countdown, the computer's sound and a copy on the Desktop. Rust keeps them (`capture_get_options` / `capture_set_options`,
  * the same device-wide options the bar's Options menu saves), and snaps
  * every value to what it allows; this only reads and writes them.
  *
@@ -175,6 +182,38 @@ export default function CaptureOptionsSetting({
             ariaLabel={TRACK_TITLE}
             checked={options.linkInsights}
             onCheckedChange={(linkInsights) => void change({ linkInsights })}
+          />
+        </OptionRow>
+      )}
+
+      <OptionRow
+        rowClassName={rowClassName}
+        layout={layout}
+        icon={<MonitorDown className="size-[18px]" strokeWidth={2} />}
+        title="Also save a copy to the Desktop"
+        description="Every screenshot is copied to your Desktop as soon as it's taken, as well as being saved to your drive. Its link stays the same."
+      >
+        <SettingsToggle
+          ariaLabel="Also save a copy to the Desktop"
+          checked={options.desktopCopy === true}
+          onCheckedChange={(desktopCopy) => void change({ desktopCopy })}
+        />
+      </OptionRow>
+
+      {/* Recordings are a choice of their own (videos are large), and only
+          mean something while copies go to the Desktop at all. */}
+      {recording && options.desktopCopy === true && (
+        <OptionRow
+          rowClassName={rowClassName}
+          layout={layout}
+          icon={<Video className="size-[18px]" strokeWidth={2} />}
+          title="Recordings too"
+          description="Copies each recording to your Desktop as well. Recordings can be large."
+        >
+          <SettingsToggle
+            ariaLabel="Save a copy of recordings to the Desktop"
+            checked={options.desktopCopyRecordings === true}
+            onCheckedChange={(desktopCopyRecordings) => void change({ desktopCopyRecordings })}
           />
         </OptionRow>
       )}

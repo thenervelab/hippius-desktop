@@ -531,6 +531,43 @@ describe("the card's actions (Rust decides which)", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("saves a copy to the Desktop from the More menu and says where, for a moment", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { saveToDesktop: true }));
+    tauri.onInvoke("capture_preview_save_to_desktop", () => `Saved to your Desktop as ${FILE}.`);
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save to Desktop" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_save_to_desktop")).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByTestId("capture-desktop-note")).toHaveTextContent(`Saved to your Desktop as ${FILE}.`);
+    // In the second line's place, so the card keeps its height.
+    expect(screen.queryByTestId("capture-link-note")).toBeNull();
+    await advance(4000);
+    expect(screen.queryByTestId("capture-desktop-note")).toBeNull();
+    expect(screen.getByTestId("capture-link-note")).toBeInTheDocument();
+  });
+
+  it("says plainly when the copy could not be saved", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { saveToDesktop: true }));
+    tauri.onInvoke("capture_preview_save_to_desktop", () => {
+      throw { kind: "Validation", message: "That file isn't on this computer any more." };
+    });
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save to Desktop" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("That file isn't on this computer any more.");
+  });
+
+  it("offers Save to Desktop only when Rust does", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Save to Desktop" })).toBeNull();
+  });
+
   it("moves through the More menu with the arrow keys", async () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true, revokeLink: true }));
     fireEvent.click(screen.getByRole("button", { name: "More" }));
