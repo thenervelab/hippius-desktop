@@ -1,5 +1,5 @@
-//! The selection overlays as non-activating panels (macOS), and who holds
-//! the keyboard while the user chooses what to capture.
+//! The capture windows as non-activating panels (macOS), and who holds the
+//! keyboard while the user chooses what to capture.
 //!
 //! **Why.** WebKit hit-tests mouse moves (hover, `pointerenter`, the window
 //! under the pointer lit in window mode) and takes keys only while its
@@ -13,21 +13,41 @@
 //! so the bar has hover and keys whichever app is frontmost, and the user's
 //! app keeps its menu bar and Space while they choose.
 //!
+//! **Full-screen apps.** Only such a panel can show on another app's
+//! full-screen Space. An ordinary window of an app that has windows
+//! elsewhere (the main window) stays on the desktop's Space however it is
+//! ordered front, `FullScreenAuxiliary` and all, and so does a panel without
+//! the non-activating style; activating Hippius does not bring it either. So
+//! every window a capture shows (the overlays, the pill and its tooltip, the
+//! camera bubble and its controls, the card) and the tray popover are made
+//! panels, or the crosshairs, the pill and the card only appeared once the
+//! user left full screen.
+//!
 //! **How.** Tauri builds every window as tao's `TaoWindow` (an `NSWindow`
-//! subclass), so the overlay is turned into a panel right after it is built
-//! and before it is shown ([`make_panel`]): its class is swapped for
-//! [`PANEL_CLASS`], an `NSPanel` subclass with tao's `focusable` ivar at
-//! the same offset and tao's own `canBecomeKeyWindow` / `sendEvent:`.
-//! Swapping a class under key-value observers breaks them (a later
-//! `removeObserver:` throws, which aborts the process), and WebKit observes
-//! the window's `contentView` through a KVO subclass. So the content view
-//! (the web view's parent) is taken out first, which removes WebKit's
-//! observer, the swap happens while only AppKit's own manual observation
-//! remains, and the content view goes back, when WebKit observes again and
-//! KVO subclasses the panel class itself. Anything unexpected (another
-//! class, sizes or ivar offsets that differ, a KVO subclass that overrides
-//! more than `setContentView:`) leaves the window as it was, logged, and the
-//! overlay works as before (keyed by activating Hippius).
+//! subclass), so a window is turned into a panel right after it is built and
+//! before it is shown ([`make_panel`]): its class is swapped for
+//! [`PANEL_CLASS`], an `NSPanel` subclass with tao's `focusable` ivar at the
+//! same offset and tao's own `canBecomeKeyWindow` / `sendEvent:`.
+//!
+//! **Key-value observers.** Removing an observer looks its key path up by
+//! the observed object's class, so an observer added under one class and
+//! removed under another throws, which aborts the process. WebKit observes
+//! the window (`contentLayoutRect`, `titlebarAppearsTransparent`) for as
+//! long as the web view is in it, so the content view (the web view's
+//! parent) is taken out first, the swap happens, and the content view goes
+//! back, when WebKit observes again under the panel's class. What the window
+//! is still observed for at that moment is read from its own observation
+//! info ([`observed_key_paths`]), never from the methods of its KVO
+//! subclass: that class is shared by every tao window and keeps the setters
+//! of keys observed on ANY of them (the main window's title bar observes
+//! `opaque`), which refused every overlay. Only AppKit's own
+//! `_windowLayerContext` may remain ([`observances_allow_swap`]); AppKit
+//! removes that observer as the window deallocates, so the panel turns back
+//! into its own class, content view out again, as it closes. Anything
+//! unexpected (another class, sizes or ivar offsets that differ, another
+//! observer, or other observers at close than at the swap) leaves the window
+//! as it was, logged; a panel that cannot turn back is kept alive rather
+//! than deallocated under the wrong class.
 //!
 //! **Keeping the keyboard.** [`make_key`] makes the bar's overlay key
 //! without activating Hippius. The bar's overlay is keyed once every overlay
@@ -39,25 +59,43 @@
 
 use tauri::WebviewWindow;
 
-/// The runtime class every macOS selection overlay becomes.
+/// The runtime class every macOS capture window becomes.
 pub const PANEL_CLASS: &str = "HippiusCaptureOverlayPanel";
 
 /// `NSWindowStyleMaskNonactivatingPanel`.
 pub const NONACTIVATING_PANEL_MASK: usize = 1 << 7;
 
-/// The methods a key-value-observing subclass of the overlay window may
-/// carry for the class swap to be safe: KVO's bookkeeping (`class`,
-/// `dealloc`, `_isKVOA`) and the setter of the one key WebKit observes,
-/// `contentView`, whose observer goes away with the content view.
-pub const KVO_METHODS_SAFE_TO_DROP: [&str; 4] = ["setContentView:", "class", "dealloc", "_isKVOA"];
+/// The key paths a window may still be observed for, once its content view
+/// is out, for the class swap to be safe: AppKit's own layer context, whose
+/// observer AppKit removes only as the window deallocates, by when the panel
+/// is back under its own class.
+pub const KEY_PATHS_SAFE_AT_SWAP: [&str; 1] = ["_windowLayerContext"];
 
-/// Whether the window's key-value-observing subclass, listed by its own
-/// methods, observes nothing but the content view, so its class can be
-/// swapped once the content view is out. A window that is not KVO-subclassed
-/// lists nothing here.
+/// The key paths a window is observed for, read from the description of its
+/// `NSKeyValueObservationInfo` (one `Key path: <path>,` per observance).
+/// `None` when the text is not such a description: the caller then refuses
+/// the swap rather than guess.
 #[must_use]
-pub fn kvo_subclass_allows_swap<S: AsRef<str>>(own_methods: &[S]) -> bool {
-    own_methods.iter().all(|m| KVO_METHODS_SAFE_TO_DROP.contains(&m.as_ref()))
+pub fn observed_key_paths(description: &str) -> Option<Vec<String>> {
+    if !description.trim_start().starts_with("<NSKeyValueObservationInfo") {
+        return None;
+    }
+    const LABEL: &str = "Key path: ";
+    let mut paths = Vec::new();
+    for line in description.lines().filter(|l| l.contains("<NSKeyValueObservance")) {
+        let start = line.find(LABEL)? + LABEL.len();
+        let rest = &line[start..];
+        let path = rest.split(", ").next().filter(|p| !p.is_empty())?;
+        paths.push(path.to_owned());
+    }
+    Some(paths)
+}
+
+/// Whether a window observed for `paths` (its content view out) can have its
+/// class swapped: nothing but [`KEY_PATHS_SAFE_AT_SWAP`].
+#[must_use]
+pub fn observances_allow_swap<S: AsRef<str>>(paths: &[S]) -> bool {
+    paths.iter().all(|p| KEY_PATHS_SAFE_AT_SWAP.contains(&p.as_ref()))
 }
 
 /// Whether the bar's overlay gets hover and keys: it must be the key
@@ -118,8 +156,9 @@ impl KeyboardState {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use std::collections::HashMap;
     use std::ffi::{CStr, c_char, c_void};
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
     use cocoa::base::{BOOL, NO, YES, id, nil};
     use objc::declare::ClassDecl;
@@ -127,7 +166,7 @@ mod imp {
     use objc::{class, msg_send, sel, sel_impl};
     use tauri::WebviewWindow;
 
-    use super::{KeyboardState, NONACTIVATING_PANEL_MASK, PANEL_CLASS, kvo_subclass_allows_swap};
+    use super::{KeyboardState, NONACTIVATING_PANEL_MASK, PANEL_CLASS, observances_allow_swap, observed_key_paths};
 
     unsafe extern "C" {
         fn object_getClass(obj: *const Object) -> *const Class;
@@ -147,6 +186,75 @@ mod imp {
 
     extern "C" fn cannot_become_main(_this: &Object, _cmd: Sel) -> BOOL {
         NO
+    }
+
+    /// What a window was before it became a panel: its class (tao's, or
+    /// KVO's subclass of it) and the key paths it was observed for at the
+    /// swap, keyed by the window's address.
+    struct Swapped {
+        class: usize,
+        observed: Vec<String>,
+    }
+
+    fn swapped() -> &'static Mutex<HashMap<usize, Swapped>> {
+        static SWAPPED: OnceLock<Mutex<HashMap<usize, Swapped>>> = OnceLock::new();
+        SWAPPED.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// The key paths `ns_window` is observed for now, from its own
+    /// observation info; `None` when that cannot be read. Main thread only.
+    unsafe fn observed_now(ns_window: *mut Object) -> Option<Vec<String>> {
+        // SAFETY: a live window on the main thread; the observation info is
+        // an object (or null) and its description a C string it owns.
+        unsafe {
+            let info: *mut c_void = msg_send![ns_window, observationInfo];
+            if info.is_null() {
+                return Some(Vec::new());
+            }
+            let description: id = msg_send![info.cast::<Object>(), description];
+            if description == nil {
+                return None;
+            }
+            let utf8: *const c_char = msg_send![description, UTF8String];
+            if utf8.is_null() {
+                return None;
+            }
+            observed_key_paths(&CStr::from_ptr(utf8).to_string_lossy())
+        }
+    }
+
+    /// The panel's `close`: the window turns back into the class it was
+    /// built as before it closes, so AppKit removes its own observer (added
+    /// under that class) as the window deallocates. The content view goes
+    /// first, taking WebKit's observers (added under the panel's class) with
+    /// it. A window observed for anything else than at the swap is kept
+    /// alive instead: either class would throw as it deallocated.
+    extern "C" fn close_as_built(this: &mut Object, _cmd: Sel) {
+        let address = std::ptr::from_mut(this) as usize;
+        let entry = super::super::commands::lock(swapped()).remove(&address);
+        let this: *mut Object = this;
+        // SAFETY: AppKit calls `close` on the main thread with a live
+        // window; every call is plain AppKit or the ObjC runtime on it.
+        unsafe {
+            if let Some(entry) = entry {
+                let placeholder: id = msg_send![class!(NSView), new];
+                let () = msg_send![this, setContentView: placeholder];
+                let () = msg_send![placeholder, release];
+                if observed_now(this).as_ref() == Some(&entry.observed) {
+                    object_setClass(this, entry.class as *const Class);
+                    // Now the class it was built as: its own `close`.
+                    let () = msg_send![this, close];
+                    return;
+                }
+                tracing::warn!(
+                    observed = ?observed_now(this),
+                    at_swap = ?entry.observed,
+                    "capture: a panel is observed for other keys than when it was made; kept alive rather than closed under the wrong class"
+                );
+                let _: id = msg_send![this, retain];
+            }
+            let () = msg_send![super(this, class!(NSPanel)), close];
+        }
     }
 
     /// The panel class, declared once. `None` when tao's class is not there
@@ -185,6 +293,7 @@ mod imp {
                 // A panel is never the main window: being main is part of
                 // activating an app, which this panel must not do.
                 decl.add_method(sel!(canBecomeMainWindow), cannot_become_main as extern "C" fn(&Object, Sel) -> BOOL);
+                decl.add_method(sel!(close), close_as_built as extern "C" fn(&mut Object, Sel));
             }
             decl.add_ivar::<BOOL>("focusable");
             Some(std::ptr::from_ref(decl.register()) as usize)
@@ -227,6 +336,7 @@ mod imp {
         NoPanelClass,
         LayoutDiffers,
         NoContentView,
+        Unreadable,
         Observed(Vec<String>),
     }
 
@@ -237,7 +347,8 @@ mod imp {
                 Self::NoPanelClass => f.write_str("tao's window methods were not found to copy"),
                 Self::LayoutDiffers => f.write_str("the panel's size or ivar layout differs from tao's window"),
                 Self::NoContentView => f.write_str("it has no content view"),
-                Self::Observed(methods) => write!(f, "it is observed for more than its content view ({})", methods.join(", ")),
+                Self::Unreadable => f.write_str("what observes it could not be read"),
+                Self::Observed(paths) => write!(f, "it is still observed for {} with its content view out", paths.join(", ")),
             }
         }
     }
@@ -271,8 +382,7 @@ mod imp {
             }
 
             // Take the web view's parent out: WebKit stops observing the
-            // window's content view, so nothing observes a key the swap
-            // would cut off.
+            // window, so only AppKit's own observer can be left.
             let content: id = msg_send![ns_window, contentView];
             if content == nil {
                 return Err(Refusal::NoContentView);
@@ -281,19 +391,27 @@ mod imp {
             let placeholder: id = msg_send![class!(NSView), new];
             let () = msg_send![ns_window, setContentView: placeholder];
 
-            let real = object_getClass(ns_window);
-            let observed = if real == apparent { Vec::new() } else { own_method_names(real) };
-            let result = if kvo_subclass_allows_swap(&observed) {
-                object_setClass(ns_window, panel_ptr);
-                let mask: usize = msg_send![ns_window, styleMask];
-                let () = msg_send![ns_window, setStyleMask: mask | NONACTIVATING_PANEL_MASK];
-                // A panel hides when its app deactivates, and Hippius is
-                // often not the active app while the user chooses.
-                let () = msg_send![ns_window, setHidesOnDeactivate: NO];
-                let () = msg_send![ns_window, setBecomesKeyOnlyIfNeeded: NO];
-                Ok(())
-            } else {
-                Err(Refusal::Observed(observed))
+            let built_as = object_getClass(ns_window);
+            let result = match observed_now(ns_window) {
+                None => Err(Refusal::Unreadable),
+                Some(observed) if !observances_allow_swap(&observed) => Err(Refusal::Observed(observed)),
+                Some(observed) => {
+                    super::super::commands::lock(swapped()).insert(
+                        ns_window as usize,
+                        Swapped {
+                            class: built_as as usize,
+                            observed,
+                        },
+                    );
+                    object_setClass(ns_window, panel_ptr);
+                    let mask: usize = msg_send![ns_window, styleMask];
+                    let () = msg_send![ns_window, setStyleMask: mask | NONACTIVATING_PANEL_MASK];
+                    // A panel hides when its app deactivates, and Hippius is
+                    // often not the active app while the user chooses.
+                    let () = msg_send![ns_window, setHidesOnDeactivate: NO];
+                    let () = msg_send![ns_window, setBecomesKeyOnlyIfNeeded: NO];
+                    Ok(())
+                }
             };
 
             // Put the web view back; it takes the keyboard in its window
@@ -317,11 +435,11 @@ mod imp {
             let Ok(ns_window) = target.ns_window() else { return };
             // SAFETY: this window's live NSWindow, on the main thread.
             match unsafe { convert(ns_window.cast::<Object>()) } {
-                Ok(()) => tracing::info!(window = %label, "capture: overlay is a non-activating panel"),
+                Ok(()) => tracing::info!(window = %label, "capture: window is a non-activating panel"),
                 Err(why) => tracing::warn!(
                     window = %label,
                     reason = %why,
-                    "capture: overlay left an ordinary window; it takes the keyboard by bringing Hippius forward"
+                    "capture: window left an ordinary window; it shows only on the desktop's Space and takes the keyboard by bringing Hippius forward"
                 ),
             }
         });
@@ -418,9 +536,10 @@ mod imp {
     }
 }
 
-/// Turn a freshly built overlay into a non-activating panel (macOS; queued
-/// on the main thread, so call it before the overlay is shown). Elsewhere
-/// nothing happens.
+/// Turn a freshly built capture window (or the tray popover) into a
+/// non-activating panel (macOS; queued on the main thread, so call it before
+/// the window is shown, and once: a window that is a panel already is left
+/// alone). Elsewhere nothing happens.
 pub fn make_panel(window: &WebviewWindow) {
     #[cfg(target_os = "macos")]
     imp::make_panel(window);
@@ -467,23 +586,43 @@ pub fn rekey_if_pointer_on_overlay(window: &WebviewWindow) {
 mod tests {
     use super::*;
 
-    /// Swapping a class under a key-value observer breaks it, and a later
-    /// `removeObserver:` throws, which aborts the app. WebKit observes only
-    /// the content view, which is taken out before the swap; a window whose
-    /// KVO subclass observes anything else keeps its class.
+    /// A transparent overlay's observation info with its content view out,
+    /// and a titled window's, as AppKit prints them.
+    const OVERLAY_INFO: &str = "<NSKeyValueObservationInfo 0x7616ad3c40> (\n<NSKeyValueObservance 0x7616cb80f0: Observer: 0x76169091e0, Key path: _windowLayerContext, Options: <New: YES, Old: YES, Prior: NO> Context: 0x1e6baff78, Property: 0x7616cb8000>\n)";
+    const TITLED_INFO: &str = "<NSKeyValueObservationInfo 0x76938cc840> (\n<NSKeyValueObservance 0x76929b8120: Observer: 0x769356d1b0, Key path: _windowLayerContext, Options: <New: YES, Old: YES, Prior: NO> Context: 0x1e6baff78, Property: 0x76929b8060>\n<NSKeyValueObservance 0x7692adacd0: Observer: 0x7693492c00, Key path: opaque, Options: <New: YES, Old: NO, Prior: NO> Context: 0x1e4cc9e80, Property: 0x7692adb030>\n<NSKeyValueObservance 0x7692adb630: Observer: 0x7693747420, Key path: contentLayoutRect, Options: <New: NO, Old: NO, Prior: NO> Context: 0x1e56b1a10, Property: 0x7692adb6f0>\n)";
+
     #[test]
-    fn the_class_is_swapped_only_when_nothing_but_the_content_view_is_observed() {
-        assert!(kvo_subclass_allows_swap::<&str>(&[]), "a window that is not KVO-subclassed");
-        assert!(kvo_subclass_allows_swap(&["setContentView:", "class", "dealloc", "_isKVOA"]));
-        assert!(kvo_subclass_allows_swap(&["class", "dealloc", "_isKVOA"]));
-        assert!(!kvo_subclass_allows_swap(&[
-            "setContentView:",
-            "setTitle:",
-            "class",
-            "dealloc",
-            "_isKVOA"
-        ]));
-        assert!(!kvo_subclass_allows_swap(&["setFrame:display:"]));
+    fn the_observed_key_paths_are_read_from_the_windows_own_observation_info() {
+        assert_eq!(observed_key_paths(OVERLAY_INFO), Some(vec!["_windowLayerContext".to_owned()]));
+        assert_eq!(
+            observed_key_paths(TITLED_INFO),
+            Some(vec![
+                "_windowLayerContext".to_owned(),
+                "opaque".to_owned(),
+                "contentLayoutRect".to_owned()
+            ])
+        );
+        assert_eq!(observed_key_paths("<NSKeyValueObservationInfo 0x1> (\n)"), Some(Vec::new()));
+        assert_eq!(observed_key_paths("something else"), None, "an unknown text is not read as no observers");
+        assert_eq!(
+            observed_key_paths("<NSKeyValueObservationInfo 0x1> (\n<NSKeyValueObservance 0x2: Observer: 0x3, Options: x>\n)"),
+            None,
+            "an observance without a key path is not skipped"
+        );
+    }
+
+    /// Removing an observer under another class than it was added under
+    /// throws, which aborts the app. With the content view out an overlay is
+    /// observed by AppKit's layer context alone, removed only as the window
+    /// deallocates (back under its own class by then); anything else keeps
+    /// the window as it is. The shared KVO subclass's methods (which carried
+    /// `setOpaque:` from the main window's title bar) no longer decide.
+    #[test]
+    fn the_class_is_swapped_only_when_nothing_but_the_layer_context_observes_the_window() {
+        assert!(observances_allow_swap::<&str>(&[]), "a window nobody observes");
+        assert!(observances_allow_swap(&observed_key_paths(OVERLAY_INFO).unwrap()));
+        assert!(!observances_allow_swap(&observed_key_paths(TITLED_INFO).unwrap()));
+        assert!(!observances_allow_swap(&["contentLayoutRect"]), "WebKit still in the window");
     }
 
     /// WebKit gives hover and keys only to the key window, and an ordinary

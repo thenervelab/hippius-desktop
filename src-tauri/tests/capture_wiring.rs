@@ -444,7 +444,7 @@ fn the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward() {
     let panel = open
         .find("overlay_panel::make_panel(&window)")
         .expect("every overlay is made a panel as it opens");
-    assert!(open.contains("own_windows::overlay_is_panel(super::rollout::current_platform())"));
+    assert!(open.contains("own_windows::capture_windows_are_panels(super::rollout::current_platform())"));
     let shown = open.find("show_without_focus(&window)").expect("the overlay is shown");
     assert!(panel < shown, "the panel is made before the overlay is shown");
 
@@ -474,19 +474,82 @@ fn the_bars_overlay_takes_the_keyboard_without_bringing_hippius_forward() {
     assert!(check.contains("bar_gets_pointer()"));
     assert!(!check.contains("is_focused()"));
 
-    // The class swap happens only with the content view taken out, so no
-    // key-value observer of the window is cut off (a later removeObserver:
-    // would throw and abort the app), and a panel never hides when Hippius
-    // is not the active app.
+    // The class swap happens only with the content view taken out and the
+    // window's OWN observers read (not its shared KVO subclass's methods), so
+    // no key-value observer of the window is cut off (a later
+    // removeObserver: would throw and abort the app), and a panel never
+    // hides when Hippius is not the active app.
     let panel_src = read("src/capture/overlay_panel.rs");
     let convert = fn_body(&panel_src, "unsafe fn convert(");
     let detached = convert.find("setContentView: placeholder").expect("the content view is taken out");
-    let gate = convert.find("kvo_subclass_allows_swap(&observed)").expect("observers are checked");
+    let read_observers = convert.find("observed_now(ns_window)").expect("the window's own observers are read");
+    let gate = convert.find("observances_allow_swap(&observed)").expect("observers are checked");
+    let remembered = convert.find("swapped()).insert(").expect("the class it was built as is remembered");
     let swapped = convert.find("object_setClass(ns_window, panel_ptr)").expect("the class is swapped");
     let attached = convert.find("setContentView: content").expect("the content view goes back");
-    assert!(detached < gate && gate < swapped && swapped < attached);
+    assert!(detached < read_observers && read_observers < gate && gate < remembered && remembered < swapped && swapped < attached);
     assert!(convert.contains("setHidesOnDeactivate: NO"));
     assert!(convert.contains("NONACTIVATING_PANEL_MASK"));
+    assert!(
+        !panel_src.contains("own_method_names(real)"),
+        "the shared KVO subclass's methods never decide"
+    );
+
+    // AppKit removes its own observer as the window deallocates, so the panel
+    // closes as the class it was built as: content view out, observers the
+    // same as at the swap, class back, then that class's own close. A panel
+    // that cannot turn back is kept alive, never deallocated under the wrong
+    // class.
+    let close = fn_body(&panel_src, "extern \"C\" fn close_as_built(");
+    let out = close.find("setContentView: placeholder").expect("the content view goes before the close");
+    let same = close
+        .find("observed_now(this).as_ref() == Some(&entry.observed)")
+        .expect("observers compared");
+    let back = close.find("object_setClass(this, entry.class").expect("the class goes back");
+    let closed = close.find("msg_send![this, close]").expect("then its own close");
+    assert!(out < same && same < back && back < closed);
+    assert!(close.contains("msg_send![this, retain]"), "a panel that cannot turn back is kept alive");
+    assert!(panel_src.contains("decl.add_method(sel!(close), close_as_built"));
+}
+
+/// Only a non-activating panel shows on another app's full-screen Space: an
+/// ordinary window of an app with a window elsewhere stays on the desktop's
+/// Space however it is ordered front. So on macOS every capture window is
+/// made a panel as it is built, before it is first shown, or the pill, its
+/// tooltip, the camera and its controls and the card were missing while the
+/// user captured a full-screen app.
+#[test]
+fn every_capture_window_is_a_panel_so_it_shows_over_full_screen_apps() {
+    let src = read("src/capture/commands.rs");
+    let helper = fn_body(&src, "fn make_capture_panel(");
+    assert!(helper.contains("own_windows::capture_windows_are_panels(super::rollout::current_platform())"));
+    assert!(helper.contains("overlay_panel::make_panel(window)"));
+    for (sig, built, shown) in [
+        (
+            "fn open_controls(",
+            "Could not open the recording controls",
+            "show_without_focus(&window)",
+        ),
+        ("fn pill_tip_window(", "let built = WebviewWindowBuilder", "Some(window)"),
+        (
+            "fn open_preview_window(",
+            "Could not open the capture preview",
+            "float_over_full_screen(&window)",
+        ),
+        ("fn open_camera_window(", "Could not open the camera", "show_without_focus(&window)"),
+        ("fn bubble_controls_window(", "let built = WebviewWindowBuilder", "Some(window)"),
+    ] {
+        let body = fn_body(&src, sig);
+        let at_build = body.find(built).unwrap_or_else(|| panic!("{sig} builds its window"));
+        let panel = body
+            .find("make_capture_panel(&window)")
+            .unwrap_or_else(|| panic!("{sig} makes its window a panel"));
+        let at_show = body.rfind(shown).unwrap_or_else(|| panic!("{sig} shows or returns its window"));
+        assert!(
+            at_build < panel && panel < at_show,
+            "{sig}: the panel is made after the build, before the window is used"
+        );
+    }
 }
 
 /// The preview card floats over whatever the user captures next, and it is

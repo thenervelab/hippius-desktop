@@ -410,7 +410,7 @@ the bar's overlay takes the keyboard, and only once every overlay is up
 per `own_windows::overlay_show`, without focus on macOS (the bar's too) and
 Windows (the others), a display plugged in mid-choice too. **On macOS the
 overlays are non-activating panels** (`overlay_panel.rs`,
-`own_windows::overlay_is_panel`): WebKit gives hover, mouse moves and keys
+`own_windows::capture_windows_are_panels`): WebKit gives hover, mouse moves and keys
 only to the key window, and an ordinary window is key only while Hippius is
 the active app, so whenever the user's app was in front (the shortcut, the
 tray, a click or gesture that reached another app while choosing) the bar
@@ -420,12 +420,31 @@ bar is `overlay_panel::make_key`, never `set_focus` (which activates): once
 all are up, on a bar move, when the bar's page has loaded
 (`capture_overlay_context`), and from the bar-follow watch when another app
 took the keyboard and the pointer is on an overlay (`should_rekey`; never
-from another Hippius window or a prompt above the overlays). The panel is
-made by swapping the built window's class (`make_panel`, before show) with
-the content view taken out first, so WebKit's KVO observer of `contentView`
-is gone during the swap (a class swapped under an observer aborts the app on
-the next `removeObserver:`); any unexpected class, layout or KVO override
-leaves an ordinary window, logged. `log_if_bar_lacks_keyboard` logs key AND
+from another Hippius window or a prompt above the overlays). **Every
+capture window is a panel on macOS, not only the overlays** (the pill, its
+tooltip, the camera, its controls and the card too, `make_capture_panel`
+right after each build): only a non-activating panel shows on another app's
+full-screen Space; an ordinary window of an app with a window elsewhere stays
+on the desktop's Space however it is ordered front (`FullScreenAuxiliary`,
+order and activation make no difference, measured), so over a full-screen
+app the crosshairs, pill and card never appeared. The panel is made by
+swapping the built window's class (`make_panel`, before show) with the
+content view taken out first, so WebKit's observers are gone during the
+swap (an observer removed under another class than it was added under
+throws and aborts the app). What may still observe the window is read from
+ITS OWN observation info (`observed_key_paths`), never from the methods of
+its KVO subclass: that class is shared by every tao window and carries
+`setOpaque:` from the main window's title bar, which refused every overlay
+in every real run. Only AppKit's `_windowLayerContext` may remain; AppKit
+removes it as the window deallocates, so the panel's `close`
+(`close_as_built`) takes the content view out, checks the observers match
+the swap's and puts the built class back before that class's own close; a
+mismatch keeps the window alive rather than crash. Any unexpected class,
+layout or observer leaves an ordinary window, logged. **The tray popover is
+NOT a panel yet**: a non-activating panel gets no resign-key when another
+app comes forward, so its click-outside dismissal (`on_panel_blur`) would
+stop working; it needs an outside-click monitor first, and until then it
+does not open over a full-screen app. `log_if_bar_lacks_keyboard` logs key AND
 (panel OR Hippius active), at open and at page load; `isKeyWindow` alone said
 "key" while the bar had no hover. The bar's tooltip opens on focus only for
 `:focus-visible`, so the window taking the keyboard back does not pop one on
@@ -1232,8 +1251,9 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `finish_screenshot` hides a visible card first (`hide_card_for_grab`).
   Windows keeps protection on all of them (WGC cannot leave windows out);
   Linux has none. Overlays are raised to screen-saver level on macOS; every
-  capture window gets `FullScreenAuxiliary` so it can show over a full-screen
-  app without switching Spaces.
+  capture window gets `FullScreenAuxiliary` and is a non-activating panel,
+  the two together being what lets it show over a full-screen app without
+  switching Spaces (`FullScreenAuxiliary` alone does nothing there).
 - **Placement.** Work areas are read once per capture (one main-thread hop)
   and cached per display (`work_areas`); nothing waits on AppKit when a window
   is placed. Windows places in physical pixels (`place`, from the area's

@@ -1584,8 +1584,9 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
     };
     // A non-activating panel on macOS, before it is shown: the bar's overlay
     // then takes the keyboard (hover, tooltips, Escape) without bringing
-    // Hippius forward, whichever app is frontmost (`overlay_panel`).
-    if super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+    // Hippius forward, whichever app is frontmost, and the overlays show on
+    // a full-screen app's Space (`overlay_panel`).
+    if super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
         super::overlay_panel::make_panel(&window);
     }
     // Content protection is asked for, not promised: on Windows it is
@@ -1723,6 +1724,7 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .visible(false)
             .build()
             .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
+        make_capture_panel(&window);
         raise_above_menu_bar(&window);
         watch_capture_window_focus(&window);
         // Lay the page out at its full height at once (macOS), before it
@@ -2068,6 +2070,7 @@ fn pill_tip_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
             // window, and the frame alone keeps it out of the way.
             #[cfg(target_os = "macos")]
             let _ = window.set_ignore_cursor_events(true);
+            make_capture_panel(&window);
             raise_pill_tip(&window);
             Some(window)
         }
@@ -2345,6 +2348,16 @@ fn show_without_focus(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Make a freshly built capture window a non-activating panel (macOS), before
+/// it is first shown: only a panel shows on a full-screen app's Space, so
+/// without it the pill, the card and the camera were on the desktop's Space
+/// while the user recorded a full-screen app (`overlay_panel`).
+fn make_capture_panel(window: &tauri::WebviewWindow) {
+    if super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
+        super::overlay_panel::make_panel(window);
+    }
+}
+
 /// Tauri's always-on-top level sits BELOW the macOS menu bar, which would
 /// leave the overlay stopping short of the top of the screen and the menu bar
 /// impossible to select. Raise it to the screen-saver level.
@@ -2531,7 +2544,7 @@ fn spawn_bar_follow(app: AppHandle) {
             // Another app took the keyboard (a click or gesture reached it):
             // give it back to the bar once the pointer is on an overlay, so
             // its tooltips and keys work without a click on it (macOS).
-            if super::own_windows::overlay_is_panel(super::rollout::current_platform())
+            if super::own_windows::capture_windows_are_panels(super::rollout::current_platform())
                 && let Some(window) = bar_overlay(&app)
             {
                 super::overlay_panel::rekey_if_pointer_on_overlay(&window);
@@ -2647,7 +2660,7 @@ pub async fn capture_overlay_context(app: AppHandle, state: tauri::State<'_, App
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
     // The bar's page has loaded (a dev page can take seconds): make sure its
     // overlay has the keyboard now, in case another app took it meanwhile.
-    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
         focus_overlays(&app);
         log_if_bar_lacks_keyboard(&app, "bar page loaded");
     }
@@ -5766,6 +5779,7 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
+    make_capture_panel(&window);
     watch_capture_window_focus(&window);
     if let Some(d) = display {
         let area = work_area(&app.state::<AppState>().capture, d);
@@ -6771,6 +6785,7 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize, anc
         .accept_first_mouse(true)
         .visible(false);
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    make_capture_panel(&window);
     watch_capture_window_focus(&window);
     // WebView2 asks the app before `getUserMedia` may open the camera.
     super::webview_media::allow_capture_devices(&window);
@@ -7018,6 +7033,7 @@ fn bubble_controls_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .build();
     match built {
         Ok(window) => {
+            make_capture_panel(&window);
             raise_bubble_controls(&window);
             watch_capture_window_focus(&window);
             Some(window)
