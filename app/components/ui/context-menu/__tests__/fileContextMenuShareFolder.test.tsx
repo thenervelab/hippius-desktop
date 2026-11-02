@@ -19,6 +19,13 @@ vi.mock("@/app/utils/hooks/useUrlParams", () => ({
   useUrlParams: () => ({ getParam: () => null }),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+// The row's existing link is covered by fileContextMenuCopyLink.test.tsx.
+vi.mock("@/app/components/page-sections/drive/useExistingLinks", () => ({
+  useExistingLinks: () => ({ linkFor: () => null, isLoadingFor: () => false }),
+}));
+vi.mock("@/app/components/page-sections/drive/useCopyExistingLink", () => ({
+  useCopyExistingLink: () => vi.fn(),
+}));
 vi.mock("@/app/lib/hooks/useSharedDriveRoles", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/app/lib/hooks/useSharedDriveRoles")>();
   const empty = new Set<string>();
