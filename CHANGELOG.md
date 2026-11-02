@@ -61,6 +61,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Blocking someone on a share link now marks all of their comments.** In Insights, every comment that person wrote under a name shows as Blocked, and Unblock on any of them lifts it for all. Blocks also still show after you close and reopen Insights. A comment someone left anonymously is only marked when you block through that comment.
 - **A tidier sidebar, laid out like the web app's.** Drive is its own section with My Drive, Shared Drives and Captures. Plans & Billing moves out of Settings into Account, above Wallet and Referrals. Documentation shows that it opens in your browser, and Settings puts related options together.
 - **Large files upload faster to drives you don't sync on this computer.** A big file added to a Drive folder that isn't synced here now goes up several pieces at a time instead of one after another, which is much quicker on connections far from our servers.
 - **Insights buttons line up.** On the Captures page each capture's Insights button sits at the end of its name, so the buttons form one tidy column instead of following each name's length, and the link icon stays right after the name. The button looks the same as on the web app, and shows just its icon when the window is narrow so long names stay readable.
