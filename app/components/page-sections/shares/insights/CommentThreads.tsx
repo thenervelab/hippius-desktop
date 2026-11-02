@@ -33,10 +33,13 @@ import { commentsQueryKey, insightsQueryKey, PANEL_MUTATION, PANEL_QUERY } from 
 import {
   actionErrorLine,
   BLOCK_EXPLAINER,
+  blockedAuthorKeys,
+  blockSubject,
   COMMENTS_PAGE,
   DELETE_EXPLAINER,
   formatAgo,
   formatWatched,
+  isCommentBlocked,
   loadErrorLine,
   mentionSegments,
   sortThreads,
@@ -54,8 +57,10 @@ type RowQuestion = { id: string; kind: "delete" | "block" } | null;
 
 /**
  * The link's comments and what the owner does to them, held by the panel so
- * the summary's count and the Comments tab read one list, and a block lasts
- * while the panel is open.
+ * the summary's count and the Comments tab read one list. A block is on the
+ * person: the listing marks every named comment of theirs (grouped by its
+ * author key) or the one anonymous comment it went through, and a block or
+ * unblock made here shows at once, then the list is read again.
  */
 export function useCommentModeration(shareToken: string, enabled: boolean) {
   const queryClient = useQueryClient();
@@ -66,10 +71,11 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
     enabled,
   });
   const [asking, setAsking] = useState<RowQuestion>(null);
-  // Comments whose author was blocked from this panel. The server keeps the
-  // block but never lists it, so this is the only place it shows; it lasts
-  // while the panel is open.
-  const [blocked, setBlocked] = useState<ReadonlySet<string>>(new Set());
+  // Blocks (true) and unblocks (false) made from this panel, by
+  // `blockSubject`. They win over a listing read before they were made.
+  const [changedHere, setChangedHere] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const blockedAuthors = useMemo(() => blockedAuthorKeys(comments.data?.comments ?? []), [comments.data]);
+  const isBlocked = (c: ShareComment) => isCommentBlocked(c, changedHere, blockedAuthors);
   const remove = useMutation({
     ...PANEL_MUTATION,
     mutationFn: (id: string) => deleteShareComment(shareToken, id),
@@ -82,17 +88,14 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
   });
   const block = useMutation({
     ...PANEL_MUTATION,
-    mutationFn: ({ id, on }: { id: string; on: boolean }) =>
-      on ? blockShareCommenter(shareToken, id) : unblockShareCommenter(shareToken, id),
-    onSuccess: (_, { id, on }) => {
+    mutationFn: ({ comment, on }: { comment: ShareComment; on: boolean }) =>
+      on ? blockShareCommenter(shareToken, comment.id) : unblockShareCommenter(shareToken, comment.id),
+    onSuccess: (_, { comment, on }) => {
       setAsking(null);
-      setBlocked((prev) => {
-        const next = new Set(prev);
-        if (on) next.add(id);
-        else next.delete(id);
-        return next;
-      });
+      setChangedHere((prev) => new Map(prev).set(blockSubject(comment), on));
       toast.success(on ? "Blocked. They can't comment or react on this link now." : "Unblocked.");
+      // Read the marks back, so every comment the server changed shows it.
+      void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
     },
     onError: (err, { on }) => {
       toast.error(actionErrorLine(on ? "block them" : "unblock them", err, navigator.onLine));
@@ -100,7 +103,7 @@ export function useCommentModeration(shareToken: string, enabled: boolean) {
       void queryClient.invalidateQueries({ queryKey: commentsQueryKey(shareToken) });
     },
   });
-  return { comments, asking, setAsking, blocked, remove, block };
+  return { comments, asking, setAsking, isBlocked, remove, block };
 }
 
 export type Moderation = ReturnType<typeof useCommentModeration>;
@@ -124,7 +127,7 @@ export function CommentsTab({
 }) {
   const repliesEnabled = useAtomValue(shareCommentRepliesEnabledAtom);
   const online = useIsOnline();
-  const { comments, asking, setAsking, blocked, remove, block } = moderation;
+  const { comments, asking, setAsking, isBlocked, remove, block } = moderation;
   const [order, setOrder] = useState<CommentOrder>("newest");
   const [limit, setLimit] = useState(COMMENTS_PAGE);
   const [onlyMentions, setOnlyMentions] = useState(false);
@@ -178,15 +181,15 @@ export function CommentsTab({
                     comment={c}
                     showReplies={repliesEnabled}
                     asking={asking?.id === c.id ? asking.kind : null}
-                    blocked={blocked.has(c.id)}
+                    blocked={isBlocked(c)}
                     busy={
                       (remove.isPending && remove.variables === c.id) ||
-                      (block.isPending && block.variables?.id === c.id)
+                      (block.isPending && block.variables?.comment.id === c.id)
                     }
                     onAsk={(kind) => setAsking({ id: c.id, kind })}
                     onCancel={() => setAsking(null)}
                     onDelete={() => remove.mutate(c.id)}
-                    onBlock={(on) => block.mutate({ id: c.id, on })}
+                    onBlock={(on) => block.mutate({ comment: c, on })}
                   />
                 ))}
               </ul>

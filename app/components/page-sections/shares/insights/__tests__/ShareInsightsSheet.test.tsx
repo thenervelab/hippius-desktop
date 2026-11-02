@@ -356,7 +356,7 @@ describe("ShareInsightsSheet", () => {
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("share_block_commenter", { shareToken: "tok", commentId: "c2" }),
     );
-    // The server lists no block state, so the row says it.
+    // Shown at once, before the list is read back.
     expect(await screen.findByText("Blocked")).toBeInTheDocument();
     // A blocked row's menu offers Delete only.
     await openMenu("Anonymous viewer");
@@ -369,6 +369,77 @@ describe("ShareInsightsSheet", () => {
       expect(invokeMock).toHaveBeenCalledWith("share_unblock_commenter", { shareToken: "tok", commentId: "c2" }),
     );
     await waitFor(() => expect(screen.queryByText("Blocked")).toBeNull());
+  });
+
+  it("marks every comment of a person blocked through one of them, and reads the list again", async () => {
+    const KEY = "q3LkV0Xp2b9nYt1sZx8wAg";
+    const before: ShareComments = {
+      comments: [
+        { id: "c1", text: "First spam", name: "Sofia", atMs: null, createdAt: "2026-10-13T10:00:00Z", authorKey: KEY },
+        { id: "c2", text: "Fair point", name: "Ada", atMs: null, createdAt: "2026-10-13T10:01:00Z", authorKey: "Zm9vYmFyYmF6cXV4cXV1dQ" },
+        { id: "c3", text: "Second spam", name: "Sofia", atMs: null, createdAt: "2026-10-13T10:02:00Z", authorKey: KEY },
+        { id: "c4", text: "Quiet one", name: null, atMs: null, createdAt: "2026-10-13T10:03:00Z" },
+      ],
+      unreadable: null,
+    };
+    // What the server lists after the block: every named comment of Sofia's.
+    const after: ShareComments = {
+      ...before,
+      comments: before.comments.map((c) => (c.authorKey === KEY ? { ...c, blocked: true } : c)),
+    };
+    let listed = before;
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: () => listed,
+      share_block_commenter: () => {
+        listed = after;
+        return undefined;
+      },
+    });
+    renderSheet();
+
+    expect(await screen.findByText("Second spam")).toBeInTheDocument();
+    const reads = () => invokeMock.mock.calls.filter(([cmd]) => cmd === "share_list_comments").length;
+    const readsBefore = reads();
+    await openMenu("Sofia");
+    fireEvent.click(screen.getByRole("menuitem", { name: /Block Sofia/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Block" }));
+
+    await waitFor(() => expect(screen.getAllByText("Blocked")).toHaveLength(2));
+    await waitFor(() => expect(reads()).toBeGreaterThan(readsBefore));
+    const row = (text: string) => screen.getByText(text).closest("li")!;
+    expect(within(row("First spam")).getByText("Blocked")).toBeInTheDocument();
+    expect(within(row("Second spam")).getByText("Blocked")).toBeInTheDocument();
+    expect(within(row("Fair point")).queryByText("Blocked")).toBeNull();
+    expect(within(row("Quiet one")).queryByText("Blocked")).toBeNull();
+    expect(document.body.innerHTML).not.toContain(KEY);
+  });
+
+  it("shows the server's block marks, spread to all of the person's comments", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: {
+        comments: [
+          { id: "c1", text: "First spam", name: "Sofia", atMs: null, createdAt: "2026-10-13T10:00:00Z", authorKey: "k1", blocked: true },
+          { id: "c2", text: "Second spam", name: "Sofia", atMs: null, createdAt: "2026-10-13T10:01:00Z", authorKey: "k1" },
+          { id: "c3", text: "Old block", name: null, atMs: null, createdAt: "2026-10-13T10:02:00Z", blocked: true },
+          { id: "c4", text: "Fine", name: null, atMs: null, createdAt: "2026-10-13T10:03:00Z" },
+        ],
+        unreadable: null,
+      } satisfies ShareComments,
+      share_unblock_commenter: undefined,
+    });
+    renderSheet();
+
+    expect(await screen.findByText("Fine")).toBeInTheDocument();
+    expect(screen.getAllByText("Blocked")).toHaveLength(3);
+    const row = (text: string) => screen.getByText(text).closest("li")!;
+    expect(within(row("Fine")).queryByText("Blocked")).toBeNull();
+
+    // Unblocking through either of Sofia's comments clears both.
+    fireEvent.click(within(row("Second spam")).getByRole("button", { name: "Unblock" }));
+    await waitFor(() => expect(screen.getAllByText("Blocked")).toHaveLength(1));
+    expect(within(row("Old block")).getByText("Blocked")).toBeInTheDocument();
   });
 
   it("draws no replies or Owner badge until the server has replies", async () => {

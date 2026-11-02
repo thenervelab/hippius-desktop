@@ -12,6 +12,9 @@ import {
   averageWatchMs,
   avatarFor,
   biggestDrop,
+  blockedAuthorKeys,
+  blockSubject,
+  isCommentBlocked,
   emptyInsightsCopy,
   estimateDurationMs,
   formatAgo,
@@ -197,6 +200,36 @@ describe("sortThreads", () => {
     const copy = [...threads];
     sortThreads(threads, "newest");
     expect(threads).toEqual(copy);
+  });
+});
+
+describe("who reads as blocked", () => {
+  const sofia = (id: string, blocked?: boolean) => ({ id, authorKey: "k1", ...(blocked ? { blocked } : {}) });
+
+  it("groups a person's comments by author key, and leaves keyless ones alone", () => {
+    expect(blockSubject({ id: "1", authorKey: "k1" })).toBe(blockSubject({ id: "2", authorKey: "k1" }));
+    expect(blockSubject({ id: "1" })).not.toBe(blockSubject({ id: "2" }));
+  });
+
+  it("spreads the listing's mark to every comment with the same key", () => {
+    const list = [sofia("1", true), sofia("2"), { id: "3", authorKey: "k2" }, { id: "4" }];
+    const authors = blockedAuthorKeys(list);
+    expect(list.map((c) => isCommentBlocked(c, new Map(), authors))).toEqual([true, true, false, false]);
+  });
+
+  it("falls back to each comment's own mark when there are no keys", () => {
+    const list = [{ id: "1", blocked: true }, { id: "2" }];
+    const authors = blockedAuthorKeys(list);
+    expect(list.map((c) => isCommentBlocked(c, new Map(), authors))).toEqual([true, false]);
+  });
+
+  it("lets a block or unblock made in the panel win over an older listing", () => {
+    const list = [sofia("1", true), sofia("2", true), { id: "3" }];
+    const authors = blockedAuthorKeys(list);
+    const unblocked = new Map([[blockSubject(list[1]), false]]);
+    expect(list.map((c) => isCommentBlocked(c, unblocked, authors))).toEqual([false, false, false]);
+    const blocked = new Map([[blockSubject(list[2]), true]]);
+    expect(isCommentBlocked(list[2], blocked, authors)).toBe(true);
   });
 });
 
