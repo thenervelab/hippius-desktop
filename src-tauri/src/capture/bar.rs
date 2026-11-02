@@ -107,6 +107,14 @@ pub struct CaptureOptions {
     pub link_insights: bool,
     /// Recording countdown: 0, 3 or 5 seconds.
     pub record_countdown_secs: u8,
+    /// "Also save a copy to the Desktop": every screenshot is copied to the
+    /// Desktop as soon as it is saved, the way the system screenshot tool
+    /// leaves its pictures there. The capture in its drive and its link are
+    /// unchanged. Off by default.
+    pub desktop_copy: bool,
+    /// The same for recordings, a choice of its own (videos are large).
+    /// Off by default.
+    pub desktop_copy_recordings: bool,
 }
 
 impl Default for CaptureOptions {
@@ -128,6 +136,8 @@ impl Default for CaptureOptions {
             chat_preview: true,
             link_insights: true,
             record_countdown_secs: RECORDING_COUNTDOWN_SECS,
+            desktop_copy: false,
+            desktop_copy_recordings: false,
         }
     }
 }
@@ -178,6 +188,17 @@ impl CaptureOptions {
         match kind {
             CaptureKind::Screenshot => self.clone().normalized().timer_secs,
             CaptureKind::Recording => self.clone().normalized().record_countdown_secs,
+        }
+    }
+
+    /// Whether a new capture of `kind` is also copied to the Desktop as soon
+    /// as it is saved: screenshots by "Also save a copy to the Desktop",
+    /// recordings only when their own choice is on as well.
+    #[must_use]
+    pub const fn copies_to_desktop(&self, kind: CaptureKind) -> bool {
+        match kind {
+            CaptureKind::Screenshot => self.desktop_copy,
+            CaptureKind::Recording => self.desktop_copy && self.desktop_copy_recordings,
         }
     }
 
@@ -721,6 +742,34 @@ mod tests {
         assert_eq!(o.camera_size, CameraSize::Small);
     }
 
+    /// Screenshots follow "Also save a copy to the Desktop"; recordings need
+    /// their own choice too, and nothing is copied by default.
+    #[test]
+    fn only_the_chosen_kinds_are_copied_to_the_desktop() {
+        let off = CaptureOptions::default();
+        assert!(!off.copies_to_desktop(CaptureKind::Screenshot));
+        assert!(!off.copies_to_desktop(CaptureKind::Recording));
+        let shots = CaptureOptions {
+            desktop_copy: true,
+            ..CaptureOptions::default()
+        };
+        assert!(shots.copies_to_desktop(CaptureKind::Screenshot));
+        assert!(!shots.copies_to_desktop(CaptureKind::Recording));
+        let both = CaptureOptions {
+            desktop_copy_recordings: true,
+            ..shots.clone()
+        };
+        assert!(both.copies_to_desktop(CaptureKind::Recording));
+        let recordings_alone = CaptureOptions {
+            desktop_copy_recordings: true,
+            ..CaptureOptions::default()
+        };
+        assert!(
+            !recordings_alone.copies_to_desktop(CaptureKind::Recording),
+            "the second choice sits under the first"
+        );
+    }
+
     /// The overlay reads these names; a partial or older row still loads.
     #[test]
     fn options_round_trip_and_fill_missing_fields() {
@@ -733,7 +782,7 @@ mod tests {
                 "cameraSize": "small", "showClicks": false, "systemAudio": false,
                 "lastKind": "screenshot", "lastMode": "area",
                 "copyLink": true, "openLink": true, "chatPreview": true, "linkInsights": true,
-                "recordCountdownSecs": 3
+                "recordCountdownSecs": 3, "desktopCopy": false, "desktopCopyRecordings": false
             })
         );
         let partial: CaptureOptions = serde_json::from_value(serde_json::json!({ "timerSecs": 5 })).unwrap();
@@ -747,6 +796,8 @@ mod tests {
         assert_eq!(partial.record_countdown_secs, RECORDING_COUNTDOWN_SECS);
         // A row saved before the switch existed records no system audio.
         assert!(!partial.system_audio);
+        // Nor puts anything on the Desktop.
+        assert!(!partial.desktop_copy && !partial.desktop_copy_recordings);
     }
 
     #[tokio::test]
@@ -776,6 +827,8 @@ mod tests {
             chat_preview: false,
             link_insights: false,
             record_countdown_secs: 5,
+            desktop_copy: true,
+            desktop_copy_recordings: true,
         };
         save_options(&pool, chosen.clone()).await.unwrap();
         assert_eq!(load_options(&pool).await.unwrap(), chosen);

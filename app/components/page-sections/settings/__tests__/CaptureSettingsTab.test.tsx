@@ -302,10 +302,36 @@ describe("the capture bar's options, here as well", () => {
     await waitFor(() => expect(stored.systemAudio).toBe(true));
   });
 
+  it("saves a copy of screenshots to the Desktop when asked, and of recordings as a second choice", async () => {
+    setup();
+    const desktop = await screen.findByRole("switch", { name: "Also save a copy to the Desktop" });
+    expect(desktop).toHaveAttribute("aria-checked", "false");
+    // Recordings are a choice under it, shown only once copies are on.
+    expect(screen.queryByRole("switch", { name: "Save a copy of recordings to the Desktop" })).toBeNull();
+    fireEvent.click(desktop);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: { ...OPTIONS, desktopCopy: true },
+      }),
+    );
+    const recordings = await screen.findByRole("switch", { name: "Save a copy of recordings to the Desktop" });
+    expect(recordings).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(recordings);
+    await waitFor(() => expect(stored.desktopCopyRecordings).toBe(true));
+    expect(stored.desktopCopy).toBe(true);
+  });
+
   it("offers only the link options where this computer cannot record", async () => {
     setup({ recording: false });
     expect(await screen.findByRole("switch", { name: "Copy a share link after capture" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Recording countdown" })).toBeNull();
     expect(screen.queryByRole("switch", { name: "Record system audio" })).toBeNull();
+  });
+
+  it("offers the Desktop copy for screenshots only where this computer cannot record", async () => {
+    stored = { ...OPTIONS, desktopCopy: true };
+    setup({ recording: false });
+    expect(await screen.findByRole("switch", { name: "Also save a copy to the Desktop" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("switch", { name: "Save a copy of recordings to the Desktop" })).toBeNull();
   });
 });

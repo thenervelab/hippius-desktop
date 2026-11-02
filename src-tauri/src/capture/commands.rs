@@ -1584,8 +1584,9 @@ async fn open_overlay(app: &AppHandle, display: &DisplayTarget, hosts_bar: bool,
     };
     // A non-activating panel on macOS, before it is shown: the bar's overlay
     // then takes the keyboard (hover, tooltips, Escape) without bringing
-    // Hippius forward, whichever app is frontmost (`overlay_panel`).
-    if super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+    // Hippius forward, whichever app is frontmost, and the overlays show on
+    // a full-screen app's Space (`overlay_panel`).
+    if super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
         super::overlay_panel::make_panel(&window);
     }
     // Content protection is asked for, not promised: on Windows it is
@@ -1723,6 +1724,7 @@ fn open_controls(app: &AppHandle, show: bool) -> Result<()> {
             .visible(false)
             .build()
             .map_err(|e| AppError::Other(format!("Could not open the recording controls: {e}")))?;
+        make_capture_panel(&window);
         raise_above_menu_bar(&window);
         watch_capture_window_focus(&window);
         // Lay the page out at its full height at once (macOS), before it
@@ -2068,6 +2070,7 @@ fn pill_tip_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
             // window, and the frame alone keeps it out of the way.
             #[cfg(target_os = "macos")]
             let _ = window.set_ignore_cursor_events(true);
+            make_capture_panel(&window);
             raise_pill_tip(&window);
             Some(window)
         }
@@ -2345,6 +2348,16 @@ fn show_without_focus(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Make a freshly built capture window a non-activating panel (macOS), before
+/// it is first shown: only a panel shows on a full-screen app's Space, so
+/// without it the pill, the card and the camera were on the desktop's Space
+/// while the user recorded a full-screen app (`overlay_panel`).
+fn make_capture_panel(window: &tauri::WebviewWindow) {
+    if super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
+        super::overlay_panel::make_panel(window);
+    }
+}
+
 /// Tauri's always-on-top level sits BELOW the macOS menu bar, which would
 /// leave the overlay stopping short of the top of the screen and the menu bar
 /// impossible to select. Raise it to the screen-saver level.
@@ -2531,7 +2544,7 @@ fn spawn_bar_follow(app: AppHandle) {
             // Another app took the keyboard (a click or gesture reached it):
             // give it back to the bar once the pointer is on an overlay, so
             // its tooltips and keys work without a click on it (macOS).
-            if super::own_windows::overlay_is_panel(super::rollout::current_platform())
+            if super::own_windows::capture_windows_are_panels(super::rollout::current_platform())
                 && let Some(window) = bar_overlay(&app)
             {
                 super::overlay_panel::rekey_if_pointer_on_overlay(&window);
@@ -2647,7 +2660,7 @@ pub async fn capture_overlay_context(app: AppHandle, state: tauri::State<'_, App
     let hosts_bar = lock(&state.capture.bar_display).as_ref().is_some_and(|d| d.id == display_id);
     // The bar's page has loaded (a dev page can take seconds): make sure its
     // overlay has the keyboard now, in case another app took it meanwhile.
-    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::overlay_is_panel(super::rollout::current_platform()) {
+    if hosts_bar && plan == super::support::StartPlan::Overlay && super::own_windows::capture_windows_are_panels(super::rollout::current_platform()) {
         focus_overlays(&app);
         log_if_bar_lacks_keyboard(&app, "bar page loaded");
     }
@@ -3173,6 +3186,7 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Screenshot).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
@@ -3273,6 +3287,7 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Screenshot).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(true)
@@ -4420,6 +4435,25 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 
 // ── Delivering ──────────────────────────────────────────────────────────────
 
+/// "Also save a copy to the Desktop": copy a new capture there before its
+/// delivery moves it into the drive, when the options ask for that kind
+/// ([`bar::CaptureOptions::copies_to_desktop`]). Only fresh captures, never a
+/// retry. A copy that fails is logged and the capture is delivered as usual:
+/// the Desktop copy is a convenience, the drive is the capture.
+async fn copy_new_capture_to_desktop(app: &AppHandle, path: &Path, kind: CaptureKind) {
+    let state = app.state::<AppState>();
+    let Ok(pool) = state.pool() else { return };
+    if !bar::load_options(pool).await.is_ok_and(|o| o.copies_to_desktop(kind)) {
+        return;
+    }
+    let source = path.to_path_buf();
+    match tauri::async_runtime::spawn_blocking(move || crate::utils::desktop_copy::save_to_desktop(&source)).await {
+        Ok(Ok(saved)) => tracing::info!(name = ?saved.file_name(), "capture: a copy was saved to the Desktop"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "capture: the Desktop copy was not saved"),
+        Err(e) => tracing::warn!(error = %e, "capture: the Desktop copy task failed"),
+    }
+}
+
 /// Upload the capture and mint its link, then say how it went: on the preview
 /// card when one is showing (`card_id`), and as a system notification only
 /// when the upload failed, since the card already shows a success.
@@ -5148,6 +5182,7 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Recording).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
@@ -5766,6 +5801,7 @@ fn open_preview_window(app: &AppHandle, display: Option<&DisplayTarget>) -> Resu
         .inner_size(PREVIEW_WIDTH, PREVIEW_HEIGHT)
         .build()
         .map_err(|e| AppError::Other(format!("Could not open the capture preview: {e}")))?;
+    make_capture_panel(&window);
     watch_capture_window_focus(&window);
     if let Some(d) = display {
         let area = work_area(&app.state::<AppState>().capture, d);
@@ -5789,6 +5825,31 @@ pub fn capture_preview_context(state: tauri::State<'_, AppState>) -> Option<Prev
 pub fn capture_preview_pointer(app: AppHandle) -> Option<(f64, f64)> {
     let window = app.get_webview_window(PREVIEW_LABEL)?;
     pointer_in_window(&app, &window)
+}
+
+/// The card's picture is being dragged out as a file and the drag is over
+/// (dropped or cancelled): the card lets go of its hold and counts down again.
+pub const PREVIEW_DRAG_ENDED_EVENT: &str = "capture_preview_drag_ended";
+
+/// Dragging the card's picture: the system's own file drag of the capture's
+/// file on this computer (`drag_out`), so another app receives the PNG or
+/// MP4 itself, never the picture's `data:` URL. The file is the card's own:
+/// the page names none. The card holds itself up until
+/// [`PREVIEW_DRAG_ENDED_EVENT`]. Not async: it runs on the main thread, while
+/// the mouse button that began the drag is still down.
+#[tauri::command]
+pub fn capture_preview_start_drag(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+    let card = card_for(&state.capture, |c| c.actions.drag_out, "This capture isn't on this computer.")?;
+    let file = super::drag_out::file_to_drag(card.placed_path.as_ref(), &card.file_path)
+        .ok_or_else(|| AppError::Validation("This capture isn't on this computer any more.".into()))?;
+    let window = app
+        .get_webview_window(PREVIEW_LABEL)
+        .ok_or_else(|| AppError::Validation("The capture card isn't open.".into()))?;
+    let icon = super::drag_out::drag_icon(card.thumbnail.as_deref());
+    let ended = move || {
+        let _ = app.emit_to(PREVIEW_LABEL, PREVIEW_DRAG_ENDED_EVENT, ());
+    };
+    super::drag_out::start(&window, file, icon, ended)
 }
 
 #[cfg(target_os = "macos")]
@@ -5963,6 +6024,21 @@ pub async fn capture_preview_reveal(state: tauri::State<'_, AppState>) -> Result
     tauri::async_runtime::spawn_blocking(move || crate::utils::reveal::reveal_path(&path))
         .await
         .map_err(|e| AppError::Other(format!("Reveal cancelled: {e}")))?
+}
+
+/// Save to Desktop on the card: a copy of the capture's file on this
+/// computer (in its drive folder, or the copy kept while it uploads) goes to
+/// the Desktop under its own name, numbered past one already there. The
+/// capture in Hippius and its link are untouched. Returns the sentence the
+/// card shows.
+#[tauri::command]
+pub async fn capture_preview_save_to_desktop(state: tauri::State<'_, AppState>) -> Result<String> {
+    let card = card_for(&state.capture, |c| c.actions.save_to_desktop, "This capture isn't on this computer.")?;
+    let source = card.placed_path.filter(|p| p.is_file()).unwrap_or(card.file_path);
+    let saved = tauri::async_runtime::spawn_blocking(move || crate::utils::desktop_copy::save_to_desktop(&source))
+        .await
+        .map_err(|e| AppError::Other(format!("Copy cancelled: {e}")))??;
+    Ok(crate::utils::desktop_copy::saved_line(&saved))
 }
 
 /// Throw away a capture that could not be uploaded: its file is deleted and
@@ -6771,6 +6847,7 @@ fn open_camera_window(app: &AppHandle, shape: CameraShape, size: CameraSize, anc
         .accept_first_mouse(true)
         .visible(false);
     let window = builder.build().map_err(|e| AppError::Other(format!("Could not open the camera: {e}")))?;
+    make_capture_panel(&window);
     watch_capture_window_focus(&window);
     // WebView2 asks the app before `getUserMedia` may open the camera.
     super::webview_media::allow_capture_devices(&window);
@@ -7018,6 +7095,7 @@ fn bubble_controls_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .build();
     match built {
         Ok(window) => {
+            make_capture_panel(&window);
             raise_bubble_controls(&window);
             watch_capture_window_focus(&window);
             Some(window)

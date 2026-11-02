@@ -126,6 +126,10 @@ pub struct CardActions {
     pub manage_link: bool,
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
+    /// Put a copy of the file on the Desktop: a file of this capture is on
+    /// this computer (placed in its drive, kept for a link, or waiting to
+    /// be sent again).
+    pub save_to_desktop: bool,
     /// Open the storage plans in the main window: the upload failed because
     /// the plan is full, which Retry alone cannot fix, or a Free plan
     /// recording stopped at its length limit.
@@ -133,6 +137,10 @@ pub struct CardActions {
     /// Open the screenshot in the editor: a screenshot in the drive, with a
     /// file here to read, and no link being made from the unedited picture.
     pub edit: bool,
+    /// Drag the picture into another app as the file itself: a file of this
+    /// capture is on this computer (placed in its drive, kept for a link,
+    /// or waiting to be sent again).
+    pub drag_out: bool,
 }
 
 /// Everything the card shows, plus what its buttons need.
@@ -354,6 +362,7 @@ impl PreviewCard {
             revoke_link: has_link && self.share_token.is_some(),
             manage_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
+            save_to_desktop: self.placed_path.is_some() || retryable,
             upgrade: self.stopped_at_free_limit
                 || matches!(
                     self.status,
@@ -367,6 +376,7 @@ impl PreviewCard {
                 && self.placed_path.is_some()
                 && self.link != LinkState::Creating
                 && super::editor::EditableFormat::from_name(&self.file_name).is_some(),
+            drag_out: self.placed_path.is_some() || retryable,
         }
     }
 
@@ -580,10 +590,12 @@ mod tests {
         assert_eq!(
             c.actions,
             CardActions {
+                drag_out: true,
                 copy_link: true,
                 revoke_link: true,
                 manage_link: true,
                 reveal: true,
+                save_to_desktop: true,
                 ..CardActions::default()
             }
         );
@@ -605,7 +617,9 @@ mod tests {
         assert_eq!(
             c.actions,
             CardActions {
+                drag_out: true,
                 mint_link: true,
+                save_to_desktop: true,
                 ..CardActions::default()
             }
         );
@@ -613,7 +627,9 @@ mod tests {
         // A failed direct upload: retry or discard; a failed sync: nothing.
         let c = card(3).with_outcome(3, failed(true), None).unwrap();
         assert!(c.actions.retry && c.actions.discard && !c.actions.mint_link);
+        assert!(c.actions.save_to_desktop, "its file waits here, so it can be copied");
         assert!(c.is_parkable());
+        assert!(c.actions.drag_out, "its file waits here, so it can be dragged out");
         let c = card(3).with_outcome(3, failed(false), None).unwrap();
         assert_eq!(c.actions, CardActions::default());
         assert!(!c.is_parkable());
@@ -737,8 +753,10 @@ mod tests {
                 "linkText": "Public link copied",
                 "linkNote": "Anyone with the link can view. Never expires.",
                 "actions": {
+                    "dragOut": true,
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "manageLink": true, "reveal": true, "upgrade": false, "edit": false
+                    "revokeLink": true, "manageLink": true, "reveal": true, "saveToDesktop": true,
+                    "upgrade": false, "edit": false
                 },
                 "settled": true
             })

@@ -43,6 +43,22 @@ name: ci
 #
 # Rust caches are SAVED only by pushes to staging, beta and main, never by a
 # PR (see rust-ci-setup); PRs restore their base branch's cache.
+#
+# Runners: the Linux jobs can run on our own GitHub Actions runners. Repo
+# variable CI_RUNS_ON_LINUX names the label (e.g. hippius-medium) and
+# CI_RUNS_ON_LINUX_LARGE the one for the Rust builds (e.g. hippius-large,
+# falling back to CI_RUNS_ON_LINUX); unset, every job stays on GitHub-hosted
+# ubuntu-latest, so deleting a variable switches back. This repo is public,
+# so a pull request from a FORK always runs hosted: our runners must never
+# execute code from outside the repo. Each Linux job repeats one guard:
+#   (github.event_name != 'pull_request' ||
+#    github.event.pull_request.head.repo.full_name == github.repository)
+#   && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest'
+# The only triggers here are `pull_request` and pushes to main/staging; a
+# trigger that runs outside code with repo rights (`pull_request_target`,
+# `workflow_run`, `issue_comment`) must never be added to this workflow.
+# macOS and Windows stay hosted, and so does `release-deps-linux`: it proves
+# the packages install on the exact ubuntu-22.04 image the releases build on.
 on:
   pull_request:
   push:
@@ -75,7 +91,7 @@ jobs:
   # the long-lived branches skip the gate entirely so every lane keeps full
   # post-merge coverage.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 10
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
@@ -190,7 +206,7 @@ jobs:
     # Skipped when the PR touches no Rust-relevant path (frontend-only PRs).
     # Pushes always run.
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -217,7 +233,7 @@ jobs:
   rust-linux-test:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -267,7 +283,7 @@ jobs:
   rust-linux:
     needs: [changes, rust-linux-clippy, rust-linux-test]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Both Linux halves passed
@@ -357,7 +373,7 @@ jobs:
   rust-macos:
     needs: [changes, rust-macos-clippy, rust-macos-test]
     if: ${{ !cancelled() }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Both macOS halves passed
@@ -677,7 +693,7 @@ jobs:
     # as capture-runtime-windows.
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -795,7 +811,7 @@ jobs:
     # `advisories bans sources` (the security-relevant checks); `licenses` is
     # configured in deny.toml but not yet enforced — see the [licenses] note
     # there for the sign-off it's blocked on.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -837,6 +853,11 @@ jobs:
           echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
           ssh-add ~/.ssh/private_git_key
 
+      # Our own runners may come without rustup; GitHub's images ship it.
+      - name: Install rustup (our runners)
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
       - name: Install cargo-deny
         uses: taiki-e/install-action@ace6ebe54a6a0c86dfb5f7764b17f793b6925bc3 # v2.82.3
         with:
@@ -853,13 +874,18 @@ jobs:
     # ONE file rewrote dozens of unrelated ones, because rustfmt walks the whole
     # module tree from the crate root. Keeping the tree clean keeps `cargo fmt`
     # safe to run on a single file.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      # Our own runners may come without rustup; GitHub's images ship it.
+      - name: Install rustup (our runners)
+        if: runner.environment == 'self-hosted'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
       # Only rustfmt is needed — no crate compilation, so this deliberately
       # skips the full rust-ci-setup (SSH keys, sqlx, caches) and stays fast.
@@ -873,16 +899,27 @@ jobs:
   actionlint:
     # Lint the workflow files themselves so a malformed/insecure workflow fails
     # CI instead of only failing at run time. actionlint also runs shellcheck on
-    # every `run:` script (the ubuntu runner ships shellcheck), which is what
-    # catches the unquoted-`$GITHUB_ENV` SC2086 class. Workflow SECURITY (vs
-    # correctness) is gated separately by the `zizmor` job below.
-    runs-on: ubuntu-latest
+    # every `run:` script when shellcheck is on PATH (installed below on our
+    # own runners), which is what catches the unquoted-`$GITHUB_ENV` SC2086
+    # class. Workflow SECURITY (vs correctness) is gated separately by the
+    # `zizmor` job below.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      # GitHub's ubuntu image ships shellcheck; our own runners may not.
+      - name: Install shellcheck (our runners)
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" update
+            bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends shellcheck
+          fi
 
       # actionlint is a Go binary, not a crate, so taiki-e/install-action can't
       # provide it (it fell back to cargo-binstall and errored). Install the
@@ -909,15 +946,26 @@ jobs:
     # nowhere except on a release push, where a typo is discovered by the release
     # failing. `-x` traces the resolved paths.
     #
-    # The ubuntu runner ships shellcheck, so unlike actionlint and zizmor there
-    # is no binary to fetch or pin here.
-    runs-on: ubuntu-latest
+    # GitHub's ubuntu image ships shellcheck and our own runners take it from
+    # the distribution, so unlike actionlint and zizmor there is no binary to
+    # fetch or pin here.
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           persist-credentials: false
+
+      # GitHub's ubuntu image ships shellcheck; our own runners may not.
+      - name: Install shellcheck (our runners)
+        if: runner.environment == 'self-hosted'
+        run: |
+          set -euo pipefail
+          if ! command -v shellcheck >/dev/null; then
+            bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" update
+            bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends shellcheck
+          fi
 
       - name: Lint shell scripts
         shell: bash
@@ -932,7 +980,7 @@ jobs:
     # pinned by SHA256 like actionlint. The single accepted finding (an uncached
     # setup-node in the release workflow) is justified inline with a
     # `# zizmor: ignore[cache-poisoning]` comment.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -955,7 +1003,7 @@ jobs:
         run: ./zizmor --offline --persona regular .github/workflows/
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - name: Checkout

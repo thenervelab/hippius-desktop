@@ -14,7 +14,7 @@ import {
 } from "@/app/lib/tray/trayRowActions";
 import { formatClipDuration, trayRowSubtitle } from "@/app/lib/tray/trayRowDisplay";
 import TrayRowMenu, { type TrayMenuAnchor } from "./TrayRowMenu";
-import { copyTrayRowLink, runTrayRowAction } from "./trayMainWindow";
+import { copyTrayRowLink, runTrayRowAction, saveTrayRowToDesktop } from "./trayMainWindow";
 import {
   forgetTrayThumbnail,
   useTrayThumbnail,
@@ -29,6 +29,7 @@ const FAILED_MS = 4000;
 type Feedback =
   | { kind: "working"; reusing: boolean }
   | { kind: "copied"; reused: boolean }
+  | { kind: "done"; message: string }
   | { kind: "failed"; message: string };
 
 /**
@@ -119,6 +120,11 @@ export default function TrayUploadRow({
     async (id: TrayRowActionId) => {
       if (id === "copy-link") {
         await copyLink();
+        return;
+      }
+      if (id === "save-to-desktop") {
+        const outcome = await saveTrayRowToDesktop(item, accountId);
+        showFeedback({ kind: outcome.saved ? "done" : "failed", message: outcome.message }, FAILED_MS);
         return;
       }
       const failure = await runTrayRowAction(
@@ -371,6 +377,12 @@ function RowSubtitle({
     );
   } else if (feedback?.kind === "copied") {
     content = <span className={`${base} text-[#04C870]`}>Link copied</span>;
+  } else if (feedback?.kind === "done") {
+    content = (
+      <span className={`${base} text-[#04C870]`} title={feedback.message}>
+        {feedback.message}
+      </span>
+    );
   } else if (feedback?.kind === "failed") {
     content = (
       <span className={`${base} text-[#FF6D61]`} title={feedback.message}>

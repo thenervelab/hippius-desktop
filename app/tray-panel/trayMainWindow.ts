@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Window } from "@tauri-apps/api/window";
 import { revealFile } from "@/app/lib/utils/revealFile";
+import { saveFileToDesktop } from "@/app/lib/utils/saveFileToDesktop";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import {
   TRAY_OPEN_UPLOAD_EVENT,
@@ -98,6 +99,29 @@ export async function runTrayRowAction(
   } catch (error) {
     console.error(`[TrayPanel] "${id}" failed:`, error);
     return errorSentence(error);
+  }
+}
+
+/**
+ * "Save to Desktop" on a row: Rust copies the file on this computer to the
+ * Desktop and says where; the row shows that sentence (or why not) in its
+ * subtitle's place, as it does for Copy link. The popover stays open.
+ */
+export async function saveTrayRowToDesktop(
+  item: UploadFeedItem,
+  accountId: string | null,
+): Promise<{ saved: true; message: string } | { saved: false; message: string }> {
+  try {
+    const message = await saveFileToDesktop({
+      sourcePath: item.source || undefined,
+      label: item.label,
+      accountId: accountId ?? undefined,
+      fileName: item.actualFileName || item.name,
+    });
+    return { saved: true, message };
+  } catch (error) {
+    console.error('[TrayPanel] "save-to-desktop" failed:', error);
+    return { saved: false, message: errorSentence(error) };
   }
 }
 
