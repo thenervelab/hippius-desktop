@@ -6,6 +6,7 @@ import {
   REFERRALS_FEATURE_ENABLED,
   SHARED_DRIVES_ENABLED,
 } from "@/app/lib/featureFlags";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 export interface SubMenuItemData {
   label: string;
@@ -40,15 +41,20 @@ export interface NavItemData {
 }
 
 export interface NavSection {
-  label: string;
+  key: string;
+  // The section's title. Left out, the section draws no heading: Overview
+  // stands on its own, as in the console's sidebar.
+  label?: string;
   items: NavItemData[];
 }
 
 const ICON_CLASS = "size-[18px]";
 
+// The product first, then your account, then help: one logic for this
+// sidebar and the console's, with the same names (#1081 in hippius-console).
 export const navSections: NavSection[] = [
   {
-    label: "ESSENTIALS",
+    key: "overview",
     items: [
       {
         label: "Overview",
@@ -59,14 +65,18 @@ export const navSections: NavSection[] = [
     ],
   },
   {
-    label: "INFRASTRUCTURE",
+    // A section title, not a collapsible menu: a Drive submenu would turn
+    // Drive into a toggle. The product name, as on the website.
+    key: "drive",
+    label: "DRIVE",
     items: [
       {
-        label: "Drive",
+        // "My" only because Shared Drives exists beside it.
+        label: "My Drive",
         path: "/files",
         icon: <Icons.Category className={ICON_CLASS} />,
       },
-      // Right under Drive, as the console orders them: the drives shared
+      // Right under My Drive, as the console orders them: the drives shared
       // with this account and the ones it shared, in one place. Its own row
       // for the same reason Captures is one.
       {
@@ -75,46 +85,51 @@ export const navSections: NavSection[] = [
         icon: <Users className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "sharedDrives",
       },
-      // Right under Drive, as its own row rather than a Drive submenu: a
-      // submenu would turn Drive into a toggle, and every capture is a file
-      // in a drive, so this reads as a view of Drive.
+      // In Drive, as its own row: every capture is a file in a drive, so
+      // this reads as a view of Drive.
       {
         label: "Captures",
         path: "/captures",
         icon: <Camera className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "capture",
       },
-      {
-        label: "Chat",
-        path: "/chat",
-        icon: <MessagesSquare className={ICON_CLASS} strokeWidth={1.5} />,
-        featureFlag: "chat",
-      },
-      // The "Confidential Computing" group and its single Virtual Machines
-      // child were removed here on 2026-09-08: the term is going from the
-      // product, and the group's only child is gated off by
-      // VM_FEATURE_ENABLED anyway, so it advertised a name we no longer use
-      // for a page that redirects. Restoring VM to the sidebar when the flag
-      // flips means adding a plain item under INFRASTRUCTURE — not the
-      // wrapper group, which is what collapsed into a link to a 404 when its
-      // only child was gated off. The /vm routes and their redirect are
-      // untouched.
     ],
   },
+  // The "Confidential Computing" group and its single Virtual Machines child
+  // were removed on 2026-09-08: the group's only child is gated off by
+  // VM_FEATURE_ENABLED, so it advertised a page that redirects. Restoring VM
+  // when the flag flips means a plain item after DRIVE, named as in the
+  // console (Confidential Compute > Virtual Machines) — not a wrapper group
+  // around one gated child, which is what collapsed into a link to a 404.
+  // The /vm routes and their redirect are untouched.
   {
+    key: "account",
     label: "ACCOUNT",
     items: [
-      // Subscription Plans and Billing were two adjacent entries for one
-      // subject split by tense — what you could buy vs what you have paid.
-      // Plan detail now lives under Billing, and Billing lives in
-      // Settings → Billing, so neither belongs in this sidebar. The
-      // /billing and /drive-plans routes still exist for deep links and
-      // for the upgrade prompts that push to them.
+      // Money first, then people, then referrals. One entry for plans and billing, named
+      // as in the console, that opens Settings → Billing, where the plan
+      // catalogue, the subscription and the credit balance all live; it left
+      // the settings list so it is not offered twice. The /billing and
+      // /drive-plans routes still exist for deep links.
+      {
+        label: "Plans & Billing",
+        path: BILLING_ROUTE,
+        icon: <Icons.CreditCard className={ICON_CLASS} />,
+      },
       {
         label: "Wallet",
         path: "/wallet",
         icon: <Icons.Wallet className={ICON_CLASS} />,
         featureFlag: "wallet",
+      },
+      // In Account, as in the console, with the parts of the account that
+      // are about other people. Untitled under DRIVE it read as a fourth
+      // Drive row.
+      {
+        label: "Chat",
+        path: "/chat",
+        icon: <MessagesSquare className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "chat",
       },
       {
         label: "Referrals",
@@ -125,6 +140,7 @@ export const navSections: NavSection[] = [
     ],
   },
   {
+    key: "support",
     label: "SUPPORT",
     items: [
       {
