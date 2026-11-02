@@ -2,7 +2,7 @@ import Link from "next/link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import cn from "@/app/lib/utils/cn";
 import { RevealTextLine } from "@/components/ui";
-import { ChevronDown } from "lucide-react";
+import { ArrowUpRight, ChevronDown } from "lucide-react";
 import { SubMenuItemData } from "./NavData";
 import { activeSubMenuItemAtom, sidebarCollapsedAtom, navReclickAtom } from "./sideBarAtoms";
 import { nextReclick } from "./navReclick";
@@ -110,6 +110,15 @@ const NavItem: React.FC<NavItemProps> = ({
           >
             {label}
           </span>
+
+          {/* Leaves the app for the system browser. */}
+          {external && (
+            <ArrowUpRight
+              aria-hidden
+              className="ml-1 size-3.5 flex-shrink-0 text-[#606060] opacity-60 dark:text-grey-dark-600"
+              strokeWidth={2}
+            />
+          )}
 
           {comingSoon && (
             <span className="text-[0.5625rem] text-amber-700 px-1.5 py-0.5 rounded-sm whitespace-nowrap absolute right-0 -top-1">

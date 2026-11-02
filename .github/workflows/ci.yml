@@ -966,7 +966,11 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 'lts/*'
+          # Pinned, not lts/*: Node 26 (LTS since late October) ships a global
+          # localStorage that is undefined unless started with a storage file,
+          # and it shadows jsdom's, so every test touching localStorage failed.
+          # Move on deliberately, with the tests passing on the new version.
+          node-version: '24'
 
       - name: Setup PNPM
         uses: pnpm/action-setup@eae0cfeb286e66ffb5155f1a79b90583a127a68b # v2.4.1

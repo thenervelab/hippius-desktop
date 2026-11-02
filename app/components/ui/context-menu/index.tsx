@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Download, Link2, Trash2, FolderOpen, Pencil, FolderInput } from "lucide-react";
+import { Copy, Download, Link2, Trash2, FolderOpen, Pencil, FolderInput } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -46,6 +46,9 @@ import {
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { copyLinkLabel, linkPathFor } from "@/app/components/page-sections/drive/existingLink";
+import { useExistingLinks } from "@/app/components/page-sections/drive/useExistingLinks";
+import { useCopyExistingLink } from "@/app/components/page-sections/drive/useCopyExistingLink";
 
 interface ContextMenuProps {
   x: number;
@@ -115,6 +118,10 @@ export default function FileContextMenu({
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const folderRolesEnabled = FOLDER_ROLES_ENABLED;
   const manageableMemberDriveLabels = useManageableMemberDriveLabels();
+  // Copy link for a file or folder that already has a live link, by the same
+  // lookup as the row's link icon and the three-dots menu.
+  const { linkFor } = useExistingLinks();
+  const copyExistingLink = useCopyExistingLink();
 
   useEffect(() => {
     setMounted(true);
@@ -168,6 +175,9 @@ export default function FileContextMenu({
 
   const { url: folderUrl } = generateFolderUrl(file, getParam, undefined, driveRoute.basePath);
   const fileManagerName = fileManagerLabel();
+
+  const linkPath = linkPathFor(file, basePath);
+  const existingLink = linkFor(file, linkPath);
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
@@ -251,6 +261,21 @@ export default function FileContextMenu({
               </button>
             ) : null;
           })()}
+
+          {/* Copy link: the link this file or folder already has, above
+              Share via link (which makes a new one). */}
+          {existingLink && (
+            <button
+              className={menuItemClass}
+              onClick={() => {
+                copyExistingLink(existingLink, { file, relativePath: linkPath });
+                onClose();
+              }}
+            >
+              <Copy className="size-4" />
+              <span>{copyLinkLabel(existingLink)}</span>
+            </button>
+          )}
 
           {/*
             Share via link — appears when the server advertises `shares: true`,
