@@ -3173,6 +3173,7 @@ async fn finish_screenshot(app: &AppHandle, selection: Selection) -> Result<()> 
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Screenshot).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
@@ -3273,6 +3274,7 @@ async fn take_with_system_picker(app: &AppHandle) -> Result<bool> {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Screenshot).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(true)
@@ -4420,6 +4422,25 @@ fn capture_blocking(_selection: Selection) -> Result<image::RgbaImage> {
 
 // ── Delivering ──────────────────────────────────────────────────────────────
 
+/// "Also save a copy to the Desktop": copy a new capture there before its
+/// delivery moves it into the drive, when the options ask for that kind
+/// ([`bar::CaptureOptions::copies_to_desktop`]). Only fresh captures, never a
+/// retry. A copy that fails is logged and the capture is delivered as usual:
+/// the Desktop copy is a convenience, the drive is the capture.
+async fn copy_new_capture_to_desktop(app: &AppHandle, path: &Path, kind: CaptureKind) {
+    let state = app.state::<AppState>();
+    let Ok(pool) = state.pool() else { return };
+    if !bar::load_options(pool).await.is_ok_and(|o| o.copies_to_desktop(kind)) {
+        return;
+    }
+    let source = path.to_path_buf();
+    match tauri::async_runtime::spawn_blocking(move || crate::utils::desktop_copy::save_to_desktop(&source)).await {
+        Ok(Ok(saved)) => tracing::info!(name = ?saved.file_name(), "capture: a copy was saved to the Desktop"),
+        Ok(Err(e)) => tracing::warn!(error = %e, "capture: the Desktop copy was not saved"),
+        Err(e) => tracing::warn!(error = %e, "capture: the Desktop copy task failed"),
+    }
+}
+
 /// Upload the capture and mint its link, then say how it went: on the preview
 /// card when one is showing (`card_id`), and as a system notification only
 /// when the upload failed, since the card already shows a success.
@@ -5148,6 +5169,7 @@ pub(crate) async fn stop_inner(app: &AppHandle) -> Result<()> {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        copy_new_capture_to_desktop(&app, &path, CaptureKind::Recording).await;
         deliver_and_announce(&app, &path, card_id).await;
     });
     Ok(())
@@ -5963,6 +5985,21 @@ pub async fn capture_preview_reveal(state: tauri::State<'_, AppState>) -> Result
     tauri::async_runtime::spawn_blocking(move || crate::utils::reveal::reveal_path(&path))
         .await
         .map_err(|e| AppError::Other(format!("Reveal cancelled: {e}")))?
+}
+
+/// Save to Desktop on the card: a copy of the capture's file on this
+/// computer (in its drive folder, or the copy kept while it uploads) goes to
+/// the Desktop under its own name, numbered past one already there. The
+/// capture in Hippius and its link are untouched. Returns the sentence the
+/// card shows.
+#[tauri::command]
+pub async fn capture_preview_save_to_desktop(state: tauri::State<'_, AppState>) -> Result<String> {
+    let card = card_for(&state.capture, |c| c.actions.save_to_desktop, "This capture isn't on this computer.")?;
+    let source = card.placed_path.filter(|p| p.is_file()).unwrap_or(card.file_path);
+    let saved = tauri::async_runtime::spawn_blocking(move || crate::utils::desktop_copy::save_to_desktop(&source))
+        .await
+        .map_err(|e| AppError::Other(format!("Copy cancelled: {e}")))??;
+    Ok(crate::utils::desktop_copy::saved_line(&saved))
 }
 
 /// Throw away a capture that could not be uploaded: its file is deleted and

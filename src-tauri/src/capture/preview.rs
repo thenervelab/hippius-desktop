@@ -126,6 +126,10 @@ pub struct CardActions {
     pub manage_link: bool,
     /// Reveal the file in Finder / Explorer (a drive synced here).
     pub reveal: bool,
+    /// Put a copy of the file on the Desktop: a file of this capture is on
+    /// this computer (placed in its drive, kept for a link, or waiting to
+    /// be sent again).
+    pub save_to_desktop: bool,
     /// Open the storage plans in the main window: the upload failed because
     /// the plan is full, which Retry alone cannot fix, or a Free plan
     /// recording stopped at its length limit.
@@ -354,6 +358,7 @@ impl PreviewCard {
             revoke_link: has_link && self.share_token.is_some(),
             manage_link: has_link && self.share_token.is_some(),
             reveal: !self.remote && (in_drive || kept_here) && self.placed_path.is_some(),
+            save_to_desktop: self.placed_path.is_some() || retryable,
             upgrade: self.stopped_at_free_limit
                 || matches!(
                     self.status,
@@ -584,6 +589,7 @@ mod tests {
                 revoke_link: true,
                 manage_link: true,
                 reveal: true,
+                save_to_desktop: true,
                 ..CardActions::default()
             }
         );
@@ -606,6 +612,7 @@ mod tests {
             c.actions,
             CardActions {
                 mint_link: true,
+                save_to_desktop: true,
                 ..CardActions::default()
             }
         );
@@ -613,6 +620,7 @@ mod tests {
         // A failed direct upload: retry or discard; a failed sync: nothing.
         let c = card(3).with_outcome(3, failed(true), None).unwrap();
         assert!(c.actions.retry && c.actions.discard && !c.actions.mint_link);
+        assert!(c.actions.save_to_desktop, "its file waits here, so it can be copied");
         assert!(c.is_parkable());
         let c = card(3).with_outcome(3, failed(false), None).unwrap();
         assert_eq!(c.actions, CardActions::default());
@@ -738,7 +746,8 @@ mod tests {
                 "linkNote": "Anyone with the link can view. Never expires.",
                 "actions": {
                     "retry": false, "discard": false, "copyLink": true, "mintLink": false,
-                    "revokeLink": true, "manageLink": true, "reveal": true, "upgrade": false, "edit": false
+                    "revokeLink": true, "manageLink": true, "reveal": true, "saveToDesktop": true,
+                    "upgrade": false, "edit": false
                 },
                 "settled": true
             })
