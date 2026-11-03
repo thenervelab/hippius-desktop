@@ -329,10 +329,4 @@ async fn the_gate_follows_the_servers_preflight_verdict() {
         "a server refusal wins over a roomy-looking plan",
     )
     .await;
-
-    // SAFETY: same argument as the `set_var` above: this is the binary's
-    // only test, so nothing else reads the variable.
-    unsafe {
-        std::env::remove_var("HIPPIUS_API_BASE_URL");
-    }
 }

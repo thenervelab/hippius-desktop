@@ -248,10 +248,4 @@ async fn require_eligible_enforces_thresholds_against_mock_billing_api() {
         matches!(err, AppError::NotReady(NotReadyKind::InsufficientCredits)),
         "expected NotReady(InsufficientCredits), got {err:?}",
     );
-
-    // SAFETY: same argument as the `set_var` above: this is the binary's
-    // only test, so nothing else reads the variable.
-    unsafe {
-        std::env::remove_var("HIPPIUS_API_BASE_URL");
-    }
 }
