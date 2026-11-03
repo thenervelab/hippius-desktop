@@ -63,6 +63,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The beta channel dialog is calmer.** Switching to or from beta uses the app's usual blue style instead of a yellow warning, with shorter wording that still says beta builds are not fully stabilized.
+
 - **Blocking someone on a share link now marks all of their comments.** In Insights, every comment that person wrote under a name shows as Blocked, and Unblock on any of them lifts it for all. Blocks also still show after you close and reopen Insights. A comment someone left anonymously is only marked when you block through that comment.
 - **A clear message when your plan doesn't include a link setting.** If Hippius turns down switching on Insights, Comments or Reactions because your Drive plan doesn't include them, you now see that they come with paid Drive plans instead of a connection error.
 - **A tidier sidebar, laid out like the web app's.** Drive is its own section with My Drive, Shared Drives and Captures. Plans & Billing moves out of Settings into Account, above Wallet and Referrals. Documentation shows that it opens in your browser, and Settings puts related options together.

@@ -38,7 +38,7 @@ const CHANNEL_LABELS: Record<ReleaseChannel, string> = {
  * wording turns a warning into marketing, which is why a test pins it.
  */
 const JOIN_DESCRIPTION =
-  "The beta channel follows the development work. You get the newest features first, and those features are not fully stabilized — expect rough edges and more frequent updates. You can go back to the stable version at any time from Settings.";
+  "You get the newest features first. They are not fully stabilized, so expect rough edges. You can go back to the stable version at any time in Settings.";
 
 const LEAVE_DESCRIPTION =
   "You will move back to the stable version, which changes less often and is more thoroughly tested.";
