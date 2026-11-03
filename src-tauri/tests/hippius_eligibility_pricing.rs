@@ -240,6 +240,8 @@ async fn require_eligible_prices_uploads_by_byte_count() {
         .await
         .expect("upload passes when the balance covers the old priced cost too");
 
+    // SAFETY: same argument as the `set_var` above: this is the binary's
+    // only test, so nothing else reads the variable.
     unsafe {
         std::env::remove_var("HIPPIUS_API_BASE_URL");
     }

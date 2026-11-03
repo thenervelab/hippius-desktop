@@ -311,7 +311,13 @@ fn another_hippius_running(identifier: &str) -> bool {
         }
         // SAFETY: `s` is a non-nil NSString; UTF8String is valid while it lives.
         let c: *const std::os::raw::c_char = unsafe { msg_send![s, UTF8String] };
-        (!c.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(c) }.to_string_lossy().into_owned())
+        if c.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null, NUL-terminated UTF8String buffer, read before
+        // `s` can be released.
+        let text = unsafe { std::ffi::CStr::from_ptr(c) };
+        Some(text.to_string_lossy().into_owned())
     };
     objc::rc::autoreleasepool(|| {
         // SAFETY: read-only NSWorkspace / NSRunningApplication queries, which

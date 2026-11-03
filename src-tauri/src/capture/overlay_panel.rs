@@ -356,9 +356,9 @@ mod imp {
     /// Turn `ns_window` into a non-activating panel, or say why not. Main
     /// thread only.
     unsafe fn convert(ns_window: *mut Object) -> Result<(), Refusal> {
-        // SAFETY (whole function): `ns_window` is a live NSWindow touched on
-        // the main thread; every call is plain AppKit or the ObjC runtime on
-        // it and its own content view.
+        // SAFETY: this function's contract is a live `ns_window` on the main
+        // thread; every call below is plain AppKit or the ObjC runtime on it
+        // and its own content view.
         unsafe {
             let panel_kind: BOOL = msg_send![ns_window, isKindOfClass: class!(NSPanel)];
             if panel_kind == YES {

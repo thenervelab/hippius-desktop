@@ -2018,6 +2018,8 @@ mod tests {
 
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2110,6 +2112,8 @@ mod tests {
     async fn reencrypt_returns_err_naming_failed_folder_but_rewrites_others() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2137,6 +2141,8 @@ mod tests {
     async fn align_drive_password_does_not_flip_db_when_a_folder_fails() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2332,6 +2338,8 @@ mod tests {
     async fn validate_master_ignores_member_drive_seals() {
         let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2353,6 +2361,8 @@ mod tests {
     async fn validate_master_still_refuses_a_wrong_own_folder_seal() {
         let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2376,6 +2386,8 @@ mod tests {
     async fn probe_folder_seals_confirms_own_and_skips_member() {
         let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2398,6 +2410,8 @@ mod tests {
     async fn probe_folder_seals_mismatch_on_wrong_own_seal() {
         let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2458,6 +2472,8 @@ mod tests {
     async fn prove_master_oauth_own_seal_skips_member_and_confirms() {
         let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2482,6 +2498,8 @@ mod tests {
         // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }

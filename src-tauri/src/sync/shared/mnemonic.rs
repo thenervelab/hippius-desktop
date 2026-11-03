@@ -1160,6 +1160,8 @@ mod tests {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         // `config_dir_for_folder` and the account_id hashing path look at $HOME.
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -1254,6 +1256,8 @@ mod tests {
 
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -1278,6 +1282,8 @@ mod tests {
 
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }

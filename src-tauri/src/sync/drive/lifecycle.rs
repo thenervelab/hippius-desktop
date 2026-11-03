@@ -3055,6 +3055,8 @@ mod tests {
     fn clear_persisted_sync_state_removes_baseline_files() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -3098,6 +3100,8 @@ mod tests {
     fn clear_persisted_sync_state_tolerates_missing_files() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -3393,6 +3397,8 @@ mod tests {
     fn prepare_config_dir_member_gate_preserves_the_owner_seal() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }

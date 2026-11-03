@@ -89,6 +89,9 @@ static TEST_HOME: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock:
     let dir = tempfile::TempDir::new().expect("home tempdir");
     let path = dir.path().to_path_buf();
     std::mem::forget(dir);
+    // SAFETY: LazyLock runs this once per process, and every test in this
+    // binary that reads what is set here forces TEST_HOME first, so no
+    // test reads it mid-write.
     unsafe {
         std::env::set_var("HOME", &path);
         std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");

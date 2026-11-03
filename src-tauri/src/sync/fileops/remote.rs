@@ -2036,6 +2036,8 @@ mod tests {
     async fn member_encryption_key_comes_from_the_sealed_folder_mnemonic() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2087,6 +2089,8 @@ mod tests {
     async fn a_member_drive_with_no_seal_reaches_for_the_grant_not_this_accounts_master() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
@@ -2133,6 +2137,8 @@ mod tests {
     async fn the_two_own_drive_key_chains_agree() {
         let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
+        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
+        // (test_helpers.rs), so no other test thread changes it while this runs.
         unsafe {
             std::env::set_var("HOME", tmp.path());
         }
