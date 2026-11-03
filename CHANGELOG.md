@@ -19,7 +19,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 Capture works over full-screen apps on Mac, a screenshot or recording can be saved to your Desktop,
 and dragging a capture from its card drops the file itself into Slack, Mattermost, WhatsApp, Mail or Finder.
-Screenshots & Recording settings are grouped so each one is easy to find, and blocking someone on a share link marks all of their comments.
+Insights has a cleaner layout, Screenshots & Recording settings are grouped so each one is easy to find,
+and blocking someone on a share link marks all of their comments.
 
 ### Added
 
@@ -28,6 +29,7 @@ Screenshots & Recording settings are grouped so each one is easy to find, and bl
 
 ### Changed
 
+- **A cleaner Insights panel.** It shows the file's name, a larger preview, the link with a Copy link button, then views, viewers and comments (or how much of a recording people watched) in one row, with Comments, Viewers and Reactions as tabs below. Each thing appears once, and a switch you turned off is named under the title.
 - **Screenshots & Recording settings are easier to find your way around.** Settings are now grouped under Shortcuts, Saving, Sharing and Recording, each with a short line saying what it does, and every switch sits in the same place on the right. Choices that depend on another, like including recordings in Desktop copies, sit right under the one they belong to.
 - **Blocking someone on a share link now marks all of their comments.** In Insights, every comment that person wrote under a name shows as Blocked, and Unblock on any of them lifts it for all. Blocks also still show after you close and reopen Insights. A comment someone left anonymously is only marked when you block through that comment.
 - **A clear message when your plan doesn't include a link setting.** If Hippius turns down switching on Insights, Comments or Reactions because your Drive plan doesn't include them, you now see that they come with paid Drive plans instead of a connection error.

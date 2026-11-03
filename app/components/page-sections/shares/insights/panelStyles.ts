@@ -9,8 +9,13 @@ export const DIVIDE = "divide-grey-80 dark:divide-white/10";
 export const SKELETON = "animate-pulse rounded bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500";
 export const BAR_TRACK = "h-1 overflow-hidden rounded-full bg-grey-90 dark:bg-[#333]";
 export const BAR_FILL = "h-full rounded-full bg-primary-50 dark:bg-primary-brand-dark";
-// A quiet card on the panel's background, the side panels' pill tone.
-export const CARD = "rounded-[12px] bg-[#0000000A] dark:bg-white/[0.04]";
+// The quiet fill on the panel's background, the side panels' pill tone.
+export const FILL = "bg-[#0000000A] dark:bg-white/[0.04]";
+// A quiet card on the panel's background.
+export const CARD = cn("rounded-[12px]", FILL);
+// The hairline drawn as a ring, for boxes that sit flush in a column (the
+// preview, the link field, the numbers), so it adds no width to them.
+export const RING = "ring-1 ring-inset ring-grey-80 dark:ring-white/10";
 export const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40";
 export const TEXT_LINK = cn(
   "inline-flex items-center gap-1 rounded text-[12.5px] font-medium text-primary-50 hover:underline",

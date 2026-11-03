@@ -15,7 +15,6 @@ import {
   blockedAuthorKeys,
   blockSubject,
   isCommentBlocked,
-  emptyInsightsCopy,
   estimateDurationMs,
   formatAgo,
   formatMomentAt,
@@ -26,7 +25,7 @@ import {
   sortThreads,
   threadsMentioningYou,
   switchOffLine,
-  switchPills,
+  switchesOffLine,
   tabLabel,
   viewerName,
   visibleReplies,
@@ -176,8 +175,8 @@ describe("the tabs", () => {
     expect(defaultInsightsTab(0)).toBe("viewers");
   });
   it("puts the count in the label once it is known", () => {
-    expect(tabLabel("Comments", 20)).toBe("Comments (20)");
-    expect(tabLabel("Viewers", 0)).toBe("Viewers (0)");
+    expect(tabLabel("Comments", 20)).toBe("Comments 20");
+    expect(tabLabel("Viewers", 0)).toBe("Viewers 0");
     expect(tabLabel("Viewers", null)).toBe("Viewers");
   });
 });
@@ -243,22 +242,25 @@ describe("visibleReplies", () => {
   });
 });
 
-describe("the switches' status row", () => {
+describe("the switches, in the header's line and the tabs", () => {
   const all = { insights: true, comments: true, reactions: true };
   const on = { insights: true, comments: false, reactions: true };
-  it("draws a pill per switch the server takes, on or off, in order", () => {
-    expect(switchPills({ offered: all, on })).toEqual([
-      { key: "insights", label: "Insights", on: true },
-      { key: "comments", label: "Comments", on: false },
-      { key: "reactions", label: "Reactions", on: true },
-    ]);
-    expect(switchPills({ offered: { insights: true, comments: false, reactions: false }, on }).map((p) => p.key)).toEqual([
-      "insights",
-    ]);
+  it("names every switch that is off, in order, and nothing while all are on", () => {
+    expect(switchesOffLine({ offered: all, on: all })).toBeNull();
+    expect(switchesOffLine({ offered: all, on })).toBe("Comments off");
+    expect(switchesOffLine({ offered: all, on: { insights: false, comments: false, reactions: true } })).toBe(
+      "Insights and comments off",
+    );
+    // A free plan's link has all three off.
+    expect(switchesOffLine({ offered: all, on: { insights: false, comments: false, reactions: false } })).toBe(
+      "Insights, comments and reactions off",
+    );
   });
-  it("draws none when Link settings would draw no switches", () => {
-    expect(switchPills(null)).toEqual([]);
-    expect(switchPills({ offered: { insights: false, comments: true, reactions: true }, on })).toEqual([]);
+  it("names only switches the server takes, and none when Link settings would draw none", () => {
+    const off = { insights: false, comments: false, reactions: false };
+    expect(switchesOffLine({ offered: { insights: true, comments: false, reactions: false }, on: off })).toBe("Insights off");
+    expect(switchesOffLine(null)).toBeNull();
+    expect(switchesOffLine({ offered: { insights: false, comments: true, reactions: true }, on: off })).toBeNull();
   });
   it("gives a tab its one line only while its switch is off", () => {
     expect(switchOffLine({ offered: all, on }, "comments")).toBe("Comments are off, so viewers can't add new ones.");
@@ -293,18 +295,6 @@ describe("headerLine and formatAgo", () => {
     expect(formatAgo("2026-10-18T12:00:00Z", now)).toBe("3d");
     expect(formatAgo("2026-10-01T12:00:00Z", now)).toBe("Oct 1");
     expect(formatAgo("not a date", now)).toBe("");
-  });
-});
-
-describe("emptyInsightsCopy", () => {
-  it("mentions comments and reactions only where the server has them", () => {
-    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: true }).body).toMatch(/comments and reactions/);
-    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: false }).body).not.toMatch(/comments/);
-  });
-  it("says a link that is not counting views is not, rather than that nobody came", () => {
-    const copy = emptyInsightsCopy({ notCounting: true, commentsEnabled: false });
-    expect(copy.title).toBe("Not counting views");
-    expect(copy.body).not.toMatch(/Nobody/);
   });
 });
 
@@ -377,7 +367,6 @@ describe("what Insights promise the owner", () => {
   it("never says the owner sees who viewed or watched", async () => {
     const view = await import("../insightsView");
     const words: string[] = (Object.values(view) as unknown[]).filter((v): v is string => typeof v === "string");
-    for (const commentsEnabled of [true, false]) words.push(view.emptyInsightsCopy({ notCounting: true, commentsEnabled }).body);
     for (const video of [true, false])
       for (const notCounting of [true, false]) words.push(...Object.values(view.lockCopy({ video, notCounting })));
     for (const w of words) expect(w).not.toMatch(/\bwho (viewed|watched|watches|views|opened)\b/i);

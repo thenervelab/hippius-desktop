@@ -3,11 +3,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { useQueryClient } from "@tanstack/react-query";
-import { Copy, Eye, EyeOff, Link2, Lock } from "lucide-react";
+import { Copy, Eye, EyeOff, Lock } from "lucide-react";
 import { toast } from "sonner";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { SHARES_QUERY_KEY, useSharedFiles } from "@/app/lib/hooks/useSharedFiles";
 import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
@@ -25,9 +25,7 @@ import {
   maskedLink,
   type PanelLink,
 } from "./panelLinkMedia";
-import { HAIRLINE, ICON_BUTTON, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
-
-const TIP = "z-[60] max-w-[240px] bg-grey-10 text-white dark:bg-white dark:text-grey-10";
+import { FILL, ICON_BUTTON, MUTED, RING, SKELETON } from "./panelStyles";
 
 /**
  * Whether Hippius is locked on this computer. When it unlocks, the share
@@ -65,111 +63,65 @@ async function copy(url: string) {
 }
 
 /**
- * The header's Copy link button, beside Link settings. Locked, it opens the
- * unlock; with no key on this computer it says why it can't copy.
- */
-export function CopyLinkButton({ link }: { link: PanelLink }) {
-  if (link.kind === "loading") return null;
-  if (link.kind === "locked") return <UnlockCopyButton />;
-  const ready = link.kind === "ready";
-  const tip = ready ? COPY_LINK : LINK_UNAVAILABLE_NOTE;
-  return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={COPY_LINK}
-            aria-disabled={ready ? undefined : true}
-            onClick={() => {
-              if (ready) void copy(link.url);
-            }}
-            className={cn(ICON_BUTTON, !ready && "cursor-not-allowed opacity-50 hover:bg-transparent")}
-            data-testid="insights-copy-link"
-          >
-            <Copy className="size-4" aria-hidden />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className={TIP}>
-          {tip}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-function UnlockCopyButton() {
-  const { unlock, busy } = useUnlockFlow();
-  return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`${COPY_LINK}: ${UNLOCK_TO_COPY.toLowerCase()}`}
-            aria-busy={busy || undefined}
-            onClick={() => void unlock()}
-            className={ICON_BUTTON}
-            data-testid="insights-copy-link"
-          >
-            <Copy className="size-4" aria-hidden />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className={TIP}>
-          {LINK_LOCKED_NOTE}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-/**
- * The link itself, under the header's title. The full link is hidden until
- * the owner asks for it (the panel is often on screen while recording), and
- * the Copy button copies it either way. Locked, the link is dots with "Unlock
- * to copy"; with no key on this computer, dots and why.
+ * The link itself, under the capture's preview: one filled row with the link
+ * and a Copy link button. The full link is hidden until the owner asks for it
+ * (the panel is often on screen while recording), and Copy copies it either
+ * way; it is drawn without its `https://`. Locked, the link is dots with
+ * "Unlock to copy" in Copy's place; with no key on this computer, dots and
+ * why.
  */
 export function LinkField({ link }: { link: PanelLink }) {
   const [shown, setShown] = useState(false);
   if (link.kind === "loading") {
-    return <div aria-hidden data-testid="insights-link-loading" className={cn(SKELETON, "mt-2.5 h-8 rounded-[8px]")} />;
+    return <div aria-hidden data-testid="insights-link-loading" className={cn(SKELETON, "h-10 rounded-[10px]")} />;
   }
-  const box = cn("flex min-h-8 min-w-0 flex-1 items-center gap-2 rounded-[8px] border px-2.5 py-1.5 text-xs", HAIRLINE);
+  const box = cn("flex h-10 min-w-0 items-center gap-1.5 rounded-[10px] pl-3 pr-1 text-[13px]", FILL, RING);
   if (link.kind === "ready") {
+    const full = link.url.replace(/^https?:\/\//, "");
     return (
-      <div className="mt-2.5" data-testid="insights-link">
+      <div data-testid="insights-link">
         <div className={box}>
-          <Link2 className={cn("size-3.5 shrink-0", MUTED)} aria-hidden />
           <span className="sr-only">Link: </span>
           <span
-            className={cn("min-w-0 flex-1 select-text font-mono text-[11.5px]", STRONG, shown ? "break-all" : "truncate")}
+            className={cn("min-w-0 flex-1 select-text truncate", MUTED)}
+            title={shown ? full : undefined}
             data-testid="insights-link-text"
           >
-            {shown ? link.url : maskedLink(link.url)}
+            {shown ? full : maskedLink(link.url)}
           </span>
           <button
             type="button"
             aria-label={shown ? HIDE_LINK : SHOW_LINK}
             title={shown ? HIDE_LINK : SHOW_LINK}
             onClick={() => setShown((v) => !v)}
-            className={cn(ICON_BUTTON, "size-6 rounded-md")}
+            className={cn(ICON_BUTTON, "size-7 rounded-md")}
           >
             {shown ? <EyeOff className="size-3.5" aria-hidden /> : <Eye className="size-3.5" aria-hidden />}
           </button>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => void copy(link.url)}
+            className={COPY_BUTTON}
+            data-testid="insights-copy-link"
+          >
+            <Copy className="size-3.5" aria-hidden />
+            {COPY_LINK}
+          </Button>
         </div>
         {link.needsPassword && <p className={cn("mt-1.5 text-xs leading-[1.45]", MUTED)}>{LINK_NEEDS_PASSWORD}</p>}
       </div>
     );
   }
   return (
-    <div className="mt-2.5" data-testid="insights-link">
-      <div className={box}>
+    <div data-testid="insights-link">
+      <div className={cn(box, link.kind === "unavailable" && "pr-3")}>
         <Lock className={cn("size-3.5 shrink-0", MUTED)} aria-hidden />
         <span className="sr-only">Link hidden</span>
-        <span aria-hidden className={cn("min-w-0 flex-1 truncate font-mono text-[11.5px]", MUTED)}>
+        <span aria-hidden className={cn("min-w-0 flex-1 truncate", MUTED)}>
           {HIDDEN_DOTS}
         </span>
-        {link.kind === "locked" && <UnlockLink />}
+        {link.kind === "locked" && <UnlockButton />}
       </div>
       <p className={cn("mt-1.5 text-xs leading-[1.45]", MUTED)}>
         {link.kind === "locked" ? LINK_LOCKED_NOTE : LINK_UNAVAILABLE_NOTE}
@@ -178,17 +130,21 @@ export function LinkField({ link }: { link: PanelLink }) {
   );
 }
 
-function UnlockLink() {
+/** Copy link, inside the link's row. */
+const COPY_BUTTON = "h-8 shrink-0 gap-1.5 rounded-[7px] px-3 text-[13px] font-medium";
+
+function UnlockButton() {
   const { unlock, busy } = useUnlockFlow();
   return (
-    <button
-      type="button"
+    <Button
+      variant="primary"
+      size="sm"
       onClick={() => void unlock()}
       disabled={busy}
       aria-busy={busy || undefined}
-      className={cn(TEXT_LINK, "shrink-0 whitespace-nowrap")}
+      className={COPY_BUTTON}
     >
       {UNLOCK_TO_COPY}
-    </button>
+    </Button>
   );
 }
