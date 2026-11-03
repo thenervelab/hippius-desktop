@@ -7,12 +7,12 @@ import { toast } from "sonner";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { getSavePreference, setSavePreference, type SavePreference } from "@/app/lib/tauri/captureEditor";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { SettingIcon } from "./SettingIcon";
+import { SettingRow } from "./SettingRow";
 
 const OPTIONS: { value: SavePreference; label: string }[] = [
   { value: "ask", label: "Ask" },
   { value: "copy", label: "Save a copy" },
-  { value: "replace", label: "Replace the original" },
+  { value: "replace", label: "Replace" },
 ];
 
 /**
@@ -20,7 +20,7 @@ const OPTIONS: { value: SavePreference; label: string }[] = [
  * copy, or always replace. The same choice the save dialog's "Remember my
  * choice" stores; Rust keeps it (`capture_editor_save_preference`).
  */
-export default function EditedImageSetting({ rowClassName }: { rowClassName: string }) {
+export default function EditedImageSetting() {
   const [value, setValue] = useState<SavePreference | null>(null);
 
   useEffect(() => {
@@ -43,19 +43,12 @@ export default function EditedImageSetting({ rowClassName }: { rowClassName: str
   };
 
   return (
-    <div className={rowClassName}>
-      <div className="flex min-w-0 items-start gap-3">
-        <SettingIcon>
-          <PenLine className="size-[18px]" strokeWidth={2} />
-        </SettingIcon>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-grey-10 dark:text-white">When saving an edited image</p>
-          <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-            Keep the original and save a copy beside it, or write over the original.
-          </p>
-        </div>
-      </div>
-      <div className="w-full sm:w-auto">
+    <SettingRow
+      wide
+      icon={<PenLine className="size-[18px]" strokeWidth={2} />}
+      title="When saving an edited image"
+      description="What Save does in the screenshot editor."
+      control={
         <SegmentedControl
           ariaLabel="When saving an edited image"
           options={OPTIONS}
@@ -65,7 +58,7 @@ export default function EditedImageSetting({ rowClassName }: { rowClassName: str
           fullWidth
           showActiveIndicator={false}
         />
-      </div>
-    </div>
+      }
+    />
   );
 }
