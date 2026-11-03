@@ -101,7 +101,7 @@ fn uploading_file(path: &str, label: &str, size: u64, transferred: u64) -> SyncF
 
 /// Seed the runner's `current_session` with a single in-flight file.
 fn seed_single_file(sync: &SyncRunner, file: SyncFile) {
-    let mut state = sync.progress.lock_state();
+    let mut state = sync.progress().lock_state();
     let mut files = std::collections::HashMap::new();
     files.insert(file.path.to_string(), file);
     state.current_session = Some(SyncSession {
@@ -140,7 +140,7 @@ fn mark_file_failed_flips_snapshot_status_to_error_immediately() {
     mark_file_failed(&sync, "over-budget.bin", "insufficient_balance: 12¢ < 100¢")
         .expect("mark_file_failed should not error on a well-formed session");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     let row = snapshot
         .files
         .iter()
@@ -277,7 +277,7 @@ fn second_failure_for_same_path_does_not_overwrite_first_error() {
     mark_file_failed(&sync, "paid.txt", "first: insufficient_balance").expect("first call");
     mark_file_failed(&sync, "paid.txt", "second: network_timeout").expect("second call");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     let row = snapshot.files.iter().find(|f| f.path.as_ref() == "paid.txt").expect("row");
     assert_eq!(
         row.error.as_deref(),
@@ -301,7 +301,7 @@ fn mark_file_failed_with_unknown_path_is_a_noop() {
 
     mark_file_failed(&sync, "ghost-path-not-in-session.bin", "should be ignored").expect("must not error when the path is missing — race-safe no-op");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     assert_eq!(snapshot.failed_files, 0, "no row was flipped; failed_files must stay at 0");
     let row = snapshot
         .files

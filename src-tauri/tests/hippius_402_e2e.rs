@@ -126,7 +126,7 @@ fn uploading_file(path: &str, label: &str, total: u64, transferred: u64) -> Sync
 /// cycle: it counts expected uploads and registers each file as
 /// `Pending` / `Uploading` before any per-file event fires.
 fn seed_one_upload(sync: &SyncRunner, file: SyncFile, session_id: &'static str) {
-    let mut state = sync.progress.lock_state();
+    let mut state = sync.progress().lock_state();
     let mut files = std::collections::HashMap::new();
     files.insert(file.path.to_string(), file);
     state.current_session = Some(SyncSession {
@@ -152,7 +152,7 @@ fn seed_one_upload(sync: &SyncRunner, file: SyncFile, session_id: &'static str) 
 /// path the production runner uses — a refactor that removes or renames
 /// it breaks this test.
 fn end_cycle(sync: &SyncRunner) {
-    let mut state = sync.progress.lock_state();
+    let mut state = sync.progress().lock_state();
     state.current_session = None;
 }
 
@@ -179,10 +179,11 @@ fn end_cycle(sync: &SyncRunner) {
 ///    `SyncStarted`-handler resets the per-label counter on next cycle).
 ///
 /// The end-of-cycle assertions inspect:
-/// - `sync.progress.build_snapshot()` for `failed_files` and per-row
+/// - `sync.progress().build_snapshot()` for `failed_files` and per-row
 ///   `status == FileProgressStatus::Error` (cycle 1) or `Completed`
 ///   (cycle 3),
-/// - `sync.pending_activity` for `SyncActivityAction::Uploaded` rows
+/// - `sync.get_sync_activity` (the pending items, as nothing is committed
+///   here) for `SyncActivityAction::Uploaded` rows
 ///   (must be empty after a 402, exactly one after a 200),
 /// - `CreditsExhaustedState::count_for` for the per-label banner count.
 ///
@@ -264,7 +265,7 @@ async fn three_cycle_402_402_200_full_chain() {
     );
 
     {
-        let snapshot = sync.progress.build_snapshot();
+        let snapshot = sync.progress().build_snapshot();
         let row = snapshot
             .files
             .iter()
@@ -294,11 +295,7 @@ async fn three_cycle_402_402_200_full_chain() {
         );
     }
 
-    let pending_after_cycle_1 = sync
-        .pending_activity
-        .lock()
-        .expect("pending_activity mutex uncontended in this test")
-        .len();
+    let pending_after_cycle_1 = sync.get_sync_activity(None, None).len();
     assert_eq!(
         pending_after_cycle_1, 0,
         "cycle 1: a 402 must NOT produce a fake `Uploaded` activity row; \
@@ -346,14 +343,14 @@ async fn three_cycle_402_402_200_full_chain() {
     // session and NOT invoking any callbacks — this is exactly what the
     // desktop sees when the planner's `plan.uploads` is empty.
 
-    let pending_after_cycle_2 = sync.pending_activity.lock().expect("pending_activity mutex").len();
+    let pending_after_cycle_2 = sync.get_sync_activity(None, None).len();
     assert_eq!(
         pending_after_cycle_2, 0,
         "cycle 2: skip-set holds — no fresh activity items must appear; got {pending_after_cycle_2}"
     );
 
     {
-        let snapshot = sync.progress.build_snapshot();
+        let snapshot = sync.progress().build_snapshot();
         // With no current_session and no fresh events, the snapshot's
         // `failed_files` counter reflects only the historic state of
         // recent files. After `end_cycle` cleared the session, the
@@ -400,7 +397,7 @@ async fn three_cycle_402_402_200_full_chain() {
     callback("first.txt", &fid_hex, "cid-cycle3", "uploaded", None);
 
     {
-        let snapshot = sync.progress.build_snapshot();
+        let snapshot = sync.progress().build_snapshot();
         let row = snapshot
             .files
             .iter()
@@ -416,7 +413,7 @@ async fn three_cycle_402_402_200_full_chain() {
         assert_eq!(snapshot.failed_files, 0, "cycle 3: no failures this cycle");
     }
 
-    let activity = sync.pending_activity.lock().expect("pending_activity mutex");
+    let activity = sync.get_sync_activity(None, None);
     // `SyncActivityItem` does not implement `Debug`, so we render a
     // human-readable summary by hand in the failure message rather than
     // relying on `{:?}` formatting.

@@ -5045,7 +5045,7 @@ fn sync_facts(sync: &hcfs_client::engine::runner::SyncRunner, label: &str, rel_p
     // An upload's row reads `Encrypt` while it is being encrypted.
     let upload = |a: &FileAction| matches!(a, FileAction::Upload | FileAction::Encrypt);
     let (live, finished) = {
-        let progress = sync.progress.lock_state();
+        let progress = sync.progress().lock_state();
         let live = progress
             .current_session
             .as_ref()

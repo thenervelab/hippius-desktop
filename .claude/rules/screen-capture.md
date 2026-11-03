@@ -1752,7 +1752,7 @@ argument, dialog source, new-capture branch before any write).
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
 **Record** and **Screenshot**, Record first everywhere they sit together
 (here, the tray's tiles, the capture bar's groups via `barGroups`, the
-empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+empty states' wording, Settings' Shortcuts group; a disabled Record keeps
 its place), each a normal
 toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
@@ -1786,13 +1786,19 @@ shown where `useCaptureAvailability` is `available`, kept while `unknown`) holds
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
-before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
-size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
-`reveal_drive_in_finder` only for a drive synced here), the options as a grid
-of cards (`layout="cards"`, `@container` columns so they follow the tab's
-width), then `EditedImageSetting`; each setting's icon sits in a
-`SettingIcon` chip. Pinned by
+before each `capture_set_options`, once for the tab by `useCaptureChoices`). Layout:
+four labelled groups (`SettingGroup` = `SettingsCard` + hairline rows,
+`SettingRow` = icon chip, title, one line, control at the right edge), in
+order Shortcuts (Record's row first), Saving (captures folder with "Show in
+Finder" / "Show in folder" only for a drive synced here, Desktop copy,
+`EditedImageSetting`), Sharing (copy link, preview, tracking), Recording
+(countdown, system audio; absent where this computer cannot record). A
+setting that only means something while another is on ("Include
+recordings", "Open the link in your browser") is a `sub` row: indented
+under its parent's words, with its own icon and the same background as
+every row (a bare, tinted row read as broken in dark mode). A grid of equal cards was tried and read as having no
+starting point. Pinned by `CaptureSettingsTab.test.tsx` ("puts every
+setting in its group") and
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every

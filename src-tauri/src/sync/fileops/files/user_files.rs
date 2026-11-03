@@ -595,7 +595,7 @@ pub async fn search_user_files_recursive(
             &walk_rel,
             &walk_label,
             &walk_folder,
-            walk_synced.as_ref(),
+            walk_synced.as_deref(),
             &walk_rules,
             &mut collected,
         );
@@ -619,7 +619,7 @@ pub async fn search_user_files_recursive(
         // Borrowing from `out.iter().map(...)` would keep an immutable
         // borrow alive across the push and fail the borrow checker.
         let seen: std::collections::HashSet<String> = out.iter().map(|e| e.actual_file_name.clone()).collect();
-        for (rel, info) in map {
+        for (rel, info) in map.iter() {
             if !prefix.is_empty() && !rel.starts_with(&prefix) {
                 continue;
             }

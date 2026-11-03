@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type MouseEvent, type PointerEvent } from "react";
 import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import {
   AlertCircle,
@@ -49,7 +49,7 @@ import { GLASS_BUTTON, GLASS_FOCUS, GLASS_MUTED, GLASS_PANEL, GLASS_PRIMARY } fr
 import { fileManagerLabel } from "@/app/lib/utils/isMacPlatform";
 import { markedAt } from "@/app/lib/capture/rustHover";
 import { useBarTooltip } from "@/app/capture-overlay/BarTooltip";
-import { AUTO_HIDE_MS, cardView, destinationText, wantsProgress } from "./previewCard";
+import { AUTO_HIDE_MS, DRAG_THRESHOLD_PX, cardView, destinationText, wantsProgress } from "./previewCard";
 import { barOffsetMs, nextCountdown, timeLeft, type Countdown } from "./autoHide";
 
 /** How long "Copied" shows before the button reads "Copy link" again. */
@@ -165,6 +165,11 @@ export default function CapturePreviewPage() {
   // The picture is being dragged out as a file: the card holds until Rust
   // says the drag is over, so it never slides away under a drag.
   const [dragging, setDragging] = useState(false);
+  // Where the primary button went down on the picture, until it comes up.
+  const pressAt = useRef<{ x: number; y: number } | null>(null);
+  // The press moved far enough to be a drag: the click it ends in (if any
+  // reaches the page) must not also open the editor.
+  const pressDragged = useRef(false);
   // Discard and Revoke link ask first, in the card itself.
   const [asking, setAsking] = useState<CardQuestion | null>(null);
   const keepButton = useRef<HTMLButtonElement | null>(null);
@@ -392,19 +397,49 @@ export default function CapturePreviewPage() {
   };
 
   const showInFolder = () => void showCapturePreviewInFolder().catch(() => undefined);
-  // Dragging the picture: the webview's own drag would hand other apps the
-  // picture's data: URL (a long string of text in a chat app), so it is
-  // cancelled and Rust starts the system's drag of the capture's file.
-  const dragOut = (e: DragEvent) => {
-    e.preventDefault();
-    if (!actions.dragOut) return;
-    setDragging(true);
-    void startCapturePreviewDrag().catch(() => setDragging(false));
-  };
   // A screenshot's picture opens the editor, as macOS's thumbnail opens
   // Markup; anything else (a recording) still shows its folder.
   const canEdit = actions.edit === true;
   const edit = () => run(editCapturePreview);
+  // Dragging the picture out as a file. The webview's own drag would hand
+  // other apps the picture's data: URL (a long string of text in a chat
+  // app), so it never starts (`draggable={false}`, `dragstart` cancelled).
+  // Instead a press that moves past the threshold asks Rust to start the
+  // system's drag of the capture's file, while the button is still down:
+  // AppKit then begins it from the real mouse event of this window. Started
+  // from `dragstart` it began after WebKit had taken the press for its own
+  // drag, and other apps refused the drop.
+  const noWebviewDrag = (e: DragEvent) => e.preventDefault();
+  const press = (e: PointerEvent) => {
+    pressDragged.current = false;
+    pressAt.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+  };
+  const pressMove = (e: PointerEvent) => {
+    const at = pressAt.current;
+    if (!at || (e.buttons & 1) === 0) return;
+    if (Math.hypot(e.clientX - at.x, e.clientY - at.y) < DRAG_THRESHOLD_PX) return;
+    pressAt.current = null;
+    pressDragged.current = true;
+    if (!actions.dragOut) return;
+    setDragging(true);
+    void startCapturePreviewDrag().catch(() => setDragging(false));
+  };
+  const release = () => {
+    pressAt.current = null;
+  };
+  const pictureClick = (e: MouseEvent) => {
+    // A pointer's click (`detail` counts its presses; the keyboard's is 0)
+    // after a drag is the drag's end, not a click.
+    const afterDrag = pressDragged.current && e.detail > 0;
+    pressDragged.current = false;
+    if (afterDrag) {
+      e.preventDefault();
+      return;
+    }
+    if (failed) return;
+    if (canEdit) edit();
+    else showInFolder();
+  };
 
   const saveToDesktop = () =>
     run(() =>
@@ -473,8 +508,12 @@ export default function CapturePreviewPage() {
 
         <button
           type="button"
-          onClick={failed ? undefined : canEdit ? edit : showInFolder}
-          onDragStart={dragOut}
+          onClick={pictureClick}
+          onPointerDown={press}
+          onPointerMove={pressMove}
+          onPointerUp={release}
+          onPointerCancel={release}
+          onDragStart={noWebviewDrag}
           aria-label={canEdit ? `Edit ${card.fileName}` : `Show ${card.fileName} in its folder`}
           // Its hover face says what a click does; no tooltip repeats it.
           data-card-tip="picture"
@@ -483,7 +522,7 @@ export default function CapturePreviewPage() {
         >
           {card.thumbnail ? (
             // A data: URL from Rust; next/image does not apply.
-            <img src={card.thumbnail} alt="" className="size-full object-cover" />
+            <img src={card.thumbnail} alt="" draggable={false} className="size-full select-none object-cover" />
           ) : (
             <div className="grid size-full place-items-center text-white/40">
               <Video className="size-8" />
