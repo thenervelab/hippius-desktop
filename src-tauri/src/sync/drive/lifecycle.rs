@@ -2741,6 +2741,37 @@ mod tests {
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
     }
 
+    /// A label with no registered drive (a paused drive, or one whose init
+    /// failed) still reports the DB row's path, so removing it unregisters
+    /// its Finder root and drops its cached directory stats.
+    #[tokio::test]
+    async fn remove_drive_inmemory_returns_the_hint_when_no_drive_is_registered() {
+        let sync = test_sync_runner();
+        let hint = PathBuf::from("/tmp/paused-drive");
+
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, "paused", Some(hint.clone())).await;
+
+        assert_eq!(remaining, 0);
+        assert_eq!(removed_path, Some(hint));
+    }
+
+    /// A registered drive's own path wins over the hint: the slot is what
+    /// the runner was watching.
+    #[tokio::test]
+    async fn remove_drive_inmemory_prefers_the_slot_path_over_the_hint() {
+        let sync = test_sync_runner();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        let manager = DriveManager::new(sync_path.clone(), tmp.path().join("config"));
+        sync.add_drive("live".to_string(), DriveSlot::new(manager, CancellationToken::new()))
+            .await;
+
+        let (_, removed_path) = remove_drive_inmemory(&sync, "live", Some(PathBuf::from("/tmp/stale-row"))).await;
+
+        assert_eq!(removed_path, Some(sync_path));
+    }
+
     /// Re-initializing a live drive must not blank its Finder badges or Files
     /// listing while the init runs: the entry teardown removes the slot but
     /// keeps the label root and the synced-paths cache that `register_drive`
