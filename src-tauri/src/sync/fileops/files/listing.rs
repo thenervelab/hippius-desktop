@@ -21,7 +21,7 @@ use tracing::warn;
 /// disk walk read.
 struct DriveView {
     /// The drive's synced map; `None` when the drive is not available.
-    synced: Option<HashMap<String, SyncedFileInfo>>,
+    synced: Option<Arc<HashMap<String, SyncedFileInfo>>>,
     /// The drive's exclude patterns.
     excludes: Vec<String>,
     /// The drive's saved refusals.
@@ -267,7 +267,7 @@ async fn list_sync_folder_inner_with(
             .map_err(|e| crate::error::AppError::Other(format!("ensure_within task panicked: {e}")))??;
     }
 
-    let synced_set = view.synced.as_ref();
+    let synced_set = view.synced.as_deref();
     let excluded_patterns = &view.excludes;
     let exclude_rules = super::exclude_match::rules_from_patterns(excluded_patterns);
 
@@ -398,7 +398,7 @@ async fn forget_vanished_refusals(view: &DriveView, prefix: &str, on_disk: &Hash
         return;
     }
     let state = drive_state.state().await;
-    view.refused.forget_vanished(missing, view.synced.as_ref(), state).await;
+    view.refused.forget_vanished(missing, view.synced.as_deref(), state).await;
 }
 
 /// Response for [`list_sync_folder_grouped`].
@@ -574,7 +574,7 @@ pub async fn list_sync_folder_grouped_inner(
     let mut server_only_folders: HashMap<String, u64> = HashMap::new();
 
     if let Some(map) = &synced_set {
-        for (rel, info) in map {
+        for (rel, info) in map.iter() {
             if !rel.starts_with(&prefix) {
                 continue;
             }
@@ -1047,7 +1047,7 @@ mod tests {
 
         let meta = |byte: u8| FileMetadata {
             path_hash: [byte; 32],
-            salted_hash: [0; 32],
+            salted_hash: hcfs_shared::salted_hash::SaltedHash::default(),
             size_bytes: 0,
             revision_seq: 0,
             revision_id: [0; 32],

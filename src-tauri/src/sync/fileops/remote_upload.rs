@@ -20,7 +20,9 @@
 use std::path::Path;
 
 use ed25519_dalek::{Signer, SigningKey};
+use hcfs_crypto::FileKey;
 use hcfs_shared::network::Manifest;
+use hcfs_shared::salted_hash::SaltedHash;
 use sqlx::sqlite::SqlitePool;
 use zeroize::Zeroize;
 
@@ -143,13 +145,13 @@ pub(crate) fn wire_relative_path(parent_path: &str, file_name: &str) -> String {
 }
 
 /// Encrypt `source` into `dest` and return `(ciphertext_hash, size_bytes)`.
-fn encrypt_to_temp(source: &Path, dest: &Path, key: &[u8; 32]) -> Result<String> {
+fn encrypt_to_temp(source: &Path, dest: &Path, key: &FileKey) -> Result<String> {
     let mut reader = std::io::BufReader::new(std::fs::File::open(source)?);
     let file_size = std::fs::metadata(source)?.len();
     let mut writer = std::io::BufWriter::new(std::fs::File::create(dest)?);
     let mut hasher = blake3::Hasher::new();
 
-    hcfs_client::crypto::encrypt_stream_with_hash(&mut reader, &mut writer, key, file_size, &mut hasher, None::<fn(u64, u64)>)
+    hcfs_crypto::encrypt_stream_with_hash(&mut reader, &mut writer, key, file_size, &mut hasher, None::<fn(u64, u64)>)
         .map_err(|e| AppError::Crypto(format!("Encryption failed: {e}")))?;
 
     use std::io::Write;
@@ -213,7 +215,7 @@ fn transfer_progress(
 struct SealRequest<'a> {
     source: &'a Path,
     ciphertext_path: &'a Path,
-    encryption_key: &'a [u8; 32],
+    encryption_key: &'a FileKey,
     signing_key: &'a SigningKey,
     /// The drive this file is being written INTO, resolved once by the
     /// caller. The manifest names the namespace the file lands in, which for
@@ -221,7 +223,7 @@ struct SealRequest<'a> {
     identity: &'a DriveIdentity,
     size_bytes: u64,
     path_hash: [u8; 32],
-    salted_hash: [u8; 32],
+    salted_hash: SaltedHash,
     encrypted_path: Vec<u8>,
     file_name: &'a str,
     relative_path: &'a str,
@@ -498,13 +500,13 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     // server recognises identical content by this, so salting with the
     // uploader's account on somebody else's drive would never match the
     // drive's own files.
-    let (salted_hash, size_bytes) = hcfs_client::crypto::compute_salted_hash_file(source, &identity.wire_ss58)
+    let (salted_hash, size_bytes) = hcfs_client::hash::compute_salted_hash_file(source, &identity.wire_ss58)
         .map_err(|e| AppError::Crypto(format!("Failed to hash {}: {e}", source.display())))?;
 
     let relative_path = wire_relative_path(parent_path, &file_name);
-    let path_hash = hcfs_client::crypto::compute_path_hash(&relative_path);
-    let encrypted_path = hcfs_client::crypto::encrypt_small(relative_path.as_bytes(), &encryption_key)
-        .map_err(|e| AppError::Crypto(format!("Failed to seal path: {e}")))?;
+    let path_hash = hcfs_crypto::compute_path_hash(&relative_path);
+    let encrypted_path =
+        hcfs_crypto::encrypt_small(relative_path.as_bytes(), &encryption_key).map_err(|e| AppError::Crypto(format!("Failed to seal path: {e}")))?;
 
     // Encrypt beside the app's own temp area, not next to the user's file:
     // the source may sit on a read-only volume or one the app cannot write.
@@ -1238,7 +1240,7 @@ mod tests {
             ciphertext_hash: "aa".to_string(),
             size_bytes: 5,
             path_hash: [7u8; 32],
-            salted_hash: [3u8; 32],
+            salted_hash: SaltedHash::from_bytes([3u8; 32]),
             revision_seq: 0,
             relative_path: Some("docs/big.bin".to_string()),
             ..Default::default()

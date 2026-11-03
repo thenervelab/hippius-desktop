@@ -118,7 +118,7 @@ use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use tokio::sync::Mutex as TokioMutex;
+use hcfs_crypto::FileKey;
 use tokio_util::sync::CancellationToken;
 
 use hcfs_client::client::folder_share::{FolderShareError, ShareTtl, folder_share_token_hash};
@@ -411,14 +411,9 @@ async fn seed_drive_with_file(env: &LiveEnv, label: &str, rel_path: &str, conten
         reqwest::Client::new(),
     ));
     runner.register_label_root(label.to_string(), root.path().to_path_buf());
-    runner.drives.lock().await.insert(
-        label.to_string(),
-        DriveSlot {
-            manager: Arc::new(TokioMutex::new(manager)),
-            cancel_token: CancellationToken::new(),
-            sync_path: root.path().to_path_buf(),
-        },
-    );
+    runner
+        .add_drive(label.to_string(), DriveSlot::new(manager, CancellationToken::new()))
+        .await;
 
     trigger_sync(&runner).await;
     assert_eq!(
@@ -475,12 +470,11 @@ fn secret_32(bytes: Vec<u8>, what: &str) -> [u8; 32] {
 /// drive. `open_folder_link` is what a recipient's app calls with a pasted
 /// link, so it runs here with no owner credentials in reach.
 ///
-/// Also asserts the target advertises `folder_share_link_envelopes`, so the
-/// funnel mints `#s=` / `#sp=`. Without it every own-drive mint is a legacy
-/// `#k=` / `#p=` link, and the fragment asserts would fail with a message
-/// that hides why.
+/// The target must store folder-link envelopes: hcfs-client mints only `#s=`
+/// / `#sp=` links, and against a server without envelopes the mint itself
+/// fails with `LinkEnvelopeNotStored`.
 async fn link_secret_recipient(env: &LiveEnv) -> HcfsClient {
-    let recipient = HcfsClient::new(HcfsClientConfig {
+    HcfsClient::new(HcfsClientConfig {
         base_url: env.server_url.clone(),
         bearer_token: String::new(),
         accept_invalid_certs: false,
@@ -490,18 +484,7 @@ async fn link_secret_recipient(env: &LiveEnv) -> HcfsClient {
         read_timeout_ms: None,
         shared_drive_member: false,
     })
-    .expect("construct a credential-less recipient HcfsClient");
-
-    let supported = recipient
-        .folder_share_link_envelopes_supported()
-        .await
-        .expect("read the live /v1/capabilities");
-    assert!(
-        supported,
-        "the target must advertise folder_share_link_envelopes \
-         (hcfs-server with HCFS_FEATURE_FOLDER_LINK_ENVELOPES=1, as production runs)"
-    );
-    recipient
+    .expect("construct a credential-less recipient HcfsClient")
 }
 
 /// Opens a live link-secret link the way a recipient's app does and returns
@@ -515,11 +498,11 @@ async fn link_secret_recipient(env: &LiveEnv) -> HcfsClient {
 async fn open_as_recipient(recipient: &HcfsClient, share_url: &str, token: &str, link_secret: &[u8; 32], label: &str) -> [u8; 32] {
     let drive_key = hcfs_client::drive::remote::derive_encryption_key(MASTER, label).expect("drive-key derivation from the in-test master");
     assert!(
-        *link_secret != drive_key,
+        link_secret != drive_key.as_bytes(),
         "the link's fragment must carry a link secret, not the drive key"
     );
     assert!(
-        !share_url.contains(&URL_SAFE_NO_PAD.encode(drive_key)),
+        !share_url.contains(&URL_SAFE_NO_PAD.encode(drive_key.as_bytes())),
         "the raw drive key must not appear anywhere in a link-secret URL"
     );
 
@@ -527,10 +510,13 @@ async fn open_as_recipient(recipient: &HcfsClient, share_url: &str, token: &str,
         .open_folder_link(token, link_secret)
         .await
         .expect("the link secret must open the live envelope");
-    assert!(*opened == drive_key, "the envelope must seal exactly the drive's derived file key");
+    assert!(
+        opened.as_bytes() == drive_key.as_bytes(),
+        "the envelope must seal exactly the drive's derived file key"
+    );
     // The opened key, not `drive_key`: callers decrypt with what the link
     // yielded, so the decrypt stays a second, independent check.
-    *opened
+    *opened.as_bytes()
 }
 
 /// Asserts the minting device's live listing row for `link` before its
@@ -666,8 +652,8 @@ async fn public_mint_round_trips_decrypt_list_and_revoke() {
         ciphertext.len() > plaintext.len(),
         "the blob is ciphertext (nonce + auth tags), never the plaintext"
     );
-    let decrypted =
-        hcfs_client::crypto::decrypt_small(&ciphertext, &key).expect("the key the #s= link opens must decrypt the drive's real ciphertext");
+    let decrypted = hcfs_crypto::decrypt_small(&ciphertext, &FileKey::from_bytes(key))
+        .expect("the key the #s= link opens must decrypt the drive's real ciphertext");
     assert_eq!(decrypted, plaintext, "the decrypted bytes are the original file");
 
     // --- Badge identity: the live listing row's folder_hash is the derived one ---
@@ -958,10 +944,10 @@ async fn outside_folder_copy_round_trips_browse_decrypt_list_and_revoke() {
     assert_eq!(captured.blob_status, 200, "anonymous blob must stream for a sealed copy");
     let key = secret_32(key_bytes, "the #k= fragment key");
     let mut decrypted = Vec::new();
-    hcfs_client::crypto::decrypt_stream(
+    hcfs_crypto::decrypt_stream(
         &mut std::io::Cursor::new(&captured.ciphertext),
         &mut decrypted,
-        &key,
+        &FileKey::from_bytes(key),
         None,
         None::<fn(u64, u64)>,
     )

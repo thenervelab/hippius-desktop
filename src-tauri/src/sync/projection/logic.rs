@@ -8,7 +8,7 @@
 //!
 //! Every per-chunk progress tick from `hcfs-client` flows through
 //! [`crate::sync::progress::update_file_progress`], which previously called
-//! `SyncRunner::emit_snapshot(false)` unconditionally. On macOS that routes
+//! `SyncRunner::emit_snapshot_throttled()` unconditionally. On macOS that routes
 //! into `wkwebview.eval("...")` on the main thread, where WebKit blocks
 //! converting the JSON payload to an `NSString`. Under a large session, the
 //! main thread cannot drain its eval queue and the app hangs for tens of

@@ -126,7 +126,7 @@ fn pending_upload(path: &str, label: &str, size: u64) -> SyncFile {
 /// session state, so a refactor that removes or renames it is a
 /// breaking change that this test will catch.
 fn seed_session(sync: &SyncRunner, files: Vec<SyncFile>, expected_uploads: u32) {
-    let mut state = sync.progress.lock_state();
+    let mut state = sync.progress().lock_state();
     let mut file_map = std::collections::HashMap::new();
     for f in files {
         file_map.insert(f.path.to_string(), f);
@@ -180,7 +180,7 @@ fn unconfirmed_upload_surfaces_as_error_status_in_snapshot() {
     mark_pending_files_as_failed(&sync, /* actual_uploads */ 1, /* actual_downloads */ 0, label)
         .expect("public mark_pending_files_as_failed must not error on a well-formed session");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     let failed: Vec<_> = snapshot.files.iter().filter(|f| f.status == FileProgressStatus::Error).collect();
 
     // Exactly one Error row, AND it must be one of the two we seeded.
@@ -234,7 +234,7 @@ fn failed_file_serializes_status_as_lowercase_error_string() {
     // per-file confirmation never arrived.
     mark_pending_files_as_failed(&sync, 0, 0, label).expect("mark_pending_files_as_failed");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     let json = serde_json::to_value(&snapshot).expect("SyncSnapshot must serialize to JSON; it crosses the Tauri IPC boundary");
     let files = json
         .get("files")
@@ -284,7 +284,7 @@ fn confirmed_uploads_produce_no_error_status_in_snapshot() {
     // canonical happy-path final state.
     mark_pending_files_as_failed(&sync, /* actual_uploads */ 1, 0, label).expect("mark_pending_files_as_failed");
 
-    let snapshot = sync.progress.build_snapshot();
+    let snapshot = sync.progress().build_snapshot();
     assert_eq!(
         snapshot.failed_files, 0,
         "happy path must not produce any failed files; \

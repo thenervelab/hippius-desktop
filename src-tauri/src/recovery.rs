@@ -567,7 +567,7 @@ fn spawn_post_unlock_sync_init(app: tauri::AppHandle, account_id: String) {
     tauri::async_runtime::spawn(async move {
         let state = app.state::<crate::app_state::AppState>();
 
-        let already_running = !state.sync.drives.lock().await.is_empty();
+        let already_running = state.sync.drive_count().await > 0;
         if already_running {
             debug!("post-unlock sync init skipped — drives already initialized");
             return;

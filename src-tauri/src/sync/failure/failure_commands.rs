@@ -41,10 +41,7 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
     state.file_failures.skip_file(&label, &path);
     clear_durable_failure(&state, &label, &path).await?;
 
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = state.sync.drive_manager(&label).await;
     // The exclude pattern is the actual sync-time enforcement of a skip (the
     // in-memory session-skip set is consulted only on teardown, not during a
     // sync cycle), so a failed write must surface — otherwise the FE reports
@@ -56,7 +53,7 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
         exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
-    state.sync.emit_snapshot(true);
+    state.sync.emit_snapshot();
     Ok(())
 }
 
@@ -70,10 +67,7 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
     state.file_failures.clear_failure(&label, &path);
     clear_durable_failure(&state, &label, &path).await?;
 
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = state.sync.drive_manager(&label).await;
     // Fail loudly when the drive isn't loaded: the previous `if let Some` made
     // "Exclude Permanently" silently return Ok when the drive had been stopped
     // between the failure event and the click, so the FE reported success but no
@@ -88,7 +82,7 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
         exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
-    state.sync.emit_snapshot(true);
+    state.sync.emit_snapshot();
     Ok(())
 }
 
@@ -103,10 +97,7 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
     state.file_failures.unskip_file(&label, &path);
     clear_durable_failure(&state, &label, &path).await?;
 
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = state.sync.drive_manager(&label).await;
     // A failed removal leaves the file excluded after the user clicked Retry,
     // so it would never re-sync with no signal — propagate it. Missing drive
     // stays tolerant (the failure counter / session-skip were already cleared).
@@ -115,7 +106,7 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
         remove_literal_exclusion(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
     }
 
-    state.sync.emit_snapshot(true);
+    state.sync.emit_snapshot();
     Ok(())
 }
 
@@ -221,17 +212,14 @@ pub async fn retry_file_failure(label: String, path: String, state: tauri::State
     // Mirror sp_retry_file's in-memory reset + exclude removal.
     state.file_failures.clear_failure(&label, &path);
     state.file_failures.unskip_file(&label, &path);
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = state.sync.drive_manager(&label).await;
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
         let _ = remove_literal_exclusion(&m, &path);
     }
 
     hcfs_client::engine::runner::trigger_sync(&state.sync).await;
-    state.sync.emit_snapshot(true);
+    state.sync.emit_snapshot();
     Ok(())
 }
 
@@ -290,10 +278,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
     for rec in &records {
         state.file_failures.unskip_file(&label, &rec.relative_path);
     }
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = state.sync.drive_manager(&label).await;
     if let Some(arc) = drive_arc {
         let m = arc.lock().await;
         for rec in &records {
@@ -302,7 +287,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
     }
 
     hcfs_client::engine::runner::trigger_sync(&state.sync).await;
-    state.sync.emit_snapshot(true);
+    state.sync.emit_snapshot();
     Ok(())
 }
 
@@ -314,10 +299,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
 pub async fn cleanup_session_skips(state: &crate::app_state::AppState) {
     let pairs = state.file_failures.clear_all_skipped();
     for (label, path) in pairs {
-        let drive_arc = {
-            let guard = state.sync.drives.lock().await;
-            guard.get(&label).map(|slot| slot.manager.clone())
-        };
+        let drive_arc = state.sync.drive_manager(&label).await;
         if let Some(arc) = drive_arc {
             let m = arc.lock().await;
             let _ = remove_literal_exclusion(&m, &path);

@@ -360,7 +360,7 @@ mod tests {
 
         let row = lookup(&cache, &server, "photos", 7).await.expect("listed");
 
-        assert_eq!(row.salted_hash, [8; 32]);
+        assert_eq!(row.salted_hash.as_bytes(), &[8; 32]);
         assert_eq!(row.size_bytes, 7);
         assert_eq!(row.revision_id, [9; 32]);
     }

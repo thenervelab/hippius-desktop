@@ -25,14 +25,11 @@ pub async fn stage_changes(app: tauri::AppHandle, label: String) -> Result<Stage
     let app_state = app.state::<crate::app_state::AppState>();
     let sync = &app_state.sync;
 
-    let first_arc = {
-        let guard = sync.drives.lock().await;
-        guard
-            .get(&label)
-            .map(|slot| slot.manager.clone())
-            // The label isn't in the active-drive map → NotFound (entity missing).
-            .ok_or_else(|| crate::error::AppError::NotFound(format!("No active drive with label '{label}'")))?
-    };
+    let first_arc = sync
+        .drive_manager(&label)
+        .await
+        // The label isn't in the active-drive map → NotFound (entity missing).
+        .ok_or_else(|| crate::error::AppError::NotFound(format!("No active drive with label '{label}'")))?;
 
     // RAII guard: sets review_mode for this drive, resets on drop unless commit()ed.
     let review_guard = ReviewModeGuard::new(sync.clone(), label);
@@ -134,11 +131,7 @@ pub async fn sync_with_conflict_resolutions(app: AppHandle, label: String, resol
     // side effects (review mode is re-armed — see the Err arm below), so the
     // FE keeps the review dialog (and the user's chosen resolutions) and
     // tells them to retry shortly.
-    let drive_arc = {
-        let guard = sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
-    let Some(drive_arc) = drive_arc else {
+    let Some(drive_arc) = sync.drive_manager(&label).await else {
         return Err(fail_drive_unavailable(&app, &label));
     };
     let Ok(mut m) = drive_arc.try_lock() else {

@@ -27,8 +27,7 @@ use base64::engine::general_purpose::STANDARD;
 use chrono::Utc;
 use hcfs_client::client::folder_link::{FolderLinkMint, mint_folder_link};
 use hcfs_client::client::folder_share::{
-    FolderLinkFormat, FolderShareError, FolderShareFragment, FolderShareListItem, FolderShareSource, build_folder_share_url_for,
-    folder_share_token_hash, parse_folder_share_fragment,
+    FolderLinkFormat, FolderShareError, FolderShareListItem, FolderShareSource, build_folder_share_url_for, folder_share_token_hash,
 };
 use hcfs_client::client::share::{
     ShareKeystore, ShareOptions, ShareProgress, ShareProgressFn, ShareSecret, ShareSummary as UpstreamShareSummary, ShareTtl, build_share_url_for,
@@ -1140,8 +1139,7 @@ pub async fn create_folder_share_inner(
     // remote preview use (`encryption_key_for_label`) — the link fragment
     // carries this key, never folder-mnemonic entropy. Wiped on drop.
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
-    let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?);
+    let file_key = crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?;
 
     // Drive-scoped client: `create_folder_share` sends the folder_hash from
     // the client CONFIG, so `build_account_client`'s label-less client would
@@ -1360,8 +1358,7 @@ async fn create_member_folder_share(
     info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share in a member drive");
 
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
-    let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?);
+    let file_key = crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?;
 
     // Build the secret BEFORE minting, as hcfs-client does: a failure must not
     // leave a live share whose only plaintext token was in the 201 body. A
@@ -1375,10 +1372,10 @@ async fn create_member_folder_share(
     };
     let secret = match (&link, choice.password()) {
         (Some(link), _) => link.secret.clone(),
-        (None, Some(password)) => {
-            ShareSecret::Private(hcfs_client::client::share::wrap_share_key(password, &file_key).map_err(|e| AppError::Validation(e.to_string()))?)
-        }
-        (None, None) => ShareSecret::Public(*file_key),
+        (None, Some(password)) => ShareSecret::Private(
+            hcfs_client::client::share::wrap_share_key(password, file_key.as_bytes()).map_err(|e| AppError::Validation(e.to_string()))?,
+        ),
+        (None, None) => ShareSecret::Public(*file_key.as_bytes()),
     };
 
     let created = http_create_member_folder_share(
@@ -1862,21 +1859,10 @@ pub async fn reshare_folder_link_inner(state: &AppState, account_id: &str, share
         ShareChoice::Public
     };
     let relative_path = mint_path_for_prefix(&folder_label, &path_prefix)?;
+    // hcfs-client mints only link-secret links: a server that drops the
+    // envelope fails the mint (`LinkEnvelopeNotStored`, with the new share
+    // revoked), so a link returned here never carries the drive key.
     let link = create_folder_share_inner(state, account_id, &folder_label, &relative_path, reshare_ttl(row.expires_at, now), choice).await?;
-
-    // The capability was read before the mint; if the server stopped
-    // advertising envelopes in between, the mint came out legacy too, and
-    // replacing one drive-key link with another would only cost the user
-    // their old URL. Take the new link back and leave the old one alone.
-    if !is_link_secret_url(&link.share_url) {
-        warn!("reshare: the new folder link came out legacy; revoking it and keeping the old link");
-        if let Err(e) = revoke_folder_share_inner(state, account_id, &link.share_token).await {
-            warn!(error = %e, "reshare: revoking the legacy replacement failed");
-        }
-        return Err(AppError::Validation(
-            "Hippius can't make the safer kind of link right now, so your old link was left as it was. Try again later.".into(),
-        ));
-    }
 
     // The new link exists, so a failed revoke is reported, not returned as an
     // error: an error here would lose the new link's generated password.
@@ -1891,14 +1877,6 @@ pub async fn reshare_folder_link_inner(state: &AppState, account_id: &str, share
     // but the new link shares that same folder.
     crate::finder_bridge::badges::push_from_state(state, &folder_label, &path_prefix, BadgeState::Shared);
     Ok(ReshareOutcome { link, old_link_revoked })
-}
-
-/// Whether a minted folder link is a link-secret one (`#s=` / `#sp=`).
-fn is_link_secret_url(share_url: &str) -> bool {
-    share_url
-        .split_once('#')
-        .and_then(|(_, fragment)| parse_folder_share_fragment(fragment).ok())
-        .is_some_and(|fragment| matches!(fragment, FolderShareFragment::LinkSecret(_) | FolderShareFragment::LinkSecretWrapped(_)))
 }
 
 /// Revoke a folder share by its plaintext token (from a resolvable
@@ -3013,7 +2991,7 @@ mod tests {
         assert_eq!(public.share_token.as_deref(), Some("tok-pub"));
         assert_eq!(
             public.share_url.as_deref(),
-            Some(build_folder_share_url("https://console.example.com", "tok-pub", &public_key).as_str()),
+            Some(build_folder_share_url("https://console.example.com", "tok-pub", &hcfs_crypto::FileKey::from_bytes(public_key)).as_str()),
         );
         assert_eq!(public.is_private, Some(false));
         assert_eq!(public.path_prefix, "photos");
@@ -3080,15 +3058,6 @@ mod tests {
         assert!(private_url.contains("#sp=") && !private_url.contains("#p="), "{private_url}");
         assert_eq!(out[1].is_private, Some(true));
         assert_eq!(out[0].link_format, FolderLinkKind::LinkSecret);
-    }
-
-    #[test]
-    fn only_a_link_secret_url_counts_as_a_safer_link() {
-        use hcfs_client::client::folder_share::{build_folder_link_url, build_folder_link_url_private, build_folder_share_url};
-        assert!(is_link_secret_url(&build_folder_link_url("https://x.io", "t", &[1u8; 32])));
-        assert!(is_link_secret_url(&build_folder_link_url_private("https://x.io", "t", &[1u8; 89])));
-        assert!(!is_link_secret_url(&build_folder_share_url("https://x.io", "t", &[1u8; 32])));
-        assert!(!is_link_secret_url("https://x.io/share/folder/t"));
     }
 
     /// The reshare offer: only a live legacy drive link, minted here, on a
