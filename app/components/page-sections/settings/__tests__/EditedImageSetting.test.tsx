@@ -28,11 +28,11 @@ describe("Settings: when saving an edited image", () => {
   it("shows the saved choice and changes it through Rust", async () => {
     tauri.onInvoke("capture_editor_save_preference", () => "copy");
     tauri.onInvoke("capture_editor_set_save_preference", () => null);
-    render(<EditedImageSetting rowClassName="row" />);
+    render(<EditedImageSetting />);
     expect(screen.getByRole("group", { name: "When saving an edited image" })).toBeInTheDocument();
     await waitFor(() => expect(pressed()).toEqual(["Save a copy"]));
-    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Replace the original" })));
-    expect(pressed()).toEqual(["Replace the original"]);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Replace" })));
+    expect(pressed()).toEqual(["Replace"]);
     const sets = tauri.core.invoke.mock.calls.filter(([c]) => c === "capture_editor_set_save_preference");
     expect(sets[0][1]).toEqual({ preference: "replace" });
   });
@@ -42,7 +42,7 @@ describe("Settings: when saving an edited image", () => {
     tauri.onInvoke("capture_editor_set_save_preference", () => {
       throw { kind: "Other", message: "The setting couldn't be saved." };
     });
-    render(<EditedImageSetting rowClassName="row" />);
+    render(<EditedImageSetting />);
     await waitFor(() => expect(pressed()).toEqual(["Ask"]));
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "Save a copy" })));
     await waitFor(() => expect(pressed()).toEqual(["Ask"]));
