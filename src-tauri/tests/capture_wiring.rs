@@ -2400,10 +2400,11 @@ fn the_pills_hover_comes_from_rust_and_its_tooltip_is_never_filmed_or_in_the_way
 }
 
 /// Dragging the card's picture drops the capture's FILE into another app:
-/// the page cancels the webview's own drag (which handed over the picture's
-/// `data:` URL, a huge string of text in a chat app) and asks Rust for the
-/// system's file drag of the card's own file. The page never names a path,
-/// and the card holds itself up until Rust says the drag is over.
+/// the webview's own drag never starts (it handed over the picture's `data:`
+/// URL, a huge string of text in a chat app), and a press that moves past
+/// the threshold asks Rust for the system's file drag of the card's own
+/// file while the button is still down. The page never names a path, and
+/// the card holds itself up until Rust says the drag is over.
 #[test]
 fn the_cards_picture_is_dragged_out_as_the_file() {
     let src = read("src/capture/commands.rs");
@@ -2416,12 +2417,16 @@ fn the_cards_picture_is_dragged_out_as_the_file() {
     assert!(main.contains("crate::capture::commands::capture_preview_start_drag,"));
 
     let card = read("../app/capture-preview/page.tsx");
-    assert!(card.contains("onDragStart={dragOut}"), "the picture handles its drag");
-    let handler = &card[card.find("const dragOut = ").expect("the drag handler")..];
-    let cancelled = handler.find("e.preventDefault()").expect("the webview's data: URL drag is cancelled");
+    assert!(card.contains("onDragStart={noWebviewDrag}"), "the webview's data: URL drag is cancelled");
+    assert!(card.contains("const noWebviewDrag = (e: DragEvent) => e.preventDefault();"));
+    assert!(card.contains("draggable={false}"), "nor does the picture start one");
+    assert!(card.contains("onPointerMove={pressMove}"), "the drag starts from the press");
+    let handler = &card[card.find("const pressMove = ").expect("the drag handler")..];
+    let held = handler.find("(e.buttons & 1) === 0").expect("only while the button is down");
+    let moved = handler.find("DRAG_THRESHOLD_PX").expect("only past the threshold");
     let gated = handler.find("if (!actions.dragOut) return;").expect("only when the card offers it");
     let native = handler.find("startCapturePreviewDrag()").expect("Rust starts the file drag");
-    assert!(cancelled < gated && gated < native, "cancelled first, even with nothing to drag");
+    assert!(held < moved && moved < gated && gated < native, "a held press that moved, then Rust");
     assert!(card.contains("\"capture_preview_drag_ended\""), "the hold ends with Rust's event");
 }
 

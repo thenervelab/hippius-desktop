@@ -468,10 +468,12 @@ tauri-plugin-single-instance = { version = "2.0.0", features = ["deep-link"] }
 # only (global-hotkey's backend is x11rb, pure Rust, nothing new to build or
 # install); a Wayland session uses the GlobalShortcuts portal instead.
 tauri-plugin-global-shortcut = "2"
+
+[target."cfg(any(windows, target_os = \"linux\"))".dependencies]
 # The capture card's picture dragged into another app as the file itself
-# (`capture::drag_out`): NSDraggingSession on macOS, OLE DoDragDrop on
-# Windows, a GTK drag on Linux. Pinned: it reaches into each platform's
-# drag machinery, so a new version is taken deliberately.
+# (`capture::drag_out`): OLE DoDragDrop on Windows, a GTK drag on Linux.
+# macOS has its own NSDraggingSession in `drag_out`. Pinned: it reaches into
+# each platform's drag machinery, so a new version is taken deliberately.
 drag = "=2.1.1"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]

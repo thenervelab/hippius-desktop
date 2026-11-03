@@ -23,6 +23,12 @@ import { cappedPercent } from "@/app/lib/upload-feed/percent";
  */
 export const AUTO_HIDE_MS = 10_000;
 
+/**
+ * How far, in CSS pixels, the pointer moves with the button held before a
+ * press on the card's picture is a drag rather than a click.
+ */
+export const DRAG_THRESHOLD_PX = 4;
+
 export interface CardView {
   /** 0 to 100, or null while nothing has been sent yet. */
   percent: number | null;
