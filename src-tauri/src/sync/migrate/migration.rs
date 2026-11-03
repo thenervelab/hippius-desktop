@@ -874,6 +874,10 @@ pub async fn start_server_migration(
         tracing::error!("[Migration] Failed to derive signing key: {e}");
         crate::error::AppError::Crypto(format!("Failed to derive signing key: {e}"))
     })?;
+    // hcfs-client hands back an ed25519-dalek 3 key and this crate signs with
+    // 2.x. Same secret bytes, and Ed25519 signing is deterministic, so the
+    // signature is the one the 3.x key would make.
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_key.to_bytes());
 
     // Sign the migration request
     let signing_text = format!(

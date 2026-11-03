@@ -126,10 +126,7 @@ fn matches_everything(pattern: &str) -> bool {
 /// drive does not exist.
 #[tauri::command]
 pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, AppState>) -> Result<Vec<ExcludePatternEntry>> {
-    let drive_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = app_state.sync.drive_manager(&label).await;
 
     let Some(arc) = drive_arc else {
         debug!(label = %label, "Drive not found, returning empty patterns");
@@ -155,10 +152,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
 pub async fn add_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
     let trimmed = validate_pattern(&pattern)?;
 
-    let drive_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = app_state.sync.drive_manager(&label).await;
 
     let Some(arc) = drive_arc else {
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
@@ -186,10 +180,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
 /// pattern was removed, `false` if it was not found.
 #[tauri::command]
 pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: tauri::State<'_, AppState>, app: AppHandle) -> Result<bool> {
-    let drive_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = app_state.sync.drive_manager(&label).await;
 
     let Some(arc) = drive_arc else {
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
@@ -232,10 +223,7 @@ pub async fn apply_sync_selection(
     include: Vec<String>,
     exclude: Vec<String>,
 ) -> Result<()> {
-    let drive_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_arc = app_state.sync.drive_manager(&label).await;
 
     let Some(arc) = drive_arc else {
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));

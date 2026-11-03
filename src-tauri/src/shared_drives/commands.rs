@@ -397,6 +397,10 @@ pub async fn http_create_invite(http: &reqwest::Client, base_url: &str, bearer: 
         // fine as a default, wrong as a silent one now that the user chooses.
         role: Some(role.to_string()),
         path_prefix: path_prefix.map(str::to_string),
+        // False keeps the mint as it was before this field existed: the
+        // server serves the row as a legacy invite until an envelope lands.
+        // TODO(GeorgiosDelkos, #648): send true for `#i=` mints.
+        link_secret: false,
     };
     let resp = http
         .post(format!("{}/v1/drive-invites", base_url.trim_end_matches('/')))
@@ -1507,8 +1511,11 @@ pub async fn finish_invite_link(http: &reqwest::Client, at: InviteLinkFinish<'_>
     let Some(entropy) = key.entropy else {
         return Ok(build_invite_url(at.console_base, &minted.token, key.fragment_key));
     };
+    // A folder invite's fragment key is its derived file key; the envelope
+    // API types it as one.
+    let folder_key = hcfs_crypto::FileKey::from_bytes(*key.fragment_key);
     let target = if key.folder {
-        InviteLinkTarget::Folder { file_key: key.fragment_key }
+        InviteLinkTarget::Folder { file_key: &folder_key }
     } else {
         InviteLinkTarget::Drive
     };
@@ -3278,7 +3285,7 @@ pub(crate) async fn seal_invite_row(
 /// link would have handed them.
 fn sealed_invite_payload(material: crate::sync::remote::DriveKeyMaterial, folder_invite: bool) -> Result<Zeroizing<[u8; 32]>> {
     if folder_invite {
-        Ok(Zeroizing::new(material.encryption_key()?))
+        Ok(Zeroizing::new(*material.encryption_key()?.as_bytes()))
     } else {
         grant::entropy_from_phrase(&material.into_phrase()?)
     }
@@ -3909,11 +3916,11 @@ pub async fn add_shared_drive(
     let preparing = state.preparing.clone();
     let sync = state.sync.clone();
     if preparing.mark_preparing(&label) {
-        sync.emit_snapshot(true);
+        sync.emit_snapshot();
     }
     if let Err(e) = crate::sync::lifecycle::initialize_sync_inner(app.clone(), ctx.account_id.clone(), label.clone(), None, true, None).await {
         if preparing.clear(&label) {
-            sync.emit_snapshot(true);
+            sync.emit_snapshot();
         }
         // The row + seal stay: init failures here are usually transient
         // (network), and the drive resumes through the normal retry surfaces.

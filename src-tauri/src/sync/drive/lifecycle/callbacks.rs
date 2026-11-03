@@ -188,11 +188,11 @@ fn note_engine_activity(app: &AppHandle, sync: &Arc<SyncRunner>, label: &str, ph
             match app_state.preparing.note_pre_plan_activity(label, allow_promote, activity) {
                 // Newly surfaced: bypass the throttle so the widget
                 // appears (with the counter populated) within one tick.
-                PrePlanTick::Promoted => sync.emit_snapshot(true),
+                PrePlanTick::Promoted => sync.emit_snapshot(),
                 // Counter moved on an already-visible override: ride
                 // the engine's 250ms snapshot throttle so per-file scan
                 // ticks don't flood the webview.
-                PrePlanTick::Refreshed => sync.emit_snapshot(false),
+                PrePlanTick::Refreshed => sync.emit_snapshot_throttled(),
                 PrePlanTick::Invisible => {}
             }
         }
@@ -501,7 +501,7 @@ fn end_root_not_mounted_episode<R: tauri::Runtime>(app: &AppHandle<R>, label: &s
 /// when a session is open. Straight from the plan items: an intermediate
 /// map would clone every path string.
 fn patch_session_sizes<'a>(sync: &SyncRunner, planned: impl Iterator<Item = &'a hcfs_client::sync::SyncPlanFile>) {
-    let mut progress_state = sync.progress.lock();
+    let mut progress_state = sync.progress().lock();
     if let Some(session) = progress_state.current_session.as_mut() {
         let mut patched = 0u32;
         for f in planned {
@@ -520,7 +520,7 @@ fn patch_session_sizes<'a>(sync: &SyncRunner, planned: impl Iterator<Item = &'a 
     let needs_snapshot = progress_state.current_session.is_some();
     drop(progress_state);
     if needs_snapshot {
-        sync.emit_snapshot(true);
+        sync.emit_snapshot();
     }
 }
 

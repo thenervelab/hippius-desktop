@@ -110,9 +110,9 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
 
     let old_relative = wire_relative_path(parent_path, old_name);
     let new_relative = wire_relative_path(parent_path, new_name);
-    let old_path_hash = hcfs_client::crypto::compute_path_hash(&old_relative);
-    let new_path_hash = hcfs_client::crypto::compute_path_hash(&new_relative);
-    let new_encrypted_path = hcfs_client::crypto::encrypt_small(new_relative.as_bytes(), &encryption_key)
+    let old_path_hash = hcfs_crypto::compute_path_hash(&old_relative);
+    let new_path_hash = hcfs_crypto::compute_path_hash(&new_relative);
+    let new_encrypted_path = hcfs_crypto::encrypt_small(new_relative.as_bytes(), &encryption_key)
         .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
 
     // The WIRE hash, not one derived from the local label: a member's local
@@ -315,7 +315,7 @@ async fn collect_folder_tree(
     ss58: &str,
     folder_hash: &str,
     root: &str,
-    encryption_key: &[u8; 32],
+    encryption_key: &hcfs_crypto::FileKey,
 ) -> Result<RemoteFolderTree> {
     let mut tree = RemoteFolderTree::default();
     let mut pending = vec![root.to_string()];
@@ -334,7 +334,7 @@ async fn collect_folder_tree(
                 if file.encrypted_path.is_empty() {
                     return None;
                 }
-                hcfs_client::crypto::decrypt_small(&file.encrypted_path, encryption_key)
+                hcfs_crypto::decrypt_small(&file.encrypted_path, encryption_key)
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok())
             });
@@ -458,11 +458,11 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     for batch in plan.files.chunks(RENAME_BATCH) {
         let mut renames = Vec::with_capacity(batch.len());
         for item in batch {
-            let new_encrypted_path = hcfs_client::crypto::encrypt_small(item.new_path.as_bytes(), &encryption_key)
+            let new_encrypted_path = hcfs_crypto::encrypt_small(item.new_path.as_bytes(), &encryption_key)
                 .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
             renames.push(SingleRename {
                 old_path_hash: item.old_path_hash,
-                new_path_hash: hcfs_client::crypto::compute_path_hash(&item.new_path),
+                new_path_hash: hcfs_crypto::compute_path_hash(&item.new_path),
                 new_encrypted_path,
                 new_file_name: item.new_path.rsplit('/').next().map(str::to_string),
                 new_relative_path: Some(item.new_path.clone()),

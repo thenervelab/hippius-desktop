@@ -1140,8 +1140,7 @@ pub async fn create_folder_share_inner(
     // remote preview use (`encryption_key_for_label`) — the link fragment
     // carries this key, never folder-mnemonic entropy. Wiped on drop.
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
-    let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?);
+    let file_key = crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, &identity).await?;
 
     // Drive-scoped client: `create_folder_share` sends the folder_hash from
     // the client CONFIG, so `build_account_client`'s label-less client would
@@ -1360,8 +1359,7 @@ async fn create_member_folder_share(
     info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share in a member drive");
 
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
-    let file_key =
-        zeroize::Zeroizing::new(crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?);
+    let file_key = crate::sync::remote::encryption_key_for_label(state, account_id, folder_label, &mnemonic, identity).await?;
 
     // Build the secret BEFORE minting, as hcfs-client does: a failure must not
     // leave a live share whose only plaintext token was in the 201 body. A
@@ -1375,10 +1373,10 @@ async fn create_member_folder_share(
     };
     let secret = match (&link, choice.password()) {
         (Some(link), _) => link.secret.clone(),
-        (None, Some(password)) => {
-            ShareSecret::Private(hcfs_client::client::share::wrap_share_key(password, &file_key).map_err(|e| AppError::Validation(e.to_string()))?)
-        }
-        (None, None) => ShareSecret::Public(*file_key),
+        (None, Some(password)) => ShareSecret::Private(
+            hcfs_client::client::share::wrap_share_key(password, file_key.as_bytes()).map_err(|e| AppError::Validation(e.to_string()))?,
+        ),
+        (None, None) => ShareSecret::Public(*file_key.as_bytes()),
     };
 
     let created = http_create_member_folder_share(
@@ -3013,7 +3011,7 @@ mod tests {
         assert_eq!(public.share_token.as_deref(), Some("tok-pub"));
         assert_eq!(
             public.share_url.as_deref(),
-            Some(build_folder_share_url("https://console.example.com", "tok-pub", &public_key).as_str()),
+            Some(build_folder_share_url("https://console.example.com", "tok-pub", &hcfs_crypto::FileKey::from_bytes(public_key)).as_str()),
         );
         assert_eq!(public.is_private, Some(false));
         assert_eq!(public.path_prefix, "photos");
@@ -3087,7 +3085,11 @@ mod tests {
         use hcfs_client::client::folder_share::{build_folder_link_url, build_folder_link_url_private, build_folder_share_url};
         assert!(is_link_secret_url(&build_folder_link_url("https://x.io", "t", &[1u8; 32])));
         assert!(is_link_secret_url(&build_folder_link_url_private("https://x.io", "t", &[1u8; 89])));
-        assert!(!is_link_secret_url(&build_folder_share_url("https://x.io", "t", &[1u8; 32])));
+        assert!(!is_link_secret_url(&build_folder_share_url(
+            "https://x.io",
+            "t",
+            &hcfs_crypto::FileKey::from_bytes([1u8; 32])
+        )));
         assert!(!is_link_secret_url("https://x.io/share/folder/t"));
     }
 

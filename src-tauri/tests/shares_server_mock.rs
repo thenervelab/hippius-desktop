@@ -51,6 +51,7 @@ use axum::{
 };
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use hcfs_crypto::FileKey;
 use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -490,7 +491,9 @@ fn make_state(pool: sqlx::SqlitePool, account: &str) -> AppState {
 /// derivation `encryption_key_for_label` performs for an own drive
 /// (master → derive_encryption_key(label)), computed independently here.
 fn expected_file_key(label: &str) -> [u8; 32] {
-    hcfs_client::drive::remote::derive_encryption_key(MASTER, label).expect("derive file key")
+    *hcfs_client::drive::remote::derive_encryption_key(MASTER, label)
+        .expect("derive file key")
+        .as_bytes()
 }
 
 // ── Mint (happy paths) ─────────────────────────────────────────────────────
@@ -1699,8 +1702,14 @@ async fn outside_folder_share_uploads_every_file_then_seals() {
         assert_eq!(sent, file["total_chunks"].as_u64().unwrap(), "{file}");
         let ciphertext = uploaded_ciphertext(&rec, id);
         let mut plaintext = Vec::new();
-        hcfs_client::crypto::decrypt_stream(&mut std::io::Cursor::new(&ciphertext), &mut plaintext, &key, None, None::<fn(u64, u64)>)
-            .expect("drive framing under the link key");
+        hcfs_crypto::decrypt_stream(
+            &mut std::io::Cursor::new(&ciphertext),
+            &mut plaintext,
+            &FileKey::from_bytes(key),
+            None,
+            None::<fn(u64, u64)>,
+        )
+        .expect("drive framing under the link key");
         let expected = if file["relative_path"] == "a.txt" {
             b"hello".to_vec()
         } else {
@@ -2374,10 +2383,10 @@ async fn a_password_upload_link_round_trips_through_its_blob_and_owner_wrap() {
         .and_then(|f| f["file_id"].as_i64())
         .expect("a.txt declared");
     let mut plaintext = Vec::new();
-    hcfs_client::crypto::decrypt_stream(
+    hcfs_crypto::decrypt_stream(
         &mut std::io::Cursor::new(uploaded_ciphertext(&rec, a_id)),
         &mut plaintext,
-        &key,
+        &FileKey::from_bytes(key),
         None,
         None::<fn(u64, u64)>,
     )
@@ -2478,7 +2487,7 @@ fn assert_body_seals(body: &serde_json::Value, link_secret: &[u8; 32], file_key:
     assert_eq!(envelope.len(), hcfs_shared::shares::FOLDER_LINK_ENVELOPE_LEN);
     assert_eq!(digest.len(), hcfs_shared::shares::FOLDER_LINK_FETCH_DIGEST_LEN);
     let opened = hcfs_client::client::folder_link::open_folder_link_envelope(link_secret, &envelope).expect("the envelope opens");
-    assert_eq!(&*opened, file_key, "the envelope seals the drive key");
+    assert_eq!(opened.as_bytes(), file_key, "the envelope seals the drive key");
 }
 
 /// Once the server serves link envelopes, the owner's mint keeps the drive

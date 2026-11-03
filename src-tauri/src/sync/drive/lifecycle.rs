@@ -1,7 +1,6 @@
 //! Sync lifecycle: init, stop, pause, resume, auto-init, change folder,
 //! progress handler setup, and all supporting private helpers.
 
-use notify::Watcher;
 use serde::Serialize;
 use tracing::{debug, error, info, warn};
 
@@ -210,7 +209,7 @@ pub async fn add_local_sync_folder(
     // `SyncCompleted`/`SyncError`/`SyncStopped` handlers clear it, and the 60s
     // watchdog is the backstop.
     if preparing.mark_preparing(&label) {
-        sync.emit_snapshot(true);
+        sync.emit_snapshot();
     }
 
     // Initialize sync for this drive (start_loop = true). On failure, clear the
@@ -227,7 +226,7 @@ pub async fn add_local_sync_folder(
     if let Err(e) = initialize_sync_inner(app.clone(), account_id, label.clone(), mnemonic, true, None).await {
         warn!(label = %label, error = %e, "Initializing the added sync folder failed");
         if preparing.clear(&label) {
-            sync.emit_snapshot(true);
+            sync.emit_snapshot();
         }
         if let Some(status) = init_failure_status(&e, "Failed to start syncing") {
             crate::sync::status::emit_drive_status(&app, &label, &path, status);
@@ -256,22 +255,17 @@ pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: S
 /// Stop the existing drive with the given label, discard its pending activity
 /// and progress session files, and emit a snapshot.
 async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
-    {
-        let mut drives_guard = sync.drives.lock().await;
-        if let Some(old_slot) = drives_guard.remove(label) {
-            old_slot.cancel_token.cancel();
-            debug!("Dropped previous drive instance for label '{}'", label);
-        }
-    } // release the tokio drives Mutex BEFORE the std::sync::Mutex calls below
+    // `remove_drive` cancels the old slot's token and unwatches its root; the
+    // re-registration that follows watches the root again through the loop's
+    // hot-add path.
+    if sync.remove_drive(label).await.is_some() {
+        debug!("Dropped previous drive instance for label '{}'", label);
+    }
 
-    // discard_pending_activity_for_label and remove_state lock std::sync::Mutex
-    // fields; holding the tokio drives guard across them risked stalling the
-    // executor thread under contention (axiom rust_quality_74). The tokio guard
-    // is dropped first now.
     sync.discard_pending_activity_for_label(label);
     sync.remove_state(label);
     {
-        let mut state = sync.progress.lock();
+        let mut state = sync.progress().lock();
         if let Some(session) = state.current_session.as_mut() {
             let before = session.files.len();
             session.files.retain(|_path, file| file.label.as_ref() != label);
@@ -281,7 +275,7 @@ async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
             }
         }
     }
-    sync.emit_snapshot(true);
+    sync.emit_snapshot();
 }
 
 /// Maximum time to wait for the sync loop to exit after cancellation
@@ -313,83 +307,23 @@ async fn drain_drive_lock<T>(manager: Option<&Arc<TokioMutex<T>>>, timeout: std:
     }
 }
 
-/// Cancel every drive's `CancellationToken`. Does NOT remove drives
-/// from the map — that happens later in the teardown sequence. Safe to
-/// call from any context; takes a brief lock on the drives map.
-///
-/// The per-drive tokens are observed promptly by `hcfs_client`'s
-/// `run_sync_cycle`, which passes them into
-/// `sync_with_resolutions_cancellable`. Cancelling here causes any
-/// in-flight sync to unwind at its next await point rather than being
-/// torn down mid-operation by `JoinHandle::abort`.
-async fn cancel_all_drive_tokens(sync: &SyncRunner) {
-    let guard = sync.drives.lock().await;
-    for (label, slot) in guard.iter() {
-        slot.cancel_token.cancel();
-        debug!("Cancelled sync token for drive '{}'", label);
-    }
-}
-
-/// Await the sync loop task with a bounded grace window. Returns
-/// `true` if the loop exited cleanly (including expected cancellation
-/// or a panic — a panicked task is already terminated, so no abort is
-/// needed), `false` if the grace window expired. On timeout the
-/// `JoinHandle` is restored to `sync.loop_handle` so the caller's
-/// fallback `abort_sync_loop` can consume and abort it.
-async fn wait_for_sync_loop_exit(sync: &SyncRunner, grace: std::time::Duration) -> bool {
-    let mut handle_guard = sync.loop_handle.lock().await;
-    let Some(mut handle) = handle_guard.take() else {
-        return true;
-    };
-    match tokio::time::timeout(grace, &mut handle).await {
-        Ok(Ok(())) => true,
-        Ok(Err(join_err)) if join_err.is_cancelled() => true,
-        Ok(Err(join_err)) => {
-            // Task already dead — no abort needed, but surface the panic.
-            warn!("Sync loop task panicked on exit: {join_err}");
-            true
-        }
-        Err(_) => {
-            warn!("Sync loop did not exit within {grace:?} — will abort");
-            // Put the handle back so `abort_sync_loop` can consume it.
-            *handle_guard = Some(handle);
-            false
-        }
-    }
-}
-
-/// Abort the sync loop task as a last resort. Called only after
-/// `wait_for_sync_loop_exit` returns false — a clean cancel-and-wait
-/// is always preferred.
-async fn abort_sync_loop(sync: &SyncRunner) {
-    let mut handle_guard = sync.loop_handle.lock().await;
-    if let Some(prev) = handle_guard.take() {
-        prev.abort();
-    }
-}
-
 /// Teardown path when the last drive is being removed.
-/// Mirrors `stop_sync`'s order: cancel → wait with grace → abort → clear watcher.
+/// Mirrors `stop_sync`'s order: cancel → wait with grace → abort → clear watcher,
+/// which `stop_sync_loop_within` does in one call.
 ///
 /// Note: each drive's per-drive `cancel_token` was already cancelled when the
 /// drive was removed from the map. This helper handles the GLOBAL cancel and
 /// sync-loop shutdown for when zero drives remain.
 async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
     sync.request_cancel();
-    if !wait_for_sync_loop_exit(sync, GRACEFUL_SHUTDOWN).await {
-        abort_sync_loop(sync).await;
-    }
-    {
-        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        *watcher_guard = None;
-    }
+    sync.stop_sync_loop_within(GRACEFUL_SHUTDOWN).await;
     sync.clear_all_reviews();
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
 }
 
 /// Best-effort lookup of a label's on-disk sync path from the `sync_paths` DB
-/// row. Used as the `path_hint` for [`remove_drive_inmemory`] so the file
-/// watcher can be unwatched even when the per-drive lock is momentarily held.
+/// row. Used as the `path_hint` for [`remove_drive_inmemory`], which reports
+/// it as the removed path when no drive was registered under the label.
 async fn sync_path_for_label(app_state: &crate::app_state::AppState, account: &str, label: &str) -> Option<PathBuf> {
     let pool = app_state.pool().ok()?;
     crate::sync::folders::get_all_sync_paths_internal(pool, account)
@@ -403,59 +337,21 @@ async fn sync_path_for_label(app_state: &crate::app_state::AppState, account: &s
 /// Remove a drive from the in-memory registry: cancel its token, unwatch
 /// its path, and discard associated state. Returns `(remaining_count, removed_path)`.
 /// Does NOT touch the database — the caller decides whether to delete or
-/// mark-paused the DB row. `path_hint` is the DB-resolved sync path used when
-/// the in-memory read can't get it (see below).
+/// mark-paused the DB row. `path_hint` is the DB-resolved sync path, returned
+/// as the removed path when no drive was registered under `label`.
 async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option<PathBuf>) -> (usize, Option<PathBuf>) {
-    let (remaining, removed_path) = {
-        let mut guard = sync.drives.lock().await;
-        // Read the sync path for the unwatch below. `try_lock` returns None when
-        // an in-flight reconcile holds the per-drive lock across its HTTP await;
-        // fall back to the caller-supplied DB path so the watcher is still
-        // unwatched — otherwise the OS watch leaks until app restart.
-        let path = guard
-            .get(label)
-            .and_then(|slot| slot.manager.try_lock().ok().map(|m| m.sync_path().to_path_buf()))
-            .or(path_hint);
-        if let Some(slot) = guard.remove(label) {
-            slot.cancel_token.cancel();
-        }
-        (guard.len(), path)
-    };
-    sync.unregister_label_root(label);
-
-    if let Some(path) = &removed_path {
-        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(w) = watcher_guard.as_mut() {
-            let _ = w.unwatch(path);
-        }
-    }
-
-    sync.remove_state(label);
-    sync.discard_pending_activity_for_label(label);
-    // Wipe the synced-paths timestamp cache for this label so a
-    // future re-registration under the same label starts from a
-    // clean slate (otherwise a stale entry survives across
-    // remove/re-add cycles, briefly showing the previous drive's
-    // upload dates in the UI until the first reconcile refreshes).
-    if let Ok(mut cache) = sync.synced_paths_cache.lock() {
-        cache.remove(label);
-    }
+    // `remove_drive` also unwatches the slot's root and drops the label's
+    // state, pending activity, label root, synced-paths cache (so a re-add
+    // under the same label does not show the previous drive's upload dates)
+    // and first-reconcile gate (so the next `register_drive` installs a
+    // fresh one).
+    let removed_path = sync.remove_drive(label).await.map(|slot| slot.sync_path).or(path_hint);
     if let Some(path) = &removed_path {
         crate::sync::files::invalidate_dir_stats_under(path);
     }
-    // Drop the producer-side first-reconcile gate so the next
-    // `register_drive` for this label installs a fresh gate. Any
-    // in-flight `wait_for_first_reconcile` from a still-running
-    // spawned reconcile task is unaffected — that task holds its
-    // own `Arc<ReconcileGate>` clone and will settle on its Arc
-    // independently. See the upstream `SyncRunner::remove_drive`
-    // comment for the full invariant.
-    if let Ok(mut gates) = sync.first_reconcile.lock() {
-        gates.remove(label);
-    }
     let _ = crate::sync::progress::remove_files_for_label(sync, label.to_string());
 
-    (remaining, removed_path)
+    (sync.drive_count().await, removed_path)
 }
 
 /// Pre-populate the synced-paths cache and store the manager in the drive
@@ -507,21 +403,9 @@ async fn register_drive(app: &AppHandle, sync: &Arc<SyncRunner>, manager: DriveM
             bridge.register_root(PathBuf::from(sync_path));
         }
     }
-    let manager_arc = std::sync::Arc::new(TokioMutex::new(manager));
-    let reconcile_arc = std::sync::Arc::clone(&manager_arc);
-    {
-        let mut guard = sync.drives.lock().await;
-        guard.insert(
-            label.to_string(),
-            DriveSlot {
-                manager: manager_arc,
-                cancel_token: CancellationToken::new(),
-                // Lock-free path for the watcher enumeration (hcfs-client
-                // `collect_drive_paths`); equals `manager.sync_path()`.
-                sync_path: PathBuf::from(sync_path),
-            },
-        );
-    }
+    let slot = DriveSlot::new(manager, CancellationToken::new());
+    let reconcile_arc = Arc::clone(&slot.manager);
+    sync.add_drive(label.to_string(), slot).await;
 
     spawn_reconcile_timestamps(app, sync.clone(), reconcile_arc, label.to_string());
 }
@@ -1411,12 +1295,12 @@ pub(crate) async fn initialize_sync_inner(
         // is no busy peer manager to wait on) and awaiting keeps the first
         // drive's watcher/loop deterministically up before init returns.
         //
-        // Read `loop_handle` into a `let` so its guard drops at the semicolon,
-        // before `start_sync_loop` re-locks `loop_handle` internally. The check
+        // `is_sync_loop_running` releases the `loop_handle` lock before
+        // returning, so `start_sync_loop` can take it again. The check
         // is a hint, not a guarantee: if the loop is torn down between here and
         // the spawned task running, `start_sync_loop` re-checks `loop_handle`
         // under its own lock and self-guards an empty drive map — safe either way.
-        let loop_already_running = sync.loop_handle.lock().await.is_some();
+        let loop_already_running = sync.is_sync_loop_running().await;
         if loop_already_running {
             let app_for_hot_add = app.clone();
             tauri::async_runtime::spawn(async move {
@@ -1476,16 +1360,13 @@ pub(crate) async fn initialize_sync_inner(
             // already emitted its own status, so emit nothing here.
             //
             // Terminal teardown, NOT `teardown_previous_drive`: that
-            // helper is the cheap entry-teardown for an init that is
-            // about to re-register everything — it drops the slot but
-            // leaves the label root, the watcher path, the synced-paths
-            // cache, and the first-reconcile gate behind, which here
-            // would leak until the next lifecycle op because this init
-            // re-registers nothing. Mirror `pause_drive`'s sequence
-            // instead: resolve the path hint from the DB so the watcher
-            // is unwatched even when the per-drive lock is held by an
-            // in-flight reconcile, then do the full in-memory removal.
-            // Unlike `pause_drive`, this teardown runs OUTSIDE the commit
+            // helper is the entry-teardown for an init that is about to
+            // re-register everything, and it leaves the drive's
+            // directory-stat cache behind and reports no remaining-drive
+            // count, which this arm needs to decide whether to stop the
+            // loop. Mirror `pause_drive`'s sequence instead: resolve
+            // the path hint from the DB, then do the full in-memory
+            // removal. Unlike `pause_drive`, this teardown runs OUTSIDE the commit
             // lock: the lock exists solely to make the epoch check and the
             // `is_paused` write atomic, this arm writes no flag, and the
             // remaining unprotected-removal hazard is exactly the
@@ -1623,48 +1504,24 @@ pub async fn stop_sync(app: AppHandle) -> Result<()> {
     //     bump labels from the account's `sync_paths` rows instead
     //     (every init path persists its row before initializing), or
     //     add a global epoch component.
-    let lifecycle_labels: Vec<String> = {
-        let guard = sync.drives.lock().await;
-        guard.keys().cloned().collect()
-    };
+    let lifecycle_labels = sync.drive_labels().await;
     for label in &lifecycle_labels {
         app_state.drive_lifecycle.bump(label);
     }
 
-    // 1. Cancel every drive's cancellation token FIRST so the sync loop
-    //    sees a clean shutdown signal and can persist state before exiting.
-    cancel_all_drive_tokens(sync).await;
-
-    // 2. Request the global cancel (belt + braces for loop-level checks
-    //    and to prevent a fresh cycle from starting after the per-drive
-    //    tokens above are observed — `trigger_sync_for_drive` overwrites
-    //    `slot.cancel_token` with a fresh token at the start of each cycle).
-    sync.request_cancel();
-
-    // 3. Give the loop up to GRACEFUL_SHUTDOWN to observe the cancels and
-    //    exit on its own. Fall back to abort only if it hangs.
-    let clean_exit = wait_for_sync_loop_exit(sync, GRACEFUL_SHUTDOWN).await;
-    if !clean_exit {
-        abort_sync_loop(sync).await;
-    }
-
-    // 4. Now safe to clear the watcher — no task is racing on sync state.
-    {
-        let mut watcher_guard = sync.watcher.lock().unwrap_or_else(|p| {
-            warn!("Poisoned watcher mutex recovered in stop_sync");
-            p.into_inner()
-        });
-        *watcher_guard = None;
-    }
+    // 1-4. Cancel every drive's token and request the global cancel, so the
+    //      loop can persist state before exiting; give it up to
+    //      GRACEFUL_SHUTDOWN to exit, abort it if it hangs, then drop the
+    //      watcher. `stop_sync_loop_within` does all four in that order.
+    sync.stop_sync_loop_within(GRACEFUL_SHUTDOWN).await;
 
     // 4b. Clean up session-skip exclude patterns before drives are removed.
     crate::sync::failure_commands::cleanup_session_skips(&app_state).await;
 
-    // 5. Clear drives map and reset in-memory state.
-    {
-        let mut guard = sync.drives.lock().await;
-        guard.clear();
-    }
+    // 5. Clear drives map and reset in-memory state. `remove_all_drives` also
+    //    empties the synced-paths cache, which clearing the map in place left
+    //    behind.
+    sync.remove_all_drives().await;
     sync.reset_sync_counter();
     sync.clear_all_reviews();
     sync.reset_all_states();
@@ -1758,13 +1615,10 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     // Clone the per-drive manager Arc BEFORE teardown removes its slot, so we
     // can drain its lock further down before wiping the baseline (F09). Cheap
     // Arc bump; the brief map-lock is released immediately.
-    let drive_manager = {
-        let guard = sync.drives.lock().await;
-        guard.get(&label).map(|slot| slot.manager.clone())
-    };
+    let drive_manager = sync.drive_manager(&label).await;
 
-    // Resolve the on-disk path from the DB so remove_drive_inmemory can unwatch
-    // the folder even when the per-drive lock is held by an in-flight reconcile.
+    // Resolve the on-disk path from the DB so remove_drive_inmemory can report
+    // it (Finder root, directory stats) even when no drive is registered.
     let path_hint = match explicit_account.clone().or_else(|| app_state.current_account_id().ok()) {
         Some(acct) => sync_path_for_label(&app_state, &acct, &label).await,
         None => None,
@@ -1868,7 +1722,7 @@ pub(crate) async fn remove_drive_for_account(app: AppHandle, label: String, expl
     // serialization and progress-mutex work — none of it needs the
     // commit lock, so it must not extend the locked region.
     if preparing_cleared {
-        sync.emit_snapshot(true);
+        sync.emit_snapshot();
     }
 
     // Drop the on-disk sync baseline. Without this, a re-add (whether at the
@@ -2052,9 +1906,7 @@ async fn suspend_drive_inmemory<R: tauri::Runtime>(app: &tauri::AppHandle<R>, la
 
     // Capture pool/account up front: used both for the optional is_paused
     // write AND to resolve the sync path passed as a hint to
-    // remove_drive_inmemory, so the watcher is unwatched even when the
-    // per-drive lock is held by an in-flight reconcile (try_lock would
-    // otherwise return None and leak the watch).
+    // remove_drive_inmemory, which reports it when no drive is registered.
     let pool_and_acct = match (app_state.pool(), app_state.current_account_id()) {
         (Ok(pool), Ok(acct)) => Some((pool, acct)),
         _ => None,
@@ -2506,7 +2358,7 @@ async fn auto_init_sync_inner(
             let (files, bytes) = crate::sync::files::compute_startup_pending_summary(&folder_dir, std::path::Path::new(&sync_path)).await;
             if files > 0 {
                 preparing.mark_preparing_with_summary(&label, files, bytes);
-                sync.emit_snapshot(true);
+                sync.emit_snapshot();
             }
         });
     }
@@ -2629,6 +2481,7 @@ async fn auto_init_sync_inner(
 mod tests {
     use super::callbacks::TransferDirection;
     use super::*;
+    use hcfs_client::engine::runner::WaitOutcome;
     use std::time::Duration;
 
     // ── drain_drive_lock (F09: serialize baseline wipe vs in-flight cycle) ──
@@ -2734,7 +2587,7 @@ mod tests {
     // ── Teardown helper tests ───────────────────────────────────────────
 
     /// Build a minimal `SyncRunner` suitable for unit tests that only
-    /// exercise `loop_handle` / teardown logic (no real drives or watcher).
+    /// exercise teardown logic (no real drives or watcher).
     fn test_sync_runner() -> Arc<SyncRunner> {
         use hcfs_client::engine::{NoopCallbacks, NoopEventHandler};
         Arc::new(SyncRunner::new(
@@ -2742,53 +2595,6 @@ mod tests {
             Arc::new(NoopCallbacks),
             reqwest::Client::new(),
         ))
-    }
-
-    #[tokio::test]
-    async fn wait_for_sync_loop_exit_returns_true_when_no_handle() {
-        // When loop_handle is None (no loop running), should return true immediately.
-        let sync = test_sync_runner();
-        assert!(wait_for_sync_loop_exit(&sync, Duration::from_millis(100)).await);
-    }
-
-    #[tokio::test]
-    async fn wait_for_sync_loop_exit_returns_true_on_clean_exit() {
-        // When the loop task completes within the grace window, returns true.
-        let sync = test_sync_runner();
-        let handle = tokio::spawn(async { /* exits immediately */ });
-        *sync.loop_handle.lock().await = Some(handle);
-        assert!(wait_for_sync_loop_exit(&sync, Duration::from_millis(100)).await);
-        // Handle should be consumed (taken)
-        assert!(sync.loop_handle.lock().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn wait_for_sync_loop_exit_returns_false_on_timeout_and_restores_handle() {
-        // When the loop task doesn't exit within grace, returns false and restores handle.
-        let sync = test_sync_runner();
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        });
-        *sync.loop_handle.lock().await = Some(handle);
-        assert!(!wait_for_sync_loop_exit(&sync, Duration::from_millis(50)).await);
-        // Handle should be restored so abort_sync_loop can consume it
-        assert!(sync.loop_handle.lock().await.is_some());
-    }
-
-    #[tokio::test]
-    async fn abort_sync_loop_terminates_restored_handle() {
-        // After wait_for_sync_loop_exit restores the handle on timeout,
-        // abort_sync_loop should consume and abort it.
-        let sync = test_sync_runner();
-        let handle = tokio::spawn(async {
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        });
-        *sync.loop_handle.lock().await = Some(handle);
-        // Grace window expires
-        assert!(!wait_for_sync_loop_exit(&sync, Duration::from_millis(50)).await);
-        // Now abort
-        abort_sync_loop(&sync).await;
-        assert!(sync.loop_handle.lock().await.is_none());
     }
 
     // ── remove_drive_inmemory tests ────────────────────────────────────
@@ -2805,25 +2611,14 @@ mod tests {
         std::fs::create_dir_all(&config_dir).expect("create config dir");
 
         // Insert a drive slot with a real DriveManager.
-        {
-            let manager = DriveManager::new(sync_path.clone(), config_dir);
-            let token = CancellationToken::new();
-            let mut guard = sync.drives.lock().await;
-            guard.insert(
-                label.to_string(),
-                DriveSlot {
-                    manager: Arc::new(TokioMutex::new(manager)),
-                    cancel_token: token,
-                    sync_path: sync_path.clone(),
-                },
-            );
-        }
+        let manager = DriveManager::new(sync_path.clone(), config_dir);
+        sync.add_drive(label.to_string(), DriveSlot::new(manager, CancellationToken::new())).await;
 
         // Seed ancillary state so removal has something to clean up.
         sync.register_label_root(label.to_string(), sync_path.clone());
 
         // Pre-conditions: drive and label root exist.
-        assert!(sync.drives.lock().await.contains_key(label));
+        assert!(sync.drive_manager(label).await.is_some());
 
         let (remaining, removed_path) = remove_drive_inmemory(&sync, label, None).await;
 
@@ -2833,7 +2628,8 @@ mod tests {
             Some(sync_path.as_path()),
             "should return the sync path of the removed drive"
         );
-        assert!(!sync.drives.lock().await.contains_key(label), "drive should no longer be in the map");
+        assert!(sync.drive_manager(label).await.is_none(), "drive should no longer be in the map");
+        assert!(sync.label_root(label).is_none(), "the label root goes with the drive");
     }
 
     /// Regression test for fix 3 in the date-uploaded readiness PR.
@@ -2880,7 +2676,7 @@ mod tests {
             "synced_paths_cache should have a pre-removal entry"
         );
         assert!(
-            sync.first_reconcile.lock().expect("lock").contains_key(label),
+            !matches!(sync.wait_for_first_reconcile(label, Duration::ZERO).await, WaitOutcome::NotRegistered),
             "first_reconcile gate map should have a pre-removal entry"
         );
 
@@ -2891,7 +2687,7 @@ mod tests {
             "synced_paths_cache must be cleared by remove_drive_inmemory"
         );
         assert!(
-            !sync.first_reconcile.lock().expect("lock").contains_key(label),
+            matches!(sync.wait_for_first_reconcile(label, Duration::ZERO).await, WaitOutcome::NotRegistered),
             "first_reconcile gate map must be cleared by remove_drive_inmemory"
         );
     }
@@ -2910,18 +2706,8 @@ mod tests {
         let token = CancellationToken::new();
         let token_clone = token.clone();
 
-        {
-            let manager = DriveManager::new(sync_path.clone(), config_dir);
-            let mut guard = sync.drives.lock().await;
-            guard.insert(
-                label.to_string(),
-                DriveSlot {
-                    manager: Arc::new(TokioMutex::new(manager)),
-                    cancel_token: token,
-                    sync_path: sync_path.clone(),
-                },
-            );
-        }
+        let manager = DriveManager::new(sync_path, config_dir);
+        sync.add_drive(label.to_string(), DriveSlot::new(manager, token)).await;
 
         assert!(!token_clone.is_cancelled(), "token should not be cancelled before removal");
 
@@ -3005,20 +2791,13 @@ mod tests {
         state.auth.lock().expect("auth lock").substrate_address = Some(ACCOUNT.to_string());
 
         // Register a real drive slot so the funnel has something to remove.
-        {
-            let config_dir = sync_path.parent().expect("parent").join("config");
-            std::fs::create_dir_all(&config_dir).expect("create config dir");
-            let manager = DriveManager::new(sync_path.to_path_buf(), config_dir);
-            let mut guard = state.sync.drives.lock().await;
-            guard.insert(
-                label.to_string(),
-                DriveSlot {
-                    manager: Arc::new(TokioMutex::new(manager)),
-                    cancel_token: CancellationToken::new(),
-                    sync_path: sync_path.to_path_buf(),
-                },
-            );
-        }
+        let config_dir = sync_path.parent().expect("parent").join("config");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        let manager = DriveManager::new(sync_path.to_path_buf(), config_dir);
+        state
+            .sync
+            .add_drive(label.to_string(), DriveSlot::new(manager, CancellationToken::new()))
+            .await;
 
         (app, pool)
     }
@@ -3051,7 +2830,7 @@ mod tests {
 
         assert_eq!(remaining, 0);
         assert!(
-            !state.sync.drives.lock().await.contains_key("team-drive"),
+            state.sync.drive_manager("team-drive").await.is_none(),
             "revoked drive must be removed from the runner"
         );
         let cached = state.drive_status_cache.lock().expect("cache lock").get("team-drive").cloned();
@@ -3085,7 +2864,7 @@ mod tests {
         let remaining = suspend_drive_inmemory(&handle, "pause-drive", DriveSuspendKind::Pause).await;
 
         assert_eq!(remaining, 0);
-        assert!(!state.sync.drives.lock().await.contains_key("pause-drive"));
+        assert!(state.sync.drive_manager("pause-drive").await.is_none());
         let cached = state.drive_status_cache.lock().expect("cache lock").get("pause-drive").cloned();
         assert_eq!(cached, Some(crate::sync::drive_status::DriveStatus::Paused));
         assert!(
@@ -3346,11 +3125,8 @@ mod tests {
         let fid = [0xCCu8; 32];
         callback("new.txt", &hex::encode(fid), "cid-a", "uploaded", None);
 
-        let info = sync
-            .get_cached_synced_paths(&label)
-            .unwrap()
-            .remove("new.txt")
-            .expect("legacy-server upload should still create a cache entry");
+        let cache = sync.get_cached_synced_paths(&label).unwrap();
+        let info = cache.get("new.txt").expect("legacy-server upload should still create a cache entry");
         assert_eq!(info.uploaded_at, 0);
         assert_eq!(info.updated_at, 0);
         assert_eq!(&*info.arion_cid, "cid-a");

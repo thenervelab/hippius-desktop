@@ -730,7 +730,7 @@ pub fn spawn_watchdog(state: Weak<PreparingState>, sync: Weak<SyncRunner>) {
             // `immediate=true` bypasses the snapshot throttle. If the
             // runner is already gone the override is moot anyway.
             if let Some(sync) = sync.upgrade() {
-                sync.emit_snapshot(true);
+                sync.emit_snapshot();
             }
         }
     });

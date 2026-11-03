@@ -435,10 +435,7 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 
     // Stage 3: first active drive's folder mnemonic (pre-migration state).
     warn!("Master mnemonic not found at {:?}, falling back to per-folder mnemonic", master_path);
-    let first_arc = {
-        let guard = app_state.sync.drives.lock().await;
-        guard.values().next().map(|slot| slot.manager.clone())
-    };
+    let first_arc = app_state.sync.drive_managers().await.into_iter().next().map(|(_, manager)| manager);
     if let Some(arc) = first_arc
         && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {

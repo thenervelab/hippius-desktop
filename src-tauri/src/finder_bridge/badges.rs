@@ -92,21 +92,19 @@ pub fn badge_for_synced_action(action: &str) -> Option<BadgeState> {
 /// In memory rather than the `sync_paths` table: this runs once per visible
 /// Finder row and per transferred file.
 pub fn label_roots(sync: &SyncRunner) -> Vec<(String, PathBuf)> {
-    let guard = sync.label_roots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.iter().map(|(label, root)| (label.clone(), root.clone())).collect()
+    sync.label_roots()
 }
 
 /// The root registered for `label`, if the drive is up.
 pub fn label_root(sync: &SyncRunner, label: &str) -> Option<PathBuf> {
-    let guard = sync.label_roots.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.get(label).cloned()
+    sync.label_root(label)
 }
 
 /// What the current session says about `rel` in drive `label`. A directory
 /// (`is_dir`) aggregates everything under it: any active file makes it
 /// active, else any failed file makes it failed.
 pub fn transfer_state(sync: &SyncRunner, label: &str, rel: &str, is_dir: bool) -> Transfer {
-    let state = sync.progress.lock_state();
+    let state = sync.progress().lock_state();
     let Some(session) = state.current_session.as_ref() else {
         return Transfer::Idle;
     };
@@ -150,8 +148,7 @@ fn transfer_of(status: &FileStatus) -> Transfer {
 /// cache in place — cloning a six-figure map per Finder row is what this
 /// function exists to avoid.
 pub fn is_synced(sync: &SyncRunner, label: &str, rel: &str) -> bool {
-    let cache = sync.synced_paths_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    cache.get(label).is_some_and(|paths| paths.contains_key(rel))
+    sync.has_synced_path(label, rel)
 }
 
 /// Answer one `BADGE_QUERY`: gather the facts for `path` from the engine's
@@ -376,7 +373,7 @@ mod tests {
             remote_delete_files: None,
         };
         crate::sync::progress::merge_into_session(sync, files.len() as u32, 0, 0, 0, Some(list), Some(label.to_string())).expect("session");
-        let mut state = sync.progress.lock_state();
+        let mut state = sync.progress().lock_state();
         let session = state.current_session.as_mut().expect("session exists");
         for (path, status) in files {
             session.files.get_mut(*path).expect("seeded file").status = status.clone();

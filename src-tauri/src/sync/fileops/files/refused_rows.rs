@@ -153,7 +153,7 @@ mod tests {
             id,
             hcfs_client::drive::FileMetadata {
                 path_hash: id,
-                salted_hash: [0; 32],
+                salted_hash: hcfs_shared::salted_hash::SaltedHash::default(),
                 size_bytes: 0,
                 revision_seq: 0,
                 revision_id: [0; 32],

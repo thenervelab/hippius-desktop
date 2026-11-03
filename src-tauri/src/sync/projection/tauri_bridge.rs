@@ -21,7 +21,7 @@ use crate::sync::progress::{SyncSnapshot, cap_file_list, prepare_snapshot_for_em
 /// Pre-emit short-circuit: if the new snapshot hashes to the same value as
 /// the last emitted one, skip `app.emit` entirely. The throttle in
 /// `progress::update_file_progress` already gates by time (250 ms); this
-/// gate adds a content check so a state-transition emit (`emit_snapshot(true)`,
+/// gate adds a content check so a state-transition emit (`emit_snapshot()`,
 /// not throttled) immediately followed by a chunk-tick emit with identical
 /// headline data only goes over the IPC once. `0` is reserved for "never
 /// emitted, always allow first emit through."
@@ -138,7 +138,7 @@ fn update_failure_counts(app: &AppHandle, label: &str) {
     // back-to-back sweeps. For a drive that just completed thousands of
     // files this halves the work done under the progress lock.
     let (failed_files, succeeded_paths): (Vec<(String, Option<String>)>, Vec<String>) = {
-        let state = app_state.sync.progress.lock_state();
+        let state = app_state.sync.progress().lock_state();
         let Some(session) = &state.current_session else {
             return;
         };
@@ -233,7 +233,7 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     // cycle that completes with an empty plan (no merge_into_session) doesn't
     // leak a stuck "Preparing sync…" widget after the cycle ends.
     app_state.preparing.clear(&payload.label);
-    app_state.sync.emit_snapshot(true);
+    app_state.sync.emit_snapshot();
 
     // Defensive banner clear, scoped to THIS label and epoch-gated so an
     // overlapping in-flight cycle's completion cannot prematurely clear a NEW
@@ -429,7 +429,7 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
         //    cancels (handled by stop_sync).
         SyncErrorDisposition::SilencedCancel => {
             if app_state.preparing.clear(&payload.label) {
-                app_state.sync.emit_snapshot(true);
+                app_state.sync.emit_snapshot();
             }
             tracing::debug!(label = %payload.label, "Silenced sync cancel (not emitted as error)");
             return;
@@ -1042,7 +1042,7 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     if app_state.preparing.clear(&label) {
-        app_state.sync.emit_snapshot(true);
+        app_state.sync.emit_snapshot();
     }
     // The drive's cycle ended (pause / remove / logout
     // teardown). The 402 banner's running count is a
@@ -1088,7 +1088,7 @@ fn handle_sync_stopped(app: &AppHandle, label: String) {
 /// LAST thing the bridge observes — re-evaluating here guarantees the sleep
 /// assertion can never outlive the transfers it was held for.
 fn reevaluate_keep_awake(app_state: &crate::app_state::AppState, context: &'static str) {
-    let snapshot = app_state.sync.progress.build_snapshot();
+    let snapshot = app_state.sync.progress().build_snapshot();
     app_state.keep_awake.apply(crate::power::should_hold_keep_awake(&snapshot), context);
 }
 
@@ -1098,7 +1098,7 @@ fn handle_sync_reset<R: tauri::Runtime>(app: &AppHandle<R>, account_id: String, 
     use tauri::Manager;
     let app_state = app.state::<crate::app_state::AppState>();
     if app_state.preparing.clear_all() {
-        app_state.sync.emit_snapshot(true);
+        app_state.sync.emit_snapshot();
     }
     // Account switch / logout / reset. Every per-drive
     // 402 counter must be wiped before different account
@@ -1171,7 +1171,7 @@ fn handle_plan_ready(app: &AppHandle, mut payload: events::SyncPlanReadyPayload)
                 // the lock is already released here. Keep that boundary
                 // — extending the guard across this emit would deadlock
                 // the non-reentrant `std::sync::Mutex`.
-                app_state.sync.emit_snapshot(true);
+                app_state.sync.emit_snapshot();
             }
         } else {
             // Empty plan, or the IPC banner already covers this label:

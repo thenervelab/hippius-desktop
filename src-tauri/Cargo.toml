@@ -291,14 +291,30 @@ sha3 = "0.10"
 # `PUT .../invites/{id}/link-envelope` (`hcfs_client::client::invite_link`).
 # `DriveInviteEntry` gains `link_format`.
 #
+# Now at hcfs main 3a636ea3, the merge commit of #1156. The cipher moved to
+# the `hcfs-crypto` crate (#723) and seals or opens with `FileKey` (#963,
+# #988, #1071); `SyncRunner` fields are private (#984); the synced-paths
+# cache hands out `Arc`s (#1131); and `DriveSlot` is built with
+# `DriveSlot::new`, every clone of an `HcfsClient` shares its bearer tokens,
+# and `set_bearer_token` is `set_fallback_token` (#1156).
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0b7709c6971a17c62367868359dfc38234d602e4" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "0b7709c6971a17c62367868359dfc38234d602e4" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
+# The file cipher, path hash and `FileKey`, which hcfs-client uses but does
+# not re-export. Same rev as hcfs-client so a `FileKey` is the type its API takes.
+hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
+# Never imported. hcfs-client at this rev uses base64 0.23's `DecodeError` as a
+# `std::error::Error` but enables only `alloc`. That compiles inside the hcfs
+# workspace, where another crate turns `std` on, and fails here. This entry
+# turns `std` on through feature unification.
+# TODO(GeorgiosDelkos, thenervelab/hcfs#1165): drop once hcfs-client asks for `std`.
+base64-std-for-hcfs = { package = "base64", version = "0.23.1", default-features = false, features = ["std"] }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

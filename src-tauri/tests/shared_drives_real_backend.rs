@@ -133,7 +133,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use base64::Engine as _;
-use tokio::sync::Mutex as TokioMutex;
 use tokio_util::sync::CancellationToken;
 
 use hcfs_client::client::{HcfsClient, HcfsClientConfig};
@@ -302,8 +301,8 @@ struct EngineSide {
 }
 
 /// Build a runner and register `manager` under `label` — the
-/// `lifecycle::register_drive` slot shape (runner-owned drives map, per-drive
-/// cancel token, lock-free `sync_path` copy).
+/// `lifecycle::register_drive` slot shape (`DriveSlot::new` with a per-drive
+/// cancel token, after the manager has its config).
 async fn engine_side(manager: DriveManager, label: &str, sync_root: &std::path::Path) -> EngineSide {
     let handler = Arc::new(CaptureHandler::default());
     let runner = Arc::new(SyncRunner::new(
@@ -313,14 +312,9 @@ async fn engine_side(manager: DriveManager, label: &str, sync_root: &std::path::
     ));
 
     runner.register_label_root(label.to_string(), sync_root.to_path_buf());
-    runner.drives.lock().await.insert(
-        label.to_string(),
-        DriveSlot {
-            manager: Arc::new(TokioMutex::new(manager)),
-            cancel_token: CancellationToken::new(),
-            sync_path: sync_root.to_path_buf(),
-        },
-    );
+    runner
+        .add_drive(label.to_string(), DriveSlot::new(manager, CancellationToken::new()))
+        .await;
 
     EngineSide { runner, handler }
 }
