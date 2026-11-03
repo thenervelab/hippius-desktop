@@ -210,7 +210,9 @@ describe("Insights panel link", () => {
     expect(screen.getByTestId("insights-panel").textContent).not.toContain(KEY);
 
     fireEvent.click(screen.getByRole("button", { name: SHOW_LINK }));
-    expect(text).toHaveTextContent(URL_FULL);
+    // Shown in full without its scheme; Copy still copies all of it.
+    expect(text).toHaveTextContent(URL_FULL.replace("https://", ""));
+    expect(text.textContent).not.toContain("https://");
     fireEvent.click(screen.getByRole("button", { name: HIDE_LINK }));
     expect(text).not.toHaveTextContent(KEY);
 
@@ -220,6 +222,8 @@ describe("Insights panel link", () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(URL_FULL));
     expect(toastSuccess).toHaveBeenCalledWith(LINK_COPIED);
     expect(screen.getAllByRole("button", { name: COPY_LINK })).toHaveLength(1);
+    // A labelled button, not an icon.
+    expect(within(field).getByRole("button", { name: COPY_LINK })).toHaveTextContent(COPY_LINK);
     expect(within(header()).getAllByRole("button", { name: COPY_LINK })).toEqual([
       within(field).getByRole("button", { name: COPY_LINK }),
     ]);

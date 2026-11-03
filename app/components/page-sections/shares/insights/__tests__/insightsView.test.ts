@@ -15,7 +15,6 @@ import {
   blockedAuthorKeys,
   blockSubject,
   isCommentBlocked,
-  emptyInsightsCopy,
   estimateDurationMs,
   formatAgo,
   formatMomentAt,
@@ -176,8 +175,8 @@ describe("the tabs", () => {
     expect(defaultInsightsTab(0)).toBe("viewers");
   });
   it("puts the count in the label once it is known", () => {
-    expect(tabLabel("Comments", 20)).toBe("Comments (20)");
-    expect(tabLabel("Viewers", 0)).toBe("Viewers (0)");
+    expect(tabLabel("Comments", 20)).toBe("Comments 20");
+    expect(tabLabel("Viewers", 0)).toBe("Viewers 0");
     expect(tabLabel("Viewers", null)).toBe("Viewers");
   });
 });
@@ -299,18 +298,6 @@ describe("headerLine and formatAgo", () => {
   });
 });
 
-describe("emptyInsightsCopy", () => {
-  it("mentions comments and reactions only where the server has them", () => {
-    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: true }).body).toMatch(/comments and reactions/);
-    expect(emptyInsightsCopy({ notCounting: false, commentsEnabled: false }).body).not.toMatch(/comments/);
-  });
-  it("says a link that is not counting views is not, rather than that nobody came", () => {
-    const copy = emptyInsightsCopy({ notCounting: true, commentsEnabled: false });
-    expect(copy.title).toBe("Not counting views");
-    expect(copy.body).not.toMatch(/Nobody/);
-  });
-});
-
 describe("mentionSegments", () => {
   const owner = { kind: "owner" as const, name: "Owner", label: "Owner", you: true };
   const grace = { kind: "commenter" as const, name: "Grace Liu", label: "Grace Liu", you: false };
@@ -380,7 +367,6 @@ describe("what Insights promise the owner", () => {
   it("never says the owner sees who viewed or watched", async () => {
     const view = await import("../insightsView");
     const words: string[] = (Object.values(view) as unknown[]).filter((v): v is string => typeof v === "string");
-    for (const commentsEnabled of [true, false]) words.push(view.emptyInsightsCopy({ notCounting: true, commentsEnabled }).body);
     for (const video of [true, false])
       for (const notCounting of [true, false]) words.push(...Object.values(view.lockCopy({ video, notCounting })));
     for (const w of words) expect(w).not.toMatch(/\bwho (viewed|watched|watches|views|opened)\b/i);

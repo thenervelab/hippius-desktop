@@ -63,7 +63,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
-- **Insights is tidier.** The top of the panel shows the file's name, the capture's preview and the link with one Copy button, without a second thumbnail, a second Copy button or the row of Insights, Comments and Reactions badges; a switch that is off is named next to the share date, and Link settings is the gear.
+- **Insights has a cleaner layout.** The panel shows the file's name, a larger preview, the link with a Copy link button, then the views, viewers and comments (or how much of a recording people watched) in one row, with Comments, Viewers and Reactions as tabs below. Each thing appears once, a switch that is off is named next to the share date, and Link settings is the gear.
 - **The beta channel dialog is calmer.** Switching to or from beta uses the app's usual blue style instead of a yellow warning, with shorter wording that still says beta builds are not fully stabilized.
 - **Screenshots & Recording settings are easier to find your way around.** Settings are now grouped under Shortcuts, Saving, Sharing and Recording, each with a short line saying what it does, and every switch sits in the same place on the right. Choices that depend on another, like including recordings in Desktop copies, sit right under the one they belong to.
 - **Blocking someone on a share link now marks all of their comments.** In Insights, every comment that person wrote under a name shows as Blocked, and Unblock on any of them lifts it for all. Blocks also still show after you close and reopen Insights. A comment someone left anonymously is only marked when you block through that comment.

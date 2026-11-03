@@ -74,9 +74,9 @@ export function defaultInsightsTab(commentCount: number): InsightsTab {
   return commentCount > 0 ? "comments" : "viewers";
 }
 
-/** A tab's label: `Comments (20)`, or the name alone when the count is not known. */
+/** A tab's label: `Comments 20`, or the name alone when the count is not known. */
 export function tabLabel(name: string, count: number | null): string {
-  return count === null ? name : `${name} (${count})`;
+  return count === null ? name : `${name} ${count}`;
 }
 
 export type CommentOrder = "newest" | "oldest";
@@ -204,34 +204,6 @@ export function headerLine({
     parts.push(expired ? "link expired" : "link on");
   }
   return parts.join(" · ");
-}
-
-/**
- * The panel's one empty block, for a link nothing has happened on yet: no
- * views and, where the server has them, no comments or reactions.
- */
-export function emptyInsightsCopy({
-  notCounting,
-  commentsEnabled,
-}: {
-  /** The link's Insights switch is off, so views are not being counted. */
-  notCounting: boolean;
-  commentsEnabled: boolean;
-}): { title: string; body: string } {
-  if (notCounting) {
-    return {
-      title: "Not counting views",
-      body: commentsEnabled
-        ? "Insights are off for this link. Turn them on to count views. Comments and reactions show up here either way."
-        : "Insights are off for this link. Turn them on to count views.",
-    };
-  }
-  return {
-    title: "No views yet",
-    body: commentsEnabled
-      ? "Nobody has opened this link yet. Views, comments and reactions show up here once they do."
-      : "Nobody has opened this link yet. Views show up here once they do.",
-  };
 }
 
 /** The link switches, in the order the header and Link settings name them. */

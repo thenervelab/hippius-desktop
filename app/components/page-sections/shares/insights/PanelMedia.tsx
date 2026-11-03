@@ -20,7 +20,7 @@ import {
   type DriveLocation,
   type MediaPlan,
 } from "./panelLinkMedia";
-import { FOCUS, SKELETON } from "./panelStyles";
+import { FILL, FOCUS, RING, SKELETON } from "./panelStyles";
 
 /** Big enough for the panel's preview on a Retina screen, small enough to stay a thumbnail. */
 export const PREVIEW_THUMB_MAX_DIM = 640;
@@ -127,6 +127,9 @@ function CloudThumbnail({ file, onUrl }: { file: FormattedUserFile; onUrl: (url:
   return null;
 }
 
+/** The preview's frame: 16:10, rounded, with the panel's hairline as a ring. */
+const FRAME = "aspect-[16/10] w-full rounded-[10px]";
+
 /**
  * The capture in the panel's header: the screenshot, or the recording muted
  * with its controls (which also gives the panel its length), and "Open" to
@@ -146,12 +149,12 @@ export function MediaPreview({
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   if (media.status === "none") return null;
   if (media.status === "loading") {
-    return <div aria-hidden data-testid="insights-preview-loading" className={cn(SKELETON, "mt-3 aspect-video w-full rounded-[10px]")} />;
+    return <div aria-hidden data-testid="insights-preview-loading" className={cn(SKELETON, FRAME)} />;
   }
   if (media.url === failedUrl) return null;
   const { localPath } = media;
   return (
-    <figure data-testid="insights-preview" className="relative mt-3 overflow-hidden rounded-[10px] bg-[#000]">
+    <figure data-testid="insights-preview" className={cn("relative m-0 overflow-hidden", FRAME, FILL)}>
       {media.kind === "video" ? (
         <video
           src={media.url}
@@ -160,7 +163,7 @@ export function MediaPreview({
           playsInline
           preload="metadata"
           aria-label={`Preview of ${fileName}`}
-          className="aspect-video w-full object-contain"
+          className="size-full object-contain"
           onLoadedMetadata={(e) => {
             const seconds = e.currentTarget.duration;
             if (Number.isFinite(seconds) && seconds > 0) onDuration?.(Math.round(seconds * 1000));
@@ -171,10 +174,11 @@ export function MediaPreview({
         <img
           src={media.url}
           alt={`Preview of ${fileName}`}
-          className="aspect-video w-full object-contain"
+          className="size-full object-contain"
           onError={() => setFailedUrl(media.url)}
         />
       )}
+      <span aria-hidden className={cn("pointer-events-none absolute inset-0 rounded-[10px]", RING)} />
       {localPath && (
         <button
           type="button"
@@ -182,7 +186,7 @@ export function MediaPreview({
           title={OPEN_CAPTURE}
           onClick={() => void openInDefaultApp(localPath).catch(() => toast.error("Couldn't open the file."))}
           className={cn(
-            "absolute right-2 top-2 flex size-7 items-center justify-center rounded-md bg-[#000]/60 text-white transition-colors hover:bg-[#000]/80",
+            "absolute right-2 top-2 flex size-[30px] items-center justify-center rounded-[8px] bg-[#000]/55 text-white transition-colors hover:bg-[#000]/75",
             FOCUS,
           )}
         >
