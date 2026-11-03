@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useId, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart3, MessageSquare, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -19,16 +18,16 @@ import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
-import { actionErrorLine, DEFINITIONS, loadErrorLine, switchPills } from "./insightsView";
+import { actionErrorLine, DEFINITIONS, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
-import { FLOATING, FOCUS, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
+import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /** Marks what opens Link settings, so a press on it is not "outside". */
 export const SETTINGS_TRIGGER_ATTR = "data-link-settings-trigger";
 
 /**
- * A link's Insights, Comments and Reactions switches: what the status row
- * shows and what Link settings changes. Each change sends only the switch
+ * A link's Insights, Comments and Reactions switches: what the header's line
+ * says and what Link settings changes. Each change sends only the switch
  * flipped, shows at once, is put back if the server refuses it, and is then
  * read back from the server, so what shows is what the link has.
  */
@@ -61,62 +60,6 @@ export function useLinkSwitches(shareToken: string) {
 
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
 
-const PILL_ICON = { insights: BarChart3, comments: MessageSquare, reactions: SmilePlus } as const;
-
-/**
- * The status row: a pill per switch, on or off. Off is said in words as well
- * as drawn muted, never by colour alone. Each pill opens Link settings.
- */
-export function StatusPills({
-  settings,
-  popoverId,
-  open,
-  onOpen,
-}: {
-  settings: Pick<LinkSettingsDefault, "offered" | "on"> | null;
-  popoverId: string;
-  /** Link settings is open (the pills then point at it). */
-  open: boolean;
-  onOpen: (from: HTMLElement) => void;
-}) {
-  const pills = switchPills(settings);
-  if (pills.length === 0) return null;
-  return (
-    <ul className="flex flex-wrap items-center gap-1.5" aria-label="On this link">
-      {pills.map(({ key, label, on }) => {
-        const Icon = PILL_ICON[key];
-        return (
-          <li key={key}>
-            <button
-              type="button"
-              {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
-              aria-haspopup="dialog"
-              aria-controls={open ? popoverId : undefined}
-              aria-label={`${label} ${on ? "on" : "off"}. Change in Link settings`}
-              data-state={on ? "on" : "off"}
-              onClick={(e) => onOpen(e.currentTarget)}
-              className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11.5px] font-medium leading-none transition-colors",
-                FOCUS,
-                on
-                  ? "border-primary-50/25 bg-primary-50/[0.08] text-primary-50 hover:bg-primary-50/[0.14] dark:border-primary-brand-dark/30 dark:bg-primary-brand-dark/[0.12] dark:text-primary-brand-dark"
-                  : cn(
-                      "border-dashed border-grey-70 bg-transparent hover:bg-grey-90 dark:border-white/20 dark:hover:bg-white/[0.06]",
-                      MUTED,
-                    ),
-              )}
-            >
-              <Icon aria-hidden className="size-3" strokeWidth={2.25} />
-              <span>{label}</span>
-              {!on && <span className="font-semibold">off</span>}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 /**
  * Link settings: the link's switches and "How we count views", in a popover
  * anchored under the panel header's gear. It is drawn inside the panel (not
@@ -136,7 +79,7 @@ export function LinkSettingsPopover({
   switches: LinkSwitches;
   /** Pixels from the panel's top: just under its header. */
   top: number;
-  /** What opened it (the gear, a pill, a tab's Turn on), to give focus back to. */
+  /** What opened it (the gear or a Turn on), to give focus back to. */
   opener: React.MutableRefObject<HTMLElement | null>;
   onClose: () => void;
   /** Closes the whole panel (the upgrade prompt leaves for the plans page). */
