@@ -2034,13 +2034,9 @@ mod tests {
         reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
     )]
     async fn member_encryption_key_comes_from_the_sealed_folder_mnemonic() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
 
         const ACCT: &str = "5RemoteMemberKeyTestAccount";
         const LABEL: &str = "team";
@@ -2087,13 +2083,9 @@ mod tests {
         reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
     )]
     async fn a_member_drive_with_no_seal_reaches_for_the_grant_not_this_accounts_master() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
 
         const ACCT: &str = "5RemoteMemberKeyMissingSealAccount";
         const LABEL: &str = "team";
@@ -2135,13 +2127,9 @@ mod tests {
         reason = "HOME_LOCK is held across awaits to serialise the process-global $HOME override; current-thread test runtime, see test_helpers.rs"
     )]
     async fn the_two_own_drive_key_chains_agree() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
 
         const ACCT: &str = "5RemoteOwnDriveKeyChainAccount";
         const LABEL: &str = "chains";
@@ -2495,13 +2483,9 @@ mod tests {
     )]
     #[tokio::test]
     async fn download_cloud_file_to_errors_when_master_mnemonic_missing() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: the HOME override is serialised by HOME_LOCK (see test_helpers);
-        // #[tokio::test] is current-thread so no await contends on the env.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
 
         let account = "5MasterMissingAccount";
         let pool = schema_pool().await;

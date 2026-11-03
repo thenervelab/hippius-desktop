@@ -16,13 +16,28 @@
 
 #![cfg(test)]
 
-use std::sync::Mutex;
+use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
-/// Mutex every test must acquire before calling
-/// `std::env::set_var("HOME", ...)` (and for the duration of any code that
-/// reads `$HOME` after the override). Prevents parallel tests from
-/// seeing each other's tempdirs as their `$HOME`.
+/// Mutex every test must acquire before calling [`set_test_home`] (and for
+/// the duration of any code that reads `$HOME` after the override).
+/// Prevents parallel tests from seeing each other's tempdirs as their
+/// `$HOME`.
 pub(crate) static HOME_LOCK: Mutex<()> = Mutex::new(());
+
+/// Point `$HOME` at `home` for the rest of the test. Takes the
+/// [`HOME_LOCK`] guard so a caller cannot forget the lock.
+pub(crate) fn set_test_home(_lock: &MutexGuard<'static, ()>, home: &Path) {
+    // SAFETY: not fully discharged, and accepted because this is test-only.
+    // `set_var` requires that no other thread reads or writes the
+    // environment during the call. What holds: HOME_LOCK orders every test
+    // that sets or reads `$HOME`, and std serializes its own env reads and
+    // writes, so no Rust code sees a torn value. What is not ruled out: C
+    // code on another test thread (SQLite, the system resolver) calling
+    // `getenv` during this write. libtest offers no hook that runs before
+    // its threads start, which is where this write would otherwise belong.
+    unsafe { std::env::set_var("HOME", home) }
+}
 
 /// Collects `tracing` output so a test can assert on what was logged.
 /// Clones share one buffer; read it back with [`CaptureWriter::text`].

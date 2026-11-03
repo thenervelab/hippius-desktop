@@ -2016,13 +2016,9 @@ mod tests {
     async fn align_drive_password_writes_row_and_reencrypts_folders() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query(
@@ -2110,13 +2106,9 @@ mod tests {
 
     #[tokio::test]
     async fn reencrypt_returns_err_naming_failed_folder_but_rewrites_others() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
         let account = "5TestReencryptErrAccount";
         let (pool, master) = setup_folder_failure("alpha", "beta", account).await;
 
@@ -2139,13 +2131,9 @@ mod tests {
 
     #[tokio::test]
     async fn align_drive_password_does_not_flip_db_when_a_folder_fails() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
         let account = "5TestAlignAbortAccount";
         let (pool, master) = setup_folder_failure("alpha", "beta", account).await;
 
@@ -2193,13 +2181,9 @@ mod tests {
 
     #[tokio::test]
     async fn validate_master_refuses_wrong_master_against_encrypted_drive_password() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
-        // requires the unsafe block for std::env::set_var.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestValidateWrongMaster";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2240,13 +2224,9 @@ mod tests {
     /// unlock path free to replace the last local copy of the real master.
     #[tokio::test]
     async fn validate_master_checks_the_drive_password_row_without_folders() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
-        // requires the unsafe block for std::env::set_var.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestValidateNoFoldersRow";
         let pool = setup_validation_pool().await;
         // No sync_paths rows at all; only the encrypted drive-password row.
@@ -2269,13 +2249,9 @@ mod tests {
 
     #[tokio::test]
     async fn validate_master_allows_when_no_drive_password_config() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: test-only; HOME is serialized by HOME_LOCK and Rust 2024
-        // requires the unsafe block for std::env::set_var.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestValidateNoConfig";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2336,13 +2312,9 @@ mod tests {
     /// skip those rows the same way rotation already does.
     #[tokio::test]
     async fn validate_master_ignores_member_drive_seals() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestValidateMemberSkip";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2359,13 +2331,9 @@ mod tests {
 
     #[tokio::test]
     async fn validate_master_still_refuses_a_wrong_own_folder_seal() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestValidateOwnMismatch";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2384,13 +2352,9 @@ mod tests {
 
     #[tokio::test]
     async fn probe_folder_seals_confirms_own_and_skips_member() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestProbeMemberSkip";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2408,13 +2372,9 @@ mod tests {
 
     #[tokio::test]
     async fn probe_folder_seals_mismatch_on_wrong_own_seal() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         let account = "5TestProbeOwnMismatch";
         let pool = setup_validation_pool().await;
         let owner = crate::auth::account_key::account_key(account);
@@ -2470,13 +2430,9 @@ mod tests {
 
     #[tokio::test]
     async fn prove_master_oauth_own_seal_skips_member_and_confirms() {
-        let _home = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
+        let home_lock = crate::test_helpers::HOME_LOCK.lock().expect("HOME_LOCK");
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_lock, tmp.path());
         // Login SS58 that VALIDATION_MASTER does not derive (OAuth split).
         let account = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
         let pool = setup_validation_pool().await;
@@ -2496,13 +2452,9 @@ mod tests {
     #[tokio::test]
     async fn rotation_sidecar_roundtrip() {
         // Use a tempdir as the `HOME` so master_mnemonic_path points into it.
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        // SAFETY: HOME_LOCK, held above, serializes every test that sets $HOME
-        // (test_helpers.rs), so no other test thread changes it while this runs.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        crate::test_helpers::set_test_home(&home_guard, tmp.path());
 
         let account = "5TestSidecarAccount";
         // master_mnemonic_path creates the parent on first write via
