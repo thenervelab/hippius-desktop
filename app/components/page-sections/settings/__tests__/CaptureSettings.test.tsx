@@ -352,8 +352,9 @@ describe("the capture card on Linux", () => {
 });
 
 describe("the tab's layout", () => {
-  // The shortcuts lead the tab as tiles, the keys drawn large under the name.
-  it("draws the screenshot shortcut as a tile with its keys and actions", async () => {
+  // Each shortcut is one row of the Shortcuts group: its keys and actions
+  // at the row's right edge.
+  it("draws the screenshot shortcut as a row with its keys and actions", async () => {
     setup();
     const tile = await screen.findByRole("group", { name: "Screenshot shortcut" }, { timeout: 5000 });
     await waitFor(() => expect(tile.querySelector("kbd")).not.toBeNull());
