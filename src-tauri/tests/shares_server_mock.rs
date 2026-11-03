@@ -9,12 +9,12 @@
 //! mint route.
 //!
 //! Covers:
-//! - The happy public mint through the real funnel: the POST body is
-//!   exactly the four metadata fields carrying the drive's real
-//!   `folder_hash`, the returned URL is the `#k=` recipient link built
-//!   from the drive's derived file key, and the SQLite keystore holds it.
-//! - The password mint: `#p=` URL, keystore holds the wrapped blob, the
-//!   raw key appears nowhere.
+//! - The happy public mint through the real funnel: the POST body is the
+//!   four metadata fields carrying the drive's real `folder_hash` plus the
+//!   link envelope sealing the drive's derived file key, the returned URL is
+//!   the `#s=` link-secret link, and the SQLite keystore holds that secret.
+//! - The password mint: `#sp=` URL, keystore holds the wrapped link secret,
+//!   the raw key appears nowhere.
 //! - The member-drive refusal and the capability gate, behaviorally: the
 //!   distinct Validation messages, with the mint route provably uncalled.
 //! - Owner ops: the listing joins server `token_hash` rows to locally
@@ -158,9 +158,6 @@ struct MockOptions {
     /// Answer `link_envelope: false` even when the create body carried one:
     /// a server that dropped the envelope (hcfs #665).
     drop_envelope: bool,
-    /// Served for every `GET /v1/capabilities` after the first: a server
-    /// whose capabilities changed between two reads.
-    later_capabilities: Option<serde_json::Value>,
 }
 
 impl Default for MockOptions {
@@ -178,7 +175,6 @@ impl Default for MockOptions {
             memberships: json!({ "memberships": [] }),
             cancel_on_capabilities: None,
             drop_envelope: false,
-            later_capabilities: None,
         }
     }
 }
@@ -197,25 +193,13 @@ fn bearer_rejection(headers: &HeaderMap) -> Option<axum::response::Response> {
 }
 
 /// `GET /v1/capabilities`: counts the hit, fires the cancel hook, and serves
-/// `later` from the second read on when it is set.
-fn capabilities_reply(
-    hits: &Mutex<u32>,
-    first: serde_json::Value,
-    later: Option<serde_json::Value>,
-    cancel: Option<&CancellationToken>,
-) -> axum::response::Response {
-    let hit = {
-        let mut hits = hits.lock().unwrap();
-        *hits += 1;
-        *hits
-    };
+/// `body`.
+fn capabilities_reply(hits: &Mutex<u32>, body: serde_json::Value, cancel: Option<&CancellationToken>) -> axum::response::Response {
+    *hits.lock().unwrap() += 1;
     if let Some(cancel) = cancel {
         cancel.cancel();
     }
-    match later {
-        Some(later) if hit >= 2 => Json(later).into_response(),
-        _ => Json(first).into_response(),
-    }
+    Json(body).into_response()
 }
 
 /// The folder-share routes, mimicking hcfs-server's response shapes.
@@ -234,7 +218,6 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
     let memberships_body = opts.memberships.clone();
     let caps_cancel = opts.cancel_on_capabilities.clone();
     let drop_envelope = opts.drop_envelope;
-    let later_caps = opts.later_capabilities.clone();
 
     Router::new()
         .route(
@@ -248,7 +231,7 @@ fn share_router(opts: MockOptions, recorded: Recorded) -> Router {
         )
         .route(
             "/v1/capabilities",
-            get(move || async move { capabilities_reply(&caps_hits, caps_body, later_caps, caps_cancel.as_ref()) }),
+            get(move || async move { capabilities_reply(&caps_hits, caps_body, caps_cancel.as_ref()) }),
         )
         .route(
             "/v1/folder-shares",
@@ -498,13 +481,13 @@ fn expected_file_key(label: &str) -> [u8; 32] {
 
 // ── Mint (happy paths) ─────────────────────────────────────────────────────
 
-/// The full public mint through the real funnel: the POST body is exactly
+/// The full public mint through the real funnel: the POST body is
 /// `{folder_hash, path_prefix, display_name, ttl}` with the drive's real
-/// `folder_hash` and NOTHING else (no key material has a field to ride
-/// in), the returned URL is `…/share/folder/{token}#k={key}` with the
-/// drive's independently derived file key, and the SQLite keystore holds
-/// that key as a `Public` secret. The bearer is enforced by the mock —
-/// a wrong or missing Authorization would fail the mint outright.
+/// `folder_hash`, plus the link envelope sealing the drive's independently
+/// derived file key, the returned URL is `…/share/folder/{token}#s={secret}`,
+/// and the SQLite keystore holds that secret as `FolderLink`. The bearer is
+/// enforced by the mock — a wrong or missing Authorization would fail the
+/// mint outright.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn public_mint_posts_exact_metadata_and_persists_the_key() {
     let _home = &*TEST_HOME;
@@ -535,35 +518,34 @@ async fn public_mint_posts_exact_metadata_and_persists_the_key() {
         .await
         .expect("mint");
 
+    assert_eq!(link.share_token, "tok_pub");
+    assert_eq!(link.expires_at.as_deref(), Some("2026-08-30T00:00:00+00:00"));
+    assert_eq!(link.password, None, "a public mint returns no password");
+    assert!(
+        link.share_url.starts_with("http") && link.share_url.contains("/share/folder/tok_pub#s="),
+        "the URL must be the #s= recipient link: {}",
+        link.share_url
+    );
+    let link_secret = link_secret_of(&link.share_url);
+
     let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_body_seals(&body, &link_secret, &expected_file_key(label));
     assert_eq!(
-        body,
+        metadata_fields(&body),
         json!({
             "folder_hash": hcfs_client::drive::keys::folder_hash(label),
             "path_prefix": "photos/2026",
             "display_name": "2026",
             "ttl": "7d",
         }),
-        "the POST body must be exactly the four metadata fields"
-    );
-
-    assert_eq!(link.share_token, "tok_pub");
-    assert_eq!(link.expires_at.as_deref(), Some("2026-08-30T00:00:00+00:00"));
-    assert_eq!(link.password, None, "a public mint returns no password");
-
-    let key = expected_file_key(label);
-    let expected_suffix = format!("/share/folder/tok_pub#k={}", URL_SAFE_NO_PAD.encode(key));
-    assert!(
-        link.share_url.starts_with("http") && link.share_url.ends_with(&expected_suffix),
-        "the URL must be the #k= recipient link carrying the drive's derived file key: {}",
-        link.share_url
+        "besides the envelope pair, the POST body is exactly the four metadata fields"
     );
 
     let keystore = SqliteShareKeystore::new(pool);
     assert_eq!(
         keystore.get("tok_pub").expect("keystore get"),
-        Some(ShareSecret::Public(key)),
-        "the keystore must hold the minted token's raw key as Public"
+        Some(ShareSecret::FolderLink(link_secret)),
+        "the keystore must hold the minted token's link secret"
     );
 }
 
@@ -603,7 +585,7 @@ async fn whole_drive_mint_uses_the_drive_label_and_empty_prefix() {
 
     let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
     assert_eq!(
-        body,
+        metadata_fields(&body),
         json!({
             "folder_hash": hcfs_client::drive::keys::folder_hash(label),
             "path_prefix": "",
@@ -614,11 +596,13 @@ async fn whole_drive_mint_uses_the_drive_label_and_empty_prefix() {
     );
 }
 
-/// The password mint: the URL is a `#p=` link carrying the wrapped blob
-/// the keystore persisted, the raw derived key appears NOWHERE in it, and
-/// the caller gets the password back exactly once (on this response).
+/// The password mint: the URL is a `#sp=` link carrying the wrapped link
+/// secret the keystore persisted, the password opens that blob to the secret
+/// the body's envelope is sealed under, the raw derived key appears NOWHERE
+/// in the URL, and the caller gets the password back exactly once (on this
+/// response).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn password_mint_yields_a_p_url_and_a_private_secret() {
+async fn password_mint_yields_an_sp_url_and_a_private_secret() {
     let _home = &*TEST_HOME;
     let dir = tempfile::TempDir::new().expect("tempdir");
     let pool = make_pool(dir.path()).await;
@@ -675,21 +659,23 @@ async fn password_mint_yields_a_p_url_and_a_private_secret() {
     );
 
     let keystore = SqliteShareKeystore::new(pool);
-    let Some(ShareSecret::Private(blob)) = keystore.get("tok_priv").expect("keystore get") else {
-        panic!("the keystore must hold the password-wrapped blob, never the raw key");
+    let Some(ShareSecret::FolderLinkPrivate(blob)) = keystore.get("tok_priv").expect("keystore get") else {
+        panic!("the keystore must hold the password-wrapped link secret, never the raw key");
     };
-    let expected_suffix = format!("/share/folder/tok_priv#p={}", URL_SAFE_NO_PAD.encode(&blob));
+    let expected_suffix = format!("/share/folder/tok_priv#sp={}", URL_SAFE_NO_PAD.encode(&blob));
     assert!(
         link.share_url.ends_with(&expected_suffix),
-        "the #p= fragment must carry exactly the stored blob: {}",
+        "the #sp= fragment must carry exactly the stored blob: {}",
         link.share_url
     );
+    let link_secret = hcfs_client::client::share::unwrap_share_key("hunter2-hunter2", &blob).expect("the password opens the blob");
 
-    // The POST body stays the same four metadata fields — the password
-    // changes only the fragment and the stored secret, never the wire.
+    // Besides the envelope pair, the POST body is the same four metadata
+    // fields: the password changes only the fragment and the stored secret.
     let body = recorded.create_bodies.lock().unwrap().last().cloned().expect("a mint landed");
+    assert_body_seals(&body, &link_secret, &expected_file_key(label));
     assert_eq!(
-        body,
+        metadata_fields(&body),
         json!({
             "folder_hash": hcfs_client::drive::keys::folder_hash(label),
             "path_prefix": "secret-docs",
@@ -2490,6 +2476,16 @@ fn assert_body_seals(body: &serde_json::Value, link_secret: &[u8; 32], file_key:
     assert_eq!(opened.as_bytes(), file_key, "the envelope seals the drive key");
 }
 
+/// A create body without its link envelope pair (which [`assert_body_seals`]
+/// checks): the folder metadata the server stores in plaintext.
+fn metadata_fields(body: &serde_json::Value) -> serde_json::Value {
+    let mut body = body.clone();
+    let fields = body.as_object_mut().expect("the create body is a JSON object");
+    fields.remove("link_envelope").expect("every mint carries a link envelope");
+    fields.remove("link_fetch_digest").expect("every mint carries a fetch digest");
+    body
+}
+
 /// Once the server serves link envelopes, the owner's mint keeps the drive
 /// key off the URL: a `#s=` link secret, the drive key sealed in the body,
 /// and the secret kept as `FolderLink`, never `Public`.
@@ -2816,57 +2812,4 @@ async fn a_link_minted_elsewhere_is_not_reshared() {
     assert!(matches!(err, AppError::Validation(ref m) if m == RESHARE_ELSEWHERE), "{err:?}");
     assert!(recorded.create_bodies.lock().unwrap().is_empty());
     assert!(recorded.revoked_tokens.lock().unwrap().is_empty());
-}
-
-/// A server that stops serving envelopes between the reshare's check and its
-/// mint makes another legacy link. That one is taken back and the old link
-/// left alone: swapping one drive-key link for another only costs the URL.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_reshare_that_mints_another_legacy_link_keeps_the_old_one() {
-    let _home = &*TEST_HOME;
-    let dir = tempfile::TempDir::new().expect("tempdir");
-    let pool = make_pool(dir.path()).await;
-    let account = "5ReshareFlipAcct";
-    let label = "reshare-drive";
-    let fh = hcfs_client::drive::keys::folder_hash(label);
-
-    let recorded = Recorded::default();
-    let base = serve(share_router(
-        MockOptions {
-            capabilities: envelope_caps(),
-            later_capabilities: Some(json!({ "shares": true, "folder_shares": true })),
-            create: CreateReply::Created {
-                share_token: "tok_still_legacy",
-                expires_at: None,
-            },
-            list: json!([{
-                "token_hash": folder_share_token_hash("tok_old_f"), "folder_hash": fh, "path_prefix": "photos",
-                "display_name": "photos", "created_at": "2026-10-01T00:00:00+00:00", "expires_at": null,
-                "revoked_at": null, "source": "drive", "link_format": "legacy",
-            }]),
-            ..MockOptions::default()
-        },
-        recorded.clone(),
-    ))
-    .await;
-    seed_account(&pool, account, &base).await;
-    seed_own_drive(&pool, account, label).await;
-    write_master_seal(account);
-    let keystore = SqliteShareKeystore::new(pool.clone());
-    keystore.put("tok_old_f", &ShareSecret::Public(expected_file_key(label))).expect("put");
-    record_folder(&pool, "tok_old_f", &account_key(account), label, "photos")
-        .await
-        .expect("origin");
-    let state = make_state(pool, account);
-
-    let err = reshare_folder_link_inner(&state, account, "tok_old_f")
-        .await
-        .expect_err("a legacy replacement is refused");
-    assert!(matches!(err, AppError::Validation(ref m) if m.contains("safer kind of link")), "{err:?}");
-    assert_eq!(
-        *recorded.revoked_tokens.lock().unwrap(),
-        vec!["tok_still_legacy".to_string()],
-        "the legacy replacement is taken back; the old link is not touched"
-    );
-    assert!(keystore.get("tok_old_f").expect("get").is_some(), "the old link's secret stays");
 }
