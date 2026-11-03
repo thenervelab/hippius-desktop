@@ -53,8 +53,8 @@ name: e2e-live
 # NON-BLOCKING BY DEFAULT: `workflow_dispatch` only. It gates no merge and must
 # never be a required status check — it depends on a live external service and
 # on account secrets, so a red run can mean "prod is down", which must not block
-# unrelated PRs. There is deliberately NO `schedule:` even though `hcfs-bump.yml`
-# uses cron: this lane mutates a live server with real accounts, and the moment
+# unrelated PRs. There is deliberately NO `schedule:`, even when `hcfs-bump.yml`
+# runs weekly: this lane mutates a live server with real accounts, and the moment
 # that actually matters is a dependency bump, not a calendar day. The standing
 # rule is in `.github/hcfs-bump-gate-activation.md` and in the bump PR body:
 # RUN THIS LANE ON EVERY `hcfs` PIN BUMP before merging it —
