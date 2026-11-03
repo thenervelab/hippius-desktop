@@ -3,7 +3,6 @@
 //! plus their drive-arc + first-reconcile-wait plumbing. A dependency-free leaf
 //! (only `hcfs_client` + `std`), reached via `super::synced_state::<fn>`.
 
-use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncedFileInfo, build_synced_paths_from_state};
 use std::collections::HashMap;
@@ -30,10 +29,9 @@ pub(super) async fn synced_paths_for_label(sync: &SyncRunner, label: &str) -> Op
     if let Some(cached) = sync.get_cached_synced_paths(label) {
         return Some(cached);
     }
-    let arc = match acquire_drive_arc(sync, label).await {
-        DriveArcOutcome::Acquired(arc) => arc,
-        DriveArcOutcome::CacheFallback => return None,
-    };
+    // The runner's registry lock is held only to clone the manager Arc, never
+    // across a sync cycle, so this wait does not queue behind the sync loop.
+    let arc = sync.drive_manager(label).await?;
     // `try_lock` (not `lock().await`) is essential here: the per-drive
     // mutex is held by the sync loop for the duration of a sync cycle,
     // and the file browser must remain responsive during that window.
@@ -84,19 +82,18 @@ pub(super) async fn synced_paths_and_excludes_for_label(
         // so a mid-sync listing does not wait on the cycle — at the cost of
         // returning NO patterns while a drive is syncing, which briefly
         // un-hides excluded rows.
-        let excludes = match acquire_drive_arc(sync, label).await {
-            DriveArcOutcome::Acquired(arc) => match arc.try_lock() {
+        let excludes = match sync.drive_manager(label).await {
+            Some(arc) => match arc.try_lock() {
                 Ok(manager) => manager.list_exclude_patterns(),
                 Err(_) => Vec::new(),
             },
-            DriveArcOutcome::CacheFallback => Vec::new(),
+            None => Vec::new(),
         };
         return (Some(cached), excludes);
     }
 
-    let arc = match acquire_drive_arc(sync, label).await {
-        DriveArcOutcome::Acquired(arc) => arc,
-        DriveArcOutcome::CacheFallback => return (None, Vec::new()),
+    let Some(arc) = sync.drive_manager(label).await else {
+        return (None, Vec::new());
     };
     // `try_lock` (not `lock().await`) is essential — see synced_paths_for_label.
     match arc.try_lock() {
@@ -123,9 +120,7 @@ pub(super) async fn synced_paths_and_excludes_for_label(
 /// must not wait out a sync cycle. `shared_sync_state` serves hcfs's own
 /// cached copy, so right after a cycle this costs one `stat`.
 pub(super) async fn shared_sync_state_for_label(sync: &SyncRunner, label: &str) -> Option<std::sync::Arc<hcfs_client::sync::SyncState>> {
-    let DriveArcOutcome::Acquired(arc) = acquire_drive_arc(sync, label).await else {
-        return None;
-    };
+    let arc = sync.drive_manager(label).await?;
     let manager = arc.try_lock().ok()?;
     manager.shared_sync_state().await.ok()
 }
@@ -185,26 +180,6 @@ pub(crate) fn folder_settlement(sync_root: &Path, folder_rel: &str, synced_rel_p
     }
 
     FolderSettlement::Settled
-}
-
-/// Outcome of locating a per-drive `DriveManager` Arc behind the outer
-/// drives map. Either we got the Arc, or the outer/inner lookup failed and
-/// the caller should fall back to the cache.
-enum DriveArcOutcome {
-    Acquired(std::sync::Arc<tokio::sync::Mutex<DriveManager>>),
-    CacheFallback,
-}
-
-/// Single source of truth for the outer-drives map lookup that both the
-/// synced-paths-only and synced-paths-plus-excludes helpers need. The
-/// runner's registry lock is held only to clone the per-drive Arc, never
-/// across a sync cycle, so waiting on it does not queue a listing behind
-/// the sync loop.
-async fn acquire_drive_arc(sync: &SyncRunner, label: &str) -> DriveArcOutcome {
-    match sync.drive_manager(label).await {
-        Some(manager) => DriveArcOutcome::Acquired(manager),
-        None => DriveArcOutcome::CacheFallback,
-    }
 }
 
 #[cfg(test)]

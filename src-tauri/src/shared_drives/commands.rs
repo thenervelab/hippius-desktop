@@ -1512,12 +1512,11 @@ pub async fn finish_invite_link(http: &reqwest::Client, at: InviteLinkFinish<'_>
         return Ok(build_invite_url(at.console_base, &minted.token, key.fragment_key));
     };
     // A folder invite's fragment key is its derived file key; the envelope
-    // API types it as one.
-    let folder_key = hcfs_crypto::FileKey::from_bytes(*key.fragment_key);
-    let target = if key.folder {
-        InviteLinkTarget::Folder { file_key: &folder_key }
-    } else {
-        InviteLinkTarget::Drive
+    // API types it as one. A whole-drive invite's is the entropy, never a key.
+    let folder_key = key.folder.then(|| hcfs_crypto::FileKey::from_bytes(*key.fragment_key));
+    let target = match &folder_key {
+        Some(file_key) => InviteLinkTarget::Folder { file_key },
+        None => InviteLinkTarget::Drive,
     };
     match store_invite_link(http, &at, minted, entropy, target).await {
         Ok(secret) => Ok(hcfs_client::client::invite_link::build_invite_link_url(

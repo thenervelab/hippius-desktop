@@ -31,7 +31,9 @@
 //!    helpers, no `#[cfg(test)] pub`). Constructs a `SyncRunner` via
 //!    the public `hcfs_client::engine::SyncRunner::new(...)` API,
 //!    invokes the closure with realistic args, then inspects the
-//!    pending activity through `SyncRunner::get_sync_activity`.
+//!    pending activity through `SyncRunner::get_sync_activity`, which
+//!    lists committed and pending items together. Nothing commits in
+//!    these tests, so every item it returns is pending.
 //!
 //! No live server, no real `DriveManager`, no Tauri `AppHandle`. The
 //! point is to assert the *enqueue location*, not to exercise the

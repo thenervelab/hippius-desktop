@@ -727,7 +727,7 @@ pub fn spawn_watchdog(state: Weak<PreparingState>, sync: Weak<SyncRunner>) {
             }
             // One forced emit re-runs `apply_preparing_override` with an
             // empty set, so the widget/tray leave "Preparing sync…".
-            // `immediate=true` bypasses the snapshot throttle. If the
+            // `emit_snapshot` is never throttled. If the
             // runner is already gone the override is moot anyway.
             if let Some(sync) = sync.upgrade() {
                 sync.emit_snapshot();

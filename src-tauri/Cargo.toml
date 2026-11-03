@@ -128,7 +128,6 @@ bytes = "1"
 # lies about what is backed up.
 globset = "0.4"
 tauri-plugin-fs = "2"
-notify = "6.1"
 tauri-plugin-dialog = "2.6.0"
 # OS notifications for team chat messages (preference-gated in `chat::notify`).
 tauri-plugin-notification = "2"

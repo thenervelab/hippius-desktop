@@ -94,15 +94,19 @@ fn reviewed_sync_try_locks_the_drive_manager() {
          pauses at the next cycle boundary and the user's retry wins the lock \
          deterministically instead of racing the loop's 5s tick"
     );
-    // Exactly ONE blocking `.lock().await` is legitimate in this function: the
-    // drives-map lock used to clone out the manager Arc. A second one means a
-    // blocking manager lock crept back in.
+    // The manager Arc comes from `SyncRunner::drive_manager`, which holds the
+    // runner's registry lock only to clone it. No blocking `.lock().await` is
+    // legitimate in this function: one means a blocking manager lock crept
+    // back in.
+    assert!(
+        body.contains(".drive_manager("),
+        "sync_with_conflict_resolutions must look the manager up with drive_manager"
+    );
     let blocking_locks = body.matches(".lock().await").count();
     assert_eq!(
-        blocking_locks, 1,
-        "expected exactly one blocking .lock().await (the drives map) in \
-         sync_with_conflict_resolutions, found {blocking_locks} — the drive \
-         manager itself must be acquired via try_lock"
+        blocking_locks, 0,
+        "expected no blocking .lock().await in sync_with_conflict_resolutions, \
+         found {blocking_locks} — the drive manager must be acquired via try_lock"
     );
 }
 

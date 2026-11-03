@@ -254,16 +254,26 @@ pub async fn initialize_sync(app: tauri::AppHandle, account_id: String, label: S
 
 /// Stop the existing drive with the given label, discard its pending activity
 /// and progress session files, and emit a snapshot.
+///
+/// Keeps the label root and the synced-paths cache: Finder badges and the
+/// Files listing read them while this init runs (config, unlock, health
+/// check), and `register_drive` replaces both at the end.
 async fn teardown_previous_drive(sync: &SyncRunner, label: &str) {
-    // `remove_drive` cancels the old slot's token and unwatches its root; the
-    // re-registration that follows watches the root again through the loop's
-    // hot-add path.
+    let root = sync.label_root(label);
+    let cached = sync.get_cached_synced_paths(label);
+    // `remove_drive` cancels the old slot's token, unwatches its root (the
+    // loop watches it again when the drive is registered), and drops the
+    // label's state, pending activity, label root, cache and reconcile gate.
     if sync.remove_drive(label).await.is_some() {
         debug!("Dropped previous drive instance for label '{}'", label);
     }
+    if let Some(root) = root {
+        sync.register_label_root(label.to_string(), root);
+    }
+    if let Some(cached) = cached {
+        sync.update_synced_paths_cache(label, Arc::unwrap_or_clone(cached));
+    }
 
-    sync.discard_pending_activity_for_label(label);
-    sync.remove_state(label);
     {
         let mut state = sync.progress().lock();
         if let Some(session) = state.current_session.as_mut() {
@@ -315,7 +325,7 @@ async fn drain_drive_lock<T>(manager: Option<&Arc<TokioMutex<T>>>, timeout: std:
 /// drive was removed from the map. This helper handles the GLOBAL cancel and
 /// sync-loop shutdown for when zero drives remain.
 async fn teardown_last_drive(sync: &SyncRunner, app: &AppHandle) {
-    sync.request_cancel();
+    // Sets the global cancel flag first, as `request_cancel` does.
     sync.stop_sync_loop_within(GRACEFUL_SHUTDOWN).await;
     sync.clear_all_reviews();
     let _ = app.emit(crate::sync::events::SYNC_STOPPED, ());
@@ -339,6 +349,11 @@ async fn sync_path_for_label(app_state: &crate::app_state::AppState, account: &s
 /// Does NOT touch the database — the caller decides whether to delete or
 /// mark-paused the DB row. `path_hint` is the DB-resolved sync path, returned
 /// as the removed path when no drive was registered under `label`.
+///
+/// The remaining count is read after the removal, under a second registry
+/// lock: two concurrent removals of the last two drives can both see 0 and
+/// both run `teardown_last_drive`. The second stop finds no loop and only
+/// emits `SYNC_STOPPED` again.
 async fn remove_drive_inmemory(sync: &SyncRunner, label: &str, path_hint: Option<PathBuf>) -> (usize, Option<PathBuf>) {
     // `remove_drive` also unwatches the slot's root and drops the label's
     // state, pending activity, label root, synced-paths cache (so a re-add
@@ -1279,17 +1294,17 @@ pub(crate) async fn initialize_sync_inner(
     if start_loop {
         // Starting the sync loop must NOT block this init's return when a loop
         // is ALREADY running. In that case hcfs-client's `start_sync_loop`
-        // takes the `hot_add_drives` path, whose `collect_drive_paths` awaits
-        // EVERY registered drive's manager lock — and that lock is held for the
-        // full duration of a peer drive's in-flight sync cycle (run_sync_cycle
-        // holds `manager.lock()` across the whole transfer). Awaiting it here
+        // takes the `hot_add_drives` path, whose `collect_drive_paths` used to
+        // await EVERY registered drive's manager lock — held for the full
+        // duration of a peer drive's in-flight sync cycle. Awaiting it here
         // stalled the entire `add_local_sync_folder` IPC — and its modal, whose
         // buttons are disabled while the call is pending — for the length of the
         // peer drive's sync: the reported "app freezes when a second folder is
-        // added while one is already syncing". The new drive is already in
-        // `sync.drives` (registered just above), so the running loop picks it up
-        // on its next cycle regardless; spawn the hot-add so init can commit its
-        // status and return immediately.
+        // added while one is already syncing". hcfs now reads the paths from the
+        // drive slots, but hot-add still watches each root (a tree walk on
+        // Linux). The new drive is already registered (just above), so the
+        // running loop picks it up on its next cycle regardless; spawn the
+        // hot-add so init can commit its status and return immediately.
         //
         // When no loop is running yet, keep awaiting: creation is cheap (there
         // is no busy peer manager to wait on) and awaiting keeps the first
@@ -2724,6 +2739,43 @@ mod tests {
 
         assert_eq!(remaining, 0, "empty map has zero remaining");
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
+    }
+
+    /// Re-initializing a live drive must not blank its Finder badges or Files
+    /// listing while the init runs: the entry teardown removes the slot but
+    /// keeps the label root and the synced-paths cache that `register_drive`
+    /// later replaces.
+    #[tokio::test]
+    async fn teardown_previous_drive_keeps_label_root_and_synced_cache() {
+        use hcfs_client::engine::types::SyncedFileInfo;
+        use std::collections::HashMap;
+
+        let sync = test_sync_runner();
+        let label = "reinit";
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+
+        let token = CancellationToken::new();
+        let manager = DriveManager::new(sync_path.clone(), config_dir);
+        sync.add_drive(label.to_string(), DriveSlot::new(manager, token.clone())).await;
+        sync.register_label_root(label.to_string(), sync_path.clone());
+        let info = SyncedFileInfo {
+            path_hash: [3u8; 32],
+            arion_cid: Arc::from("cid-3"),
+            uploaded_at: 10,
+            updated_at: 20,
+        };
+        sync.update_synced_paths_cache(label, HashMap::from([("a.txt".to_string(), info)]));
+
+        teardown_previous_drive(&sync, label).await;
+
+        assert!(sync.drive_manager(label).await.is_none(), "the old slot is gone");
+        assert!(token.is_cancelled(), "the old slot's cycle is cancelled");
+        assert_eq!(sync.label_root(label), Some(sync_path), "the label root survives the re-init");
+        assert!(sync.has_synced_path(label, "a.txt"), "the synced-paths cache survives the re-init");
     }
 
     // ── suspend_drive_inmemory (pause / revoked teardown funnel) ───────
