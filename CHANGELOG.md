@@ -15,6 +15,30 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.18] - 2026-11-03
+
+Capture works over full-screen apps on Mac, a screenshot or recording can be saved to your Desktop,
+and dragging a capture from its card drops the file itself into Slack, Mattermost, WhatsApp, Mail or Finder.
+Insights has a cleaner layout, Screenshots & Recording settings are grouped so each one is easy to find,
+and blocking someone on a share link marks all of their comments.
+
+### Added
+
+- **Save a screenshot or recording to your Desktop.** The capture card's More menu has Save to Desktop, which puts a copy of the capture on your Desktop in one click, and so does the menu of any file on this computer on the Captures page, in Drive, in Recent Files and in the menu bar window, right under Reveal in Finder. In Settings, Screenshots & Recording, turn on "Also save a copy to the Desktop" to have every screenshot copied there as soon as you take it, with recordings as a second choice. The capture in Hippius and its link stay as they are, and a file already on your Desktop with the same name is never replaced: the copy gets a number instead.
+- **Drag a screenshot or recording straight into another app.** Drag the picture on the capture card into Slack, Mattermost, WhatsApp, Mail, Finder or a website's upload box and it drops the image or video file itself, the same as dragging it from Finder or Explorer, instead of a long string of text. The card stays put while you drag.
+
+### Changed
+
+- **A cleaner Insights panel.** It shows the file's name, a larger preview, the link with a Copy link button, then views, viewers and comments (or how much of a recording people watched) in one row, with Comments, Viewers and Reactions as tabs below. Each thing appears once, and a switch you turned off is named under the title.
+- **Screenshots & Recording settings are easier to find your way around.** Settings are now grouped under Shortcuts, Saving, Sharing and Recording, each with a short line saying what it does, and every switch sits in the same place on the right. Choices that depend on another, like including recordings in Desktop copies, sit right under the one they belong to.
+- **Blocking someone on a share link now marks all of their comments.** In Insights, every comment that person wrote under a name shows as Blocked, and Unblock on any of them lifts it for all. Blocks also still show after you close and reopen Insights. A comment someone left anonymously is only marked when you block through that comment.
+- **A clear message when your plan doesn't include a link setting.** If Hippius turns down switching on Insights, Comments or Reactions because your Drive plan doesn't include them, you now see that they come with paid Drive plans instead of a connection error.
+- **The beta channel dialog is calmer.** Switching to or from beta uses the app's usual blue style instead of a yellow warning, with shorter wording that still says beta builds are not fully stabilized.
+
+### Fixed
+
+- **Screenshots and recordings over full-screen apps on Mac.** The capture shortcut now opens the crosshairs and capture bar right on top of an app in full screen, and the recording controls, camera and capture card show there too, so you are no longer taken out of full screen before you can capture it. Opening it from the menu bar window still needs you to leave full screen for now.
+
 ## [0.6.17] - 2026-11-02
 
 Large files upload faster to drives you don't sync on this computer. Every file with a share link has Copy link

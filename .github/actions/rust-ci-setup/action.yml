@@ -46,8 +46,11 @@ runs:
     # this dep graph (subxt, alloy, tauri, hcfs-client + every test binary) can
     # exhaust it mid-build — the runner then dies with a "shutdown signal" /
     # exit 143. Reclaim ~25 GB of preinstalled tooling the Rust job never uses.
+    #
+    # GitHub-hosted only: on our own runners these paths and Docker images
+    # belong to the machine, not to this job, and must not be deleted.
     - name: Free up runner disk (Linux)
-      if: inputs.linux-deps == 'true'
+      if: inputs.linux-deps == 'true' && runner.environment == 'github-hosted'
       shell: bash
       run: |
         set -euo pipefail
@@ -66,9 +69,11 @@ runs:
     # every retry is cold. A swapfile lets that peak spill onto the ~39 GB of disk
     # the free step just reclaimed, so the cold compile COMPLETES once and primes
     # the cache (warm runs are then minutes). Inline (no third-party action) to
-    # keep the CI supply-chain surface flat; idempotent on re-run.
+    # keep the CI supply-chain surface flat; idempotent on re-run. GitHub-hosted
+    # only, like the free step: our own runners are sized for the build, and a
+    # swapfile is a change to the machine rather than to the job.
     - name: Add swap (Linux)
-      if: inputs.linux-deps == 'true'
+      if: inputs.linux-deps == 'true' && runner.environment == 'github-hosted'
       shell: bash
       run: |
         set -euo pipefail
@@ -99,6 +104,12 @@ runs:
           libgstreamer-plugins-base1.0-dev \
           build-essential \
           file
+
+    # Our own runners may come without rustup; GitHub's images ship it. The
+    # pinned channel is installed from rust-toolchain.toml below either way.
+    - name: Install rustup (our runners)
+      if: runner.environment == 'self-hosted'
+      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
     # hcfs-client / hcfs-shared are private git deps fetched over SSH.
     - name: Setup SSH for private Rust git deps
@@ -160,7 +171,10 @@ runs:
         # "ci-clippy" for clippy) instead of one per job: the repo cache is
         # capped at 10 GB, and separate per-job families evicted each other,
         # which is how promotion PRs kept hitting cold ~50 min builds.
-        shared-key: ${{ inputs.cache-key }}
+        # Our own runners get a family of their own: the key carries the OS
+        # but not the image, and a target dir built against one image's
+        # system libraries must not be restored onto another.
+        shared-key: ${{ runner.environment == 'self-hosted' && format('{0}-self-hosted', inputs.cache-key) || inputs.cache-key }}
         # Save the cache even when the job fails/preempts, so a cold cancelled
         # run doesn't force the next one to recompile the whole graph from
         # scratch — the difference between a ~20-min and a ~3-min retry.

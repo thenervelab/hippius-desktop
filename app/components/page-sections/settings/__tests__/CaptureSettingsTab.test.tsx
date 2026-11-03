@@ -130,6 +130,44 @@ describe("the Screenshots & Recording tab", () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order);
   });
 
+  // Four labelled groups, so a setting is found by what it is about rather
+  // than by scanning a grid of equal cards.
+  it("puts every setting in its group: Shortcuts, Saving, Sharing, Recording", async () => {
+    setup();
+    await screen.findByRole("switch", { name: "Copy a share link after capture" });
+    const groups = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
+    expect(groups).toEqual(["Shortcuts", "Saving", "Sharing", "Recording"]);
+    const group = (name: string) => screen.getByRole("region", { name });
+    expect(within(group("Shortcuts")).getByRole("group", { name: "Recording shortcut" })).toBeInTheDocument();
+    expect(within(group("Shortcuts")).getByRole("group", { name: "Screenshot shortcut" })).toBeInTheDocument();
+    expect(within(group("Saving")).getByText("Capture folder")).toBeInTheDocument();
+    expect(within(group("Saving")).getByRole("switch", { name: "Also save a copy to the Desktop" })).toBeInTheDocument();
+    expect(within(group("Saving")).getByRole("group", { name: "When saving an edited image" })).toBeInTheDocument();
+    expect(within(group("Sharing")).getByRole("switch", { name: "Open the link in your browser" })).toBeInTheDocument();
+    expect(within(group("Sharing")).getByRole("switch", { name: "Show a preview in chats" })).toBeInTheDocument();
+    expect(within(group("Recording")).getByRole("group", { name: "Recording countdown" })).toBeInTheDocument();
+    expect(within(group("Recording")).getByRole("switch", { name: "Record system audio" })).toBeInTheDocument();
+  });
+
+  // A dependent row is indented under its parent but drawn like every other
+  // row: its own icon chip, no background of its own.
+  it("draws the dependent rows with an icon like the rows they belong to", async () => {
+    stored = { ...OPTIONS, desktopCopy: true };
+    setup();
+    for (const name of ["Save a copy of recordings to the Desktop", "Open the link in your browser"]) {
+      const row = (await screen.findByRole("switch", { name })).closest("[data-setting-row]") as HTMLElement;
+      expect(row).toHaveAttribute("data-setting-row", "sub");
+      expect(row.querySelector("[aria-hidden] svg")).not.toBeNull();
+      expect(row.className).not.toMatch(/\bbg-|dark:bg-/);
+    }
+  });
+
+  it("has no Recording group where this computer cannot record", async () => {
+    setup({ recording: false });
+    await screen.findByRole("switch", { name: "Copy a share link after capture" });
+    expect(screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"))).toEqual(["Shortcuts", "Saving", "Sharing"]);
+  });
+
   it("offers no recording shortcut where this computer cannot record", async () => {
     setup({ recording: false });
     await card("Screenshot shortcut");
@@ -302,10 +340,36 @@ describe("the capture bar's options, here as well", () => {
     await waitFor(() => expect(stored.systemAudio).toBe(true));
   });
 
+  it("saves a copy of screenshots to the Desktop when asked, and of recordings as a second choice", async () => {
+    setup();
+    const desktop = await screen.findByRole("switch", { name: "Also save a copy to the Desktop" });
+    expect(desktop).toHaveAttribute("aria-checked", "false");
+    // Recordings are a choice under it, shown only once copies are on.
+    expect(screen.queryByRole("switch", { name: "Save a copy of recordings to the Desktop" })).toBeNull();
+    fireEvent.click(desktop);
+    await waitFor(() =>
+      expect(tauri.core.invoke).toHaveBeenCalledWith("capture_set_options", {
+        options: { ...OPTIONS, desktopCopy: true },
+      }),
+    );
+    const recordings = await screen.findByRole("switch", { name: "Save a copy of recordings to the Desktop" });
+    expect(recordings).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(recordings);
+    await waitFor(() => expect(stored.desktopCopyRecordings).toBe(true));
+    expect(stored.desktopCopy).toBe(true);
+  });
+
   it("offers only the link options where this computer cannot record", async () => {
     setup({ recording: false });
     expect(await screen.findByRole("switch", { name: "Copy a share link after capture" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Recording countdown" })).toBeNull();
     expect(screen.queryByRole("switch", { name: "Record system audio" })).toBeNull();
+  });
+
+  it("offers the Desktop copy for screenshots only where this computer cannot record", async () => {
+    stored = { ...OPTIONS, desktopCopy: true };
+    setup({ recording: false });
+    expect(await screen.findByRole("switch", { name: "Also save a copy to the Desktop" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("switch", { name: "Save a copy of recordings to the Desktop" })).toBeNull();
   });
 });

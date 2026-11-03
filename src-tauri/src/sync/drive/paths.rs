@@ -949,7 +949,7 @@ pub(crate) async fn label_for_sync_path(pool: &SqlitePool, account_id: &str, syn
 /// Whether `label` names a sync path configured for `account_id` on this device.
 ///
 /// This is the DB-backed answer to "is this drive set up locally", and it is
-/// deliberately NOT the same question as `state.sync.drives.contains_key(label)`.
+/// deliberately NOT the same question as `state.sync.drive_manager(label).is_some()`.
 /// That map holds only drives whose sync loop is currently registered: a paused
 /// drive is absent from it (`pause_drive` drops the slot, and `auto_init_sync`
 /// filters paused rows out of the init loop entirely), and so is one whose init

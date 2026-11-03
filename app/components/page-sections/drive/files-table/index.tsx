@@ -30,6 +30,7 @@ import {
   MoreVertical,
   Folder,
   FolderOpen,
+  MonitorDown,
   Pencil,
   PenLine,
   FolderInput,
@@ -103,6 +104,7 @@ import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregat
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
+import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { macosNameCmp } from "@/lib/utils/fileSort";
@@ -1177,6 +1179,32 @@ const FilesTable: FC<FilesTableProps> = memo(
                   },
                   disabled: itemDeleting,
                 },
+                // A copy of a file on this computer, next to Reveal; folders
+                // are left out (a capture or a document is what people drop
+                // on the Desktop).
+                ...(file.isFolder
+                  ? []
+                  : [
+                      {
+                        icon: <MonitorDown className="size-4" />,
+                        itemTitle: "Save to Desktop",
+                        onItemClick: async () => {
+                          try {
+                            toast.success(
+                              await saveFileToDesktop({
+                                sourcePath: file.source,
+                                label: file.label,
+                                accountId: polkadotAddress ?? undefined,
+                                fileName: file.actualFileName || file.name,
+                              }),
+                            );
+                          } catch (error) {
+                            toast.error(tauriErrorMessage(error));
+                          }
+                        },
+                        disabled: itemDeleting,
+                      },
+                    ]),
               ]),
           {
             icon: <Icons.InfoCircle className="size-4" />,

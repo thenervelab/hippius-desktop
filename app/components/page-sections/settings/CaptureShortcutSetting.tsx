@@ -11,7 +11,7 @@ import {
   UNSUPPORTED_SHORTCUT_KEY,
 } from "@/app/lib/capture/shortcutLabel";
 import ShortcutKeys from "@/app/components/capture/ShortcutKeys";
-import { SettingIcon } from "./SettingIcon";
+import { SettingRow } from "./SettingRow";
 import {
   addCaptureDesktopShortcut,
   configureCaptureShortcut,
@@ -27,18 +27,21 @@ import { isLinuxPlatform } from "@/app/lib/utils/isMacPlatform";
 const KBD =
   "rounded-[6px] border border-grey-dark-100 bg-grey-light-200 px-2 py-1 font-geist text-[13px] font-medium text-grey-10 dark:border-black-300 dark:bg-black-500 dark:text-white";
 
-/** Each shortcut's card: its name and what it does, in the user's words. */
+/** The shortcut row's rarer actions (Reset, Turn off): text buttons, not filled ones. */
+const QUIET = "text-grey-50 hover:text-grey-10 dark:text-grey-dark-600 dark:hover:text-white";
+
+/** Each shortcut's row: its name and what it does, in the user's words. */
 const COPY: Record<CaptureShortcutKind, { title: string; does: string; portal: string; commandTestId: string }> = {
   screenshot: {
     title: "Screenshot shortcut",
-    does: "From any app: drag over an area to screenshot it and copy its link. Press it during a recording to stop.",
+    does: "From any app, drag over an area to capture it and copy its link.",
     portal:
       "Takes a screenshot from any app and copies its link. Your desktop keeps this shortcut and may ask you to confirm it.",
     commandTestId: "capture-shortcut-command",
   },
   record: {
     title: "Recording shortcut",
-    does: "From any app: open the capture bar ready to record. Press it again during a recording to stop.",
+    does: "From any app, open the capture bar ready to record. Press again to stop.",
     portal: "",
     commandTestId: "record-shortcut-command",
   },
@@ -65,18 +68,10 @@ export const SHORTCUT_TITLE: Record<CaptureShortcutKind, string> = {
 export default function CaptureShortcutSetting({
   kind,
   support,
-  rowClassName,
-  layout = "row",
 }: {
   kind: CaptureShortcutKind;
   /** Rust's route for this shortcut here; null until Rust has answered (the key recorder). */
   support: CaptureShortcutSupport | null;
-  rowClassName: string;
-  /**
-   * `tile`: the Settings tab's side-by-side card, the keys drawn large under
-   * the name, the buttons below. `row`: one line, the keys at its end.
-   */
-  layout?: "row" | "tile";
 }) {
   const copy = COPY[kind];
   // Rust's line where Hippius cannot set the shortcut itself (Wayland
@@ -179,19 +174,25 @@ export default function CaptureShortcutSetting({
     [reload],
   );
 
+  const alert = (text: string | null | undefined) =>
+    text ? (
+      <p role="alert" className="mt-1 text-sm text-error-50">
+        {text}
+      </p>
+    ) : null;
+
   if (unavailable) {
     return (
-      <div role="group" aria-label={copy.title} className={rowClassName}>
-        <div className="flex min-w-0 flex-1 items-start gap-3">
-          <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-grey-50 dark:text-grey-dark-600" strokeWidth={2} />
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
-            <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{unavailable}</p>
+      <SettingRow
+        group
+        tone="muted"
+        icon={<Keyboard className="size-[18px]" strokeWidth={2} />}
+        title={copy.title}
+        description={unavailable}
+        below={
+          <>
             {desktopCommand && (
-              <code
-                data-testid={copy.commandTestId}
-                className={`${KBD} mt-2 block select-all break-all font-mono text-[12px]`}
-              >
+              <code data-testid={copy.commandTestId} className={`${KBD} mt-2 block select-all break-all font-mono text-[12px]`}>
                 {desktopCommand}
               </code>
             )}
@@ -200,78 +201,77 @@ export default function CaptureShortcutSetting({
                 Added to your desktop&apos;s keyboard shortcuts. Change the keys there.
               </p>
             )}
-            {error && (
-              <p role="alert" className="mt-1 text-sm text-error-50">
-                {error}
-              </p>
-            )}
-          </div>
-        </div>
-        {desktopCommand && (
-          <div className="flex flex-wrap items-center gap-2">
-            {setting?.addedToDesktop === false && (
-              <Button variant="defaultStable" size="sm" onClick={() => void run(addCaptureDesktopShortcut)}>
-                Add for me
+            {alert(error)}
+          </>
+        }
+        control={
+          desktopCommand && (
+            <>
+              {setting?.addedToDesktop === false && (
+                <Button variant="defaultStable" size="sm" onClick={() => void run(addCaptureDesktopShortcut)}>
+                  Add for me
+                </Button>
+              )}
+              <Button
+                variant="defaultStable"
+                size="sm"
+                onClick={() => void navigator.clipboard?.writeText(desktopCommand).catch(() => undefined)}
+              >
+                Copy command
               </Button>
-            )}
-            <Button
-              variant="defaultStable"
-              size="sm"
-              onClick={() => void navigator.clipboard?.writeText(desktopCommand).catch(() => undefined)}
-            >
-              Copy command
-            </Button>
-          </div>
-        )}
-      </div>
+            </>
+          )
+        }
+      />
     );
   }
 
+  const Icon = kind === "record" ? CircleDot : Camera;
+  const icon = <Icon className="size-[18px]" strokeWidth={2} />;
+  const tone = kind === "record" ? "record" : "brand";
+
   if (viaPortal) {
     return (
-      <div role="group" aria-label={copy.title} className={rowClassName}>
-        <div className="flex min-w-0 items-start gap-3">
-          <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
-            <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">{copy.portal || copy.does}</p>
-            {(error ?? setting?.problem) && (
-              <p role="alert" className="mt-1 text-sm text-error-50">
-                {error ?? setting?.problem}
-              </p>
+      <SettingRow
+        group
+        tone={tone}
+        icon={icon}
+        title={copy.title}
+        description={copy.portal || copy.does}
+        below={alert(error ?? setting?.problem)}
+        control={
+          <>
+            {!setting ? (
+              <span aria-hidden className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
+            ) : !setting.accelerator ? (
+              <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
+            ) : setting.desktopTrigger ? (
+              <span className={KBD}>{setting.desktopTrigger}</span>
+            ) : awaitingDesktop ? (
+              <span
+                role="status"
+                aria-label="Waiting for your desktop"
+                className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500"
+              />
+            ) : null}
+            {setting?.accelerator && setting.canChangeInDesktop && (
+              <Button variant="defaultStable" size="sm" onClick={() => void run(configureCaptureShortcut)}>
+                Change
+              </Button>
             )}
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {!setting ? (
-            <span aria-hidden className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500" />
-          ) : !setting.accelerator ? (
-            <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
-          ) : setting.desktopTrigger ? (
-            <span className={KBD}>{setting.desktopTrigger}</span>
-          ) : awaitingDesktop ? (
-            <span
-              role="status"
-              aria-label="Waiting for your desktop"
-              className="h-7 w-24 animate-pulse rounded-[6px] bg-grey-light-200 motion-reduce:animate-none dark:bg-black-500"
-            />
-          ) : null}
-          {setting?.accelerator && setting.canChangeInDesktop && (
-            <Button variant="defaultStable" size="sm" onClick={() => void run(configureCaptureShortcut)}>
-              Change
-            </Button>
-          )}
-          {setting && (
-            <Button
-              variant="defaultStable"
-              size="sm"
-              onClick={() => void save(setting.accelerator ? null : setting.defaultAccelerator)}
-            >
-              {setting.accelerator ? "Turn off" : "Turn on"}
-            </Button>
-          )}
-        </div>
-      </div>
+            {setting && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className={QUIET}
+                onClick={() => void save(setting.accelerator ? null : setting.defaultAccelerator)}
+              >
+                {setting.accelerator ? "Turn off" : "Turn on"}
+              </Button>
+            )}
+          </>
+        }
+      />
     );
   }
 
@@ -290,88 +290,53 @@ export default function CaptureShortcutSetting({
   const keysShown =
     recording && held ? (
       <span aria-live="polite">
-        <ShortcutKeys keys={acceleratorKeys(held, mac)} size={layout === "tile" ? "lg" : "md"} />
+        <ShortcutKeys keys={acceleratorKeys(held, mac)} size="md" />
       </span>
     ) : recording ? (
       <span aria-live="polite" className={`${KBD} animate-pulse motion-reduce:animate-none`}>
         Waiting…
       </span>
     ) : current ? (
-      <ShortcutKeys keys={current} size={layout === "tile" ? "lg" : "md"} />
+      <ShortcutKeys keys={current} size="md" />
     ) : (
       <span className="text-sm text-grey-50 dark:text-grey-dark-600">Off</span>
     );
-  const buttons = (
-    <>
-      <Button
-        variant="defaultStable"
-        size="sm"
-        onClick={() => {
-          setError(null);
-          setRecording((r) => !r);
-        }}
-      >
-        {recording ? "Cancel" : "Change"}
-      </Button>
-      {!recording && !isDefault && (
-        <Button variant="defaultStable" size="sm" onClick={() => void save(setting?.defaultAccelerator ?? null)}>
-          Reset
-        </Button>
-      )}
-      {!recording && current && (
-        <Button variant="defaultStable" size="sm" onClick={() => void save(null)}>
-          Turn off
-        </Button>
-      )}
-    </>
-  );
 
-  if (layout === "tile") {
-    const TileIcon = kind === "record" ? CircleDot : Camera;
-    return (
-      <div role="group" aria-label={copy.title} className={rowClassName}>
-        <div className="flex min-w-0 items-start gap-3">
-          <SettingIcon tone={kind === "record" ? "record" : "brand"}>
-            <TileIcon className="size-[18px]" strokeWidth={2} />
-          </SettingIcon>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
-            <p className="mt-0.5 text-[13px] leading-snug text-[#7D7D7D] dark:text-grey-dark-600">
-              {recording ? prompt : copy.does}
-            </p>
-          </div>
-        </div>
-        <div className="flex min-h-10 items-center">{keysShown}</div>
-        {(error ?? problem) && (
-          <p role="alert" className="text-sm text-error-50">
-            {error ?? problem}
-          </p>
-        )}
-        <div className="mt-auto flex flex-wrap items-center gap-2">{buttons}</div>
-      </div>
-    );
-  }
-
+  // The keys, then Change; Reset and Turn off stay quiet beside it, since
+  // they are the rarer choices and Change is the one people come for.
   return (
-    <div role="group" aria-label={copy.title} className={rowClassName}>
-      <div className="flex min-w-0 items-start gap-3">
-        <Keyboard className="mt-0.5 size-[18px] flex-shrink-0 text-primary-50 dark:text-primary-brand-dark" strokeWidth={2} />
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-grey-10 dark:text-white">{copy.title}</p>
-          <p className="mt-1 text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-            {recording ? prompt : copy.does}
-          </p>
-          {(error ?? problem) && (
-            <p role="alert" className="mt-1 text-sm text-error-50">
-              {error ?? problem}
-            </p>
+    <SettingRow
+      group
+      tone={tone}
+      icon={icon}
+      title={copy.title}
+      description={recording ? prompt : copy.does}
+      below={alert(error ?? problem)}
+      control={
+        <>
+          <span className="mr-1">{keysShown}</span>
+          <Button
+            variant="defaultStable"
+            size="sm"
+            onClick={() => {
+              setError(null);
+              setRecording((r) => !r);
+            }}
+          >
+            {recording ? "Cancel" : "Change"}
+          </Button>
+          {!recording && !isDefault && (
+            <Button variant="ghost" size="sm" className={QUIET} onClick={() => void save(setting?.defaultAccelerator ?? null)}>
+              Reset
+            </Button>
           )}
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        {keysShown}
-        {buttons}
-      </div>
-    </div>
+          {!recording && current && (
+            <Button variant="ghost" size="sm" className={QUIET} onClick={() => void save(null)}>
+              Turn off
+            </Button>
+          )}
+        </>
+      }
+    />
   );
 }

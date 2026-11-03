@@ -1162,3 +1162,50 @@ fn every_apt_call_goes_through_the_retry_wrapper() {
         }
     }
 }
+
+/// This repo is public, and the Linux CI jobs can run on our own runners
+/// (`vars.CI_RUNS_ON_LINUX*`). Those must never execute code from outside
+/// the repo: every such job routes a fork's pull request to GitHub-hosted
+/// `ubuntu-latest`, and the workflow has no trigger that runs outside code
+/// with repo rights. A dropped guard fails nothing, the fork's code simply
+/// runs on our machine. The release builds stay hosted on ubuntu-22.04: that
+/// image's glibc is the oldest the Linux app supports, and a newer runner
+/// would silently raise it.
+#[test]
+fn our_own_runners_never_run_a_fork_pull_request() {
+    const FORK_GUARD: &str = "${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && ";
+    const HOSTED_FALLBACK: &str = "|| 'ubuntu-latest' }}";
+
+    let ci = repo_file("../.github/workflows/ci.yml");
+    for line in code_lines(&ci) {
+        for trigger in ["pull_request_target", "workflow_run", "issue_comment"] {
+            assert!(!line.contains(trigger), "ci.yml must not run on `{trigger}`: {line}");
+        }
+    }
+
+    let document: serde_yaml::Value = serde_yaml::from_str(&ci).expect("ci.yml parses");
+    let mut guarded = 0;
+    for (name, job) in document["jobs"].as_mapping().expect("ci.yml has jobs") {
+        let name = name.as_str().unwrap_or_default();
+        let runs_on = job["runs-on"].as_str().unwrap_or_default();
+        if !runs_on.contains("vars.") {
+            continue;
+        }
+        assert!(
+            runs_on.starts_with(FORK_GUARD) && runs_on.ends_with(HOSTED_FALLBACK),
+            "ci.yml job {name} picks its runner from a variable without the fork guard and the hosted fallback: {runs_on}"
+        );
+        guarded += 1;
+    }
+    assert!(guarded > 0, "no ci.yml job reads its runner from a variable any more; update this pin");
+    assert_eq!(
+        document["jobs"]["release-deps-linux"]["runs-on"].as_str(),
+        Some("ubuntu-22.04"),
+        "release-deps-linux proves the packages install on the release image"
+    );
+
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let text = repo_file(&format!("../.github/workflows/{lane}"));
+        assert!(!text.contains("CI_RUNS_ON"), "{lane} must build on GitHub-hosted runners");
+    }
+}

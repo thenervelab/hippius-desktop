@@ -54,6 +54,7 @@ describe("tray row menu, per file state", () => {
       "share",
       "show-in-drive",
       "reveal",
+      "save-to-desktop",
       "rename",
       "delete",
     ]);
@@ -70,6 +71,7 @@ describe("tray row menu, per file state", () => {
       expect.arrayContaining(["preview", "download", "copy-link", "share", "show-in-drive"]),
     );
     expect(got).not.toContain("reveal");
+    expect(got).not.toContain("save-to-desktop");
     expect(got).not.toContain("delete");
     // Rename is shown but disabled, with the Drive's own reason.
     const rename = getTrayRowActions(cloud, "Finder", editor.on).find((a) => a.id === "rename");
@@ -98,11 +100,19 @@ describe("tray row menu, per file state", () => {
       arionCid: "",
       isAssigned: false,
     });
-    expect(ids(live)).toEqual(["show-in-drive", "reveal"]);
+    expect(ids(live)).toEqual(["show-in-drive", "reveal", "save-to-desktop"]);
     expect(ids({ ...live, feedStatus: "failed", syncStatus: "failed" })).toEqual([
       "show-in-drive",
       "reveal",
+      "save-to-desktop",
     ]);
+  });
+
+  it("offers Save to Desktop for a file on this computer, never for a folder", () => {
+    expect(getTrayRowActions(row(), "Finder", editor.on).find((a) => a.id === "save-to-desktop")?.label).toBe(
+      "Save to Desktop",
+    );
+    expect(ids(row({ isFolder: true }))).not.toContain("save-to-desktop");
   });
 
   it("does not offer View for a file the viewer cannot open", () => {

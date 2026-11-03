@@ -410,7 +410,7 @@ the bar's overlay takes the keyboard, and only once every overlay is up
 per `own_windows::overlay_show`, without focus on macOS (the bar's too) and
 Windows (the others), a display plugged in mid-choice too. **On macOS the
 overlays are non-activating panels** (`overlay_panel.rs`,
-`own_windows::overlay_is_panel`): WebKit gives hover, mouse moves and keys
+`own_windows::capture_windows_are_panels`): WebKit gives hover, mouse moves and keys
 only to the key window, and an ordinary window is key only while Hippius is
 the active app, so whenever the user's app was in front (the shortcut, the
 tray, a click or gesture that reached another app while choosing) the bar
@@ -420,12 +420,31 @@ bar is `overlay_panel::make_key`, never `set_focus` (which activates): once
 all are up, on a bar move, when the bar's page has loaded
 (`capture_overlay_context`), and from the bar-follow watch when another app
 took the keyboard and the pointer is on an overlay (`should_rekey`; never
-from another Hippius window or a prompt above the overlays). The panel is
-made by swapping the built window's class (`make_panel`, before show) with
-the content view taken out first, so WebKit's KVO observer of `contentView`
-is gone during the swap (a class swapped under an observer aborts the app on
-the next `removeObserver:`); any unexpected class, layout or KVO override
-leaves an ordinary window, logged. `log_if_bar_lacks_keyboard` logs key AND
+from another Hippius window or a prompt above the overlays). **Every
+capture window is a panel on macOS, not only the overlays** (the pill, its
+tooltip, the camera, its controls and the card too, `make_capture_panel`
+right after each build): only a non-activating panel shows on another app's
+full-screen Space; an ordinary window of an app with a window elsewhere stays
+on the desktop's Space however it is ordered front (`FullScreenAuxiliary`,
+order and activation make no difference, measured), so over a full-screen
+app the crosshairs, pill and card never appeared. The panel is made by
+swapping the built window's class (`make_panel`, before show) with the
+content view taken out first, so WebKit's observers are gone during the
+swap (an observer removed under another class than it was added under
+throws and aborts the app). What may still observe the window is read from
+ITS OWN observation info (`observed_key_paths`), never from the methods of
+its KVO subclass: that class is shared by every tao window and carries
+`setOpaque:` from the main window's title bar, which refused every overlay
+in every real run. Only AppKit's `_windowLayerContext` may remain; AppKit
+removes it as the window deallocates, so the panel's `close`
+(`close_as_built`) takes the content view out, checks the observers match
+the swap's and puts the built class back before that class's own close; a
+mismatch keeps the window alive rather than crash. Any unexpected class,
+layout or observer leaves an ordinary window, logged. **The tray popover is
+NOT a panel yet**: a non-activating panel gets no resign-key when another
+app comes forward, so its click-outside dismissal (`on_panel_blur`) would
+stop working; it needs an outside-click monitor first, and until then it
+does not open over a full-screen app. `log_if_bar_lacks_keyboard` logs key AND
 (panel OR Hippius active), at open and at page load; `isKeyWindow` alone said
 "key" while the bar had no hover. The bar's tooltip opens on focus only for
 `:focus-visible`, so the window taking the keyboard back does not pop one on
@@ -799,7 +818,19 @@ Discard) and at most one 32 pt icon button with an `aria-label`. Show in
 Finder / Explorer, Manage link and Revoke link live in the "More" menu (opens upward over
 the picture, focus on its first item, arrows move, Escape closes and refocuses
 More); with Upgrade, Retry and Discard all present, Discard is the icon.
-Pinned by `previewPage.test.tsx` across every state. It listens to upload progress only while `uploading` / `syncing`
+Pinned by `previewPage.test.tsx` across every state. **Dragging the picture drops the FILE** (`drag_out.rs`, `drag` crate
+pinned `=2.1.1`: NSDraggingSession / OLE DoDragDrop / GTK drag): the
+webview's own drag of the `<img>` handed other apps its `data:` URL (a
+huge text string in a chat app), so `onDragStart` on the picture always
+`preventDefault`s and, when `actions.dragOut` (a placed or kept file, or a
+failed capture's waiting file), calls `capture_preview_start_drag`, which
+drags the card's own file (`file_to_drag`, never a path from the page) with
+a 160 px PNG of the thumbnail (`drag_icon`, the app icon without one). The
+card holds (`dragging` in `held`) until `capture_preview_drag_ended`, also
+sent when the drag could not start. Rows on the Captures page and Recent
+Files have no native drag yet. Pinned by `drag_out::tests`,
+`capture_wiring::the_cards_picture_is_dragged_out_as_the_file` and
+`previewPage.test.tsx`. It listens to upload progress only while `uploading` / `syncing`
 (`wantsProgress`): it is prewarmed hidden at every capture start. The page
 only draws the percent of a row joined on label + `relPath`; it never decides
 from a progress row that a capture is done or failed (a "completed" row still
@@ -845,7 +876,22 @@ through `PreviewCard::refreshed`; every change goes through
 "Uploaded". `upgrade` (a `storageFull` failure) calls `capture_preview_upgrade`,
 which brings the main window forward and emits `capture_open_plans`;
 `CaptureHost` routes it to `BILLING_ROUTE`, where every upgrade prompt goes.
-Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). Failure copy is `deliver::failure_copy` (offline / storage full
+Reveal is labelled "Show in Finder" / "Show in Explorer" (`fileManagerLabel`). **Save to Desktop** (More menu, `actions.saveToDesktop`: a
+placed or kept file, or a failed capture's waiting file;
+`capture_preview_save_to_desktop` copies the card's own file, never a path
+from the page) and the drive menus' item next to Reveal
+(`save_file_to_desktop`, gated by `reveal::in_account_sync_folder`, found
+like Reveal by `saveFileToDesktop.ts`) go through
+`utils::desktop_copy::copy_into`: staged hidden `.part` file, then a
+no-clobber move to the first free "<name> (n).<ext>", so nothing on the
+Desktop is ever replaced. `CaptureOptions.desktopCopy` /
+`desktopCopyRecordings` ("Also save a copy to the Desktop", recordings a
+second choice under it, both off) copy a NEW capture in
+`copy_new_capture_to_desktop` BEFORE `deliver_and_announce` (a local-first
+delivery moves the file), never on a retry; a failed copy is logged and the
+capture delivered as usual. Pinned by `desktop_copy::tests`,
+`bar::tests::only_the_chosen_kinds_are_copied_to_the_desktop` and
+`capture_wiring::a_new_capture_is_copied_to_the_desktop_before_it_is_delivered`. Failure copy is `deliver::failure_copy` (offline / storage full
 / Rust's own `Validation` text; never a transport error), with `reason` and
 `retryable`. `capture_failed` carries `cardShowing`, and `CaptureHost` shows no toast
 when it is true (the card already says it); the notification never names a
@@ -1232,8 +1278,9 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `finish_screenshot` hides a visible card first (`hide_card_for_grab`).
   Windows keeps protection on all of them (WGC cannot leave windows out);
   Linux has none. Overlays are raised to screen-saver level on macOS; every
-  capture window gets `FullScreenAuxiliary` so it can show over a full-screen
-  app without switching Spaces.
+  capture window gets `FullScreenAuxiliary` and is a non-activating panel,
+  the two together being what lets it show over a full-screen app without
+  switching Spaces (`FullScreenAuxiliary` alone does nothing there).
 - **Placement.** Work areas are read once per capture (one main-thread hop)
   and cached per display (`work_areas`); nothing waits on AppKit when a window
   is placed. Windows places in physical pixels (`place`, from the area's
@@ -1705,7 +1752,7 @@ argument, dialog source, new-capture branch before any write).
 The shortcut; `CaptureButtons` (`app/components/capture/CaptureButtons.tsx`):
 **Record** and **Screenshot**, Record first everywhere they sit together
 (here, the tray's tiles, the capture bar's groups via `barGroups`, the
-empty states' wording, Settings' shortcut tiles; a disabled Record keeps
+empty states' wording, Settings' Shortcuts group; a disabled Record keeps
 its place), each a normal
 toolbar button with a chevron
 that opens its own Radix menu (no separate "…" button): the kind's modes
@@ -1739,13 +1786,19 @@ shown where `useCaptureAvailability` is `available`, kept while `unknown`) holds
 capture setting: `CaptureShortcutSetting` per kind, the captures folder,
 `EditedImageSetting`, and `CaptureOptionsSetting` (copy link, open link,
 recording countdown, system audio, read fresh through `capture_get_options`
-before each `capture_set_options`). Layout, in that order: the shortcuts as
-side-by-side tiles, Record's first (`layout="tile"`, keys at `ShortcutKeys`
-size `lg`), the captures folder row (with "Show in Finder" / "Show in folder" through
-`reveal_drive_in_finder` only for a drive synced here), the options as a grid
-of cards (`layout="cards"`, `@container` columns so they follow the tab's
-width), then `EditedImageSetting`; each setting's icon sits in a
-`SettingIcon` chip. Pinned by
+before each `capture_set_options`, once for the tab by `useCaptureChoices`). Layout:
+four labelled groups (`SettingGroup` = `SettingsCard` + hairline rows,
+`SettingRow` = icon chip, title, one line, control at the right edge), in
+order Shortcuts (Record's row first), Saving (captures folder with "Show in
+Finder" / "Show in folder" only for a drive synced here, Desktop copy,
+`EditedImageSetting`), Sharing (copy link, preview, tracking), Recording
+(countdown, system audio; absent where this computer cannot record). A
+setting that only means something while another is on ("Include
+recordings", "Open the link in your browser") is a `sub` row: indented
+under its parent's words, with its own icon and the same background as
+every row (a bare, tinted row read as broken in dark mode). A grid of equal cards was tried and read as having no
+starting point. Pinned by `CaptureSettingsTab.test.tsx` ("puts every
+setting in its group") and
 `CaptureButtons.test.tsx`, `drive/__tests__/captureButtonsPlacement.test.tsx`,
 `drive/__tests__/recentFilesCapture.test.tsx`
 and `tests/capture_wiring.rs` (content protection, focus, capabilities, every

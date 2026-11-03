@@ -469,6 +469,7 @@ describe("row menu", () => {
       "Share via link…",
       "Show in Hippius",
       expect.stringMatching(/^Reveal in /),
+      "Save to Desktop",
       "Rename…",
       "Delete…",
     ]);
@@ -572,6 +573,23 @@ describe("row menu", () => {
     fireEvent.click(screen.getByRole("button", { name: "More actions for report.pdf" }));
     fireEvent.click(screen.getByRole("menuitem", { name: /^Reveal in / }));
     expect(await screen.findByText("No such file")).toBeInTheDocument();
+  });
+
+  it("saves a copy to the Desktop from the popover itself and says where on the row", async () => {
+    invoke.mockImplementation((cmd: string) =>
+      cmd === "save_file_to_desktop"
+        ? Promise.resolve("Saved to your Desktop as report.pdf.")
+        : Promise.resolve(undefined),
+    );
+    renderRow();
+    fireEvent.click(screen.getByRole("button", { name: "More actions for report.pdf" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save to Desktop" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("save_file_to_desktop", { path: "/Users/me/Docs/Work/report.pdf" }),
+    );
+    expect(await screen.findByText("Saved to your Desktop as report.pdf.")).toBeInTheDocument();
+    expect(emit).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalledWith("hide_tray_panel");
   });
 
   it("does nothing for a disabled item", () => {

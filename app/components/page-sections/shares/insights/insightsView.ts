@@ -74,12 +74,46 @@ export function defaultInsightsTab(commentCount: number): InsightsTab {
   return commentCount > 0 ? "comments" : "viewers";
 }
 
-/** A tab's label: `Comments (20)`, or the name alone when the count is not known. */
+/** A tab's label: `Comments 20`, or the name alone when the count is not known. */
 export function tabLabel(name: string, count: number | null): string {
-  return count === null ? name : `${name} (${count})`;
+  return count === null ? name : `${name} ${count}`;
 }
 
 export type CommentOrder = "newest" | "oldest";
+
+type BlockableComment = Pick<ShareComment, "id" | "blocked" | "authorKey">;
+
+/**
+ * Who a block or unblock through this comment reaches, as the server applies
+ * it: every named comment of the person when the server keys them by author,
+ * else this one comment (an anonymous comment, or an older server).
+ */
+export function blockSubject(c: Pick<ShareComment, "id" | "authorKey">): string {
+  return c.authorKey ? `author:${c.authorKey}` : `comment:${c.id}`;
+}
+
+/** The author keys of people the listing marks blocked on any comment. */
+export function blockedAuthorKeys(comments: readonly BlockableComment[]): ReadonlySet<string> {
+  const keys = new Set<string>();
+  for (const c of comments) if (c.blocked && c.authorKey) keys.add(c.authorKey);
+  return keys;
+}
+
+/**
+ * Whether a comment reads as blocked: the panel's last block or unblock of
+ * its author, then the listing's mark on any comment of theirs, then the
+ * mark on this comment alone.
+ */
+export function isCommentBlocked(
+  c: BlockableComment,
+  changedHere: ReadonlyMap<string, boolean>,
+  blockedAuthors: ReadonlySet<string>,
+): boolean {
+  const changed = changedHere.get(blockSubject(c));
+  if (changed !== undefined) return changed;
+  if (c.authorKey && blockedAuthors.has(c.authorKey)) return true;
+  return c.blocked === true;
+}
 
 /**
  * Comment threads newest or oldest first, by when each was written. A time
@@ -172,35 +206,7 @@ export function headerLine({
   return parts.join(" · ");
 }
 
-/**
- * The panel's one empty block, for a link nothing has happened on yet: no
- * views and, where the server has them, no comments or reactions.
- */
-export function emptyInsightsCopy({
-  notCounting,
-  commentsEnabled,
-}: {
-  /** The link's Insights switch is off, so views are not being counted. */
-  notCounting: boolean;
-  commentsEnabled: boolean;
-}): { title: string; body: string } {
-  if (notCounting) {
-    return {
-      title: "Not counting views",
-      body: commentsEnabled
-        ? "Insights are off for this link. Turn them on to count views. Comments and reactions show up here either way."
-        : "Insights are off for this link. Turn them on to count views.",
-    };
-  }
-  return {
-    title: "No views yet",
-    body: commentsEnabled
-      ? "Nobody has opened this link yet. Views, comments and reactions show up here once they do."
-      : "Nobody has opened this link yet. Views show up here once they do.",
-  };
-}
-
-/** The link switches, in the order the status row and Link settings show them. */
+/** The link switches, in the order the header and Link settings name them. */
 export const SWITCH_NAMES: ReadonlyArray<{ key: keyof LinkSettingsDefault["on"]; label: string }> = [
   { key: "insights", label: "Insights" },
   { key: "comments", label: "Comments" },
@@ -208,19 +214,19 @@ export const SWITCH_NAMES: ReadonlyArray<{ key: keyof LinkSettingsDefault["on"];
 ];
 
 /**
- * The status row under the panel header: one pill per switch this server
- * takes, on or off. Empty when Link settings would draw no switches (the
+ * The switches that are off, for the end of the header's line: `Comments
+ * off`, `Insights and comments off`, `Insights, comments and reactions off`.
+ * `null` while every switch is on, or when Link settings would draw none (the
  * server has no Insights switch, or the settings are not known yet).
  */
-export function switchPills(
-  settings: Pick<LinkSettingsDefault, "offered" | "on"> | null,
-): Array<{ key: keyof LinkSettingsDefault["on"]; label: string; on: boolean }> {
-  if (!settings || !settings.offered.insights) return [];
-  return SWITCH_NAMES.filter(({ key }) => settings.offered[key]).map(({ key, label }) => ({
-    key,
-    label,
-    on: settings.on[key],
-  }));
+export function switchesOffLine(settings: Pick<LinkSettingsDefault, "offered" | "on"> | null): string | null {
+  if (!settings || !settings.offered.insights) return null;
+  const off = SWITCH_NAMES.filter(({ key }) => settings.offered[key] && !settings.on[key]).map(({ label }, i) =>
+    i === 0 ? label : label.toLowerCase(),
+  );
+  if (off.length === 0) return null;
+  const names = off.length === 1 ? off[0] : `${off.slice(0, -1).join(", ")} and ${off[off.length - 1]}`;
+  return `${names} off`;
 }
 
 /**

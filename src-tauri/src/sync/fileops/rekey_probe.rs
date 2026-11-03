@@ -27,6 +27,7 @@ use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::mnemonic::{config_dir_for_folder, derive_folder_mnemonic, master_mnemonic_path};
 use crate::sync::remote::{build_client, encryption_key_for_label, encryption_key_from_phrase, session_mnemonic};
+use hcfs_crypto::FileKey;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tracing::info;
@@ -98,7 +99,7 @@ struct Tally {
 /// candidate is "would this key recover it", and two sources can hold the
 /// same key (a `.bak` of a raw-master seal IS the local master).
 fn tally(encrypted_paths: &[Vec<u8>], current: &[u8; 32], keys: &[[u8; 32]]) -> Tally {
-    let opens = |ciphertext: &[u8], key: &[u8; 32]| hcfs_client::crypto::decrypt_small(ciphertext, key).is_ok();
+    let opens = |ciphertext: &[u8], key: &[u8; 32]| hcfs_crypto::decrypt_small(ciphertext, &FileKey::from_bytes(*key)).is_ok();
     let mut tally = Tally {
         total_files: encrypted_paths.len(),
         rescues: vec![0; keys.len()],
@@ -257,7 +258,7 @@ async fn probe_rekey_recovery_inner(
         ));
     }
 
-    let mut current = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
+    let current = encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(&mnemonic)).await?;
     let folder_dir = config_dir_for_folder(account_id, label)?;
     let master_path = master_mnemonic_path(account_id)?;
@@ -281,9 +282,9 @@ async fn probe_rekey_recovery_inner(
         let mut built = build_candidate_keys(&sources);
         let mut keys: Vec<[u8; 32]> = built.iter().filter_map(|(_, k)| k.as_ref().ok().copied()).collect();
 
-        let report = assemble(tally(&encrypted_paths, &current, &keys), &built);
+        let report = assemble(tally(&encrypted_paths, current.as_bytes(), &keys), &built);
 
-        current.zeroize();
+        // `current` is a `FileKey`, which zeroes its bytes when dropped.
         keys.zeroize();
         for (_, key) in &mut built {
             if let Ok(key) = key {
@@ -316,7 +317,7 @@ mod tests {
     const OTHER_MASTER: &str = "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
     fn seal(key: &[u8; 32], path: &str) -> Vec<u8> {
-        hcfs_client::crypto::encrypt_small(path.as_bytes(), key).expect("encrypt path")
+        hcfs_crypto::encrypt_small(path.as_bytes(), &FileKey::from_bytes(*key)).expect("encrypt path")
     }
 
     fn key_of_phrase(phrase: &str) -> [u8; 32] {

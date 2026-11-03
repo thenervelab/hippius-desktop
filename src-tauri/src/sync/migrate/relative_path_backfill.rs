@@ -220,10 +220,7 @@ pub async fn is_backfilled(pool: &SqlitePool, owner: &str, label: &str) -> Resul
 /// bootstrapping pass for pre-existing legacy rows — steady-state writes
 /// are handled by `sync_async`.
 async fn snapshot_path_index(state: &AppState, label: &str) -> Option<std::collections::HashMap<[u8; 32], PathBuf>> {
-    let drive_arc = {
-        let guard = state.sync.drives.lock().await;
-        guard.get(label).map(|slot| slot.manager.clone())
-    }?;
+    let drive_arc = state.sync.drive_manager(label).await?;
     // Short lock: only while `load_sync_state` reads the persisted state
     // (disk I/O runs on a blocking task inside hcfs-client). Dropping the
     // guard immediately after keeps upload/download on this drive

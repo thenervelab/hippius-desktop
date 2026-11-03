@@ -11,7 +11,20 @@ vi.mock("@tauri-apps/api/core", () => tauri.core);
 vi.mock("@tauri-apps/api/event", () => tauri.event);
 
 import CapturePreviewPage from "../page";
-import { AUTO_HIDE_MS } from "../previewCard";
+import { AUTO_HIDE_MS, DRAG_THRESHOLD_PX } from "../previewCard";
+
+// jsdom has no PointerEvent, and without one a pointer event loses its
+// coordinates and buttons; a MouseEvent carries them.
+if (typeof window.PointerEvent === "undefined") {
+  class PointerEventWithCoords extends MouseEvent {
+    pointerId: number;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 1;
+    }
+  }
+  Object.defineProperty(window, "PointerEvent", { value: PointerEventWithCoords, configurable: true });
+}
 
 type Actions = CapturePreviewCard["actions"];
 const NO_ACTIONS: Actions = { retry: false, discard: false, copyLink: false, mintLink: false, revokeLink: false, reveal: false, upgrade: false };
@@ -140,6 +153,74 @@ describe("the preview card", () => {
       await vi.advanceTimersByTimeAsync(AUTO_HIDE_MS + 10);
     });
     expect(dismissed()).toBe(1);
+  });
+
+  // Dragging the picture must drop the capture's file, not the picture's
+  // data: URL: the webview never drags it, and a press that moves past the
+  // threshold asks Rust for the system's file drag while the button is still
+  // down. The card holds until Rust says the drag is over, and the drag is
+  // not also a click that opens the editor.
+  it("drags its picture out as the file once the press moves past the threshold", async () => {
+    tauri.onInvoke("capture_preview_start_drag", () => null);
+    await setup(card({ state: "uploaded", linkCopied: true }, 1, { dragOut: true, edit: true }));
+    const picture = screen.getByRole("button", { name: `Edit ${FILE}` });
+    fireEvent.pointerDown(picture, { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 10 + DRAG_THRESHOLD_PX - 2, clientY: 11 });
+    expect(called("capture_preview_start_drag")).toBe(0);
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 10 + DRAG_THRESHOLD_PX + 4, clientY: 10 });
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 40, clientY: 30 });
+    await advance(0);
+    expect(called("capture_preview_start_drag")).toBe(1);
+    fireEvent.pointerUp(picture, { button: 0, buttons: 0, clientX: 40, clientY: 30 });
+    fireEvent.click(picture, { detail: 1 });
+    await advance(0);
+    expect(called("capture_preview_edit")).toBe(0);
+    await advance(AUTO_HIDE_MS * 2);
+    expect(dismissed()).toBe(0);
+    await act(() => tauri.emitEvent("capture_preview_drag_ended", null));
+    await advance(AUTO_HIDE_MS + 10);
+    expect(dismissed()).toBe(1);
+  });
+
+  it("still opens the editor on a click that barely moves, and from the keyboard after a drag", async () => {
+    tauri.onInvoke("capture_preview_start_drag", () => null);
+    await setup(card({ state: "uploaded", linkCopied: true }, 1, { dragOut: true, edit: true }));
+    const picture = screen.getByRole("button", { name: `Edit ${FILE}` });
+    fireEvent.pointerDown(picture, { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 11, clientY: 11 });
+    fireEvent.pointerUp(picture, { button: 0, buttons: 0, clientX: 11, clientY: 11 });
+    fireEvent.click(picture, { detail: 1 });
+    await advance(0);
+    expect(called("capture_preview_edit")).toBe(1);
+    expect(called("capture_preview_start_drag")).toBe(0);
+    // The keyboard's click after a drag still edits: only a pointer's click
+    // can be the end of a drag.
+    fireEvent.pointerDown(picture, { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 40, clientY: 10 });
+    await advance(0);
+    expect(called("capture_preview_start_drag")).toBe(1);
+    fireEvent.click(picture, { detail: 0 });
+    await advance(0);
+    expect(called("capture_preview_edit")).toBe(2);
+    // A move with no button held (hover after the click) starts nothing.
+    fireEvent.pointerMove(picture, { buttons: 0, clientX: 60, clientY: 60 });
+    await advance(0);
+    expect(called("capture_preview_start_drag")).toBe(1);
+  });
+
+  it("never hands the webview's drag of its picture to another app, even with nothing to drag", async () => {
+    await setup(card({ state: "uploading" }));
+    const picture = screen.getByRole("button", { name: `Show ${FILE} in its folder` });
+    expect(picture.querySelector("img")?.getAttribute("draggable") ?? "false").toBe("false");
+    const drag = new Event("dragstart", { bubbles: true, cancelable: true });
+    act(() => {
+      picture.dispatchEvent(drag);
+    });
+    expect(drag.defaultPrevented).toBe(true);
+    fireEvent.pointerDown(picture, { button: 0, buttons: 1, clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(picture, { buttons: 1, clientX: 60, clientY: 10 });
+    await advance(0);
+    expect(called("capture_preview_start_drag")).toBe(0);
   });
 
   // Reaching for a button must never race the card, and leaving it must not
@@ -529,6 +610,43 @@ describe("the card's actions (Rust decides which)", () => {
     });
     expect(called("capture_preview_reveal")).toBe(1);
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("saves a copy to the Desktop from the More menu and says where, for a moment", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { saveToDesktop: true }));
+    tauri.onInvoke("capture_preview_save_to_desktop", () => `Saved to your Desktop as ${FILE}.`);
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save to Desktop" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_save_to_desktop")).toBe(1);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByTestId("capture-desktop-note")).toHaveTextContent(`Saved to your Desktop as ${FILE}.`);
+    // In the second line's place, so the card keeps its height.
+    expect(screen.queryByTestId("capture-link-note")).toBeNull();
+    await advance(4000);
+    expect(screen.queryByTestId("capture-desktop-note")).toBeNull();
+    expect(screen.getByTestId("capture-link-note")).toBeInTheDocument();
+  });
+
+  it("says plainly when the copy could not be saved", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { saveToDesktop: true }));
+    tauri.onInvoke("capture_preview_save_to_desktop", () => {
+      throw { kind: "Validation", message: "That file isn't on this computer any more." };
+    });
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Save to Desktop" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("That file isn't on this computer any more.");
+  });
+
+  it("offers Save to Desktop only when Rust does", async () => {
+    await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true }));
+    fireEvent.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("menuitem", { name: "Save to Desktop" })).toBeNull();
   });
 
   it("moves through the More menu with the arrow keys", async () => {

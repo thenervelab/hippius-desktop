@@ -2,7 +2,7 @@
 
 import React, { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { AlertTriangle, ArrowLeft } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CardButton, Graphsheet, Icons } from ".";
 import { Button } from "@/components/ui/button";
@@ -112,9 +112,11 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
   // read as one with the app-wide Exclude/Delete action (e.g. FailedFilesModal)
   // rather than the brighter error-50 red.
   const variantStyles = {
-    danger: { accent: "bg-[#fc7d73]", confirmVariant: "destructive" as const },
-    warning: { accent: "bg-warning-50", confirmVariant: "primary" as const },
-    info: { accent: "bg-primary-50", confirmVariant: "primary" as const },
+    danger: { accent: "bg-[#fc7d73]", confirmVariant: "destructive" as const, Icon: AlertTriangle },
+    warning: { accent: "bg-warning-50", confirmVariant: "primary" as const, Icon: AlertTriangle },
+    // A choice, not a hazard: the brand frame and an info mark, never the
+    // warning triangle.
+    info: { accent: "bg-primary-50", confirmVariant: "primary" as const, Icon: Info },
   };
   const styles = variantStyles[variant];
 
@@ -126,7 +128,7 @@ const AlertModeDialog: React.FC<AlertModeProps> = ({
       open={open}
       onClose={() => onOpenChange(false)}
       title={title}
-      icon={<AlertTriangle className="size-5 text-white" />}
+      icon={<styles.Icon className="size-5 text-white" />}
       iconBgClassName={styles.accent}
       borderClassName={styles.accent}
       maxWidth="max-w-[560px]"
