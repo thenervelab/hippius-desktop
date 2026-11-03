@@ -92,4 +92,4 @@ Desktop-owned FE-facing types are pinned next to where they live in the `sync/fi
 
 Shape tests can't catch a behavioral change, so `tests/hcfs_contract.rs` holds known-answer tests for the key/identity derivation (`folder_hash`, `derive_folder_mnemonic`, `derive_encryption_key`) AND an at-rest XChaCha20-Poly1305 decrypt KAT (a ciphertext frozen at the pinned rev that must still decrypt — the data-loss guard for already-uploaded files).
 
-**When adding a new IPC command/event that carries an hcfs type, add a matching pin.** The weekly auto-bump workflow + its activation steps are in `.github/hcfs-bump-gate-activation.md`.
+**When adding a new IPC command/event that carries an hcfs type, add a matching pin.** The auto-bump workflow + its activation steps are in `.github/hcfs-bump-gate-activation.md`.
