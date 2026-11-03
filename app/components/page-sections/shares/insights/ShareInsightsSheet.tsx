@@ -41,10 +41,10 @@ import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { CommentsTab, PersonName, useCommentModeration } from "./CommentThreads";
 import { InsightsAvatar } from "./InsightsAvatar";
-import { CopyLinkButton, LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
-import { MediaPreview, MediaTile, usePanelMedia } from "./PanelMedia";
+import { LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
+import { MediaPreview, usePanelMedia } from "./PanelMedia";
 import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
-import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, StatusPills, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
+import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
 import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
 import {
@@ -75,6 +75,7 @@ import {
   loadErrorLine,
   lockCopy,
   switchOffLine,
+  switchesOffLine,
   tabLabel,
   type InsightsTab,
 } from "./insightsView";
@@ -368,8 +369,8 @@ function captureLocation(target: InsightsSheetTarget): DriveLocation | null {
 }
 
 /**
- * The no-link panel's header: the capture, its name, a line under it, Close,
- * and the capture's preview under them while unlocked.
+ * The no-link panel's header: the capture's name, a line under it, Close,
+ * and the capture's preview under them.
  */
 function PanelHeader({
   file,
@@ -384,14 +385,12 @@ function PanelHeader({
   subtitle: string | null;
   onClose: () => void;
 }) {
-  const previewId = useId();
   const unlocked = !useAppLocked();
   const { media, source } = usePanelMedia({ file, fileName, location, unlocked });
   return (
     <header className={cn("shrink-0 border-b px-4 pb-3 pt-4", HAIRLINE)}>
       {source}
       <div className="flex items-center gap-2.5">
-        <MediaTile media={media} fileName={fileName} previewId={previewId} onDuration={() => undefined} />
         <div className="min-w-0 flex-1">
           <h2
             tabIndex={-1}
@@ -408,7 +407,7 @@ function PanelHeader({
           <X className="size-4" />
         </button>
       </div>
-      <MediaPreview media={media} fileName={fileName} id={previewId} />
+      <MediaPreview media={media} fileName={fileName} />
     </header>
   );
 }
@@ -440,12 +439,12 @@ function anyLocked(insights: ShareInsights): boolean {
 }
 
 /**
- * The panel, top to bottom: a fixed header (the capture, its name, "Shared …
- * · link on", the Link settings gear, Close) with the link's switches as
- * pills under it, a fixed summary of the numbers, fixed tabs (Comments,
- * Viewers, Reactions), and one scrolling body for the selected tab. With
- * twenty comments only the body scrolls, so the switches and the counts stay
- * in view.
+ * The panel, top to bottom: a fixed header (the name, "Shared … · link on"
+ * and any switch that is off, the Link settings gear, Close, then the
+ * capture's preview and the link with Copy), a fixed summary of the numbers,
+ * fixed tabs (Comments, Viewers, Reactions), and one scrolling body for the
+ * selected tab. With twenty comments only the body scrolls, so the header and
+ * the counts stay in view.
  */
 function InsightsPanelFor({
   shareToken,
@@ -465,7 +464,6 @@ function InsightsPanelFor({
   const tabsId = useId();
   const titleId = useId();
   const popoverId = useId();
-  const previewId = useId();
   const [chosenTab, setChosenTab] = useState<InsightsTab | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -488,8 +486,8 @@ function InsightsPanelFor({
     setSettingsOpen(true);
   };
 
-  // The recording's length, read off the capture itself when it is on this
-  // device; otherwise worked out from the viewers (`estimateDurationMs`).
+  // The recording's length, read off the capture's preview when it is on
+  // this device; otherwise worked out from the viewers (`estimateDurationMs`).
   const [mediaMs, setMediaMs] = useState<number | null>(null);
   const durationMs = useDurationMs(shareToken, mediaMs);
   const summary = useCachedShare(shareToken);
@@ -523,6 +521,9 @@ function InsightsPanelFor({
   });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
   const settings = switches.current.data ?? null;
+  // What the link has turned off, said once in the header's line; the gear
+  // changes it.
+  const offLine = switchesOffLine(settings);
   const notCounting = settings?.offered.insights === true && !settings.on.insights;
 
   const commentList = moderation.comments.data?.comments ?? [];
@@ -608,7 +609,6 @@ function InsightsPanelFor({
       <header className={cn("shrink-0 border-b px-4 pb-3 pt-4", HAIRLINE)}>
         {source}
         <div ref={titleRowRef} className="flex items-center gap-2.5">
-          <MediaTile media={media} fileName={fileName} previewId={previewId} onDuration={setMediaMs} />
           <div className="min-w-0 flex-1">
             <h2
               id={titleId}
@@ -622,11 +622,12 @@ function InsightsPanelFor({
             </h2>
             {turnedOff ? (
               <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{LINK_TURNED_OFF}</p>
-            ) : subtitle ? (
-              <p className={cn("mt-0.5 truncate text-xs", MUTED)}>{subtitle}</p>
+            ) : subtitle || offLine ? (
+              <p className={cn("mt-0.5 text-xs", MUTED)} data-testid="insights-subtitle">
+                {[subtitle, offLine].filter(Boolean).join(" · ")}
+              </p>
             ) : null}
           </div>
-          {!turnedOff && <CopyLinkButton link={link} />}
           {!turnedOff && (
             <button
               type="button"
@@ -645,13 +646,8 @@ function InsightsPanelFor({
             <X className="size-4" />
           </button>
         </div>
-        {!turnedOff && <MediaPreview media={media} fileName={fileName} id={previewId} />}
+        {!turnedOff && <MediaPreview media={media} fileName={fileName} onDuration={setMediaMs} />}
         {!turnedOff && <LinkField link={link} />}
-        {settings && !turnedOff && (
-          <div className="mt-2.5 empty:hidden">
-            <StatusPills settings={settings} popoverId={popoverId} open={settingsOpen} onOpen={openSettings} />
-          </div>
-        )}
       </header>
 
       {settingsOpen && !turnedOff && (

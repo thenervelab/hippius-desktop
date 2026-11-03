@@ -234,7 +234,7 @@ export function emptyInsightsCopy({
   };
 }
 
-/** The link switches, in the order the status row and Link settings show them. */
+/** The link switches, in the order the header and Link settings name them. */
 export const SWITCH_NAMES: ReadonlyArray<{ key: keyof LinkSettingsDefault["on"]; label: string }> = [
   { key: "insights", label: "Insights" },
   { key: "comments", label: "Comments" },
@@ -242,19 +242,19 @@ export const SWITCH_NAMES: ReadonlyArray<{ key: keyof LinkSettingsDefault["on"];
 ];
 
 /**
- * The status row under the panel header: one pill per switch this server
- * takes, on or off. Empty when Link settings would draw no switches (the
+ * The switches that are off, for the end of the header's line: `Comments
+ * off`, `Insights and comments off`, `Insights, comments and reactions off`.
+ * `null` while every switch is on, or when Link settings would draw none (the
  * server has no Insights switch, or the settings are not known yet).
  */
-export function switchPills(
-  settings: Pick<LinkSettingsDefault, "offered" | "on"> | null,
-): Array<{ key: keyof LinkSettingsDefault["on"]; label: string; on: boolean }> {
-  if (!settings || !settings.offered.insights) return [];
-  return SWITCH_NAMES.filter(({ key }) => settings.offered[key]).map(({ key, label }) => ({
-    key,
-    label,
-    on: settings.on[key],
-  }));
+export function switchesOffLine(settings: Pick<LinkSettingsDefault, "offered" | "on"> | null): string | null {
+  if (!settings || !settings.offered.insights) return null;
+  const off = SWITCH_NAMES.filter(({ key }) => settings.offered[key] && !settings.on[key]).map(({ label }, i) =>
+    i === 0 ? label : label.toLowerCase(),
+  );
+  if (off.length === 0) return null;
+  const names = off.length === 1 ? off[0] : `${off.slice(0, -1).join(", ")} and ${off[off.length - 1]}`;
+  return `${names} off`;
 }
 
 /**

@@ -580,6 +580,7 @@ describe("ShareInsightsSheet", () => {
     });
     renderSheet();
 
+    expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Comments off$/);
     const settings = await openSettings();
     const comments = await within(settings).findByRole("switch", { name: "Comments" });
     expect(comments).toHaveAttribute("aria-checked", "false");
@@ -595,13 +596,13 @@ describe("ShareInsightsSheet", () => {
     // Saving re-renders the popover; focus stays on the switch.
     await waitFor(() => expect(screen.getByRole("switch", { name: "Comments" })).not.toBeDisabled());
     expect(screen.getByRole("switch", { name: "Comments" })).toHaveFocus();
-    // The status row follows the switch.
-    expect(screen.getByRole("button", { name: /^Comments on/ })).toBeInTheDocument();
+    // The header's line follows the switch.
+    await waitFor(() => expect(screen.queryByTestId("insights-subtitle")).toBeNull());
 
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(settingsCalls).toBe(2));
     await waitFor(() => expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true"));
-    expect(screen.getByRole("button", { name: /^Insights on/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("insights-subtitle")).toBeNull();
   });
 
   describe("on the free plan", () => {
@@ -750,10 +751,10 @@ describe("ShareInsightsSheet", () => {
     expect(within(settings).getByText("Each time the link is opened.")).toBeInTheDocument();
   });
 
-  describe("Link settings and the status row", () => {
+  describe("Link settings and the header's line", () => {
     const SOME_OFF = { offered: ALL_ON, on: { insights: true, comments: false, reactions: true }, switchesInPlan: true };
 
-    it("shows each switch as a pill, saying off in words, not colour alone", async () => {
+    it("says a switch that is off in the header's line, with no row of switch badges", async () => {
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
@@ -761,19 +762,36 @@ describe("ShareInsightsSheet", () => {
         share_get_link_settings: SOME_OFF,
       });
       renderSheet();
-      const row = await screen.findByRole("list", { name: "On this link" });
-      const pills = within(row).getAllByRole("button");
-      expect(pills.map((p) => p.getAttribute("aria-label"))).toEqual([
-        "Insights on. Change in Link settings",
-        "Comments off. Change in Link settings",
-        "Reactions on. Change in Link settings",
-      ]);
-      expect(pills[1]).toHaveTextContent(/^Commentsoff$/);
-      expect(pills[0]).not.toHaveTextContent(/off/);
-      expect(pills[1]).toHaveAttribute("data-state", "off");
+      expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Comments off$/);
+      expect(screen.queryByRole("list", { name: "On this link" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Change in Link settings/ })).toBeNull();
+      // The header is the name, its line, the gear and Close: no thumbnail,
+      // no second Copy.
+      const header = screen.getByTestId("insights-panel").querySelector("header")!;
+      expect(screen.queryByTestId("insights-media-tile")).toBeNull();
+      expect(within(header).getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+      expect(within(header).getByRole("button", { name: "Close" })).toBeInTheDocument();
+      expect(within(header).queryByRole("button", { name: /Copy link/ })).toBeNull();
     });
 
-    it("opens from the gear or a pill, closes on Escape without closing the panel, and gives focus back", async () => {
+    it("says a free plan's link has every switch off, with the lock and the gear still there", async () => {
+      answer({
+        share_get_insights: FREE,
+        share_list_comments: COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: { offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: false },
+      });
+      renderSheet();
+      expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Insights, comments and reactions off$/);
+      // The plan's lock stays where it was, in the Viewers tab, and Link
+      // settings still opens from the gear.
+      fireEvent.click(screen.getByRole("tab", { name: /Viewers/ }));
+      expect(await screen.findByTestId("insights-locked")).toBeInTheDocument();
+      const settings = await openSettings();
+      expect(within(settings).getAllByRole("switch")).toHaveLength(3);
+    });
+
+    it("opens from the gear, closes on Escape without closing the panel, and gives focus back", async () => {
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
@@ -799,9 +817,8 @@ describe("ShareInsightsSheet", () => {
       expect(store.get(insightsSheetAtom)).not.toBeNull();
       await waitFor(() => expect(gear).toHaveFocus());
 
-      // A pill opens the same popover, and a press outside closes it.
-      const pill = screen.getByRole("button", { name: /^Comments on/ });
-      fireEvent.click(pill);
+      // A press outside closes it.
+      fireEvent.click(gear);
       expect(await screen.findByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
       fireEvent.pointerDown(screen.getByRole("heading", { level: 2 }));
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
@@ -1021,7 +1038,6 @@ describe("ShareInsightsSheet", () => {
       expect(
         screen.getByText("Nobody has opened this link yet. Views, comments and reactions show up here once they do."),
       ).toBeInTheDocument();
-      expect(await screen.findByRole("list", { name: "On this link" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
       // No zero, no summary, no tabs, no per-tab empty states.
       expect(screen.queryByText("views")).toBeNull();

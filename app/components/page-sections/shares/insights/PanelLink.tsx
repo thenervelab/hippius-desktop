@@ -7,7 +7,6 @@ import { Copy, Eye, EyeOff, Link2, Lock } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { SHARES_QUERY_KEY, useSharedFiles } from "@/app/lib/hooks/useSharedFiles";
 import { useUnlockFlow } from "@/app/lib/hooks/useUnlockFlow";
@@ -26,8 +25,6 @@ import {
   type PanelLink,
 } from "./panelLinkMedia";
 import { HAIRLINE, ICON_BUTTON, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
-
-const TIP = "z-[60] max-w-[240px] bg-grey-10 text-white dark:bg-white dark:text-grey-10";
 
 /**
  * Whether Hippius is locked on this computer. When it unlocks, the share
@@ -65,68 +62,9 @@ async function copy(url: string) {
 }
 
 /**
- * The header's Copy link button, beside Link settings. Locked, it opens the
- * unlock; with no key on this computer it says why it can't copy.
- */
-export function CopyLinkButton({ link }: { link: PanelLink }) {
-  if (link.kind === "loading") return null;
-  if (link.kind === "locked") return <UnlockCopyButton />;
-  const ready = link.kind === "ready";
-  const tip = ready ? COPY_LINK : LINK_UNAVAILABLE_NOTE;
-  return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={COPY_LINK}
-            aria-disabled={ready ? undefined : true}
-            onClick={() => {
-              if (ready) void copy(link.url);
-            }}
-            className={cn(ICON_BUTTON, !ready && "cursor-not-allowed opacity-50 hover:bg-transparent")}
-            data-testid="insights-copy-link"
-          >
-            <Copy className="size-4" aria-hidden />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className={TIP}>
-          {tip}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-function UnlockCopyButton() {
-  const { unlock, busy } = useUnlockFlow();
-  return (
-    <TooltipProvider delayDuration={300}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={`${COPY_LINK}: ${UNLOCK_TO_COPY.toLowerCase()}`}
-            aria-busy={busy || undefined}
-            onClick={() => void unlock()}
-            className={ICON_BUTTON}
-            data-testid="insights-copy-link"
-          >
-            <Copy className="size-4" aria-hidden />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className={TIP}>
-          {LINK_LOCKED_NOTE}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
-
-/**
- * The link itself, under the header's title. The full link is hidden until
- * the owner asks for it (the panel is often on screen while recording), and
- * the Copy button copies it either way. Locked, the link is dots with "Unlock
+ * The link itself, under the capture's preview, with its Copy link button.
+ * The full link is hidden until the owner asks for it (the panel is often on
+ * screen while recording), and Copy copies it either way. Locked, the link is dots with "Unlock
  * to copy"; with no key on this computer, dots and why.
  */
 export function LinkField({ link }: { link: PanelLink }) {
@@ -155,6 +93,16 @@ export function LinkField({ link }: { link: PanelLink }) {
             className={cn(ICON_BUTTON, "size-6 rounded-md")}
           >
             {shown ? <EyeOff className="size-3.5" aria-hidden /> : <Eye className="size-3.5" aria-hidden />}
+          </button>
+          <button
+            type="button"
+            aria-label={COPY_LINK}
+            title={COPY_LINK}
+            onClick={() => void copy(link.url)}
+            className={cn(ICON_BUTTON, "size-6 rounded-md")}
+            data-testid="insights-copy-link"
+          >
+            <Copy className="size-3.5" aria-hidden />
           </button>
         </div>
         {link.needsPassword && <p className={cn("mt-1.5 text-xs leading-[1.45]", MUTED)}>{LINK_NEEDS_PASSWORD}</p>}

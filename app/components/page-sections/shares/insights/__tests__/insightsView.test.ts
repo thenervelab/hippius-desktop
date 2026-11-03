@@ -26,7 +26,7 @@ import {
   sortThreads,
   threadsMentioningYou,
   switchOffLine,
-  switchPills,
+  switchesOffLine,
   tabLabel,
   viewerName,
   visibleReplies,
@@ -243,22 +243,25 @@ describe("visibleReplies", () => {
   });
 });
 
-describe("the switches' status row", () => {
+describe("the switches, in the header's line and the tabs", () => {
   const all = { insights: true, comments: true, reactions: true };
   const on = { insights: true, comments: false, reactions: true };
-  it("draws a pill per switch the server takes, on or off, in order", () => {
-    expect(switchPills({ offered: all, on })).toEqual([
-      { key: "insights", label: "Insights", on: true },
-      { key: "comments", label: "Comments", on: false },
-      { key: "reactions", label: "Reactions", on: true },
-    ]);
-    expect(switchPills({ offered: { insights: true, comments: false, reactions: false }, on }).map((p) => p.key)).toEqual([
-      "insights",
-    ]);
+  it("names every switch that is off, in order, and nothing while all are on", () => {
+    expect(switchesOffLine({ offered: all, on: all })).toBeNull();
+    expect(switchesOffLine({ offered: all, on })).toBe("Comments off");
+    expect(switchesOffLine({ offered: all, on: { insights: false, comments: false, reactions: true } })).toBe(
+      "Insights and comments off",
+    );
+    // A free plan's link has all three off.
+    expect(switchesOffLine({ offered: all, on: { insights: false, comments: false, reactions: false } })).toBe(
+      "Insights, comments and reactions off",
+    );
   });
-  it("draws none when Link settings would draw no switches", () => {
-    expect(switchPills(null)).toEqual([]);
-    expect(switchPills({ offered: { insights: false, comments: true, reactions: true }, on })).toEqual([]);
+  it("names only switches the server takes, and none when Link settings would draw none", () => {
+    const off = { insights: false, comments: false, reactions: false };
+    expect(switchesOffLine({ offered: { insights: true, comments: false, reactions: false }, on: off })).toBe("Insights off");
+    expect(switchesOffLine(null)).toBeNull();
+    expect(switchesOffLine({ offered: { insights: false, comments: true, reactions: true }, on: off })).toBeNull();
   });
   it("gives a tab its one line only while its switch is off", () => {
     expect(switchOffLine({ offered: all, on }, "comments")).toBe("Comments are off, so viewers can't add new ones.");

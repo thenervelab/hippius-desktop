@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { atom, useAtom } from "jotai";
 import { useQuery } from "@tanstack/react-query";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import { File as FileIcon, ImageIcon, Maximize2, Video } from "lucide-react";
+import { Maximize2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
@@ -14,9 +13,7 @@ import { getFileUrl } from "@/app/lib/utils/fileUrlResolver";
 import { openInDefaultApp } from "@/components/page-sections/drive/file-preview/previewBytes";
 import { useVideoPlayback } from "@/components/page-sections/drive/file-preview/videoPlayback";
 import {
-  HIDE_PREVIEW,
   OPEN_CAPTURE,
-  SHOW_PREVIEW,
   captureMediaKind,
   planPanelMedia,
   type CaptureMediaKind,
@@ -29,23 +26,16 @@ import { FOCUS, SKELETON } from "./panelStyles";
 export const PREVIEW_THUMB_MAX_DIM = 640;
 
 /**
- * Whether the preview under the header is open. Kept for the session, in
- * memory only, so somebody who closed it to make room does not have to close
- * it again on every link.
- */
-export const insightsPreviewOpenAtom = atom(true);
-
-/**
  * A picture of the capture for the panel. `ready` carries the URL to draw
  * (for a recording, the one it plays from: Rust's loopback stream on Linux,
  * where the WebView cannot play `asset://` media) and the file on disk for
- * "Open", when there is one. `previewable` is false when the app is locked:
- * the header keeps its small frame, as before, and shows no preview.
+ * "Open", when there is one. While the app is locked only the file on disk
+ * is offered (`planPanelMedia`).
  */
 export type PanelMediaState =
   | { status: "none" }
-  | { status: "loading"; kind: CaptureMediaKind; previewable: boolean }
-  | { status: "ready"; kind: CaptureMediaKind; url: string; localPath: string | null; previewable: boolean };
+  | { status: "loading"; kind: CaptureMediaKind }
+  | { status: "ready"; kind: CaptureMediaKind; url: string; localPath: string | null };
 
 /**
  * Finds the capture's picture through the paths the app already has (see
@@ -108,7 +98,7 @@ export function usePanelMedia({
   }
 
   // A recording plays from where Rust says (`video_playback_source`); no
-  // decoder, or no answer, and the panel shows the tile instead.
+  // decoder, or no answer, and the panel shows no picture.
   const { playback, failed } = useVideoPlayback(kind === "video" && localPath ? localPath : "");
   if (kind === "video" && url) {
     if (failed) url = null;
@@ -117,10 +107,9 @@ export function usePanelMedia({
     else if (playback.kind !== "webview") url = null;
   }
 
-  const previewable = unlocked;
   let media: PanelMediaState = { status: "none" };
-  if (kind && pending) media = { status: "loading", kind, previewable };
-  else if (kind && url) media = { status: "ready", kind, url, localPath, previewable };
+  if (kind && pending) media = { status: "loading", kind };
+  else if (kind && url) media = { status: "ready", kind, url, localPath };
 
   return {
     media,
@@ -138,98 +127,31 @@ function CloudThumbnail({ file, onUrl }: { file: FormattedUserFile; onUrl: (url:
   return null;
 }
 
-const TILE = "relative flex h-9 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[8px]";
-
 /**
- * The header's tile: a frame of the capture when there is one (a recording
- * also gives the panel its length), otherwise the file's kind. With a preview
- * to show it is the button that opens and closes it.
+ * The capture in the panel's header: the screenshot, or the recording muted
+ * with its controls (which also gives the panel its length), and "Open" to
+ * see it full size in the computer's own viewer. A skeleton of the same size
+ * while it loads; a file with no picture, or one that can't be drawn, takes
+ * no room at all.
  */
-export function MediaTile({
+export function MediaPreview({
   media,
   fileName,
-  previewId,
   onDuration,
 }: {
   media: PanelMediaState;
   fileName: string;
-  previewId: string;
-  onDuration: (ms: number) => void;
+  onDuration?: (ms: number) => void;
 }) {
-  const [open, setOpen] = useAtom(insightsPreviewOpenAtom);
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const ready = media.status === "ready" && media.url !== failedUrl ? media : null;
-  const kind = captureMediaKind(fileName);
-  const Icon = kind === "video" ? Video : kind === "image" ? ImageIcon : FileIcon;
-
-  if (media.status === "loading") {
-    return <span aria-hidden data-testid="insights-media-tile-loading" className={cn(TILE, SKELETON, "rounded-[8px]")} />;
-  }
-
-  const inner = ready ? (
-    ready.kind === "video" ? (
-      <video
-        src={`${ready.url}#t=0.1`}
-        muted
-        playsInline
-        preload="metadata"
-        tabIndex={-1}
-        aria-hidden
-        className="pointer-events-none size-full object-cover"
-        onLoadedMetadata={(e) => {
-          const seconds = e.currentTarget.duration;
-          if (Number.isFinite(seconds) && seconds > 0) onDuration(Math.round(seconds * 1000));
-        }}
-        onError={() => setFailedUrl(ready.url)}
-      />
-    ) : (
-      <img src={ready.url} alt="" className="size-full object-cover" onError={() => setFailedUrl(ready.url)} />
-    )
-  ) : (
-    <Icon className="size-[18px]" />
-  );
-  const tone = ready ? "bg-[#000]" : "bg-primary-50/10 text-primary-50 dark:bg-primary-50/15 dark:text-primary-brand-dark";
-
-  if (ready?.previewable) {
-    return (
-      <button
-        type="button"
-        aria-label={open ? HIDE_PREVIEW : SHOW_PREVIEW}
-        aria-expanded={open}
-        aria-controls={open ? previewId : undefined}
-        title={open ? HIDE_PREVIEW : SHOW_PREVIEW}
-        onClick={() => setOpen((v) => !v)}
-        className={cn(TILE, tone, FOCUS, "transition-opacity hover:opacity-90")}
-        data-testid="insights-media-tile"
-      >
-        {inner}
-      </button>
-    );
-  }
-  return (
-    <span aria-hidden className={cn(TILE, tone)} data-testid="insights-media-tile">
-      {inner}
-    </span>
-  );
-}
-
-/**
- * The capture under the header, while unlocked: the screenshot, or the
- * recording muted with its controls, and "Open" to see it full size in the
- * computer's own viewer. A skeleton of the same size while it loads; if it
- * can't be drawn it goes quietly and the tile stays.
- */
-export function MediaPreview({ media, fileName, id }: { media: PanelMediaState; fileName: string; id: string }) {
-  const [open] = useAtom(insightsPreviewOpenAtom);
-  const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  if (!open || media.status === "none" || !media.previewable) return null;
+  if (media.status === "none") return null;
   if (media.status === "loading") {
     return <div aria-hidden data-testid="insights-preview-loading" className={cn(SKELETON, "mt-3 aspect-video w-full rounded-[10px]")} />;
   }
   if (media.url === failedUrl) return null;
   const { localPath } = media;
   return (
-    <figure id={id} data-testid="insights-preview" className="relative mt-3 overflow-hidden rounded-[10px] bg-[#000]">
+    <figure data-testid="insights-preview" className="relative mt-3 overflow-hidden rounded-[10px] bg-[#000]">
       {media.kind === "video" ? (
         <video
           src={media.url}
@@ -239,6 +161,10 @@ export function MediaPreview({ media, fileName, id }: { media: PanelMediaState; 
           preload="metadata"
           aria-label={`Preview of ${fileName}`}
           className="aspect-video w-full object-contain"
+          onLoadedMetadata={(e) => {
+            const seconds = e.currentTarget.duration;
+            if (Number.isFinite(seconds) && seconds > 0) onDuration?.(Math.round(seconds * 1000));
+          }}
           onError={() => setFailedUrl(media.url)}
         />
       ) : (
