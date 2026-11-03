@@ -309,15 +309,17 @@ fn another_hippius_running(identifier: &str) -> bool {
         if s.is_null() {
             return None;
         }
-        // SAFETY: `s` is a non-nil NSString; UTF8String is valid while it lives.
+        // SAFETY: `s` is a non-nil NSString, and `UTF8String` takes no arguments.
         let c: *const std::os::raw::c_char = unsafe { msg_send![s, UTF8String] };
         if c.is_null() {
             return None;
         }
-        // SAFETY: a non-null, NUL-terminated UTF8String buffer, read before
-        // `s` can be released.
-        let text = unsafe { std::ffi::CStr::from_ptr(c) };
-        Some(text.to_string_lossy().into_owned())
+        // SAFETY: `c` is non-null and NUL-terminated. The buffer lives no
+        // longer than `s` and the enclosing autorelease pool; `text` is called
+        // only inside the `autoreleasepool` below, while `s` is alive, and
+        // copies the bytes before returning.
+        let c_str = unsafe { std::ffi::CStr::from_ptr(c) };
+        Some(c_str.to_string_lossy().into_owned())
     };
     objc::rc::autoreleasepool(|| {
         // SAFETY: read-only NSWorkspace / NSRunningApplication queries, which

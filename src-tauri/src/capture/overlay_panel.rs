@@ -353,12 +353,20 @@ mod imp {
         }
     }
 
-    /// Turn `ns_window` into a non-activating panel, or say why not. Main
-    /// thread only.
+    /// Turn `ns_window` into a non-activating panel, or say why not.
+    ///
+    /// # Safety
+    ///
+    /// 1. `ns_window` points to a live `NSWindow`.
+    /// 2. Called on the main thread.
     unsafe fn convert(ns_window: *mut Object) -> Result<(), Refusal> {
-        // SAFETY: this function's contract is a live `ns_window` on the main
-        // thread; every call below is plain AppKit or the ObjC runtime on it
-        // and its own content view.
+        // SAFETY: preconditions 1 and 2 cover every message sent to
+        // `ns_window` and its content view. The `object_setClass` swap below
+        // is sound because the checks before it refuse (`LayoutDiffers`)
+        // unless the panel class has the window's real class's instance size
+        // and its `focusable` ivar at the same offset, so tao's ivars stay in
+        // place, and refuse (`Observed`) unless the window's key-value
+        // observers allow the swap.
         unsafe {
             let panel_kind: BOOL = msg_send![ns_window, isKindOfClass: class!(NSPanel)];
             if panel_kind == YES {
@@ -433,7 +441,8 @@ mod imp {
         let label = window.label().to_owned();
         let _ = window.run_on_main_thread(move || {
             let Ok(ns_window) = target.ns_window() else { return };
-            // SAFETY: this window's live NSWindow, on the main thread.
+            // SAFETY: 1. `ns_window()` returned this window's live NSWindow.
+            // 2. Inside `run_on_main_thread`.
             match unsafe { convert(ns_window.cast::<Object>()) } {
                 Ok(()) => tracing::info!(window = %label, "capture: window is a non-activating panel"),
                 Err(why) => tracing::warn!(
