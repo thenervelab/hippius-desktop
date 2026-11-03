@@ -1652,7 +1652,7 @@ mod tests {
         // under `HOME_LOCK`. Without taking the lock this races them and
         // fails intermittently in a full `cargo test` run while passing when
         // filtered to itself.
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
+        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let conf = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).expect("read tauri.conf.json");
         let conf: serde_json::Value = serde_json::from_str(&conf).expect("parse tauri.conf.json");
 

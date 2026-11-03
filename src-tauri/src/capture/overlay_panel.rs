@@ -462,8 +462,9 @@ mod imp {
     /// 1. `ns_window` points to a live `NSWindow`.
     /// 2. Called on the main thread.
     unsafe fn key_panel(ns_window: *mut Object) -> bool {
-        // SAFETY: preconditions 1 and 2; every call below is a read-only
-        // AppKit query or an ordering message on `ns_window`.
+        // SAFETY: preconditions 1 and 2. `isKindOfClass:` returns `BOOL` and
+        // `orderFrontRegardless` / `makeKeyWindow` return `void`, matching the
+        // declared types.
         unsafe {
             let panel: BOOL = msg_send![ns_window, isKindOfClass: class!(NSPanel)];
             if panel != YES {

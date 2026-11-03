@@ -7,8 +7,8 @@
 //! serialisation.
 //!
 //! Tests that hold [`HOME_LOCK`] across `.await` points must apply
-//! `#[expect(clippy::await_holding_lock, reason = "...")]` at the test
-//! function level.
+//! `#[expect(clippy::await_holding_lock, reason = "...")]` to the test or
+//! its `tests` module.
 //! The lint is a false positive here: `#[tokio::test]` uses a
 //! current-thread runtime, so awaits don't yield to another task
 //! contending for the same lock. The lock protects against *different
@@ -26,8 +26,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// parallel tests from seeing each other's tempdirs as their `$HOME`.
 pub(crate) static HOME_LOCK: Mutex<()> = Mutex::new(());
 
-/// Lock [`HOME_LOCK`] and point `$HOME` at `home` until the returned guard
-/// drops.
+/// Lock [`HOME_LOCK`] and point `$HOME` at `home`. Dropping the guard
+/// releases the lock; `$HOME` is not restored.
 ///
 /// A poisoned lock is taken anyway: the only state it guards is `$HOME`,
 /// which this call overwrites, so one panicking test does not fail every
