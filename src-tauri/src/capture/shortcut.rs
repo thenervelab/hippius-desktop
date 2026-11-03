@@ -309,13 +309,15 @@ fn another_hippius_running(identifier: &str) -> bool {
         if s.is_null() {
             return None;
         }
-        // SAFETY: `s` is a non-nil NSString, and `UTF8String` takes no arguments.
+        // SAFETY: `s` is a non-nil NSString, and `UTF8String` returns
+        // `const char *`, the type `c` is declared with.
         let c: *const std::os::raw::c_char = unsafe { msg_send![s, UTF8String] };
         if c.is_null() {
             return None;
         }
-        // SAFETY: `c` is non-null and NUL-terminated. The buffer lives no
-        // longer than `s` and the enclosing autorelease pool; `text` is called
+        // SAFETY: `c` is non-null and NUL-terminated. Per the docs of
+        // `-[NSString UTF8String]`, the buffer lives no longer than `s` and the
+        // enclosing autorelease pool; `text` is called
         // only inside the `autoreleasepool` below, while `s` is alive, and
         // copies the bytes before returning.
         let c_str = unsafe { std::ffi::CStr::from_ptr(c) };

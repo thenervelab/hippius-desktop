@@ -1157,10 +1157,9 @@ mod tests {
     async fn reencrypt_overwrites_existing_folder_mnemonics_under_new_password() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         // `config_dir_for_folder` and the account_id hashing path look at $HOME.
-        crate::test_helpers::set_test_home(&home_guard, tmp.path());
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
@@ -1250,9 +1249,8 @@ mod tests {
     async fn reencrypt_with_zero_folders_returns_ok() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        crate::test_helpers::set_test_home(&home_guard, tmp.path());
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
@@ -1272,9 +1270,8 @@ mod tests {
     async fn reencrypt_with_invalid_master_returns_err_naming_all_folders() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        crate::test_helpers::set_test_home(&home_guard, tmp.path());
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")

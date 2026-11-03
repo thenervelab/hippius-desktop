@@ -129,7 +129,7 @@ These hold everywhere; the subsystem rules files carry the reasoning.
 - **Every re-authentication from a stored mnemonic derives via `service.rs::derive_verified_keys`**, never the bare `derive_keys` — an OAuth account's sync mnemonic derives a different identity than its login SS58.
 - **Sync-failure copy comes from Rust** (`FileFailureKindPayload::display_reason`), never from reqwest's `Display`. Do not tell the user to check their connection.
 - **Match IPC errors on the structured shape** `{ kind, message }`, not on substring matching of `err.message`.
-- **A Rust test that touches `$HOME` must acquire `crate::test_helpers::HOME_LOCK`, and sets it only through `test_helpers::set_test_home`** — cargo's parallel runner races them otherwise. Used across `sync/` and `recovery.rs`, so it lives here rather than in one subsystem's rules file.
+- **A unit test that sets `$HOME` does it only through `crate::test_helpers::set_test_home`, which holds `HOME_LOCK`; one that only reads it takes `HOME_LOCK`; an integration test uses its file's `TEST_HOME`** — cargo's parallel runner races them otherwise. Used across `sync/` and `recovery.rs`, so it lives here rather than in one subsystem's rules file.
 - **Run the live e2e lane on every `hcfs` pin bump**, before merging the bump PR.
 - **A new test goes in the lowest layer that can fail for the same reason a user would notice** — routing table in `docs/testing-policy.md`. A higher-layer failure is a missing lower-level test.
 - **Sync `#[tauri::command]`s run on the OS main thread.** Listing/filter/copy work is `async` + `spawn_blocking`.
