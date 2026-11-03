@@ -1605,7 +1605,7 @@ fn reject_if_weak(candidate: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::await_holding_lock,
     reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
 )]

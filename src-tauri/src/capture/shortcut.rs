@@ -315,9 +315,11 @@ fn another_hippius_running(identifier: &str) -> bool {
         if c.is_null() {
             return None;
         }
-        // SAFETY: `c` is non-null and NUL-terminated. Per the docs of
-        // `-[NSString UTF8String]`, the buffer lives no longer than `s`; `s` is
-        // alive here and the bytes are copied before `text` returns.
+        // SAFETY: `c` is non-null and NUL-terminated. Apple's docs for
+        // `-[NSString UTF8String]` say the buffer may not outlive `s` and must be
+        // copied before leaving the current memory context. It is copied on the
+        // next line, with no message sent to `s` in between, inside the
+        // `autoreleasepool` below.
         let c_str = unsafe { std::ffi::CStr::from_ptr(c) };
         Some(c_str.to_string_lossy().into_owned())
     };

@@ -899,7 +899,7 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::await_holding_lock,
     reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
 )]
