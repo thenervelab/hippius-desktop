@@ -1,7 +1,7 @@
 name: hcfs-bump
 
-# Weekly automation that bumps the pinned `hcfs` git rev to thenervelab/hcfs
-# `main` HEAD and opens a PR. The `ci` workflow then runs the full Rust +
+# Bumps the pinned `hcfs` git rev to thenervelab/hcfs `main` HEAD and opens a
+# PR. The `ci` workflow then runs the full Rust +
 # frontend suite (including the IPC wire-contract guards) on that PR, so a
 # breaking hcfs bump fails review instead of shipping. This is the automated
 # half of the dependency-bump safety net — the manual audit becomes a gated PR.
@@ -10,10 +10,11 @@ name: hcfs-bump
 # `rev = "<sha>"` git hash is skipped by their cargo managers, and the dep is a
 # private SSH repo. This workflow already has the hcfs deploy key, so it does
 # the resolve + update + PR itself.
+# Manual only for now. The drive-speed work moves the pin in planned steps, each
+# its own reviewed bump PR to a chosen hcfs commit, and a weekly bump to `main`
+# HEAD would mix unrelated hcfs changes into them. Restore the weekly
+# `schedule:` (`cron: "0 6 * * 1"`, Mondays 06:00 UTC) once those bumps ship.
 on:
-  schedule:
-    # Mondays 06:00 UTC — a weekly cadence (matches the 7-day cooldown norm).
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -103,9 +104,10 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Both hcfs-client and hcfs-shared share the same rev — update together.
+          # hcfs-client, hcfs-shared and hcfs-crypto share one rev, so they move
+          # together: the sed rewrites every line that holds the old rev.
           sed -i "s/$old/$new/g" src-tauri/Cargo.toml
-          ( cd src-tauri && cargo update --package hcfs-client --package hcfs-shared )
+          ( cd src-tauri && cargo update --package hcfs-client --package hcfs-shared --package hcfs-crypto )
           {
             echo "changed=true"
             echo "old=$old"
@@ -118,7 +120,10 @@ jobs:
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.HCFS_BUMP_TOKEN || github.token }}
-          branch: automated/hcfs-bump
+          # One branch per rev. The repo's no-force-push ruleset rejects the
+          # force-push this action uses to update an existing branch, which made
+          # every run fail while a fixed `automated/hcfs-bump` branch existed.
+          branch: automated/hcfs-bump-${{ steps.bump.outputs.short_new }}
           # Target `staging`, not the default branch (`main`). A dependency bump
           # must be proven by a staging build and the e2e-live lane before it can
           # reach production — and a push to `main` publishes a release outright,
@@ -129,7 +134,7 @@ jobs:
             src-tauri/Cargo.toml
             src-tauri/Cargo.lock
           commit-message: "chore(deps): bump hcfs to ${{ steps.bump.outputs.short_new }}"
-          title: "chore(deps): bump hcfs-client/hcfs-shared to main HEAD"
+          title: "chore(deps): bump hcfs to main HEAD ${{ steps.bump.outputs.short_new }}"
           delete-branch: true
           body: |
             Automated bump of the pinned `hcfs` git rev to `thenervelab/hcfs` **main** HEAD.
@@ -138,7 +143,7 @@ jobs:
             - to: `${{ steps.bump.outputs.new }}`
             - compare: https://github.com/thenervelab/hcfs/compare/${{ steps.bump.outputs.old }}...${{ steps.bump.outputs.new }}
 
-            Updates `hcfs-client` and `hcfs-shared` in `src-tauri/Cargo.toml` + `Cargo.lock`.
+            Updates `hcfs-client`, `hcfs-shared` and `hcfs-crypto` in `src-tauri/Cargo.toml` + `Cargo.lock`.
 
             The `ci` workflow runs the full Rust + frontend suite (including the IPC
             wire-contract guards) on this PR — **review its result before merging**.
@@ -149,7 +154,7 @@ jobs:
             branch before merging:
 
             ```
-            gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+            gh workflow run e2e-live.yml --ref automated/hcfs-bump-${{ steps.bump.outputs.short_new }} -f suite=all
             ```
 
             > If CI did not start on this PR, add a `HCFS_BUMP_TOKEN` PAT secret:

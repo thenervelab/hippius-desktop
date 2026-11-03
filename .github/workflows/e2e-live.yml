@@ -59,7 +59,7 @@ name: e2e-live
 # rule is in `.github/hcfs-bump-gate-activation.md` and in the bump PR body:
 # RUN THIS LANE ON EVERY `hcfs` PIN BUMP before merging it —
 #
-#   gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+#   gh workflow run e2e-live.yml --ref <bump branch> -f suite=all
 #
 # — noting that `workflow_dispatch` resolves this file BY PATH ON THE DEFAULT
 # BRANCH. `--ref` picks which code runs, but until this workflow itself is
