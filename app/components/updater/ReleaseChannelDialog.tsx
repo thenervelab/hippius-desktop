@@ -126,7 +126,9 @@ export default function ReleaseChannelDialog() {
         // install running with nothing on screen explaining the restart.
         if (!next && !switching) closeChannelDialog();
       }}
-      variant={status.current === "beta" ? "info" : "warning"}
+      // Info both ways: joining beta is a reversible choice, not a hazard. The
+      // copy says the builds are not fully stabilized; the frame need not shout it.
+      variant="info"
       title={view.title}
       description={status.blockedReason ?? view.description}
       confirmText={view.confirmText}
