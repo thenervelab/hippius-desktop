@@ -10,6 +10,7 @@ use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
 use crate::sync::identity::{DriveIdentity, resolve_drive_identity_or_own};
 use hcfs_client::drive::remote::RemoteFileInfo;
+use hcfs_crypto::FileKey;
 use sqlx::sqlite::SqlitePool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -103,10 +104,10 @@ pub(crate) enum DriveKeyMaterial {
 
 impl DriveKeyMaterial {
     /// The 32-byte file-encryption key.
-    pub(crate) fn encryption_key(&self) -> Result<[u8; 32]> {
+    pub(crate) fn encryption_key(&self) -> Result<FileKey> {
         match self {
-            Self::Phrase(phrase) => encryption_key_from_phrase(phrase),
-            Self::FileKey(key) => Ok(**key),
+            Self::Phrase(phrase) => encryption_key_from_phrase(phrase).map(FileKey::from_bytes),
+            Self::FileKey(key) => Ok(FileKey::from_bytes(**key)),
         }
     }
 
@@ -220,7 +221,7 @@ pub(crate) async fn encryption_key_for_label(
     label: &str,
     mnemonic: &str,
     identity: &DriveIdentity,
-) -> Result<[u8; 32]> {
+) -> Result<FileKey> {
     drive_key_material_for_label(state, account_id, label, mnemonic, identity)
         .await?
         .encryption_key()
@@ -233,7 +234,7 @@ pub(crate) async fn encryption_key_for_label(
 /// and an own drive, not an `AppState`, and a member key genuinely needs one
 /// (the grant is fetched with the session's bearer). `the_two_own_drive_key_chains_agree`
 /// pins it against the funnel so the two cannot drift.
-async fn own_drive_encryption_key(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<[u8; 32]> {
+async fn own_drive_encryption_key(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str) -> Result<FileKey> {
     let password = crate::sync::config::get_drive_password(pool, account_id, Some(mnemonic)).await?;
     let master_path = master_mnemonic_path(account_id)?;
     let mut master_mnemonic = hcfs_client::auth::recover_mnemonic(&master_path, &password)
@@ -344,13 +345,7 @@ pub async fn build_client_for_tests(pool: &SqlitePool, account_id: &str, identit
 }
 
 /// `encryption_key_for_label` for the live lane — see above.
-pub async fn encryption_key_for_tests(
-    pool: &SqlitePool,
-    account_id: &str,
-    label: &str,
-    mnemonic: &str,
-    identity: &DriveIdentity,
-) -> Result<[u8; 32]> {
+pub async fn encryption_key_for_tests(pool: &SqlitePool, account_id: &str, label: &str, mnemonic: &str, identity: &DriveIdentity) -> Result<FileKey> {
     debug_assert!(!identity.is_member, "the live lane derives own-drive keys only");
     own_drive_encryption_key(pool, account_id, label, mnemonic).await
 }
@@ -1687,7 +1682,7 @@ mod tests {
     fn browse_file(name: Option<&str>, rel_path: Option<&str>, size: u64, created: i64, updated: i64) -> hcfs_shared::network::RemoteFileEntry {
         hcfs_shared::network::RemoteFileEntry {
             path_hash: [7u8; 32],
-            salted_hash: [0u8; 32],
+            salted_hash: hcfs_shared::salted_hash::SaltedHash::from_bytes([0u8; 32]),
             size_bytes: size,
             revision_seq: 1,
             revision_id: [0u8; 32],
@@ -2067,7 +2062,7 @@ mod tests {
             .expect("valid mnemonic")
             .to_seed("");
         assert_eq!(
-            key.as_slice(),
+            key.as_bytes().as_slice(),
             &expected_seed[..32],
             "member key must be to_seed(\"\")[..32] of the sealed folder mnemonic"
         );
@@ -2168,7 +2163,11 @@ mod tests {
         .await
         .expect("funnel");
 
-        assert_eq!(direct, via_funnel, "the funnel and the live lane must derive one own-drive key");
+        assert_eq!(
+            direct.as_bytes(),
+            via_funnel.as_bytes(),
+            "the funnel and the live lane must derive one own-drive key"
+        );
     }
 
     #[test]

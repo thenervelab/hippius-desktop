@@ -497,7 +497,6 @@ async fn pending_backfill_flag_reflects_db_state() {
 async fn register_drive_with_excludes(state: &AppState, sync_root: &std::path::Path, patterns: &str) {
     use hcfs_client::engine::manager::DriveManager;
     use hcfs_client::engine::runner::DriveSlot;
-    use tokio::sync::Mutex as TokioMutex;
     use tokio_util::sync::CancellationToken;
 
     let config_dir = sync_root.join(".hippius");
@@ -505,15 +504,10 @@ async fn register_drive_with_excludes(state: &AppState, sync_root: &std::path::P
     std::fs::write(config_dir.join("exclude"), patterns).expect("write exclude file");
 
     let manager = DriveManager::new(sync_root.to_path_buf(), config_dir);
-    let mut guard = state.sync.drives.lock().await;
-    guard.insert(
-        LABEL.to_string(),
-        DriveSlot {
-            manager: Arc::new(TokioMutex::new(manager)),
-            cancel_token: CancellationToken::new(),
-            sync_path: sync_root.to_path_buf(),
-        },
-    );
+    state
+        .sync
+        .add_drive(LABEL.to_string(), DriveSlot::new(manager, CancellationToken::new()))
+        .await;
 }
 
 /// H-069: a user-typed `*.bin` must match via ExcludeRules, not `==`.

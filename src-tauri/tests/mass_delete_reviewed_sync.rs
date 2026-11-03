@@ -128,7 +128,7 @@ async fn synced_drive(root: &std::path::Path, config_dir: &std::path::Path, serv
         .map(|(id, meta)| {
             serde_json::json!({
                 "path_hash": id.to_vec(),
-                "salted_hash": meta.salted_hash.to_vec(),
+                "salted_hash": meta.salted_hash.as_bytes().to_vec(),
                 "size_bytes": meta.size_bytes,
                 "revision_seq": meta.revision_seq,
                 "revision_id": meta.revision_id.to_vec(),

@@ -19,11 +19,11 @@ use std::time::{Duration, Instant};
 use crate::error::Result;
 use crate::sync::logic::{NEVER_EMITTED, is_file_completion_tick, should_schedule_flush, try_claim_snapshot_emit};
 
-/// Minimum milliseconds between throttled `emit_snapshot(false)` calls from
+/// Minimum milliseconds between throttled `emit_snapshot_throttled()` calls from
 /// the per-chunk progress hot path.
 ///
 /// Per-chunk emits are the only code path that can fire hundreds of times per
-/// second; state-transition emits (`emit_snapshot(true)`) are not throttled.
+/// second; state-transition emits (`emit_snapshot()`) are not throttled.
 /// 250 ms matches the trailing-edge cadence the frontend `useSyncSnapshot`
 /// listener is designed for and keeps the perceived UI update rate at 4 Hz,
 /// which is visually smooth without flooding the WebKit main-thread eval
@@ -78,7 +78,7 @@ pub fn register_flush_runner(sync: &Arc<SyncRunner>) {
 /// is one redundant emit, which is self-correcting.
 fn emit_snapshot_throttled(sync: &SyncRunner, is_file_complete: bool) {
     if try_claim_snapshot_emit(&LAST_THROTTLED_EMIT_MS, monotonic_now_ms(), is_file_complete, SNAPSHOT_THROTTLE_MS) {
-        sync.emit_snapshot(false);
+        sync.emit_snapshot_throttled();
         return;
     }
     if let Some(weak) = RUNNER_FOR_FLUSH.get() {
@@ -109,7 +109,7 @@ fn schedule_trailing_flush(weak: Weak<SyncRunner>, cursor: &'static AtomicU64, f
         flag.store(false, Ordering::Relaxed);
         cursor.store(monotonic_now_ms(), Ordering::Relaxed);
         if let Some(sync) = weak.upgrade() {
-            sync.emit_snapshot(false);
+            sync.emit_snapshot_throttled();
         }
     });
     if spawned.is_err() {
@@ -136,7 +136,7 @@ fn monotonic_now_ms() -> u64 {
 
 /// Update per-file byte progress in the active sync session.
 ///
-/// The underlying `SyncRunner::emit_snapshot(false)` call is throttled to one
+/// The underlying `SyncRunner::emit_snapshot_throttled()` call is throttled to one
 /// emit per [`SNAPSHOT_THROTTLE_MS`] across the whole process, with a
 /// trailing flush for suppressed ticks (see [`emit_snapshot_throttled`]).
 /// File-completion ticks (`bytes_transferred == total_bytes` with
@@ -166,7 +166,7 @@ pub fn update_file_progress(
     // hcfs-client's progress tracker is infallible (no ProgressError); the
     // call returns `()`. The wrapper still returns Result<()> so its callers
     // (which `?` it) don't ripple.
-    sync.progress
+    sync.progress()
         .update_file_progress(path.to_owned(), bytes_transferred, total_bytes, action, label.map(ToOwned::to_owned));
     let is_file_complete = is_file_completion_tick(bytes_transferred, total_bytes);
     emit_snapshot_throttled(sync, is_file_complete);
@@ -179,13 +179,13 @@ pub fn update_file_progress(
 ///
 /// Per-file TERMINAL callbacks (`mark_file_synced` / `mark_file_failed`) fire
 /// once per file the instant each task settles. A cycle finishing N files in a
-/// burst would otherwise trigger N unthrottled `emit_snapshot(true)` calls —
+/// burst would otherwise trigger N unthrottled `emit_snapshot()` calls —
 /// each rebuilding the whole `SyncSnapshot` and (via the bridge) running a
 /// SQLite overlay aggregate — flooding the webview. A terminal event does not
 /// need a synchronous immediate emit: a suppressed one is delivered by the
 /// trailing flush within ~one window (see [`emit_snapshot_throttled`]), and
 /// `finalize_session_for_label` does an unconditional immediate emit at cycle
-/// end so the final state is never lost. Reserve `emit_snapshot(true)` for
+/// end so the final state is never lost. Reserve `emit_snapshot()` for
 /// genuine session transitions.
 fn emit_throttled_completion(sync: &SyncRunner) {
     emit_snapshot_throttled(sync, true);
@@ -201,7 +201,7 @@ pub fn merge_into_session(
     file_list: Option<SessionFileList>,
     label: Option<String>,
 ) -> Result<()> {
-    sync.progress.merge_into_session(
+    sync.progress().merge_into_session(
         expected_uploads,
         expected_downloads,
         expected_local_deletes,
@@ -209,28 +209,28 @@ pub fn merge_into_session(
         file_list,
         label.as_deref(),
     );
-    sync.emit_snapshot(true);
+    sync.emit_snapshot();
     Ok(())
 }
 
 /// Remove all files for a label from the current session.
 pub fn remove_files_for_label(sync: &SyncRunner, label: String) -> Result<()> {
-    sync.progress.remove_files_for_label(label);
-    sync.emit_snapshot(true);
+    sync.progress().remove_files_for_label(label);
+    sync.emit_snapshot();
     Ok(())
 }
 
 /// Clear all sync progress data (session + recent files).
 pub fn clear_all_data(sync: &SyncRunner) -> Result<()> {
-    sync.progress.clear_all_data();
-    sync.emit_snapshot(true);
+    sync.progress().clear_all_data();
+    sync.emit_snapshot();
     Ok(())
 }
 
 /// Mark excess pending files as failed.
 pub fn mark_pending_files_as_failed(sync: &SyncRunner, actual_uploads: u32, actual_downloads: u32, label: &str) -> Result<()> {
-    sync.progress.mark_pending_files_as_failed(actual_uploads, actual_downloads, label);
-    sync.emit_snapshot(true);
+    sync.progress().mark_pending_files_as_failed(actual_uploads, actual_downloads, label);
+    sync.emit_snapshot();
     Ok(())
 }
 
@@ -295,7 +295,7 @@ pub fn mark_file_synced(sync: &SyncRunner, path: &str) -> Result<u64> {
     // drops. `u64: Copy`, so the value moves out of the borrow region
     // cleanly — no lifetime extension, no extra clone.
     let observed_bytes = {
-        let mut state = sync.progress.lock_state();
+        let mut state = sync.progress().lock_state();
         let Some(session) = state.current_session.as_mut() else {
             return Ok(0);
         };
@@ -386,7 +386,7 @@ pub fn mark_file_failed(sync: &SyncRunner, path: &str, error: &str) -> Result<()
     use std::sync::Arc;
 
     {
-        let mut state = sync.progress.lock_state();
+        let mut state = sync.progress().lock_state();
         let Some(session) = state.current_session.as_mut() else {
             return Ok(());
         };
@@ -503,7 +503,7 @@ pub(crate) fn cap_file_list(v: &mut Vec<String>) {
 /// drive label, suitable for attaching to a
 /// [`crate::sync::events::SyncCompletedPayload`] before emission.
 ///
-/// Reads `sync.progress.current_session.files` — the internal session
+/// Reads `sync.progress().current_session.files` — the internal session
 /// state, which is NOT truncated by [`MAX_EVENT_FILES`] — and filters to
 /// entries whose `label` matches and whose status is `Completed`.
 /// Sorts by `completed_at` descending so the newest cycle's files win
@@ -524,7 +524,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
     if max_files == 0 {
         return Vec::new();
     }
-    let state = sync.progress.lock_state();
+    let state = sync.progress().lock_state();
     let Some(session) = state.current_session.as_ref() else {
         return Vec::new();
     };
@@ -550,21 +550,8 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
 
 /// Get a full snapshot with retry state injected.
 pub fn get_snapshot(sync: &SyncRunner, preparing: &crate::sync::preparing::PreparingState) -> Result<SyncSnapshot> {
-    let mut snapshot = sync.progress.build_snapshot();
-    let retry_at = sync.retry_at.load(std::sync::atomic::Ordering::Relaxed);
-    if retry_at > 0 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
-        snapshot.retry_in_secs = (retry_at - now).max(0) as u64;
-    }
-    // Recover a poisoned lock (read the data behind it) instead of `.ok()`-ing
-    // it away — a thread that panicked while holding `last_error` must not make
-    // the user-facing error string vanish from every later snapshot. Mirrors
-    // the deliberate `PoisonError::into_inner` recovery on the watcher mutex.
-    snapshot
-        .last_error
-        .clone_from(&sync.last_error.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    // The runner's snapshot carries the retry countdown and the last error.
+    let mut snapshot = sync.snapshot();
     prepare_snapshot_for_emit(&mut snapshot, preparing);
     Ok(snapshot)
 }
@@ -784,8 +771,8 @@ pub fn sp_get_snapshot(state: tauri::State<'_, crate::app_state::AppState>) -> R
 /// Dismiss the sync status widget for the current session.
 #[tauri::command]
 pub fn sp_dismiss_sync_widget(state: tauri::State<'_, crate::app_state::AppState>) {
-    state.sync.progress.dismiss();
-    state.sync.emit_snapshot(true);
+    state.sync.progress().dismiss();
+    state.sync.emit_snapshot();
 }
 
 #[cfg(test)]
@@ -1478,7 +1465,7 @@ mod tests {
     /// Seed `current_session.files` with the given files. Overwrites
     /// any existing session.
     fn seed_session(sync: &hcfs_client::engine::runner::SyncRunner, files: Vec<SyncFile>) {
-        let mut state = sync.progress.lock_state();
+        let mut state = sync.progress().lock_state();
         let file_map: HashMap<String, SyncFile> = files.into_iter().map(|f| (f.path.to_string(), f)).collect();
         state.current_session = Some(SyncSession {
             session_id: Arc::from("test-session"),
@@ -1707,7 +1694,7 @@ mod tests {
         assert_eq!(observed, 8_192);
 
         // Side-effect check: the row really did transition to Completed.
-        let state = sync.progress.lock_state();
+        let state = sync.progress().lock_state();
         let session = state.current_session.as_ref().expect("session was seeded");
         let file = session.files.get("a.bin").expect("file present");
         assert_eq!(file.status, FileStatus::Completed);

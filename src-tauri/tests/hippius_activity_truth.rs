@@ -31,7 +31,9 @@
 //!    helpers, no `#[cfg(test)] pub`). Constructs a `SyncRunner` via
 //!    the public `hcfs_client::engine::SyncRunner::new(...)` API,
 //!    invokes the closure with realistic args, then inspects the
-//!    public `pending_activity` mutex.
+//!    pending activity through `SyncRunner::get_sync_activity`, which
+//!    lists committed and pending items together. Nothing commits in
+//!    these tests, so every item it returns is pending.
 //!
 //! No live server, no real `DriveManager`, no Tauri `AppHandle`. The
 //! point is to assert the *enqueue location*, not to exercise the
@@ -101,7 +103,7 @@ fn seed_one_file_session(sync: &SyncRunner, path: &str, label: &str, total_bytes
         completed_at: None,
         error: None,
     };
-    let mut state = sync.progress.lock_state();
+    let mut state = sync.progress().lock_state();
     let mut files: HashMap<String, SyncFile> = HashMap::with_capacity(1);
     files.insert(path.to_string(), file);
     state.current_session = Some(SyncSession {
@@ -249,11 +251,11 @@ async fn on_file_synced_enqueues_uploaded_activity() {
 
     callback("folder/file.txt", &fid_hex, "cid-1", "uploaded", None);
 
-    let pending = sync.pending_activity.lock().expect("pending_activity mutex is uncontended in this test");
-    let items: Vec<_> = pending.iter().collect();
+    // A fresh runner has no committed activity, so this lists the pending items only.
+    let items = sync.get_sync_activity(None, None);
 
     assert_eq!(items.len(), 1, "exactly one activity item expected after one server-confirmed upload");
-    let item = items[0];
+    let item = &items[0];
     assert_eq!(item.action, SyncActivityAction::Uploaded);
     assert_eq!(&*item.file_name, "folder/file.txt");
     assert_eq!(&*item.label, "drive-a");
@@ -283,8 +285,7 @@ fn on_file_synced_enqueues_downloaded_activity_for_download_action() {
     let fid = [0xBBu8; 32];
     callback("doc.txt", &hex::encode(fid), "cid-2", "downloaded", None);
 
-    let pending = sync.pending_activity.lock().expect("mutex");
-    let items: Vec<_> = pending.iter().collect();
+    let items = sync.get_sync_activity(None, None);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].action, SyncActivityAction::Downloaded);
     assert_eq!(&*items[0].file_name, "doc.txt");
@@ -325,8 +326,7 @@ async fn on_file_synced_without_progress_entry_falls_back_to_zero_size() {
     let fid = [0xEEu8; 32];
     callback("ghost.bin", &hex::encode(fid), "cid-ghost", "uploaded", None);
 
-    let pending = sync.pending_activity.lock().expect("mutex");
-    let items: Vec<_> = pending.iter().collect();
+    let items = sync.get_sync_activity(None, None);
     assert_eq!(items.len(), 1, "row is still enqueued — the upload succeeded; only the size is unknown");
     assert_eq!(items[0].size_bytes, 0, "no progress entry → size_bytes is the 0 sentinel, not a panic");
     assert_eq!(items[0].action, SyncActivityAction::Uploaded);
@@ -346,7 +346,7 @@ fn on_file_synced_with_unknown_action_does_not_enqueue() {
     let fid = [0xCCu8; 32];
     callback("future/path.bin", &hex::encode(fid), "cid-future", "future-variant", None);
 
-    let pending = sync.pending_activity.lock().expect("mutex");
+    let pending = sync.get_sync_activity(None, None);
     assert!(
         pending.is_empty(),
         "unknown action must skip the enqueue — recording nothing is the truthful choice when we cannot categorize the event; got {} item(s)",

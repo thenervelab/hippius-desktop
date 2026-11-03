@@ -113,7 +113,7 @@ export default function ShotsPage() {
           {scene === "rows" && <Rows />}
           {scene === "settings" && (
             <div className="fixed left-8 top-24 z-10 w-[560px] rounded-[12px] border border-grey-80 bg-white p-4 dark:border-[#333] dark:bg-[#1a1a1a]" data-testid="settings-scene">
-              <CaptureOptionsSetting rowClassName="py-3" recording={false} recordCountdown={false as never} systemAudio={false as never} />
+              <CaptureOptionsSetting recording={false} recordCountdown={false as never} systemAudio={false as never} />
             </div>
           )}
           <Toaster position="top-center" />

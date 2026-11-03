@@ -4,13 +4,11 @@
 
 use crate::error::Result;
 use hcfs_client::drive::ExcludeRules;
-use hcfs_client::engine::manager::DriveManager;
 use hcfs_client::engine::runner::SyncRunner;
 use hcfs_client::engine::types::{SyncActivityAction, SyncedFileInfo, build_synced_paths_from_state};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
 
 /// Return sync metadata (arion hashes, CIDs, timestamps) for all synced
 /// files across all drives. Used internally by `get_user_files` to look
@@ -20,16 +18,10 @@ use tokio::sync::Mutex as TokioMutex;
 /// source of truth; `load_sync_state` is miss-only. Reloading disk
 /// when the lock is free would clobber DATE UPLOADED / pending vs
 /// synced for the next Files listing.
-async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, SyncedFileInfo>)> {
-    let drive_arcs: Vec<(String, std::sync::Arc<tokio::sync::Mutex<DriveManager>>)> = match sync.drives.try_lock() {
-        Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
-        Err(_) => Vec::new(),
-    };
+async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, Arc<HashMap<String, SyncedFileInfo>>)> {
+    let drive_arcs = sync.drive_managers().await;
     if drive_arcs.is_empty() {
-        return match sync.synced_paths_cache.lock() {
-            Ok(cache) => cache.iter().map(|(l, m)| (l.clone(), m.clone())).collect(),
-            Err(_) => Vec::new(),
-        };
+        return sync.cached_synced_paths().into_iter().collect();
     }
     let mut out = Vec::new();
     for (label, arc) in &drive_arcs {
@@ -43,7 +35,7 @@ async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, S
         if let Ok(st) = manager.load_sync_state().await {
             let paths = build_synced_paths_from_state(&st);
             sync.update_synced_paths_cache(label, paths.clone());
-            out.push((label.clone(), paths));
+            out.push((label.clone(), Arc::new(paths)));
         }
     }
     out
@@ -56,10 +48,7 @@ async fn collect_label_maps(sync: &SyncRunner) -> Vec<(String, HashMap<String, S
 /// A missed exclude set means that drive's activity rows stay visible —
 /// fail-open, never block the feed.
 async fn collect_label_exclude_rules(sync: &SyncRunner) -> HashMap<String, ExcludeRules> {
-    let drive_arcs: Vec<(String, Arc<TokioMutex<DriveManager>>)> = match sync.drives.try_lock() {
-        Ok(guard) => guard.iter().map(|(k, slot)| (k.clone(), slot.manager.clone())).collect(),
-        Err(_) => Vec::new(),
-    };
+    let drive_arcs = sync.drive_managers().await;
     let mut out = HashMap::new();
     for (label, arc) in &drive_arcs {
         let Ok(manager) = arc.try_lock() else {
@@ -84,12 +73,12 @@ async fn collect_label_exclude_rules(sync: &SyncRunner) -> HashMap<String, Exclu
 /// the activity window, not the whole corpus. Pure (no `SyncRunner`) so the
 /// allocation bound is unit-testable.
 fn bundles_for_wanted_keys(
-    label_maps: Vec<(String, HashMap<String, SyncedFileInfo>)>,
+    label_maps: Vec<(String, Arc<HashMap<String, SyncedFileInfo>>)>,
     wanted: &std::collections::HashSet<String>,
 ) -> HashMap<String, MetadataBundle> {
     let mut out = HashMap::with_capacity(wanted.len());
     for (label, paths) in label_maps {
-        for (rel_path, info) in paths {
+        for (rel_path, info) in paths.iter() {
             let key = format!("{rel_path}::{label}");
             if !wanted.contains(&key) {
                 continue;
@@ -297,7 +286,7 @@ mod tests {
                 },
             );
         }
-        let label_maps = vec![("drive".to_string(), corpus)];
+        let label_maps = vec![("drive".to_string(), Arc::new(corpus))];
 
         let wanted: HashSet<String> = ["file3.txt::drive", "file7.txt::drive", "missing.txt::drive"]
             .iter()
@@ -328,7 +317,7 @@ mod tests {
                 updated_at: 0,
             },
         );
-        let out = bundles_for_wanted_keys(vec![("d".to_string(), corpus)], &HashSet::new());
+        let out = bundles_for_wanted_keys(vec![("d".to_string(), Arc::new(corpus))], &HashSet::new());
         assert!(out.is_empty());
     }
 

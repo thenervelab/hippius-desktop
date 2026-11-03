@@ -25,10 +25,10 @@ use hcfs_client::client::folder_share::{
     build_folder_share_url_for, build_folder_share_url_private, folder_share_token_hash, parse_folder_share_fragment,
 };
 use hcfs_client::client::share::{ShareSecret, wrap_share_key};
-use hcfs_client::crypto::{decrypt_small, encrypt_small};
 use hcfs_client::drive::keys::{derive_folder_mnemonic, folder_hash};
 use hcfs_client::drive::remote::derive_encryption_key;
 use hcfs_client::mnemonic_blob::{MnemonicBlobError, open_mnemonic, seal_mnemonic};
+use hcfs_crypto::{FileKey, decrypt_small, encrypt_small};
 use hcfs_shared::network::{
     AcceptDriveInviteRequest, AcceptDriveInviteResponse, CreateDriveInviteRequest, CreateDriveInviteResponse, DriveInviteMetaResponse,
     DriveMemberEntry, DriveMembersResponse, DriveMembershipEntry, DriveMembershipsResponse, EmailDriveInviteResponse, ListFolderEntriesResult,
@@ -81,21 +81,21 @@ fn derive_folder_mnemonic_is_pinned() {
 fn derive_encryption_key_is_pinned() {
     let alpha = derive_encryption_key(TEST_MNEMONIC, "alpha").expect("derive encryption key");
     assert_eq!(
-        hex::encode(alpha),
+        hex::encode(alpha.as_bytes()),
         "b8a5eaafb059a3ed9860023f33622205851004ea2ee3750bb2b5c06653b45eec",
         "derive_encryption_key(master, \"alpha\") drifted"
     );
 
     // Deterministic over (master, label).
     assert_eq!(
-        derive_encryption_key(TEST_MNEMONIC, "alpha").expect("re-derive"),
-        alpha,
+        derive_encryption_key(TEST_MNEMONIC, "alpha").expect("re-derive").as_bytes(),
+        alpha.as_bytes(),
         "derive_encryption_key must be deterministic"
     );
     // Per-folder distinct key — the isolation property at-rest encryption needs.
     assert_ne!(
-        derive_encryption_key(TEST_MNEMONIC, "beta").expect("beta"),
-        alpha,
+        derive_encryption_key(TEST_MNEMONIC, "beta").expect("beta").as_bytes(),
+        alpha.as_bytes(),
         "distinct labels must derive distinct content keys"
     );
 }
@@ -116,7 +116,7 @@ fn derive_encryption_key_is_the_folder_mnemonic_seed_tail() {
     let key = derive_encryption_key(TEST_MNEMONIC, "alpha").expect("derive encryption key");
     assert_eq!(
         &seed[..32],
-        key.as_slice(),
+        key.as_bytes().as_slice(),
         "derive_encryption_key must equal the folder mnemonic's seed tail (member key path)"
     );
 }
@@ -141,7 +141,7 @@ proptest! {
     fn derive_encryption_key_is_deterministic(label in "[A-Za-z0-9 _/.-]{0,64}") {
         let a = derive_encryption_key(TEST_MNEMONIC, &label).expect("derive");
         let b = derive_encryption_key(TEST_MNEMONIC, &label).expect("re-derive");
-        prop_assert_eq!(a, b);
+        prop_assert_eq!(a.as_bytes(), b.as_bytes());
     }
 
     /// At-rest round-trip over arbitrary plaintext: `decrypt(encrypt(x)) == x`.
@@ -183,8 +183,8 @@ const KAT_PLAINTEXT: &[u8] = b"hippius hcfs at-rest decrypt KAT v1";
 /// deliberately — and ship a migration — only when changing the format on purpose.
 const FROZEN_CIPHERTEXT_HEX: &str = "b76413f1c1633749ed02dfaee004b11d44a8126ee12f0ed10100000033000000cfd276eb49236f6c3a83df13c42a769f2c478a0415ae380801be09e0d30c1052eb4bf1a090bba946bc2d284f7e621ee0137eb2";
 
-fn enc_key_alpha() -> [u8; 32] {
-    hex::decode(ENC_KEY_ALPHA_HEX).expect("valid hex key").try_into().expect("32-byte key")
+fn enc_key_alpha() -> FileKey {
+    FileKey::from_bytes(hex::decode(ENC_KEY_ALPHA_HEX).expect("valid hex key").try_into().expect("32-byte key"))
 }
 
 #[test]
@@ -313,11 +313,13 @@ fn create_drive_invite_request_wire_pinned() {
         role: None,
         owner_ss58: None,
         path_prefix: None,
+        link_secret: false,
     };
 
     let json = serde_json::to_value(&req).expect("serialize");
     let keys: BTreeSet<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
-    // path_prefix is skip_serializing_if None — whole-drive mint omits it.
+    // path_prefix is skip_serializing_if None — whole-drive mint omits it;
+    // link_secret is skipped while false, which is what the desktop sends.
     assert_eq!(
         keys,
         ["expires_in_secs", "folder_hash", "max_uses", "owner_ss58", "role"]
@@ -339,6 +341,7 @@ fn create_drive_invite_request_wire_pinned() {
         role: Some("reader".into()),
         owner_ss58: None,
         path_prefix: Some("Clients/ACME".into()),
+        link_secret: false,
     };
     let folder_json = serde_json::to_value(&folder).expect("serialize folder");
     assert_eq!(folder_json.get("path_prefix").and_then(|v| v.as_str()), Some("Clients/ACME"));
@@ -740,7 +743,7 @@ fn mnemonic_blob_seal_open_round_trips_with_ss58_binding() {
 /// pinned — a drifted path segment or fragment key breaks every minted link.
 #[test]
 fn folder_share_url_builders_are_pinned() {
-    let public = build_folder_share_url("https://x.io/", "tok", &[0u8; 32]);
+    let public = build_folder_share_url("https://x.io/", "tok", &FileKey::from_bytes([0u8; 32]));
     assert_eq!(
         public,
         format!("https://x.io/share/folder/tok#k={}", "A".repeat(43)),
@@ -748,7 +751,7 @@ fn folder_share_url_builders_are_pinned() {
     );
     assert_eq!(
         public,
-        build_folder_share_url("https://x.io", "tok", &[0u8; 32]),
+        build_folder_share_url("https://x.io", "tok", &FileKey::from_bytes([0u8; 32])),
         "a trailing slash on the console base must be trimmed"
     );
 
@@ -793,7 +796,7 @@ fn a_private_folder_share_secret_can_never_produce_a_key_url() {
     let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Public([7u8; 32]));
     assert_eq!(
         url,
-        build_folder_share_url("https://console.example.com", "tok", &[7u8; 32]),
+        build_folder_share_url("https://console.example.com", "tok", &FileKey::from_bytes([7u8; 32])),
         "public secret must yield the plain #k= URL"
     );
 }
@@ -840,7 +843,7 @@ fn every_folder_link_fragment_parses_back() {
     let fragment = |url: &str| url.split_once('#').expect("fragment").1.to_string();
     let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
     assert_eq!(
-        parse_folder_share_fragment(&fragment(&build_folder_share_url("https://x.io", "t", &[1u8; 32]))).expect("k"),
+        parse_folder_share_fragment(&fragment(&build_folder_share_url("https://x.io", "t", &FileKey::from_bytes([1u8; 32])))).expect("k"),
         FolderShareFragment::LegacyKey([1u8; 32])
     );
     assert_eq!(
@@ -867,16 +870,19 @@ fn a_minted_folder_link_opens_to_the_drive_key() {
         secret,
         link_envelope,
         link_fetch_digest,
-    } = mint_folder_link(&file_key, None).expect("mint");
+    } = mint_folder_link(&FileKey::from_bytes(file_key), None).expect("mint");
     let ShareSecret::FolderLink(link_secret) = secret else {
         panic!("a passwordless mint keeps a public link secret, got {secret:?}");
     };
     assert_ne!(link_secret, file_key, "the link secret is never the drive key");
     assert_eq!(link_envelope.len(), hcfs_shared::shares::FOLDER_LINK_ENVELOPE_LEN);
     assert_eq!(link_fetch_digest.len(), hcfs_shared::shares::FOLDER_LINK_FETCH_DIGEST_LEN);
-    assert_eq!(*open_folder_link_envelope(&link_secret, &link_envelope).expect("open"), file_key);
+    assert_eq!(
+        *open_folder_link_envelope(&link_secret, &link_envelope).expect("open").as_bytes(),
+        file_key
+    );
 
-    let private = mint_folder_link(&file_key, Some("correct horse battery staple")).expect("mint private");
+    let private = mint_folder_link(&FileKey::from_bytes(file_key), Some("correct horse battery staple")).expect("mint private");
     assert!(matches!(private.secret, ShareSecret::FolderLinkPrivate(_)), "{:?}", private.secret);
 
     // The recipient-side open the shares page does not use, referenced so a
@@ -919,7 +925,7 @@ fn folder_share_client_surface_is_reachable() {
 
     let created = CreatedFolderShare {
         share_token: "tok".to_string(),
-        share_url: build_folder_share_url("https://console.example.com", "tok", &[0u8; 32]),
+        share_url: build_folder_share_url("https://console.example.com", "tok", &FileKey::from_bytes([0u8; 32])),
         expires_at: None,
     };
     assert!(created.share_url.contains("/share/folder/"));
@@ -1155,7 +1161,7 @@ fn expected_content_download_surface_is_pinned() {
 
     let entry = RemoteFileEntry {
         path_hash: [1; 32],
-        salted_hash: [2; 32],
+        salted_hash: hcfs_shared::salted_hash::SaltedHash::from_bytes([2; 32]),
         size_bytes: 3,
         revision_seq: 4,
         revision_id: [5; 32],

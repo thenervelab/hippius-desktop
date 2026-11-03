@@ -164,6 +164,12 @@ describe("wiring", () => {
     expect(dialog).toContain("confirmDisabled");
   });
 
+  it("frames the switch as a choice, not a warning", () => {
+    const dialog = read("app", "components", "updater", "ReleaseChannelDialog.tsx");
+    expect(dialog).toContain('variant="info"');
+    expect(dialog).not.toContain('"warning"');
+  });
+
   it("registers the settings section", () => {
     expect(read("app", "components", "sidebar", "SettingsSidebar.tsx")).toContain(
       'section: "updates"',
