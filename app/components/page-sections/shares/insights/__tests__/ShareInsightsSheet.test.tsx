@@ -154,6 +154,13 @@ async function openSettings() {
 }
 
 /** Selects a tab by the start of its label ("Viewers", "Reactions") and returns its panel. */
+/** The summary's number under one label (Views, Viewers, Comments, Watched), or null when that cell is not drawn. */
+function stat(label: string): string | null {
+  const summary = screen.getByRole("region", { name: "Summary" });
+  const dt = within(summary).queryByText(label, { selector: "dt" });
+  return dt?.parentElement?.querySelector("dd")?.textContent ?? null;
+}
+
 async function showTab(start: string) {
   const tab = await screen.findByRole("tab", { name: (name) => name.startsWith(start) });
   fireEvent.click(tab);
@@ -179,8 +186,11 @@ describe("ShareInsightsSheet", () => {
     const locked = await screen.findByTestId("insights-locked");
     expect(screen.getByRole("tab", { name: "Viewers" })).toHaveAttribute("aria-selected", "true");
     const summary = screen.getByRole("region", { name: "Summary" });
-    expect(within(summary).getByText("2")).toBeInTheDocument();
-    expect(within(summary).getByText("1 person viewed")).toBeInTheDocument();
+    expect(stat("Views")).toBe("2");
+    expect(stat("Viewers")).toBe("1");
+    // Completion is locked, so the third cell is the comments, not Watched.
+    await waitFor(() => expect(stat("Comments")).toBe("0"));
+    expect(stat("Watched")).toBeNull();
     expect(invokeMock).toHaveBeenCalledWith("share_get_insights", { shareToken: "tok" });
 
     const blurred = locked.firstElementChild as HTMLElement;
@@ -233,23 +243,22 @@ describe("ShareInsightsSheet", () => {
     answer({ share_get_insights: PAID, share_list_comments: COMMENTS });
     renderSheet();
 
-    const summary = await screen.findByRole("region", { name: "Summary" });
-    expect(await within(summary).findByText("25%")).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Summary" });
+    // A recording: Views, Viewers, and how much of it people watched.
+    await waitFor(() => expect(stat("Watched")).toBe("25%"));
     expect(screen.queryByTestId("insights-locked")).toBeNull();
-    expect(within(summary).getByText("5")).toBeInTheDocument();
-    expect(within(summary).getByText("3 people viewed")).toBeInTheDocument();
-    // Average watch: everything watched over every view, (78 + 12) s / 5.
-    expect(within(summary).getByText("0:18")).toBeInTheDocument();
-    // Two comments: a chip in the summary, and the tab it opens on.
-    expect(within(summary).getByRole("list", { name: "Comments and reactions" })).toHaveTextContent("2 comments");
+    expect(stat("Views")).toBe("5");
+    expect(stat("Viewers")).toBe("3");
+    expect(stat("Comments")).toBeNull();
+    // Two comments: the tab it opens on.
     const tabs = screen.getByRole("tablist", { name: "Insights" });
     expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual([
-      "Comments (2)",
-      "Viewers (2)",
+      "Comments 2",
+      "Viewers 2",
       // Reactions did not load here, so no count is claimed.
       "Reactions",
     ]);
-    expect(within(tabs).getByRole("tab", { name: "Comments (2)" })).toHaveAttribute("aria-selected", "true");
+    expect(within(tabs).getByRole("tab", { name: "Comments 2" })).toHaveAttribute("aria-selected", "true");
 
     const viewers = await showTab("Viewers");
     expect(within(viewers).getByRole("heading", { name: "Where people stopped" })).toBeInTheDocument();
@@ -258,6 +267,18 @@ describe("ShareInsightsSheet", () => {
     expect(within(viewers).getAllByText("Anonymous viewer").length).toBeGreaterThan(0);
     expect(within(viewers).getByText("2 visits")).toBeInTheDocument();
     expect(within(viewers).getByTitle("Watched 1:18")).toBeInTheDocument();
+  });
+
+  it("gives a picture's numbers as Views, Viewers and Comments, with no watch bars in its rows", async () => {
+    answer({ share_get_insights: PAID, share_list_comments: COMMENTS });
+    renderSheet(CAPS, undefined, "Screenshot 2026-10-13.png");
+    await waitFor(() => expect(stat("Comments")).toBe("2"));
+    expect(stat("Views")).toBe("5");
+    expect(stat("Viewers")).toBe("3");
+    expect(stat("Watched")).toBeNull();
+    const viewers = await showTab("Viewers");
+    expect(within(viewers).getAllByText("Anonymous viewer").length).toBeGreaterThan(0);
+    expect(within(viewers).queryByTitle(/^Watched /)).toBeNull();
   });
 
   it("names the biggest drop over the chart", async () => {
@@ -286,10 +307,10 @@ describe("ShareInsightsSheet", () => {
       share_get_reactions: { counts: [{ emoji: "👍", count: 3 }], total: 3 },
     });
     renderSheet();
-    expect(await screen.findByRole("tab", { name: "Viewers (2)" })).toHaveAttribute("aria-selected", "true");
-    const reactions = await showTab("Reactions (3)");
+    expect(await screen.findByRole("tab", { name: "Viewers 2" })).toHaveAttribute("aria-selected", "true");
+    const reactions = await showTab("Reactions 3");
     expect(within(reactions).getByRole("list", { name: "Reaction totals" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Viewers (2)" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "Viewers 2" })).toHaveAttribute("aria-selected", "false");
   });
 
   // A name keeps its LRM/RLM/ALM marks, which would otherwise reorder the
@@ -524,7 +545,7 @@ describe("ShareInsightsSheet", () => {
     expect(screen.queryByTestId("mentions-filter")).toBeNull();
   });
 
-  it("shows the reaction totals as chips and bars, and that viewers don't see them while Reactions is off", async () => {
+  it("shows the reaction totals as bars, and that viewers don't see them while Reactions is off", async () => {
     answer({
       share_get_insights: PAID,
       share_list_comments: { comments: [], unreadable: null },
@@ -542,11 +563,8 @@ describe("ShareInsightsSheet", () => {
     });
     renderSheet();
 
-    const summary = await screen.findByRole("region", { name: "Summary" });
-    const chips = await within(summary).findByRole("list", { name: "Comments and reactions" });
-    expect(within(chips).getAllByRole("listitem").map((li) => li.textContent)).toEqual(["👍3", "🔥1"]);
-
-    const tab = await showTab("Reactions (4)");
+    await screen.findByRole("region", { name: "Summary" });
+    const tab = await showTab("Reactions 4");
     const totals = within(tab).getByRole("list", { name: "Reaction totals" });
     // Most first, as bars.
     expect(within(totals).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
@@ -580,6 +598,7 @@ describe("ShareInsightsSheet", () => {
     });
     renderSheet();
 
+    expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Comments off$/);
     const settings = await openSettings();
     const comments = await within(settings).findByRole("switch", { name: "Comments" });
     expect(comments).toHaveAttribute("aria-checked", "false");
@@ -595,13 +614,13 @@ describe("ShareInsightsSheet", () => {
     // Saving re-renders the popover; focus stays on the switch.
     await waitFor(() => expect(screen.getByRole("switch", { name: "Comments" })).not.toBeDisabled());
     expect(screen.getByRole("switch", { name: "Comments" })).toHaveFocus();
-    // The status row follows the switch.
-    expect(screen.getByRole("button", { name: /^Comments on/ })).toBeInTheDocument();
+    // The header's line follows the switch.
+    await waitFor(() => expect(screen.queryByTestId("insights-subtitle")).toBeNull());
 
     fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
     await waitFor(() => expect(settingsCalls).toBe(2));
     await waitFor(() => expect(screen.getByRole("switch", { name: "Insights" })).toHaveAttribute("aria-checked", "true"));
-    expect(screen.getByRole("button", { name: /^Insights on/ })).toBeInTheDocument();
+    expect(screen.queryByTestId("insights-subtitle")).toBeNull();
   });
 
   describe("on the free plan", () => {
@@ -692,9 +711,9 @@ describe("ShareInsightsSheet", () => {
       renderSheet();
 
       // Its real counts are shown, not samples.
-      const summary = await screen.findByRole("region", { name: "Summary" });
-      expect(within(summary).getByText("0")).toBeInTheDocument();
-      expect(within(summary).getByText("0 people viewed")).toBeInTheDocument();
+      await screen.findByRole("region", { name: "Summary" });
+      expect(stat("Views")).toBe("0");
+      expect(stat("Viewers")).toBe("0");
       const settings = await openSettings();
       const insights = await within(settings).findByRole("switch", { name: "Insights" });
       expect(insights).toHaveAttribute("aria-checked", "true");
@@ -726,10 +745,10 @@ describe("ShareInsightsSheet", () => {
     answer({ share_get_insights: PAID });
     renderSheet({ ...CAPS, share_comments: false });
 
-    await screen.findByText("25%");
+    await waitFor(() => expect(stat("Watched")).toBe("25%"));
     // Viewers is then the only tab, so it is drawn without a tab list.
     expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.getByRole("heading", { name: "Viewers" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Viewers" })).toBeInTheDocument();
     expect(screen.queryByText(/Comments/)).toBeNull();
     expect(screen.queryByText(/Reactions/)).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("share_list_comments", expect.anything());
@@ -750,10 +769,10 @@ describe("ShareInsightsSheet", () => {
     expect(within(settings).getByText("Each time the link is opened.")).toBeInTheDocument();
   });
 
-  describe("Link settings and the status row", () => {
+  describe("Link settings and the header's line", () => {
     const SOME_OFF = { offered: ALL_ON, on: { insights: true, comments: false, reactions: true }, switchesInPlan: true };
 
-    it("shows each switch as a pill, saying off in words, not colour alone", async () => {
+    it("says a switch that is off in the header's line, with no row of switch badges", async () => {
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
@@ -761,19 +780,36 @@ describe("ShareInsightsSheet", () => {
         share_get_link_settings: SOME_OFF,
       });
       renderSheet();
-      const row = await screen.findByRole("list", { name: "On this link" });
-      const pills = within(row).getAllByRole("button");
-      expect(pills.map((p) => p.getAttribute("aria-label"))).toEqual([
-        "Insights on. Change in Link settings",
-        "Comments off. Change in Link settings",
-        "Reactions on. Change in Link settings",
-      ]);
-      expect(pills[1]).toHaveTextContent(/^Commentsoff$/);
-      expect(pills[0]).not.toHaveTextContent(/off/);
-      expect(pills[1]).toHaveAttribute("data-state", "off");
+      expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Comments off$/);
+      expect(screen.queryByRole("list", { name: "On this link" })).toBeNull();
+      expect(screen.queryByRole("button", { name: /Change in Link settings/ })).toBeNull();
+      // The header is the name, its line, the gear and Close: no thumbnail,
+      // no second Copy.
+      const header = screen.getByTestId("insights-panel").querySelector("header")!;
+      expect(screen.queryByTestId("insights-media-tile")).toBeNull();
+      expect(within(header).getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+      expect(within(header).getByRole("button", { name: "Close" })).toBeInTheDocument();
+      expect(within(header).queryByRole("button", { name: /Copy link/ })).toBeNull();
     });
 
-    it("opens from the gear or a pill, closes on Escape without closing the panel, and gives focus back", async () => {
+    it("says a free plan's link has every switch off, with the lock and the gear still there", async () => {
+      answer({
+        share_get_insights: FREE,
+        share_list_comments: COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: { offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: false },
+      });
+      renderSheet();
+      expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent(/^Insights, comments and reactions off$/);
+      // The plan's lock stays where it was, in the Viewers tab, and Link
+      // settings still opens from the gear.
+      fireEvent.click(screen.getByRole("tab", { name: /Viewers/ }));
+      expect(await screen.findByTestId("insights-locked")).toBeInTheDocument();
+      const settings = await openSettings();
+      expect(within(settings).getAllByRole("switch")).toHaveLength(3);
+    });
+
+    it("opens from the gear, closes on Escape without closing the panel, and gives focus back", async () => {
       answer({
         share_get_insights: PAID,
         share_list_comments: COMMENTS,
@@ -799,9 +835,8 @@ describe("ShareInsightsSheet", () => {
       expect(store.get(insightsSheetAtom)).not.toBeNull();
       await waitFor(() => expect(gear).toHaveFocus());
 
-      // A pill opens the same popover, and a press outside closes it.
-      const pill = screen.getByRole("button", { name: /^Comments on/ });
-      fireEvent.click(pill);
+      // A press outside closes it.
+      fireEvent.click(gear);
       expect(await screen.findByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
       fireEvent.pointerDown(screen.getByRole("heading", { level: 2 }));
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
@@ -879,7 +914,7 @@ describe("ShareInsightsSheet", () => {
         share_get_link_settings: ALL_SWITCHES_ON,
       });
       renderSheet();
-      expect(await screen.findByRole("tab", { name: "Comments (22)" })).toHaveAttribute("aria-selected", "true");
+      expect(await screen.findByRole("tab", { name: "Comments 22" })).toHaveAttribute("aria-selected", "true");
       await waitFor(() => expect(threads()).toHaveLength(10));
       expect(firstText()).toBe("Comment 21");
       expect(screen.getByText("10 of 22")).toBeInTheDocument();
@@ -981,7 +1016,7 @@ describe("ShareInsightsSheet", () => {
           share_get_reactions: NO_REACTIONS,
         });
         renderSheet();
-        await screen.findByRole("tab", { name: "Comments (1)" });
+        await screen.findByRole("tab", { name: "Comments 1" });
         const boxes = await waitFor(() => {
           const found = Array.from(document.querySelectorAll<HTMLElement>("[data-middle-truncate]")).filter(
             (el) => el.getAttribute("title") === LONG_NAME,
@@ -1008,7 +1043,7 @@ describe("ShareInsightsSheet", () => {
   describe("a link nothing has happened on yet", () => {
     const EMPTY = { ...PAID, totalViews: 0, uniqueViewers: 0, viewers: { state: "shown" as const, value: [] } };
 
-    it("is one short block with the link's switches a click away, not an empty state per tab", async () => {
+    it("shows its zeros and one short line in the tab, with no helper sentence", async () => {
       answer({
         share_get_insights: EMPTY,
         share_list_comments: NO_COMMENTS,
@@ -1017,18 +1052,15 @@ describe("ShareInsightsSheet", () => {
       });
       renderSheet();
 
-      expect(await screen.findByText("No views yet")).toBeInTheDocument();
-      expect(
-        screen.getByText("Nobody has opened this link yet. Views, comments and reactions show up here once they do."),
-      ).toBeInTheDocument();
-      expect(await screen.findByRole("list", { name: "On this link" })).toBeInTheDocument();
+      const viewers = await showTab("Viewers 0");
+      expect(within(viewers).getByText("No views yet")).toBeInTheDocument();
+      expect(stat("Views")).toBe("0");
+      expect(stat("Viewers")).toBe("0");
+      expect(screen.queryByText(/Nobody has opened this link yet/)).toBeNull();
+      expect(screen.queryByText(/Views show up here/)).toBeNull();
       expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
-      // No zero, no summary, no tabs, no per-tab empty states.
-      expect(screen.queryByText("views")).toBeNull();
-      expect(screen.queryByRole("region", { name: "Summary" })).toBeNull();
-      expect(screen.queryByRole("tablist")).toBeNull();
-      expect(screen.queryByText("No comments yet.")).toBeNull();
-      expect(screen.queryByText("No reactions yet.")).toBeNull();
+      expect(within(await showTab("Comments 0")).getByText("No comments yet")).toBeInTheDocument();
+      expect(within(await showTab("Reactions 0")).getByText("No reactions yet")).toBeInTheDocument();
     });
 
     it("says the link is not counting views when its Insights switch is off, with Turn on", async () => {
@@ -1039,19 +1071,21 @@ describe("ShareInsightsSheet", () => {
         share_get_link_settings: { offered: ALL_ON, on: { ...ALL_ON, insights: false }, switchesInPlan: true },
       });
       renderSheet();
-      expect(await screen.findByText("Not counting views")).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+      expect(await screen.findByTestId("insights-subtitle")).toHaveTextContent("Insights off");
+      const viewers = await showTab("Viewers");
+      expect(await within(viewers).findByText("Insights are off, so new views aren't counted.")).toBeInTheDocument();
+      fireEvent.click(within(viewers).getByRole("button", { name: "Turn on" }));
       expect(await screen.findByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
     });
 
-    it("waits for comments and reactions before deciding, so the block never flashes", async () => {
+    it("shows the numbers it has while comments load, holding only their count", async () => {
       invokeMock.mockImplementation((cmd: string) =>
         cmd === "share_get_insights" ? Promise.resolve(EMPTY) : new Promise(() => {}),
       );
-      renderSheet();
-      await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_insights", { shareToken: "tok" }));
-      expect(screen.getByTestId("insights-loading")).toBeInTheDocument();
-      expect(screen.queryByText("No views yet")).toBeNull();
+      renderSheet(CAPS, undefined, "Screenshot 2026-10-13.png");
+      await waitFor(() => expect(stat("Views")).toBe("0"));
+      expect(stat("Comments")).toBe("");
+      expect(screen.queryByTestId("insights-loading")).toBeNull();
     });
 
     it("keeps one line for no views once there are comments", async () => {
@@ -1060,15 +1094,14 @@ describe("ShareInsightsSheet", () => {
         share_list_comments: COMMENTS,
         share_get_reactions: NO_REACTIONS,
       });
-      renderSheet();
+      renderSheet(CAPS, undefined, "Screenshot 2026-10-13.png");
       expect(await screen.findByText("Looks great at 1:23!")).toBeInTheDocument();
-      const summary = screen.getByRole("region", { name: "Summary" });
-      expect(within(summary).getByText("No views yet")).toBeInTheDocument();
-      expect(screen.queryByText("None yet")).toBeNull();
+      expect(stat("Views")).toBe("0");
+      expect(stat("Comments")).toBe("2");
       const viewers = await showTab("Viewers");
-      expect(within(viewers).getByText("Views show up here once someone opens the link.")).toBeInTheDocument();
+      expect(within(viewers).getByText("No views yet")).toBeInTheDocument();
       const reactions = await showTab("Reactions");
-      expect(within(reactions).getByText("No reactions yet.")).toBeInTheDocument();
+      expect(within(reactions).getByText("No reactions yet")).toBeInTheDocument();
     });
   });
 
@@ -1111,7 +1144,7 @@ describe("ShareInsightsSheet", () => {
     fail = false;
     const body = screen.getByTestId("insights-body");
     fireEvent.click(within(body).getByRole("button", { name: "Try again" }));
-    expect(await within(body).findByText("No comments yet.")).toBeInTheDocument();
+    expect(await within(body).findByText("No comments yet")).toBeInTheDocument();
   });
 
   it("says when this computer is offline, instead of loading for ever", async () => {

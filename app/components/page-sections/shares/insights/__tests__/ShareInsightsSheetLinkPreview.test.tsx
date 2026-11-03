@@ -10,14 +10,12 @@ import {
   COPY_LINK,
   HIDDEN_DOTS,
   HIDE_LINK,
-  HIDE_PREVIEW,
   LINK_COPIED,
   LINK_LOCKED_NOTE,
   LINK_NEEDS_PASSWORD,
   LINK_UNAVAILABLE_NOTE,
   OPEN_CAPTURE,
   SHOW_LINK,
-  SHOW_PREVIEW,
   UNLOCK_TO_COPY,
   captureMediaKind,
   maskedLink,
@@ -30,8 +28,8 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities, ShareSummary } from "@/app/lib/tauri/shares";
 import type { ShareInsights } from "@/app/lib/tauri/shareInsights";
 
-// The Insights panel's link field, its Copy link button, and the capture's
-// thumbnail and preview: each shown only as far as this computer can open it.
+// The Insights panel's link field with its Copy link button, and the capture's
+// preview: each shown only as far as this computer can open it.
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
@@ -131,6 +129,9 @@ function renderSheet(target: Partial<InsightsSheetTarget> = {}, locked = false) 
   return store;
 }
 
+/** The panel's fixed header. */
+const header = () => screen.getByTestId("insights-panel").querySelector("header")!;
+
 const called = (cmd: string) => invokeMock.mock.calls.filter(([c]) => c === cmd);
 
 describe("panelLink", () => {
@@ -157,7 +158,7 @@ describe("panelLink", () => {
 
 describe("planPanelMedia", () => {
   const base = { mediaKind: "image" as const, onDisk: false, location: null, unlocked: true };
-  it("uses the copy on disk first, even while locked, as the header did", () => {
+  it("uses the copy on disk first, even while locked", () => {
     expect(planPanelMedia({ ...base, file: { source: "/a.png" }, onDisk: true, unlocked: false })).toEqual({ kind: "disk" });
   });
   it("offers nothing else while locked", () => {
@@ -209,13 +210,23 @@ describe("Insights panel link", () => {
     expect(screen.getByTestId("insights-panel").textContent).not.toContain(KEY);
 
     fireEvent.click(screen.getByRole("button", { name: SHOW_LINK }));
-    expect(text).toHaveTextContent(URL_FULL);
+    // Shown in full without its scheme; Copy still copies all of it.
+    expect(text).toHaveTextContent(URL_FULL.replace("https://", ""));
+    expect(text.textContent).not.toContain("https://");
     fireEvent.click(screen.getByRole("button", { name: HIDE_LINK }));
     expect(text).not.toHaveTextContent(KEY);
 
-    fireEvent.click(screen.getByRole("button", { name: COPY_LINK }));
+    // Copy sits in the link's own row; the header has none.
+    const field = screen.getByTestId("insights-link");
+    fireEvent.click(within(field).getByRole("button", { name: COPY_LINK }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(URL_FULL));
     expect(toastSuccess).toHaveBeenCalledWith(LINK_COPIED);
+    expect(screen.getAllByRole("button", { name: COPY_LINK })).toHaveLength(1);
+    // A labelled button, not an icon.
+    expect(within(field).getByRole("button", { name: COPY_LINK })).toHaveTextContent(COPY_LINK);
+    expect(within(header()).getAllByRole("button", { name: COPY_LINK })).toEqual([
+      within(field).getByRole("button", { name: COPY_LINK }),
+    ]);
   });
 
   it("says a password link needs its password", async () => {
@@ -234,9 +245,8 @@ describe("Insights panel link", () => {
     expect(within(field).getByText(LINK_LOCKED_NOTE)).toBeInTheDocument();
     fireEvent.click(within(field).getByRole("button", { name: UNLOCK_TO_COPY }));
     expect(unlock).toHaveBeenCalledTimes(1);
-    // The header's Copy link opens the same unlock.
-    fireEvent.click(screen.getByRole("button", { name: /Copy link: unlock to copy/ }));
-    expect(unlock).toHaveBeenCalledTimes(2);
+    // Unlock is the one way to the link: there is no second Copy to press.
+    expect(screen.queryByRole("button", { name: /Copy link/ })).toBeNull();
     expect(writeText).not.toHaveBeenCalled();
 
     // The unlock went through: Rust can open the link's key now, the listing
@@ -254,10 +264,7 @@ describe("Insights panel link", () => {
     renderSheet();
     expect(await screen.findByText(LINK_UNAVAILABLE_NOTE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: UNLOCK_TO_COPY })).toBeNull();
-    const copy = screen.getByRole("button", { name: COPY_LINK });
-    expect(copy).toHaveAttribute("aria-disabled", "true");
-    fireEvent.click(copy);
-    expect(writeText).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: COPY_LINK })).toBeNull();
   });
 
   it("holds the link's place while the listing loads", async () => {
@@ -297,12 +304,9 @@ describe("Insights panel preview", () => {
     fireEvent.click(within(preview).getByRole("button", { name: OPEN_CAPTURE }));
     expect(invokeMock).toHaveBeenCalledWith("open_in_default_app", { path: "/Users/me/Hippius Captures/shot.png" });
 
-    // The thumbnail opens and closes it.
-    const tile = screen.getByRole("button", { name: HIDE_PREVIEW });
-    expect(tile).toHaveAttribute("aria-expanded", "true");
-    fireEvent.click(tile);
-    expect(screen.queryByTestId("insights-preview")).toBeNull();
-    expect(screen.getByRole("button", { name: SHOW_PREVIEW })).toHaveAttribute("aria-expanded", "false");
+    // The preview is the one picture: no thumbnail of it in the title row.
+    expect(screen.getAllByRole("img")).toHaveLength(1);
+    expect(screen.queryByTestId("insights-media-tile")).toBeNull();
   });
 
   it("plays a recording muted with its controls, from where Rust says", async () => {
@@ -317,9 +321,25 @@ describe("Insights panel preview", () => {
     expect(video).toHaveAttribute("controls");
     expect(video.muted).toBe(true);
     expect(video).toHaveAttribute("src", "asset://localhost/Users/me/Hippius Captures/rec.mp4");
+
+    // Its length, read off the preview, joins the header's line.
+    Object.defineProperty(video, "duration", { value: 252, configurable: true });
+    fireEvent.loadedMetadata(video);
+    expect(await screen.findByText("Shared Oct 29 · 4:12 · link on")).toBeInTheDocument();
+    expect(header().querySelectorAll("video")).toHaveLength(1);
   });
 
-  it("keeps today's tile while locked, and asks for nothing", async () => {
+  it("leaves no room for a picture of a file that has none", async () => {
+    answer(() => [row({ filename: "notes.pdf" })]);
+    renderSheet({ fileName: "notes.pdf" });
+    await screen.findByTestId("insights-link-text");
+    expect(screen.queryByTestId("insights-preview")).toBeNull();
+    expect(screen.queryByTestId("insights-preview-loading")).toBeNull();
+    expect(screen.queryByTestId("insights-media-tile")).toBeNull();
+    expect(header().querySelector("img, video")).toBeNull();
+  });
+
+  it("asks for nothing while locked when the capture is not on disk", async () => {
     answer(() => [row({ ...placed, shareUrl: null })], {
       resolve_drive_file_source: () => "/Users/me/Hippius Captures/shot.png",
     });
@@ -327,37 +347,35 @@ describe("Insights panel preview", () => {
     await screen.findByTestId("insights-link");
     expect(called("resolve_drive_file_source")).toHaveLength(0);
     expect(screen.queryByTestId("insights-preview")).toBeNull();
-    expect(screen.getByTestId("insights-media-tile")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("still shows the frame of a capture on disk while locked, but no preview", async () => {
+  it("still shows a capture on disk while locked", async () => {
     answer(() => [row({ shareUrl: null })]);
     const file = { name: SHOT, source: "/Users/me/shot.png" } as FormattedUserFile;
     renderSheet({ file }, true);
-    const tile = await screen.findByTestId("insights-media-tile");
-    expect(tile.querySelector("img")).toHaveAttribute("src", "asset://localhost/Users/me/shot.png");
-    expect(screen.queryByTestId("insights-preview")).toBeNull();
+    const preview = await screen.findByTestId("insights-preview");
+    expect(within(preview).getByRole("img", { name: `Preview of ${SHOT}` })).toHaveAttribute(
+      "src",
+      "asset://localhost/Users/me/shot.png",
+    );
   });
 
-  it("falls back to the file-type tile quietly when the capture can't be found or drawn", async () => {
+  it("shows nothing, quietly, when the capture can't be found", async () => {
     answer(() => [row(placed)], { resolve_drive_file_source: () => null });
     renderSheet();
     await screen.findByTestId("insights-link-text");
     await waitFor(() => expect(called("resolve_drive_file_source")).toHaveLength(1));
     expect(screen.queryByTestId("insights-preview")).toBeNull();
     expect(screen.queryByTestId("insights-preview-loading")).toBeNull();
-    expect(screen.getByTestId("insights-media-tile")).toHaveAttribute("aria-hidden", "true");
     expect(toastError).not.toHaveBeenCalled();
   });
 
-  it("drops a preview that fails to draw, and its tile with it", async () => {
+  it("drops a preview that fails to draw", async () => {
     answer(() => [row(placed)], { resolve_drive_file_source: () => "/Users/me/broken.png" });
     renderSheet();
     const img = await screen.findByRole("img", { name: `Preview of ${SHOT}` });
     fireEvent.error(img);
     expect(screen.queryByTestId("insights-preview")).toBeNull();
-    const tileImg = screen.getByTestId("insights-media-tile").querySelector("img")!;
-    fireEvent.error(tileImg);
-    expect(screen.getByTestId("insights-media-tile").querySelector("img")).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
   });
 });

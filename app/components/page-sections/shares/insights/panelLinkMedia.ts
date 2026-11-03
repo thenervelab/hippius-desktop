@@ -60,8 +60,6 @@ export const LINK_LOCKED_NOTE = "Unlock Hippius on this computer to see and copy
 export const LINK_UNAVAILABLE_NOTE =
   "This link was made somewhere else and its key isn't on this computer, so it can't be copied here.";
 export const LINK_NEEDS_PASSWORD = "People also need the link's password to open it.";
-export const SHOW_PREVIEW = "Show preview";
-export const HIDE_PREVIEW = "Hide preview";
 export const OPEN_CAPTURE = "Open in your default app";
 
 /** The kinds of capture the panel shows a picture of. */
@@ -93,10 +91,9 @@ export type DriveLocation = { label: string; relativePath: string };
  *    thumbnailer downloads and decrypts it, keeps a small picture and drops
  *    the full copy. A recording only on the server gets no picture, so the
  *    panel never downloads a whole video to show a frame.
- *  - `none`: the file-type tile, as before.
+ *  - `none`: no picture.
  *
- * Locked, only `disk` is offered: that is what the header showed before, and
- * everything else needs the app unlocked.
+ * Locked, only `disk` is offered: everything else needs the app unlocked.
  */
 export type MediaPlan =
   | { kind: "none" }

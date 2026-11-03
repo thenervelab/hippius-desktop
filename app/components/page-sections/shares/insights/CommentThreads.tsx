@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Loader2, MoreHorizontal, Trash2 } from "lucide-react";
+import { Ban, Loader2, MessageSquare, MoreHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ import {
   visibleReplies,
   type CommentOrder,
 } from "./insightsView";
+import { EmptyLine } from "./EmptyLine";
 import { LoadError } from "./LoadError";
 import { SwitchOffNotice } from "./LinkSettingsPopover";
 import { DIVIDE, FLOATING, FOCUS, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
@@ -152,7 +153,7 @@ export function CommentsTab({
         <>
           {comments.data.unreadable && <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>}
           {list.length === 0 ? (
-            <p className={cn("text-sm", MUTED)}>No comments yet.</p>
+            <EmptyLine icon={<MessageSquare />} text="No comments yet" />
           ) : (
             <>
               <div className="mb-1 flex min-h-7 items-center justify-between gap-3">
