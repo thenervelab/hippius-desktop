@@ -16,7 +16,6 @@ import VPNSettings from "@/components/page-sections/settings/VPNSettings";
 import CustomizeRPC from "@/components/page-sections/settings/CustomizeRPC";
 import InfoTooltip from "@/components/ui/info-tooltip";
 import NotificationSection from "@/components/page-sections/settings/NotificationSection";
-import BillingSections from "@/components/page-sections/billing/BillingSections";
 import {
   VPN_FEATURE_ENABLED,
   WALLET_FEATURE_ENABLED,
@@ -52,38 +51,8 @@ const SECTION_META: Record<
     showDescription?: boolean;
   }
 > = {
-  billing: {
-    title: "Billing",
-    description:
-      "Your plan, your credits, and everything you have been charged for.",
-    // The subtitle says what the page IS; the tooltip says how to use it.
-    // Both routes are laid out because the choice is not obvious from the
-    // page: the plan cards show a price, and nothing on them explains
-    // that credits are an alternative to a card, or that a credit is a
-    // dollar.
-    tooltip: (
-      <>
-        <span className="mb-1 block font-semibold text-grey-10 dark:text-white">
-          Two ways to pay for a storage plan
-        </span>
-        <span className="mb-1 block">
-          <span className="font-semibold">By card:</span> pick a plan, choose
-          Card, and Stripe opens in your browser. Your card then funds each
-          renewal.
-        </span>
-        <span className="block">
-          <span className="font-semibold">From credits:</span> add credits
-          first (1 credit = $1), then pick a plan and choose Credits. Renewals
-          come out of your balance, so keep it topped up.
-        </span>
-      </>
-    ),
-    // The default 260px is sized for one sentence; three short blocks
-    // need the extra room or every line wraps twice.
-    tooltipClassName: "max-w-[320px]",
-    learnMoreUrl: "https://docs.hippius.com/use/desktop/billing",
-    showDescription: true,
-  },
+  // Billing is not a section: Plans & Billing is its own page (`/billing`),
+  // and the layout sends an old `?section=billing` there.
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
@@ -197,8 +166,6 @@ function SettingsContent() {
 
       {/* Section content */}
       <div className="flex flex-col gap-4 w-full">
-        {section === "billing" && <BillingSections />}
-
         {section === "sync" && (
           <>
             <DeviceNameSetting />

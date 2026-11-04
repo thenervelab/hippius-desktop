@@ -73,13 +73,12 @@ describe("the settings sidebar's Screenshots & Recording tab", () => {
   });
 });
 
-describe("the settings sidebar's groups", () => {
-  // Billing is Plans & Billing in the main sidebar now. Security, Updates and
-  // Customize RPC are never gated, so all four groups always show, and three
-  // dividers set them apart.
-  it("offers no Billing entry, and sets its four groups apart", () => {
+describe("the settings sidebar's list", () => {
+  // Billing is Plans & Billing in the main sidebar now. The entries run as
+  // one list with no lines between them.
+  it("offers no Billing entry, and draws no dividers", () => {
     const { container } = renderSidebar(true);
     expect(entries()).not.toContain("Billing");
-    expect(container.querySelectorAll('div[aria-hidden="true"].h-px')).toHaveLength(3);
+    expect(container.querySelectorAll(".h-px")).toHaveLength(0);
   });
 });

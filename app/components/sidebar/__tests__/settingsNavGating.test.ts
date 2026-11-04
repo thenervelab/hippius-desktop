@@ -3,8 +3,10 @@ import {
   CAPTURE_SETTINGS_SECTION,
   DEFAULT_SETTINGS_SECTION,
   filterSettingsNavItems,
+  movedSettingsSectionRoute,
   resolveSettingsSection,
 } from "../settingsNavGating";
+import { BILLING_ROUTE } from "@/app/lib/routes";
 
 // Minimal fixture — sections only, like the real settingsNavItems shape but
 // without icons (the filter never touches them).
@@ -67,7 +69,7 @@ describe("filterSettingsNavItems", () => {
  * desktop app. Hidden here rather than deleted, same as wallet and VPN.
  */
 describe("the API token entry", () => {
-  const items = [{ section: "api-key" }, { section: "billing" }];
+  const items = [{ section: "api-key" }, { section: "security" }];
 
   it("is dropped when the feature is off", () => {
     const out = filterSettingsNavItems(items, {
@@ -75,7 +77,7 @@ describe("the API token entry", () => {
       walletEnabled: true,
       apiTokenEnabled: false,
     });
-    expect(out.map((i) => i.section)).toEqual(["billing"]);
+    expect(out.map((i) => i.section)).toEqual(["security"]);
   });
 
   it("is kept when the feature is on", () => {
@@ -84,7 +86,7 @@ describe("the API token entry", () => {
       walletEnabled: true,
       apiTokenEnabled: true,
     });
-    expect(out.map((i) => i.section)).toEqual(["api-key", "billing"]);
+    expect(out.map((i) => i.section)).toEqual(["api-key", "security"]);
   });
 });
 
@@ -113,7 +115,7 @@ describe("resolveSettingsSection", () => {
 
   // Ungated sections are none of this resolver's business.
   it("passes an ungated section through either way", () => {
-    expect(resolveSettingsSection("billing", allOff)).toBe("billing");
+    expect(resolveSettingsSection("notifications", allOff)).toBe("notifications");
     expect(resolveSettingsSection("security", allOff)).toBe("security");
   });
 
@@ -157,3 +159,30 @@ describe("the Screenshots & Recording entry", () => {
   });
 });
 
+
+/**
+ * A section that left Settings for a page of its own keeps its old address
+ * working: `?section=` is bookmarked, restored at launch and saved in
+ * notification rows, and falling back to Sync & Storage would read as the
+ * link being broken.
+ */
+describe("movedSettingsSectionRoute", () => {
+  it("sends billing to the Plans & Billing page", () => {
+    expect(movedSettingsSectionRoute("billing")).toBe(BILLING_ROUTE);
+  });
+
+  it("leaves every section still in Settings where it is", () => {
+    for (const section of ["sync", CAPTURE_SETTINGS_SECTION, "notifications", "security", "updates", "vpn"]) {
+      expect(movedSettingsSectionRoute(section)).toBeNull();
+    }
+    expect(movedSettingsSectionRoute(null)).toBeNull();
+    expect(movedSettingsSectionRoute(undefined)).toBeNull();
+    expect(movedSettingsSectionRoute("")).toBeNull();
+  });
+
+  // The section is read from the URL, so it is a lookup by own key only.
+  it("does not answer for an inherited property name", () => {
+    expect(movedSettingsSectionRoute("constructor")).toBeNull();
+    expect(movedSettingsSectionRoute("toString")).toBeNull();
+  });
+});
