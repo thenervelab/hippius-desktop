@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
 use crate::sync::config::get_drive_password;
+use hcfs_client::engine::lock_drive;
 use hcfs_client::engine::manager::DriveManager;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
@@ -435,11 +436,11 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 
     // Stage 3: first active drive's folder mnemonic (pre-migration state).
     warn!("Master mnemonic not found at {:?}, falling back to per-folder mnemonic", master_path);
-    let first_arc = app_state.sync.drive_managers().await.into_iter().next().map(|(_, manager)| manager);
-    if let Some(arc) = first_arc
+    let first_drive = app_state.sync.drive_managers().await.into_iter().next();
+    if let Some((label, arc)) = first_drive
         && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "get_mnemonic_for_account").await;
         if m.is_initialized()
             && let Ok(mnemonic) = m.export_mnemonic(&drive_password)
             && candidate_is_account_master(&mnemonic, account_id)

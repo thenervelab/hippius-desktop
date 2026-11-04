@@ -7,28 +7,35 @@
 //! wait that decision never sees (hippius-desktop #722). The `try_lock` sites
 //! (`synced_state.rs`, `recent.rs`, `control.rs`) never wait and stay as they
 //! are. Same idiom as `tests/failure_commands_wiring.rs`.
+//!
+//! The pin covers the files listed below and nothing else: a new drive-lock
+//! site in another file needs adding here.
 
-fn source(path: &str) -> String {
+/// The file's source with all whitespace removed, so a lock chain rustfmt
+/// splits across lines (`arc\n    .lock()\n    .await`) still matches.
+fn compact_source(path: &str) -> String {
     let full = format!("{}/{path}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("read {full}: {e}"))
+    let src = std::fs::read_to_string(&full).unwrap_or_else(|e| panic!("read {full}: {e}"));
+    src.split_whitespace().collect()
 }
 
 #[test]
 fn drive_manager_locks_are_counted_by_lock_drive() {
-    // Every `.lock().await` in these files was a drive-manager lock.
+    // Every `.lock().await` these files had was a drive-manager lock.
     for path in [
         "src/sync/drive/selective.rs",
         "src/sync/failure/failure_commands.rs",
         "src/sync/migrate/relative_path_backfill.rs",
+        "src/sync/shared/mnemonic.rs",
     ] {
-        let src = source(path);
+        let src = compact_source(path);
         assert_eq!(src.matches(".lock().await").count(), 0, "{path} locks a drive manager without lock_drive");
         assert!(src.contains("lock_drive("), "{path} no longer calls lock_drive; update this pin");
     }
 
     // lifecycle.rs also takes the commit lock and test-only locks directly,
     // so only the reconcile task's manager lock is pinned there.
-    let lifecycle = source("src/sync/drive/lifecycle.rs");
+    let lifecycle = compact_source("src/sync/drive/lifecycle.rs");
     assert!(
         !lifecycle.contains("manager_arc.lock()"),
         "the reconcile task locks the drive manager without lock_drive"
