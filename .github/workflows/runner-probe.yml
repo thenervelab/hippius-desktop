@@ -1,0 +1,21 @@
+name: runner-probe
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        label: [hippius-small, hippius-medium, hippius-large]
+    runs-on: ${{ matrix.label }}
+    timeout-minutes: 5
+    steps:
+      - run: |
+          echo "runner=$RUNNER_NAME label=${{ matrix.label }}"
+          uname -a
+          cat /etc/os-release | head -3
+          id
+          df -h / | tail -1
+          nproc; free -g | head -2
