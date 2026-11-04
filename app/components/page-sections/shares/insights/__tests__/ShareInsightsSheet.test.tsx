@@ -16,7 +16,10 @@ import {
   LOCK_BODY_STILL,
   LOCK_TITLE,
   LOCK_TITLE_STILL,
+  PAGES_LOCK_BODY,
+  PAGES_LOCK_TITLE,
   PRICING_URL,
+  SAMPLE_PAGES,
   SAMPLE_LABEL,
   SAMPLE_UNIQUE_VIEWERS,
   SAMPLE_VIEWERS,
@@ -1361,5 +1364,87 @@ describe("the Insights side panel", () => {
     // Closing one opens nothing else.
     store.set(fileDetailsPanelAtom, null);
     expect(store.get(insightsSheetAtom)).toBeNull();
+  });
+});
+
+describe("the Insights Pages tab", () => {
+  const DOC = "Pitch deck.pdf";
+  const DOC_CAPS: ServerCapabilities = { ...CAPS, share_document_views: true };
+  const PAID_DOC: ShareInsights = {
+    plan: "paid",
+    totalViews: 4,
+    uniqueViewers: 2,
+    completion: { state: "shown", value: 0.5 },
+    retention: { state: "shown", value: null },
+    viewers: {
+      state: "shown",
+      value: [
+        { viewerId: "a", name: "Maya", visits: 1, watchedMs: 8_100, completion: 0.5, lastViewedAt: null, comments: 0, reactions: 0, pagesSeen: 2, pageCount: 4 },
+      ],
+    },
+    pages: { state: "shown", value: { pageCount: 4, reach: [100, 75, 30, 25], medianMs: [4_200, 3_000, 900, 0] } },
+  };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    push.mockReset();
+    viewport.wide = true;
+  });
+
+  it("shows drop-off and time per page, and where most people stopped", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+
+    const panel = await showTab("Pages");
+    expect(within(panel).getByText("Drop-off by page")).toBeInTheDocument();
+    expect(within(panel).getByText("Most left after page 2")).toBeInTheDocument();
+    const rows = within(within(panel).getByRole("list", { name: "Pages" })).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toHaveTextContent(/Page 1.*reached by 100%.*median time 0:04/);
+    expect(rows[2]).toHaveTextContent(/Page 3.*30%.*0:01/);
+    expect(screen.queryByTestId("insights-locked")).toBeNull();
+  });
+
+  it("says how many pages each viewer saw", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const viewers = await showTab("Viewers");
+    expect(within(viewers).getByText("2 of 4 pages")).toBeInTheDocument();
+  });
+
+  it("says no page views yet on a document link nobody has read", async () => {
+    answer({ share_get_insights: { ...PAID_DOC, pages: { state: "shown", value: null } }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const panel = await showTab("Pages");
+    expect(within(panel).getByText("No page views yet")).toBeInTheDocument();
+  });
+
+  it("locks the Pages tab on the free plan, over sample pages only", async () => {
+    answer({ share_get_insights: { ...FREE, pages: { state: "locked" } }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const panel = await showTab("Pages");
+    const locked = within(panel).getByTestId("insights-locked");
+    expect(within(locked).getByText(PAGES_LOCK_TITLE)).toBeInTheDocument();
+    expect(within(locked).getByText(PAGES_LOCK_BODY)).toBeInTheDocument();
+    const blurred = locked.firstElementChild as HTMLElement;
+    expect(blurred).toHaveAttribute("aria-hidden", "true");
+    expect(within(blurred).getAllByText(/^Page \d+$/)).toHaveLength(SAMPLE_PAGES.pageCount);
+  });
+
+  it("has no Pages tab until the server has document views", async () => {
+    // Rust sends no `pages` without `share_document_views`.
+    const { pages: _pages, ...today } = PAID_DOC;
+    void _pages;
+    answer({ share_get_insights: today, share_list_comments: NO_COMMENTS });
+    renderSheet(CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
+  });
+
+  it("has no Pages tab on a recording's link, even on the free plan", async () => {
+    answer({ share_get_insights: { ...FREE, pages: { state: "locked" } }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS);
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
   });
 });
