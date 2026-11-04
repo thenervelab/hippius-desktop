@@ -494,6 +494,8 @@ print_stdout = "deny"
 print_stderr = "deny"
 await_holding_lock = "deny"
 large_futures = "deny"
+# An unsafe block states why it is sound in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "deny"
 module_name_repetitions = "allow"
 similar_names = "allow"
 missing_errors_doc = "allow"

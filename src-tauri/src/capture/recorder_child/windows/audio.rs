@@ -293,8 +293,9 @@ impl Client {
         let result = (|| {
             while !stop.load(Ordering::SeqCst) {
                 match &self.ready {
-                    // SAFETY: a live event handle owned by this client.
                     Some(event) => {
+                        // SAFETY: `event` is a live handle this client owns
+                        // and closes only when it is dropped.
                         let waited = unsafe { WaitForSingleObject(event.0, u32::try_from(POLL.as_millis() * 2).unwrap_or(20)) };
                         if waited != WAIT_OBJECT_0 {
                             continue;
@@ -303,10 +304,7 @@ impl Client {
                     None => std::thread::sleep(POLL),
                 }
                 loop {
-                    // SAFETY: GetNextPacketSize / GetBuffer / ReleaseBuffer on
-                    // this thread's capture client; `data` is read for exactly
-                    // `frames * frame_bytes` bytes between GetBuffer and
-                    // ReleaseBuffer, as WASAPI documents.
+                    // SAFETY: GetNextPacketSize on this thread's capture client.
                     let packet = unsafe { self.capture.GetNextPacketSize() }.map_err(|e| format!("the device went away: {e}"))?;
                     if packet == 0 {
                         break;
@@ -315,6 +313,10 @@ impl Client {
                     let mut frames = 0u32;
                     let mut flags = 0u32;
                     let mut qpc = 0u64;
+                    // SAFETY: GetBuffer on this thread's capture client; every
+                    // out-pointer is a live local. `data` is read for exactly
+                    // `frames * frame_bytes` bytes before ReleaseBuffer below,
+                    // as WASAPI documents.
                     unsafe {
                         self.capture
                             .GetBuffer(&raw mut data, &raw mut frames, &raw mut flags, None, Some(&raw mut qpc))
@@ -328,6 +330,8 @@ impl Client {
                         let bytes = unsafe { std::slice::from_raw_parts(data, frames as usize * frame_bytes) };
                         self.converter.convert(bytes)
                     };
+                    // SAFETY: releases the `frames` GetBuffer handed out above;
+                    // `bytes`, the only view of `data`, is no longer used.
                     unsafe { self.capture.ReleaseBuffer(frames) }.map_err(|e| format!("the device went away: {e}"))?;
                     let time = sources::packet_time_us(qpc, com::qpc_micros(), frames, format.rate);
                     if samples.is_empty() {
