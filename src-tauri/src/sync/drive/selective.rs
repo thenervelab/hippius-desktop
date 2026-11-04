@@ -7,8 +7,8 @@
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::exclude_literal::{ExcludePatternEntry, entries_from_patterns, exclude_path_literally, literal_pattern, remove_literal_exclusion};
-use hcfs_client::engine::DriveManager;
 use hcfs_client::engine::runner::trigger_sync;
+use hcfs_client::engine::{DriveManager, lock_drive};
 use tauri::{AppHandle, Emitter, Manager};
 use tracing::{debug, info, warn};
 
@@ -133,7 +133,7 @@ pub async fn list_exclude_patterns(label: String, app_state: tauri::State<'_, Ap
         return Ok(Vec::new());
     };
 
-    let manager = arc.lock().await;
+    let manager = lock_drive(&arc, &label, "list_exclude_patterns").await;
     let patterns = manager.list_exclude_patterns();
     debug!(
         label = %label,
@@ -158,7 +158,7 @@ pub async fn add_exclude_pattern(label: String, pattern: String, app_state: taur
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
     };
 
-    let manager = arc.lock().await;
+    let manager = lock_drive(&arc, &label, "add_exclude_pattern").await;
     let added = manager.add_exclude_pattern(&trimmed).map_err(AppError::Hcfs)?;
     drop(manager);
     if added {
@@ -186,7 +186,7 @@ pub async fn remove_exclude_pattern(label: String, pattern: String, app_state: t
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
     };
 
-    let manager = arc.lock().await;
+    let manager = lock_drive(&arc, &label, "remove_exclude_pattern").await;
     let removed = manager.remove_exclude_pattern(&pattern).map_err(AppError::Hcfs)?;
     drop(manager);
     if removed {
@@ -229,7 +229,7 @@ pub async fn apply_sync_selection(
         return Err(AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
     };
 
-    let manager = arc.lock().await;
+    let manager = lock_drive(&arc, &label, "apply_sync_selection").await;
     apply_selection_on_manager(&manager, &label, &include, &exclude)?;
     drop(manager);
 
