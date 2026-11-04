@@ -106,11 +106,12 @@ export const navSections: NavSection[] = [
     key: "account",
     label: "ACCOUNT",
     items: [
-      // Money first, then people, then referrals. One entry for plans and billing, named
-      // as in the console, that opens Settings → Billing, where the plan
-      // catalogue, the subscription and the credit balance all live; it left
-      // the settings list so it is not offered twice. The /billing and
-      // /drive-plans routes still exist for deep links.
+      // Money first, then people, then referrals. One entry for plans and
+      // billing, named as in the console, that opens its own page under this
+      // sidebar (`/billing`), where the plan catalogue, the subscription and
+      // the credit balance all live. It is not in Settings, so it is not
+      // offered twice; Settings redirects an old `?section=billing` here and
+      // /drive-plans still resolves for deep links.
       {
         label: "Plans & Billing",
         path: BILLING_ROUTE,

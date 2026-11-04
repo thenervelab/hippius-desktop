@@ -1,17 +1,26 @@
 /**
  * Where in-app links point for money-related destinations.
  *
- * Billing lives in Settings, and everything about a plan — the catalogue,
- * the current subscription, the credit balance — is on that one page. The
- * standalone Subscription Plans page is gone: it showed a subset of what
- * Billing shows, so an upgrade prompt and a top-up prompt sent the user to
- * two different screens for one subject.
+ * Plans & Billing is a page of its own under the main sidebar, as in the
+ * console, and everything about a plan — the catalogue, the current
+ * subscription, the credit balance — is on that one page. The standalone
+ * Subscription Plans page is gone: it showed a subset of what Billing shows,
+ * so an upgrade prompt and a top-up prompt sent the user to two different
+ * screens for one subject.
+ *
+ * A bare path with no query string: the main sidebar lights an entry by
+ * comparing its path with `usePathname()`, which never carries one, and it
+ * hides itself entirely under `/settings`. The old
+ * `/settings?section=billing` still resolves (Settings redirects it here,
+ * see `movedSettingsSectionRoute`) for bookmarks and saved notifications.
  *
  * A constant rather than the literal at each call site because there were
  * eight of them pointing at two different routes, which is how they came
- * to disagree in the first place.
+ * to disagree in the first place. Rust's low-credits notification links
+ * here too (`notifications/credits.rs::BILLING_LINK`), pinned to this value
+ * by `app/lib/__tests__/routes.test.ts`.
  */
-export const BILLING_ROUTE = "/settings?section=billing";
+export const BILLING_ROUTE = "/billing";
 
 /**
  * Open one folder on the Drive page.
