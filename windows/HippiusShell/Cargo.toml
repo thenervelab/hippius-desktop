@@ -4,7 +4,7 @@
 # DELIBERATELY NOT a member of the src-tauri workspace: it is windows-only and
 # built by the packaging step, so keeping it separate means the macOS/Linux/
 # Windows `cargo check` of the app itself is unaffected. Build it explicitly:
-#   cargo build --release --manifest-path windows/HippiusShell/Cargo.toml
+#   cargo build --release --locked --manifest-path windows/HippiusShell/Cargo.toml
 [package]
 name = "hippius-shell"
 version = "0.1.0"
