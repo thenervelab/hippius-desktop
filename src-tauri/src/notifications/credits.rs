@@ -624,6 +624,13 @@ fn basename(path: &str) -> String {
 const RENEWAL_CREDITS_TITLE: &str = "Your credits won't cover the next renewal";
 const RENEWAL_CREDITS_DESCRIPTION: &str = "Top up your credits to keep your storage plan running. Without enough credits the plan will not renew.";
 
+/// Where the renewal warning's "View Billing" goes: the Plans & Billing page.
+///
+/// Must equal the frontend's `BILLING_ROUTE` (`app/lib/routes.ts`), pinned by
+/// `app/lib/__tests__/routes.test.ts`. Rows saved before the page left
+/// Settings carry `/settings?section=billing`, which Settings redirects here.
+pub const BILLING_LINK: &str = "/billing";
+
 /// Raise the "credits will not cover your renewal" notification, once.
 ///
 /// `renewal_unix_day` — days since the epoch, the drive rail's own unit —
@@ -663,13 +670,14 @@ pub async fn ensure_renewal_credits_notification(pool: &sqlx::SqlitePool, user_a
             title_text, description, link_text, link,
             is_unread, creation_time, is_deleted, release_notes
         )
-        VALUES (?, 'Hippius', ?, ?, ?, 'View Billing', '/settings?section=billing', 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, NULL)
+        VALUES (?, 'Hippius', ?, ?, ?, 'View Billing', ?, 1, CAST(strftime('%s','now') * 1000 AS INTEGER), 0, NULL)
         ",
     )
     .bind(user_address)
     .bind(&subtype)
     .bind(RENEWAL_CREDITS_TITLE)
     .bind(RENEWAL_CREDITS_DESCRIPTION)
+    .bind(BILLING_LINK)
     .execute(pool)
     .await?;
 
