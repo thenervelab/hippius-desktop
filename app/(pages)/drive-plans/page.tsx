@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 
 /**
- * The Subscription Plans page is gone — plans live on Billing, in Settings.
+ * The Subscription Plans page is gone — plans live on Plans & Billing.
  *
  * The route stays as a redirect rather than being deleted outright: this
  * app is a static export with no server rewrites, so a deleted route is a

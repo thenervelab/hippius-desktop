@@ -305,7 +305,7 @@ describe("the capture bar's options, here as well", () => {
     expect(tauri.core.invoke).not.toHaveBeenCalledWith("capture_set_options", expect.anything());
 
     fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
-    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(push).toHaveBeenCalledWith("/billing");
   });
 
   it("keeps the plain switch when the plan could not be read", async () => {

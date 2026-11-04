@@ -5,7 +5,7 @@
 // after closing the picker, so only one dialog is ever open. New drive makes
 // a drive on Hippius right here (`useNewDriveStep`, no local folder) and then
 // goes the same way as Continue, with the new drive. Upgrade plan is
-// Settings > Billing, like every other Drive upgrade prompt. Mounted only
+// Plans & Billing, like every other Drive upgrade prompt. Mounted only
 // while the picker is open.
 
 import React, { useCallback } from "react";
