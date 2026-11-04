@@ -9,16 +9,9 @@ import DrivePlansSection from "@/components/page-sections/drive-plans/DrivePlans
 import DriveSubscriptionHistory from "@/components/page-sections/drive-plans/DriveSubscriptionHistory";
 
 /**
- * Everything on the Billing page except the page chrome.
- *
- * Billing is reachable from two places — the `/billing` route and
- * Settings → Billing — and they must show the same thing. Extracting the
- * body is what keeps that true: a second copy is how one of them ends up
- * missing a section nobody notices for a release.
- *
- * The page chrome (DashboardTitleWrapper + PageHeader) stays with the
- * route, because inside Settings the surrounding page already supplies a
- * title and would render two.
+ * Everything on the Plans & Billing page except the page chrome, which
+ * (DashboardTitleWrapper + PageHeader) stays with the route in `./index.tsx`.
+ * The page is `/billing` only; it is no longer also a Settings section.
  *
  * **The plans shown here are the Drive plans, not the credit-reload
  * packages.** This page used to list the S3 credit-reload subscriptions

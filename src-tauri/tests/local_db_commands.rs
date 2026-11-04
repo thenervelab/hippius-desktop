@@ -1213,6 +1213,26 @@ async fn a_dismissed_renewal_warning_is_not_raised_again() {
     assert_eq!(count, 1, "dismissing must not make it come back");
 }
 
+/// "View Billing" opens the Plans & Billing page.
+///
+/// It linked into Settings while billing was a settings section; the page
+/// has since left Settings, which only redirects that old address for rows
+/// already saved.
+#[tokio::test]
+async fn the_renewal_warning_opens_plans_and_billing() {
+    let pool = setup_db().await;
+    let alice = "alice-addr";
+    ensure_renewal_credits_notification(&pool, alice, 20_400).await.unwrap();
+
+    let (link, link_text) = sqlx::query_as::<_, (String, String)>("SELECT link, link_text FROM notifications WHERE user_address = ?")
+        .bind(alice)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(link, "/billing");
+    assert_eq!(link_text, "View Billing");
+}
+
 /// One account's warning must not silence another's — the dedup is
 /// user-scoped for the same reason `process_credit_events`' is.
 #[tokio::test]

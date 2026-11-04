@@ -151,7 +151,7 @@ describe("CaptureHost", () => {
   it("opens the plans on the card's Upgrade", async () => {
     mountHost();
     await act(() => tauri.emitEvent("capture_open_plans", null));
-    expect(h.push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(h.push).toHaveBeenCalledWith("/billing");
   });
 
   it("opens Shared Links at the capture's link on the card's Manage link", async () => {

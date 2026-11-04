@@ -15,6 +15,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.19] - 2026-11-04
+
+Plans & Billing now opens as its own page, right in the app, instead of inside Settings.
+
+### Changed
+
+- **Plans & Billing opens as its own page.** Choosing Plans & Billing in the sidebar opens your plan, balance and billing history with the sidebar staying where it is, and the page is named Plans & Billing at the top instead of Settings. Upgrade and top up prompts, and the low credits notification, go there too. Its help tip talks about your account balance in dollars rather than credits, and the Settings list is one clean list without lines between its entries.
+
 ## [0.6.18] - 2026-11-03
 
 Capture works over full-screen apps on Mac, a screenshot or recording can be saved to your Desktop,

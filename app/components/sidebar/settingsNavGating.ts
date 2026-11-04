@@ -3,6 +3,8 @@
 // entries stay in the nav array; flipping a flag in featureFlags.ts is the
 // only release change needed. Unit-tested in __tests__/settingsNavGating.test.ts.
 
+import { BILLING_ROUTE } from "@/app/lib/routes";
+
 export interface GatedSettingsItem {
   section: string;
 }
@@ -37,6 +39,34 @@ export function filterSettingsNavItems<T extends GatedSettingsItem>(
 
 /** The section shown when none is named, or the named one is unavailable. */
 export const DEFAULT_SETTINGS_SECTION = "sync";
+
+/**
+ * Sections that used to live in Settings and are now pages of their own,
+ * keyed by their old `?section=` value.
+ */
+const MOVED_SETTINGS_SECTIONS: Record<string, string> = {
+  // Plans & Billing is a main-sidebar page, as in the console.
+  billing: BILLING_ROUTE,
+};
+
+/**
+ * Where a settings section that has moved out of Settings lives now, or
+ * null for one that is still here.
+ *
+ * The section comes from the query string, which is bookmarked, restored
+ * across launches and saved in notification rows already in the user's
+ * database (the low-credits warning linked `/settings?section=billing`), so
+ * the old address has to keep landing on the page rather than falling back
+ * to Sync & Storage.
+ */
+export function movedSettingsSectionRoute(
+  requested: string | null | undefined,
+): string | null {
+  if (!requested) return null;
+  return Object.prototype.hasOwnProperty.call(MOVED_SETTINGS_SECTIONS, requested)
+    ? MOVED_SETTINGS_SECTIONS[requested]
+    : null;
+}
 
 /**
  * Which settings section to actually render.
