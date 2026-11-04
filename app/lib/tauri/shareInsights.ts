@@ -48,6 +48,22 @@ export interface InsightsViewer {
   lastViewedAt: string | null;
   comments: number;
   reactions: number;
+  /**
+   * For a document: how many of its pages this viewer saw, and how many it
+   * has. Absent or `null` for anything else, and on a server without
+   * document views.
+   */
+  pagesSeen?: number | null;
+  pageCount?: number | null;
+}
+
+/** A document link's page by page numbers (`share_document_views`). */
+export interface InsightsPages {
+  pageCount: number;
+  /** One per page: the percentage (0 to 100) of document visits that saw it. */
+  reach: number[];
+  /** One per page: the median milliseconds on it, over the visits that saw it. */
+  medianMs: number[];
 }
 
 export interface ShareInsights {
@@ -59,6 +75,12 @@ export interface ShareInsights {
   /** 100 buckets of 0 to 100; `null` inside when there is no video data. */
   retention: Gated<number[] | null>;
   viewers: Gated<InsightsViewer[]>;
+  /**
+   * Page by page numbers. `null` (or absent) on a server without document
+   * views, which shows nothing about pages; `null` inside while the link has
+   * no document visit.
+   */
+  pages?: Gated<InsightsPages | null> | null;
 }
 
 export interface ShareComment {

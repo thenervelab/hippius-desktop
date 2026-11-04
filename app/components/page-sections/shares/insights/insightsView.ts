@@ -6,7 +6,7 @@
 // The web console draws the same sheet, so the words and the avatar palette
 // here are the console's too: change them in both places or neither.
 
-import type { InsightsViewer, LinkSettingsDefault, ShareComment } from "@/app/lib/tauri/shareInsights";
+import type { Gated, InsightsPages, InsightsViewer, LinkSettingsDefault, ShareComment } from "@/app/lib/tauri/shareInsights";
 
 /** What a viewer or commenter without a chosen name is called. */
 export const ANONYMOUS = "Anonymous viewer";
@@ -45,6 +45,17 @@ export function lockCopy({ video, notCounting }: { video: boolean; notCounting: 
   if (video) return { title: LOCK_TITLE, body: notCounting ? LOCK_BODY_NOT_COUNTING : LOCK_BODY };
   return { title: LOCK_TITLE_STILL, body: notCounting ? LOCK_BODY_STILL_NOT_COUNTING : LOCK_BODY_STILL };
 }
+
+/** The Pages tab's lock: how far people read a document, page by page. */
+export const PAGES_LOCK_TITLE = "See how far people read";
+export const PAGES_LOCK_BODY = "Your views are being counted. Drop-off and time per page come with paid Drive plans.";
+export const PAGES_LOCK_BODY_NOT_COUNTING = "Count this link's views and see how far people read, page by page.";
+
+/** The Pages tab's lock title and line. */
+export function pagesLockCopy({ notCounting }: { notCounting: boolean }): { title: string; body: string } {
+  return { title: PAGES_LOCK_TITLE, body: notCounting ? PAGES_LOCK_BODY_NOT_COUNTING : PAGES_LOCK_BODY };
+}
+
 export const UPGRADE_PLAN = "Upgrade plan";
 export const COMPARE_PLANS = "Compare plans";
 /** Where Compare plans goes: the plans side by side on the website. */
@@ -64,7 +75,47 @@ export const VIEWERS_PAGE = 20;
 export const SUMMARY_REACTIONS = 4;
 
 /** The panel's tabs, in the order they are shown. */
-export type InsightsTab = "comments" | "viewers" | "reactions";
+export type InsightsTab = "comments" | "viewers" | "pages" | "reactions";
+
+/**
+ * The files whose links count page by page views: PDF, Word and PowerPoint,
+ * the same kinds Rust starts with Insights on (`shares::insights`).
+ */
+export const DOCUMENT_NAME = /\.(pdf|docx|pptx)$/i;
+
+/**
+ * Whether the Pages tab shows: only on a server with document views (Rust
+ * sends `pages` only then), for a document's link, or for any link that
+ * already has page numbers. On the free plan it is the lock.
+ */
+export function pagesTabShown(pages: Gated<InsightsPages | null> | null | undefined, fileName: string): boolean {
+  if (!pages) return false;
+  if (pages.state === "shown" && pages.value !== null) return true;
+  return DOCUMENT_NAME.test(fileName);
+}
+
+/** Where most people stopped reading: the page after which the most visits left. */
+export function biggestPageDrop(reach: readonly number[]): { afterPage: number; drop: number } | null {
+  let best = 0;
+  let after = -1;
+  for (let i = 0; i + 1 < reach.length; i++) {
+    const d = reach[i] - reach[i + 1];
+    if (d > best) {
+      best = d;
+      after = i;
+    }
+  }
+  return after < 0 || best < MIN_PAGE_DROP_POINTS ? null : { afterPage: after + 1, drop: best };
+}
+const MIN_PAGE_DROP_POINTS = 2;
+
+/** A viewer's pages: `5 of 12 pages`, or `1 of 1 page`. */
+export function pagesSeenLabel(seen: number, count: number): string {
+  return `${seen} of ${count} ${count === 1 ? "page" : "pages"}`;
+}
+
+/** Pages listed before "Show more pages", and how many each press adds. */
+export const PAGES_PAGE = 20;
 
 /**
  * The tab the panel opens on: Comments when there are any (that is what an
@@ -399,6 +450,21 @@ export const SAMPLE_VIEWERS: InsightsViewer[] = [
   { viewerId: "sample-2", name: "Example viewer", visits: 1, watchedMs: 47_000, completion: 0.41, lastViewedAt: null, comments: 0, reactions: 1 },
 ];
 
+/** The sample pages behind the Pages tab's lock: a 10 page document. */
+export const SAMPLE_PAGES: InsightsPages = {
+  pageCount: 10,
+  reach: [100, 92, 84, 80, 61, 58, 55, 41, 38, 30],
+  medianMs: [6_000, 14_000, 9_000, 22_000, 11_000, 8_000, 7_000, 12_000, 5_000, 4_000],
+};
+
+/** The sample viewers for a document: how many pages each saw. */
+export const SAMPLE_DOCUMENT_VIEWERS: InsightsViewer[] = SAMPLE_VIEWERS.map((v, i) => ({
+  ...v,
+  completion: i === 0 ? 0.9 : 0.4,
+  pagesSeen: i === 0 ? 9 : 4,
+  pageCount: 10,
+}));
+
 /** The sample viewers for a picture or any other file: who viewed, nothing watched. */
 export const SAMPLE_STILL_VIEWERS: InsightsViewer[] = SAMPLE_VIEWERS.map((v) => ({ ...v, watchedMs: 0, completion: null }));
 
@@ -417,6 +483,10 @@ export const DEFINITIONS: ReadonlyArray<{ term: string; meaning: string }> = [
   {
     term: "Where people stopped",
     meaning: "For each moment of the recording, how many visits reached it.",
+  },
+  {
+    term: "Pages",
+    meaning: "For a PDF, Word or PowerPoint file, how many visits reached each page and the median time spent on it.",
   },
   { term: "Pictures", meaning: "Screenshots and other pictures have views and viewers, but no completion or retention." },
   {

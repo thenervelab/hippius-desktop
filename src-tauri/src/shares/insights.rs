@@ -108,13 +108,35 @@ pub struct InsightsViewer {
     pub name: Option<String>,
     pub visits: u64,
     pub watched_ms: u64,
-    /// 0 to 1, `None` for a picture.
+    /// 0 to 1, `None` for a picture. For a document, pages seen over its
+    /// pages.
     pub completion: Option<f64>,
     /// RFC 3339.
     pub last_viewed_at: Option<String>,
     pub comments: u64,
     pub reactions: u64,
+    /// For a document, how many of its pages this viewer saw, and how many
+    /// it has. Both `None` for anything else, and on a server without
+    /// document views (`share_document_views`).
+    pub pages_seen: Option<u32>,
+    pub page_count: Option<u32>,
 }
+
+/// Page by page numbers for a document link (`share_document_views`): how
+/// many visits reached each page (the drop-off) and how long they stayed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightsPages {
+    /// 1 to [`MAX_PAGES`].
+    pub page_count: u32,
+    /// One per page: the percentage (0 to 100) of document visits that saw it.
+    pub reach: Vec<f64>,
+    /// One per page: the median milliseconds on it, over the visits that saw it.
+    pub median_ms: Vec<u64>,
+}
+
+/// The most pages a document view counts, as the server caps `page_count`.
+pub const MAX_PAGES: u32 = 1000;
 
 /// The owner's Insights for one link.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -131,6 +153,10 @@ pub struct ShareInsights {
     pub retention: Gated<Option<Vec<f64>>>,
     /// Newest visit first.
     pub viewers: Gated<Vec<InsightsViewer>>,
+    /// Page by page numbers. `None` on a server without document views
+    /// (`share_document_views`), which shows nothing about pages;
+    /// `Shown(None)` while the link has no document visit.
+    pub pages: Option<Gated<Option<InsightsPages>>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,7 +174,43 @@ struct WireInsights {
     #[serde(default)]
     viewers: Option<Vec<WireViewer>>,
     #[serde(default)]
+    pages: Option<WirePages>,
+    #[serde(default)]
     locked: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WirePages {
+    #[serde(default)]
+    page_count: u32,
+    #[serde(default)]
+    reach: Vec<f64>,
+    #[serde(default)]
+    median_ms: Vec<u64>,
+}
+
+/// A `page_count` the contract allows: 1 to [`MAX_PAGES`].
+fn page_count_ok(n: u32) -> Option<u32> {
+    (1..=MAX_PAGES).contains(&n).then_some(n)
+}
+
+/// The pages block as it may be drawn: one reach and one time per page, the
+/// reach as a percentage. A block with no valid page count is no block, and
+/// a short array is filled with zeros (a long one cut), so the screen never
+/// has to guess which page a number is for.
+fn pages_from_wire(wire: WirePages) -> Option<InsightsPages> {
+    let page_count = page_count_ok(wire.page_count)?;
+    let n = page_count as usize;
+    let mut reach: Vec<f64> = wire.reach.into_iter().take(n).map(percent).collect();
+    reach.resize(n, 0.0);
+    let mut median_ms = wire.median_ms;
+    median_ms.truncate(n);
+    median_ms.resize(n, 0);
+    Some(InsightsPages {
+        page_count,
+        reach,
+        median_ms,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,6 +233,10 @@ struct WireViewer {
     name_ct: Option<String>,
     #[serde(default)]
     name_nonce: Option<String>,
+    #[serde(default)]
+    pages_seen: Option<u32>,
+    #[serde(default)]
+    page_count: Option<u32>,
 }
 
 fn unit(x: f64) -> f64 {
@@ -186,7 +252,10 @@ fn percent(x: f64) -> f64 {
 ///
 /// A metric is locked when the server names it in `locked`, and always on a
 /// plan that is not paid: whatever arrives for it is dropped.
-fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
+///
+/// `document_views` is the server's `share_document_views`: without it,
+/// nothing about pages is read, so the screen shows what it does today.
+fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
     let wire: WireInsights = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("insights parse failed: {e}")))?;
     let plan = if wire.plan == "paid" { InsightsPlan::Paid } else { InsightsPlan::Free };
     let locked: HashSet<&str> = wire.locked.iter().map(String::as_str).collect();
@@ -214,6 +283,10 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
                     (Some(ct), Some(nonce)) => names(nonce, ct).map(readable_name),
                     _ => None,
                 };
+                // Pages seen only beside a valid page count, and never more
+                // than it has.
+                let page_count = v.page_count.filter(|_| document_views).and_then(page_count_ok);
+                let pages_seen = page_count.and_then(|n| v.pages_seen.map(|seen| seen.min(n)));
                 InsightsViewer {
                     viewer_id: v.viewer_id,
                     name,
@@ -223,6 +296,8 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
                     last_viewed_at: v.last_viewed_at,
                     comments: v.comments,
                     reactions: v.reactions,
+                    pages_seen,
+                    page_count: pages_seen.and(page_count),
                 }
             })
             .collect();
@@ -231,6 +306,14 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
         Gated::Shown(rows)
     };
 
+    let pages = document_views.then(|| {
+        if is_locked("pages") {
+            Gated::Locked
+        } else {
+            Gated::Shown(wire.pages.and_then(pages_from_wire))
+        }
+    });
+
     Ok(ShareInsights {
         plan,
         total_views: wire.total_views,
@@ -238,6 +321,7 @@ fn parse_insights(body: &str, mut names: impl FnMut(&str, &str) -> Option<String
         completion,
         retention,
         viewers,
+        pages,
     })
 }
 
@@ -1385,7 +1469,8 @@ pub async fn share_engagement_features(state: tauri::State<'_, AppState>) -> Res
 #[tauri::command]
 pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: String) -> Result<ShareInsights> {
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_insights {
+    let caps = capabilities_checked(&state, &account_id, UNREACHABLE).await?;
+    if !caps.share_insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -1397,7 +1482,7 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
     } else {
         None
     };
-    parse_insights(&body, |nonce, ct| {
+    parse_insights(&body, caps.share_document_views, |nonce, ct| {
         key.as_ref()
             .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
     })
@@ -1595,7 +1680,7 @@ mod tests {
 
     #[test]
     fn a_free_plan_gets_the_two_numbers_and_everything_else_locked() {
-        let i = parse_insights(FREE, no_names).unwrap();
+        let i = parse_insights(FREE, false, no_names).unwrap();
         assert_eq!(i.plan, InsightsPlan::Free);
         assert_eq!((i.total_views, i.unique_viewers), (2, 1));
         assert_eq!(i.completion, Gated::Locked);
@@ -1607,7 +1692,7 @@ mod tests {
     /// screen does with it can show a real number.
     #[test]
     fn a_locked_metric_crosses_ipc_with_no_value() {
-        let json = serde_json::to_value(parse_insights(FREE, no_names).unwrap()).unwrap();
+        let json = serde_json::to_value(parse_insights(FREE, false, no_names).unwrap()).unwrap();
         for key in ["completion", "retention", "viewers"] {
             assert_eq!(json[key], serde_json::json!({ "state": "locked" }), "{key}");
         }
@@ -1621,22 +1706,22 @@ mod tests {
     fn values_sent_for_a_locked_metric_are_dropped() {
         let leaky =
             r#"{"plan":"free","total_views":2,"unique_viewers":1,"completion_rate":0.9,"retention":[1,2],"viewers":[{"viewer_id":"x"}],"locked":[]}"#;
-        let i = parse_insights(leaky, no_names).unwrap();
+        let i = parse_insights(leaky, false, no_names).unwrap();
         assert_eq!((i.completion, i.retention, i.viewers), (Gated::Locked, Gated::Locked, Gated::Locked));
 
         let partly = r#"{"plan":"paid","total_views":2,"unique_viewers":1,"completion_rate":0.9,"viewers":[],"locked":["completion_rate"]}"#;
-        let i = parse_insights(partly, no_names).unwrap();
+        let i = parse_insights(partly, false, no_names).unwrap();
         assert_eq!(i.completion, Gated::Locked);
         assert_eq!(i.viewers, Gated::Shown(vec![]));
 
         let unknown_plan = r#"{"plan":"enterprise","total_views":1,"unique_viewers":1,"completion_rate":0.5,"locked":[]}"#;
-        assert_eq!(parse_insights(unknown_plan, no_names).unwrap().completion, Gated::Locked);
+        assert_eq!(parse_insights(unknown_plan, false, no_names).unwrap().completion, Gated::Locked);
     }
 
     #[test]
     fn a_paid_plan_gets_everything_newest_viewer_first_with_names_opened() {
         let mut asked = Vec::new();
-        let i = parse_insights(PAID, |nonce, ct| {
+        let i = parse_insights(PAID, false, |nonce, ct| {
             asked.push((nonce.to_string(), ct.to_string()));
             Some("Ahmad".into())
         })
@@ -1657,7 +1742,7 @@ mod tests {
     fn an_access_key_accounts_generated_name_reads_as_a_short_address() {
         let generated = "user_5dsqamf3jvb3vyuxwqwux3tj6ax6ex9f5p1udjyh5tmdsk63".to_string();
         assert_eq!(readable_name(generated.clone()), "5dsqam\u{2026}sk63");
-        let i = parse_insights(PAID, |_, _| Some(generated.clone())).unwrap();
+        let i = parse_insights(PAID, false, |_, _| Some(generated.clone())).unwrap();
         let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
         assert_eq!(rows[0].name.as_deref(), Some("5dsqam\u{2026}sk63"));
         // Names people chose stay as they are, even ones that start the same way.
@@ -1675,11 +1760,114 @@ mod tests {
     #[test]
     fn a_picture_has_views_but_nothing_to_measure() {
         let image = r#"{"plan":"paid","total_views":3,"unique_viewers":2,"completion_rate":null,"retention":null,"viewers":[],"locked":[]}"#;
-        let i = parse_insights(image, no_names).unwrap();
+        let i = parse_insights(image, false, no_names).unwrap();
         assert_eq!(i.completion, Gated::Shown(None));
         assert_eq!(i.retention, Gated::Shown(None));
         let json = serde_json::to_value(&i).unwrap();
         assert_eq!(json["completion"], serde_json::json!({ "state": "shown", "value": null }));
+    }
+
+    /// A paid document link, in the shape the contract gives: the pages block
+    /// and each viewer's pages seen.
+    const PAID_DOCUMENT: &str = r#"{
+        "plan":"paid","total_views":4,"unique_viewers":2,"completion_rate":0.5,
+        "pages":{"page_count":4,"reach":[100,75,50,25],"median_ms":[4200,3000,900,0]},
+        "viewers":[
+          {"viewer_id":"a","visits":1,"watched_ms":8100,"completion":0.5,"last_viewed_at":"2026-11-01T10:00:00Z","pages_seen":2,"page_count":4},
+          {"viewer_id":"b","visits":1,"watched_ms":0,"completion":null,"last_viewed_at":"2026-11-02T10:00:00Z","pages_seen":null,"page_count":null}
+        ],
+        "locked":[]}"#;
+
+    /// With the server's `share_document_views`, a paid link gets its pages:
+    /// how many visits reached each one and the median time on it, and each
+    /// viewer's pages seen.
+    #[test]
+    fn a_paid_document_link_gets_its_pages_and_each_viewers_pages_seen() {
+        let i = parse_insights(PAID_DOCUMENT, true, no_names).unwrap();
+        assert_eq!(
+            i.pages,
+            Some(Gated::Shown(Some(InsightsPages {
+                page_count: 4,
+                reach: vec![100.0, 75.0, 50.0, 25.0],
+                median_ms: vec![4200, 3000, 900, 0],
+            })))
+        );
+        let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
+        let a = rows.iter().find(|r| r.viewer_id == "a").unwrap();
+        assert_eq!((a.pages_seen, a.page_count), (Some(2), Some(4)));
+        let b = rows.iter().find(|r| r.viewer_id == "b").unwrap();
+        assert_eq!((b.pages_seen, b.page_count), (None, None), "a visit that was not a document");
+
+        let json = serde_json::to_value(parse_insights(PAID_DOCUMENT, true, no_names).unwrap()).unwrap();
+        assert_eq!(
+            json["pages"],
+            serde_json::json!({"state":"shown","value":{"pageCount":4,"reach":[100.0,75.0,50.0,25.0],"medianMs":[4200,3000,900,0]}})
+        );
+        assert_eq!(json["viewers"]["value"][1]["pagesSeen"], 2);
+        assert_eq!(json["viewers"]["value"][1]["pageCount"], 4);
+    }
+
+    /// Until the server has document views, nothing about pages is read, so
+    /// the sheet shows what it does today: no `pages`, no pages seen.
+    #[test]
+    fn without_document_views_nothing_about_pages_is_read() {
+        let i = parse_insights(PAID_DOCUMENT, false, no_names).unwrap();
+        assert_eq!(i.pages, None);
+        let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
+        assert!(rows.iter().all(|r| r.pages_seen.is_none() && r.page_count.is_none()));
+        let json = serde_json::to_value(parse_insights(PAID_DOCUMENT, false, no_names).unwrap()).unwrap();
+        assert!(json["pages"].is_null());
+    }
+
+    /// The free plan's `locked` names `pages` and sends none: it is locked,
+    /// with no value to draw, and so is anything a server sends anyway.
+    #[test]
+    fn pages_are_locked_on_the_free_plan() {
+        let free = r#"{"plan":"free","total_views":2,"unique_viewers":1,"locked":["completion_rate","viewers","retention","pages"]}"#;
+        assert_eq!(parse_insights(free, true, no_names).unwrap().pages, Some(Gated::Locked));
+        let json = serde_json::to_value(parse_insights(free, true, no_names).unwrap()).unwrap();
+        assert_eq!(json["pages"], serde_json::json!({ "state": "locked" }));
+
+        let leaky = r#"{"plan":"free","total_views":2,"unique_viewers":1,"pages":{"page_count":2,"reach":[100,50],"median_ms":[1,2]},"locked":[]}"#;
+        assert_eq!(parse_insights(leaky, true, no_names).unwrap().pages, Some(Gated::Locked));
+        let partly =
+            r#"{"plan":"paid","total_views":2,"unique_viewers":1,"pages":{"page_count":2,"reach":[100,50],"median_ms":[1,2]},"locked":["pages"]}"#;
+        assert_eq!(parse_insights(partly, true, no_names).unwrap().pages, Some(Gated::Locked));
+    }
+
+    /// A link with no document visit yet has `pages: null`; a block outside
+    /// the contract (no pages, too many) is none; arrays that do not match the
+    /// page count are cut or filled with zeros, and reach stays a percentage.
+    #[test]
+    fn a_pages_block_is_held_to_the_contract() {
+        let pages_of = |block: &str| {
+            let body = format!(r#"{{"plan":"paid","total_views":1,"unique_viewers":1,"pages":{block},"locked":[]}}"#);
+            parse_insights(&body, true, no_names).unwrap().pages
+        };
+        assert_eq!(pages_of("null"), Some(Gated::Shown(None)));
+        assert_eq!(pages_of(r#"{"page_count":0,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
+        assert_eq!(pages_of(r#"{"page_count":1001,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
+        assert_eq!(
+            pages_of(r#"{"page_count":3,"reach":[100,140,-5,20],"median_ms":[10]}"#),
+            Some(Gated::Shown(Some(InsightsPages {
+                page_count: 3,
+                reach: vec![100.0, 100.0, 0.0],
+                median_ms: vec![10, 0, 0],
+            })))
+        );
+
+        // A viewer's pages seen never passes the page count, and needs one.
+        let body = r#"{"plan":"paid","total_views":1,"unique_viewers":1,"viewers":[
+            {"viewer_id":"a","pages_seen":9,"page_count":4},
+            {"viewer_id":"b","pages_seen":2,"page_count":0},
+            {"viewer_id":"c","pages_seen":null,"page_count":4}],"locked":[]}"#;
+        let Gated::Shown(rows) = parse_insights(body, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        let seen: Vec<_> = rows.iter().map(|r| (r.viewer_id.as_str(), r.pages_seen, r.page_count)).collect();
+        assert!(seen.contains(&("a", Some(4), Some(4))));
+        assert!(seen.contains(&("b", None, None)));
+        assert!(seen.contains(&("c", None, None)));
     }
 
     fn wire_comment(id: &str, nonce: &str, ct: &str, anonymous: bool) -> WireComment {
@@ -2406,7 +2594,7 @@ mod tests {
     async fn insights_are_read_from_the_links_route() {
         let (base, seen) = mock(|_| (200, FREE.into())).await;
         let body = get_insights_body(&reqwest::Client::new(), &Api::new(&base, "b"), "tok").await.unwrap();
-        assert_eq!(parse_insights(&body, no_names).unwrap().viewers, Gated::Locked);
+        assert_eq!(parse_insights(&body, false, no_names).unwrap().viewers, Gated::Locked);
         assert_eq!(seen.lock().unwrap()[0].path, "/v1/shares/tok/insights");
     }
 
