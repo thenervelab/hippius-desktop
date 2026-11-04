@@ -317,7 +317,7 @@ describe("a plan without sharing (Free, Starter)", () => {
   it("takes them to the Drive plans and closes the panel", async () => {
     const store = renderPanel();
     fireEvent.click(await screen.findByRole("button", { name: "Upgrade plan" }));
-    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(push).toHaveBeenCalledWith("/billing");
     expect(store.get(shareDriveModalAtom)).toBeNull();
   });
 

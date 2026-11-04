@@ -556,7 +556,7 @@ describe("a plan without sharing", () => {
     expect(button).toHaveTextContent("Share a drive");
     expect(button).toHaveTextContent("Plus");
     fireEvent.click(button);
-    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(push).toHaveBeenCalledWith("/billing");
     expect(screen.queryByRole("dialog", { name: "Share a drive picker" })).not.toBeInTheDocument();
   });
 
@@ -578,7 +578,7 @@ describe("a plan without sharing", () => {
     const card = screen.getByTestId("shared-drives-empty-all");
     expect(within(card).queryByRole("button", { name: /Share a drive/ })).not.toBeInTheDocument();
     fireEvent.click(within(card).getByRole("button", { name: /Upgrade plan/ }));
-    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(push).toHaveBeenCalledWith("/billing");
   });
 
   it("keeps a downgraded owner's shared drives listed, with Manage access", async () => {
