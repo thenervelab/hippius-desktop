@@ -3053,11 +3053,8 @@ mod tests {
 
     #[test]
     fn clear_persisted_sync_state_removes_baseline_files() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let account = "5TestClearStateAccount";
         let label = "to-be-removed";
@@ -3096,11 +3093,8 @@ mod tests {
 
     #[test]
     fn clear_persisted_sync_state_tolerates_missing_files() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         // Documents the "best-effort" contract: removing a drive that never
         // wrote any state (immediate cancel before first sync, or a label
@@ -3391,11 +3385,8 @@ mod tests {
     /// state IS re-derived (the legacy repair this check exists for).
     #[test]
     fn prepare_config_dir_member_gate_preserves_the_owner_seal() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         const ACCOUNT: &str = "5PrepareCfgMemberGateTestAccount";
         const LABEL: &str = "team";

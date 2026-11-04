@@ -329,8 +329,4 @@ async fn the_gate_follows_the_servers_preflight_verdict() {
         "a server refusal wins over a roomy-looking plan",
     )
     .await;
-
-    unsafe {
-        std::env::remove_var("HIPPIUS_API_BASE_URL");
-    }
 }
