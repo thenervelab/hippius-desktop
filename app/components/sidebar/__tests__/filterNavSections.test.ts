@@ -197,15 +197,16 @@ describe("filterNavSections", () => {
     ]);
   });
 
-  // One entry for plans and billing, named as in the console, opening the
-  // page that holds the plan catalogue, the subscription and the credits.
-  // "Billing" and "Subscription Plans" were once two entries for that one
-  // subject; neither may come back beside it.
-  it("opens Settings → Billing from Plans & Billing, first in Account", () => {
+  // One entry for plans and billing, named as in the console, opening its
+  // own page under this sidebar, which holds the plan catalogue, the
+  // subscription and the credits. "Billing" and "Subscription Plans" were
+  // once two entries for that one subject; neither may come back beside it.
+  it("opens the Plans & Billing page from Plans & Billing, first in Account", () => {
     const account = filterNavSections(navSections, { shareEnabled: true }).find(
       (s) => s.key === "account",
     );
     expect(account?.items[0]).toMatchObject({ label: "Plans & Billing", path: BILLING_ROUTE });
+    expect(account?.items[0].path).toBe("/billing");
     const labels = filterNavSections(navSections, { shareEnabled: true })
       .flatMap((s) => s.items.map((i) => i.label));
     expect(labels).not.toContain("Billing");
@@ -218,17 +219,21 @@ describe("filterNavSections", () => {
     expect(settingsNavItems.map((i) => i.label)).not.toContain("Billing");
   });
 
-  it("orders the settings nav in its four groups", () => {
-    const groups: string[][] = [];
-    for (const item of settingsNavItems) (groups[item.group] ??= []).push(item.label);
-    expect(groups).toEqual([
-      ["Sync & Storage", "Screenshots & Recording"],
-      ["Notifications", "Appearance"],
-      ["Security", "Wallets", "API Token"],
-      ["Updates", "VPN Settings", "Customize RPC"],
+  // One plain list, still ordered by topic: this computer's files, how the
+  // app tells and looks, keys and access, then the app itself.
+  it("orders the settings nav by topic, as one list", () => {
+    expect(settingsNavItems.map((i) => i.label)).toEqual([
+      "Sync & Storage",
+      "Screenshots & Recording",
+      "Notifications",
+      "Appearance",
+      "Security",
+      "Wallets",
+      "API Token",
+      "Updates",
+      "VPN Settings",
+      "Customize RPC",
     ]);
-    // Each group in one run, never split across the list.
-    expect(settingsNavItems.map((i) => i.group)).toEqual([...settingsNavItems.map((i) => i.group)].sort());
   });
 
   // Every capture setting has its own tab, right after Sync & Storage,

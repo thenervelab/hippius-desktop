@@ -212,7 +212,7 @@ describe("ShareInsightsSheet", () => {
     fireEvent.click(within(locked).getByRole("button", { name: "Compare plans" }));
     expect(openUrl).toHaveBeenCalledWith(PRICING_URL);
     fireEvent.click(within(locked).getByRole("button", { name: "Upgrade plan" }));
-    expect(push).toHaveBeenCalledWith("/settings?section=billing");
+    expect(push).toHaveBeenCalledWith("/billing");
     expect(store.get(insightsSheetAtom)).toBeNull();
   });
 
@@ -676,7 +676,7 @@ describe("ShareInsightsSheet", () => {
       expect(invokeMock).not.toHaveBeenCalledWith("share_set_link_settings", expect.anything());
 
       fireEvent.click(within(prompt).getByRole("button", { name: LOCKED_ACTION }));
-      expect(push).toHaveBeenCalledWith("/settings?section=billing");
+      expect(push).toHaveBeenCalledWith("/billing");
       expect(store.get(insightsSheetAtom)).toBeNull();
     });
 
