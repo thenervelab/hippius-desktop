@@ -790,8 +790,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release
-          cargo test
+          cargo build --release --locked
+          cargo test --locked
 
       # Validate the full packaging pipeline (build DLL -> self-signed cert ->
       # stamp manifest -> makeappx pack -> signtool sign/verify -> export cert)
