@@ -667,32 +667,74 @@ pub struct LinkSettingsDefault {
     pub switches_in_plan: Option<bool>,
 }
 
-/// The switches for a file: offered for a file (never a folder, whose links
-/// have no insights yet) on a server that takes them; on for a screenshot or
-/// recording when Settings' "Track views, comments and reactions" is on, off
-/// for every other file. They start on only on a plan known to include them
-/// ([`within_plan`]).
+/// The file kinds a share link tracks as a document (PDF, Word and
+/// PowerPoint), by extension, ignoring case.
+const DOCUMENT_EXTENSIONS: [&str; 3] = ["pdf", "docx", "pptx"];
+
+/// Whether `file_name` is a document whose link starts with Insights on
+/// ([`default_for`]): a `.pdf`, `.docx` or `.pptx`, in any case. A name that
+/// is only an extension (`.pdf`) is a hidden file, not a document.
 #[must_use]
-pub fn default_for(
-    is_folder: bool,
-    is_capture: bool,
-    captures_default: bool,
-    caps: &ServerCapabilities,
-    switches_in_plan: Option<bool>,
-) -> LinkSettingsDefault {
-    let offered = if is_folder {
+pub fn is_document_name(file_name: &str) -> bool {
+    std::path::Path::new(file_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|ext| DOCUMENT_EXTENSIONS.iter().any(|d| ext.eq_ignore_ascii_case(d)))
+}
+
+/// What a new link is for, as far as where its switches start goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkKind {
+    /// A folder: its links have no insights yet.
+    Folder,
+    /// A screenshot or recording this app took.
+    Capture,
+    /// A PDF, Word or PowerPoint file ([`is_document_name`]).
+    Document,
+    /// Any other file.
+    Other,
+}
+
+impl LinkKind {
+    /// The kind of `file_name`: a folder first, then a capture (by its drive
+    /// or its name, `is_capture`), then a document by its extension.
+    #[must_use]
+    pub fn of(is_folder: bool, is_capture: bool, file_name: &str) -> Self {
+        if is_folder {
+            Self::Folder
+        } else if is_capture {
+            Self::Capture
+        } else if is_document_name(file_name) {
+            Self::Document
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// The switches for a link: offered for a file (never a folder) on a server
+/// that takes them. All three start on for a screenshot or recording when
+/// Settings' "Track views, comments and reactions" is on; Insights alone
+/// starts on for a document, whatever that Setting says, since it is about
+/// captures; every other file starts with all three off. They start on only
+/// on a plan known to include them ([`within_plan`]), so the free plan is
+/// unchanged.
+#[must_use]
+pub fn default_for(kind: LinkKind, captures_default: bool, caps: &ServerCapabilities, switches_in_plan: Option<bool>) -> LinkSettingsDefault {
+    let offered = if kind == LinkKind::Folder {
         OfferedSwitches::default()
     } else {
         OfferedSwitches::from_caps(caps)
     };
-    let on = is_capture && captures_default;
+    let capture_on = kind == LinkKind::Capture && captures_default;
+    let insights_on = capture_on || kind == LinkKind::Document;
     LinkSettingsDefault {
         offered,
         on: within_plan(
             LinkSettings {
-                insights: offered.insights && on,
-                comments: offered.comments && on,
-                reactions: offered.reactions && on,
+                insights: offered.insights && insights_on,
+                comments: offered.comments && capture_on,
+                reactions: offered.reactions && capture_on,
             },
             switches_in_plan,
         ),
@@ -1495,14 +1537,9 @@ pub async fn share_link_settings_default(
         None => false,
     };
     let is_capture = in_captures_drive || super::preview::is_capture_name(&file_name);
+    let kind = LinkKind::of(is_folder, is_capture, &file_name);
     let (caps, switches_in_plan) = tokio::join!(capabilities_or_none(&state, &account_id), read_switches_in_plan(&state, &account_id),);
-    Ok(default_for(
-        is_folder,
-        is_capture,
-        captures_default(&state).await,
-        &caps,
-        switches_in_plan,
-    ))
+    Ok(default_for(kind, captures_default(&state).await, &caps, switches_in_plan))
 }
 
 /// Whether the signed-in account's plan includes the link switches
@@ -1852,8 +1889,8 @@ mod tests {
             share_comments: true,
             ..Default::default()
         };
-        assert_eq!(default_for(false, true, true, &none, PLAN_PAID).offered, OfferedSwitches::default());
-        let only = default_for(false, true, true, &insights, PLAN_PAID);
+        assert_eq!(default_for(LinkKind::Capture, true, &none, PLAN_PAID).offered, OfferedSwitches::default());
+        let only = default_for(LinkKind::Capture, true, &insights, PLAN_PAID);
         assert_eq!(
             only.offered,
             OfferedSwitches {
@@ -1869,7 +1906,7 @@ mod tests {
                 ..Default::default()
             }
         );
-        assert_eq!(default_for(true, true, true, &all, PLAN_PAID).offered, OfferedSwitches::default());
+        assert_eq!(default_for(LinkKind::Folder, true, &all, PLAN_PAID).offered, OfferedSwitches::default());
     }
 
     /// On for screenshots and recordings (while Settings says so), off for
@@ -1881,10 +1918,10 @@ mod tests {
             share_comments: true,
             ..Default::default()
         };
-        assert_eq!(default_for(false, true, true, &all, PLAN_PAID).on, LinkSettings::all(true));
-        assert_eq!(default_for(false, false, true, &all, PLAN_PAID).on, LinkSettings::all(false));
+        assert_eq!(default_for(LinkKind::Capture, true, &all, PLAN_PAID).on, LinkSettings::all(true));
+        assert_eq!(default_for(LinkKind::Other, true, &all, PLAN_PAID).on, LinkSettings::all(false));
         assert_eq!(
-            default_for(false, true, false, &all, PLAN_PAID).on,
+            default_for(LinkKind::Capture, false, &all, PLAN_PAID).on,
             LinkSettings::all(false),
             "Settings off"
         );
@@ -1941,11 +1978,11 @@ mod tests {
             share_comments: true,
             ..Default::default()
         };
-        let paid = default_for(false, true, true, &all, PLAN_PAID);
+        let paid = default_for(LinkKind::Capture, true, &all, PLAN_PAID);
         assert_eq!(paid.on, LinkSettings::all(true));
         assert_eq!(paid.switches_in_plan, PLAN_PAID);
         for plan in [PLAN_FREE, PLAN_UNKNOWN] {
-            let d = default_for(false, true, true, &all, plan);
+            let d = default_for(LinkKind::Capture, true, &all, plan);
             assert_eq!(d.on, LinkSettings::all(false), "{plan:?}");
             assert_eq!(
                 d.offered,
@@ -1958,10 +1995,72 @@ mod tests {
             );
             assert_eq!(d.switches_in_plan, plan);
         }
-        let json = serde_json::to_value(default_for(false, true, true, &all, PLAN_FREE)).unwrap();
+        let json = serde_json::to_value(default_for(LinkKind::Capture, true, &all, PLAN_FREE)).unwrap();
         assert_eq!(json["switchesInPlan"], false);
-        let json = serde_json::to_value(default_for(false, true, true, &all, PLAN_UNKNOWN)).unwrap();
+        let json = serde_json::to_value(default_for(LinkKind::Capture, true, &all, PLAN_UNKNOWN)).unwrap();
         assert!(json["switchesInPlan"].is_null());
+    }
+
+    /// PDF, Word and PowerPoint files are documents, in any case; other
+    /// files, a bare extension and an extension in the middle are not.
+    #[test]
+    fn documents_are_pdf_docx_and_pptx_by_extension() {
+        for name in ["Pitch.pdf", "plan.DOCX", "Deck v2.Pptx", "a.b.pdf"] {
+            assert!(is_document_name(name), "{name}");
+        }
+        for name in [
+            "notes.doc",
+            "deck.ppt",
+            "sheet.xlsx",
+            "photo.png",
+            "pdf",
+            ".pdf",
+            "report.pdf.zip",
+            "README",
+        ] {
+            assert!(!is_document_name(name), "{name}");
+        }
+    }
+
+    /// A document link starts with Insights on for a paid plan, as a
+    /// capture's does, with Comments and Reactions off. The free plan and a
+    /// plan that could not be read start it with everything off, a folder
+    /// never gets the switches, and the captures Setting does not apply.
+    #[test]
+    fn a_document_starts_with_insights_on_for_a_paid_plan_only() {
+        let all = ServerCapabilities {
+            share_insights: true,
+            share_comments: true,
+            ..Default::default()
+        };
+        let insights_only = LinkSettings {
+            insights: true,
+            ..Default::default()
+        };
+        assert_eq!(default_for(LinkKind::Document, true, &all, PLAN_PAID).on, insights_only);
+        assert_eq!(
+            default_for(LinkKind::Document, false, &all, PLAN_PAID).on,
+            insights_only,
+            "the captures Setting is about captures"
+        );
+        for plan in [PLAN_FREE, PLAN_UNKNOWN] {
+            let d = default_for(LinkKind::Document, true, &all, plan);
+            assert_eq!(d.on, LinkSettings::all(false), "{plan:?}");
+            assert!(d.offered.insights, "still shown: {plan:?}");
+        }
+        let folder = default_for(LinkKind::Folder, true, &all, PLAN_PAID);
+        assert_eq!(folder.offered, OfferedSwitches::default());
+        assert_eq!(folder.on, LinkSettings::all(false));
+        assert_eq!(
+            default_for(LinkKind::Document, true, &ServerCapabilities::default(), PLAN_PAID).on,
+            LinkSettings::all(false),
+            "a server without Insights"
+        );
+        // A folder or a capture is never read as a document by its name.
+        assert_eq!(LinkKind::of(false, false, "Pitch.pdf"), LinkKind::Document);
+        assert_eq!(LinkKind::of(true, false, "Reports.pdf"), LinkKind::Folder);
+        assert_eq!(LinkKind::of(false, true, "Screenshot.pdf"), LinkKind::Capture);
+        assert_eq!(LinkKind::of(false, false, "photo.png"), LinkKind::Other);
     }
 
     /// Turning any switch on from the free plan is refused; a plan that
