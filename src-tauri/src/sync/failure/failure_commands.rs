@@ -10,6 +10,7 @@
 use crate::app_state::AppState;
 use crate::error::Result;
 use crate::sync::exclude_literal::{exclude_path_literally, remove_literal_exclusion};
+use hcfs_client::engine::lock_drive;
 use serde::Deserialize;
 use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
@@ -49,7 +50,7 @@ pub async fn sp_skip_file(label: String, path: String, state: tauri::State<'_, c
     // `sp_exclude_file` comment documents. Missing drive stays tolerant: a skip
     // is a session-scoped best-effort op, unlike permanent exclude.
     if let Some(arc) = drive_arc {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "sp_skip_file").await;
         exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
@@ -78,7 +79,7 @@ pub async fn sp_exclude_file(label: String, path: String, state: tauri::State<'_
         return Err(crate::error::AppError::NotReady(crate::error::NotReadyKind::DriveNotInitialized));
     };
     {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "sp_exclude_file").await;
         exclude_path_literally(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("add_exclude_pattern failed: {e}")))?;
     }
 
@@ -102,7 +103,7 @@ pub async fn sp_retry_file(label: String, path: String, state: tauri::State<'_, 
     // so it would never re-sync with no signal — propagate it. Missing drive
     // stays tolerant (the failure counter / session-skip were already cleared).
     if let Some(arc) = drive_arc {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "sp_retry_file").await;
         remove_literal_exclusion(&m, &path).map_err(|e| crate::error::AppError::Hcfs(format!("remove_exclude_pattern failed: {e}")))?;
     }
 
@@ -214,7 +215,7 @@ pub async fn retry_file_failure(label: String, path: String, state: tauri::State
     state.file_failures.unskip_file(&label, &path);
     let drive_arc = state.sync.drive_manager(&label).await;
     if let Some(arc) = drive_arc {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "retry_file_failure").await;
         let _ = remove_literal_exclusion(&m, &path);
     }
 
@@ -280,7 +281,7 @@ pub async fn retry_all_failures(label: String, state: tauri::State<'_, crate::ap
     }
     let drive_arc = state.sync.drive_manager(&label).await;
     if let Some(arc) = drive_arc {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "retry_all_failures").await;
         for rec in &records {
             let _ = remove_literal_exclusion(&m, &rec.relative_path);
         }
@@ -301,7 +302,7 @@ pub async fn cleanup_session_skips(state: &crate::app_state::AppState) {
     for (label, path) in pairs {
         let drive_arc = state.sync.drive_manager(&label).await;
         if let Some(arc) = drive_arc {
-            let m = arc.lock().await;
+            let m = lock_drive(&arc, &label, "cleanup_session_skips").await;
             let _ = remove_literal_exclusion(&m, &path);
         }
     }

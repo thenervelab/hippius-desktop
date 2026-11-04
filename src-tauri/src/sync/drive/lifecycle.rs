@@ -17,7 +17,7 @@ use crate::sync::mnemonic::{
     account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path, report_rekey_marker,
 };
 use hcfs_client::engine::manager::DriveManager;
-use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
+use hcfs_client::engine::runner::{DriveSlot, SyncRunner, lock_drive};
 use hcfs_client::engine::types::build_synced_paths_from_state;
 use sqlx::sqlite::SqlitePool;
 use std::error::Error as _;
@@ -491,7 +491,7 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
         // its guard is `Send` and safely held across `.await`
         // points (Async Lock Hygiene axiom applies to
         // `std::sync::Mutex` guards, not Tokio's).
-        let manager = manager_arc.lock().await;
+        let manager = lock_drive(&manager_arc, &label, "reconcile_timestamps").await;
         let outcome = manager.reconcile_with_retry(RetryPolicy::first_reconcile_default()).await;
 
         match &outcome {
