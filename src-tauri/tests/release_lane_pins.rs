@@ -995,16 +995,17 @@ fn each_required_rust_lane_waits_for_its_clippy_and_test_halves() {
             "{lane} must run when a half fails"
         );
         assert!(gate.script.contains("exit 1"), "{lane} fails when a half did not pass");
+        // The Linux halves call cargo through scripts/cargo-ci.sh, which is
+        // still the same cargo command.
+        let as_cargo = |script: &str| script.replace(CARGO_CI, "cargo ");
         assert!(
-            jobs.get(&clippy)
-                .unwrap_or_else(|| panic!("ci.yml has a {clippy} job"))
-                .script
+            as_cargo(&jobs.get(&clippy).unwrap_or_else(|| panic!("ci.yml has a {clippy} job")).script)
                 .contains("cargo clippy --all-targets -- -D warnings"),
             "{clippy} runs clippy over every target with warnings denied"
         );
         let test_job = jobs.get(&test).unwrap_or_else(|| panic!("ci.yml has a {test} job"));
         assert!(
-            test_job.script.lines().any(|line| line.trim() == "cargo test"),
+            as_cargo(&test_job.script).lines().any(|line| line.trim() == "cargo test"),
             "{test} runs the whole test suite"
         );
         assert_eq!(
@@ -1013,6 +1014,38 @@ fn each_required_rust_lane_waits_for_its_clippy_and_test_halves() {
             "{clippy} and {test} run on exactly the same events"
         );
     }
+}
+
+/// How the Linux Rust halves call cargo.
+const CARGO_CI: &str = "bash ../scripts/cargo-ci.sh ";
+
+/// The Linux clippy and test builds go through scripts/cargo-ci.sh, which
+/// caps parallel rustc on our own runners only: a full build with one rustc
+/// per CPU starved a self-hosted runner until it dropped off mid-compile.
+/// The cap is set inside the step, never in `env:`, so it cannot change the
+/// rust-cache key that hosted and self-hosted runs share.
+#[test]
+fn the_linux_rust_builds_cap_parallel_rustc_on_self_hosted_runners() {
+    let jobs = workflow_jobs("ci.yml");
+    for (name, command) in [("rust-linux-clippy", "clippy --all-targets -- -D warnings"), ("rust-linux-test", "test")] {
+        let job = jobs.get(name).unwrap_or_else(|| panic!("ci.yml has a {name} job"));
+        assert!(
+            job.script.lines().any(|line| line.trim() == format!("{CARGO_CI}{command}")),
+            "{name} builds through scripts/cargo-ci.sh"
+        );
+    }
+    let script = repo_file("../scripts/cargo-ci.sh");
+    assert!(
+        script.contains("if [[ \"${RUNNER_ENVIRONMENT:-}\" == \"self-hosted\" ]]"),
+        "the cap applies to self-hosted runners only"
+    );
+    assert!(script.contains("export CARGO_BUILD_JOBS="), "the cap is CARGO_BUILD_JOBS");
+    assert!(script.contains("exec cargo \"$@\""), "everything else is plain cargo");
+    let ci = repo_file("../.github/workflows/ci.yml");
+    assert!(
+        !ci.contains("CARGO_BUILD_JOBS"),
+        "no CARGO_BUILD_JOBS in ci.yml, where it would split the rust-cache key"
+    );
 }
 
 /// Rust caches are saved only by a push to a lane branch. A PR's cache is

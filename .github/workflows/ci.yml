@@ -228,7 +228,8 @@ jobs:
         working-directory: src-tauri
         env:
           SQLX_OFFLINE: "true"
-        run: cargo clippy --all-targets -- -D warnings
+        # Through cargo-ci.sh: fewer parallel rustc on our own runners.
+        run: bash ../scripts/cargo-ci.sh clippy --all-targets -- -D warnings
 
   rust-linux-test:
     needs: changes
@@ -252,7 +253,8 @@ jobs:
         working-directory: src-tauri
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test
+        # Through cargo-ci.sh: fewer parallel rustc on our own runners.
+        run: bash ../scripts/cargo-ci.sh test
 
       # Linux X11 screenshots against a real X server: the displays RandR
       # lists and a grab of the root window (capture::linux_x11). Xvfb has
