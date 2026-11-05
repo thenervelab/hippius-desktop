@@ -151,12 +151,14 @@ fn base_name(relative_path: &str) -> &str {
 ///
 /// - a link this device made (`origin` is its `share_origin` row) belongs to
 ///   the file it was made for;
-/// - a link with no origin here was made elsewhere, and the server names its
-///   file by name and size only. It belongs to a screenshot or recording
-///   whose name is a capture's own (`is_capture_name`, which carries the
-///   second it was taken) and matches, unless both sizes are known and
-///   differ. Any other file gets only this device's links: a plain
-///   `image.png` must not pick up another file's link.
+/// - a link with no origin here was made elsewhere (the web console, the
+///   browser extension, another computer), and the server names its file by
+///   name and size only. It belongs to a file of that name when the sizes
+///   say it is the same file: for any file both sizes must be known and
+///   equal, so a plain `image.png` never picks up a different `image.png`'s
+///   link; a screenshot or recording whose name is a capture's own
+///   (`is_capture_name`, which carries the second it was taken) is specific
+///   enough on its own and only needs the sizes not to differ.
 #[must_use]
 pub fn link_belongs_to_file(
     origin: Option<&ShareOrigin>,
@@ -170,11 +172,14 @@ pub fn link_belongs_to_file(
         return o.folder_label == folder_label && same_relative_path(&o.relative_path, relative_path);
     }
     let name = base_name(relative_path);
-    let sizes_agree = match size {
-        Some(s) if s > 0 && link_size > 0 => s == link_size,
-        _ => true,
-    };
-    is_capture_media(name) && is_capture_name(name) && link_filename == name && sizes_agree
+    if link_filename != name {
+        return false;
+    }
+    let both_known = size.filter(|s| *s > 0).zip(Some(link_size).filter(|s| *s > 0));
+    match both_known {
+        Some((file_size, link_size)) => file_size == link_size,
+        None => is_capture_media(name) && is_capture_name(name),
+    }
 }
 
 /// Two drive-relative paths name the same file. The server stores some paths
@@ -603,6 +608,15 @@ mod tests {
         );
     }
 
+    /// A link made in the web console for any file, a PDF in a regular
+    /// drive included, belongs to the file of that name and size: the case
+    /// where the row showed no link icon until this device made its own.
+    #[test]
+    fn a_link_made_elsewhere_belongs_to_any_file_of_that_name_and_size() {
+        assert!(link_belongs_to_file(None, "report.pdf", 48_213, "Docs", "Work/report.pdf", Some(48_213)));
+        assert!(link_belongs_to_file(None, "image.png", 10, "Drive", "image.png", Some(10)));
+    }
+
     #[test]
     fn a_link_made_elsewhere_from_a_different_file_does_not_belong() {
         assert!(
@@ -610,8 +624,16 @@ mod tests {
             "same name, different size: a different file"
         );
         assert!(
-            !link_belongs_to_file(None, "image.png", 10, "Drive", "image.png", Some(10)),
-            "a plain name is not specific enough to match by name"
+            !link_belongs_to_file(None, "image.png", 11, "Drive", "image.png", Some(10)),
+            "a plain name with another size is another file"
+        );
+        assert!(
+            !link_belongs_to_file(None, "image.png", 10, "Drive", "image.png", None),
+            "a plain name is not specific enough without the sizes"
+        );
+        assert!(
+            !link_belongs_to_file(None, "report.pdf", 0, "Docs", "report.pdf", Some(10)),
+            "a plain name is not specific enough when the link's size is unknown"
         );
         assert!(
             !link_belongs_to_file(
@@ -622,7 +644,7 @@ mod tests {
                 "Screenshot 2026-10-30 at 11.58.27.txt",
                 None
             ),
-            "only a screenshot or a recording"
+            "only a screenshot or a recording matches by its capture name alone"
         );
         assert!(!link_belongs_to_file(
             None,
