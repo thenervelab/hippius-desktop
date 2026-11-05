@@ -1,5 +1,5 @@
 //! One-click "Copy link" for a file, used by the tray popover's upload rows,
-//! and "Create link" in a capture's Insights panel.
+//! and "Create link" in a file's Insights panel.
 //!
 //! The Drive's Share dialog asks how long a link should live and whether it
 //! needs a password; a quick action cannot ask anything, so this command
@@ -21,9 +21,10 @@ use crate::app_state::AppState;
 use crate::auth::account_key::account_key;
 use crate::error::{AppError, Result};
 use crate::shares::SqliteShareKeystore;
+use crate::shares::capabilities::ServerCapabilities;
 use crate::shares::client::build_account_client;
 use crate::shares::commands::{ShareChoice, ShareLink, console_base_url};
-use crate::shares::insights::LinkSettings;
+use crate::shares::insights::{LinkSettings, LinkSettingsDefault, OfferedSwitches};
 use crate::shares::origin::{self, ShareOrigin};
 use crate::shares::preview::is_capture_name;
 use chrono::{DateTime, Duration, Utc};
@@ -359,14 +360,89 @@ pub struct CaptureLink {
     pub reused: bool,
 }
 
-/// What a link made from the Insights panel asks for: what every capture
-/// link gets, Settings' "Track views, comments and reactions"
-/// (`insights::for_capture`). The plan rule still decides
-/// (`insights::apply_after_mint` passes them through `within_plan`), so a
-/// free plan's link starts with them off, as every new link on that plan does.
+/// What a link made from the Insights panel asks for. A screenshot or
+/// recording gets what every capture link gets, Settings' "Track views,
+/// comments and reactions" (`insights::for_capture`). Any other file asks for
+/// all three: that Setting is about captures, and the owner opened Insights
+/// to see them. The plan rule still decides (`insights::apply_after_mint`
+/// passes them through `within_plan`), so a free plan's link starts with them
+/// off, as every new link on that plan does.
 #[must_use]
-pub const fn insights_panel_link_settings(captures_default: bool) -> LinkSettings {
-    crate::shares::insights::for_capture(captures_default)
+pub const fn insights_panel_link_settings(is_capture: bool, captures_default: bool) -> LinkSettings {
+    if is_capture {
+        crate::shares::insights::for_capture(captures_default)
+    } else {
+        LinkSettings::all(true)
+    }
+}
+
+/// What "Create link" in the Insights panel would give a file, for the
+/// panel's words: the switches the server takes, which of them a new link
+/// starts with ([`insights_panel_link_settings`] within the plan), and
+/// whether the file is a capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightsPanelLinkDefault {
+    #[serde(flatten)]
+    pub settings: LinkSettingsDefault,
+    pub is_capture: bool,
+}
+
+/// [`InsightsPanelLinkDefault`] from what Rust read: the file's kind, the
+/// Settings choice, the server's capabilities and the plan.
+#[must_use]
+pub fn panel_link_default(
+    is_capture: bool,
+    captures_default: bool,
+    caps: &ServerCapabilities,
+    switches_in_plan: Option<bool>,
+) -> InsightsPanelLinkDefault {
+    let offered = OfferedSwitches::from_caps(caps);
+    let wanted = insights_panel_link_settings(is_capture, captures_default);
+    let on = crate::shares::insights::within_plan(
+        LinkSettings {
+            insights: offered.insights && wanted.insights,
+            comments: offered.comments && wanted.comments,
+            reactions: offered.reactions && wanted.reactions,
+        },
+        switches_in_plan,
+    );
+    InsightsPanelLinkDefault {
+        settings: LinkSettingsDefault {
+            offered,
+            on,
+            switches_in_plan,
+        },
+        is_capture,
+    }
+}
+
+/// What the Insights panel's "Create link" would give this file
+/// ([`panel_link_default`]), so its words promise only that.
+///
+/// # Errors
+///
+/// No signed-in account, or the database is not open.
+#[tauri::command]
+pub async fn insights_panel_link_default(
+    state: tauri::State<'_, AppState>,
+    folder_label: String,
+    file_name: String,
+) -> Result<InsightsPanelLinkDefault> {
+    let account_id = state.current_account_id()?;
+    // A row inside a folder names its file by the drive-relative path.
+    let base_name = file_name.rsplit('/').next().unwrap_or(&file_name);
+    let is_capture = crate::shares::insights::is_capture_file(&state, &account_id, Some(folder_label.trim()), base_name).await?;
+    let (caps, switches_in_plan) = tokio::join!(
+        crate::shares::insights::capabilities_or_none(&state, &account_id),
+        crate::shares::insights::read_switches_in_plan(&state, &account_id),
+    );
+    Ok(panel_link_default(
+        is_capture,
+        crate::shares::insights::captures_default(&state).await,
+        &caps,
+        switches_in_plan,
+    ))
 }
 
 /// An existing link handed out again: copied, as a new one would be.
@@ -382,7 +458,8 @@ fn reused_capture_link(app: &AppHandle, link: &ExistingLink, url: String) -> Cap
     }
 }
 
-/// "Create link" in the Insights panel of a capture that has no link yet:
+/// "Create link" in the Insights panel of a file that has no link yet (a
+/// screenshot or recording, or any other file):
 /// a public link that lasts until it is revoked, made through the same
 /// funnels as the tray's Copy link (so the storage gate, the share-origin
 /// row that matches it to the capture's row and the owner wrap all apply),
@@ -417,7 +494,7 @@ pub async fn create_capture_link(
     let folder_label = folder_label.trim().to_owned();
     let relative_path = relative_path.trim().trim_matches('/').to_owned();
     if folder_label.is_empty() || relative_path.is_empty() {
-        return Err(AppError::Validation("This capture can't get a link from here.".into()));
+        return Err(AppError::Validation("This file can't get a link from here.".into()));
     }
     let file_id = file_id.map(|id| id.trim().to_owned()).filter(|id| !id.is_empty());
     let account_id = state.current_account_id()?;
@@ -447,11 +524,17 @@ pub async fn create_capture_link(
             return Err(AppError::Validation(failure_copy(&e)));
         }
     };
-    let wanted = insights_panel_link_settings(crate::shares::insights::captures_default(&state).await);
+    let file_name = relative_path.rsplit('/').next().unwrap_or(&relative_path);
+    let is_capture = crate::shares::insights::is_capture_file(&state, &account_id, Some(&folder_label), file_name)
+        .await
+        .unwrap_or(false);
+    let wanted = insights_panel_link_settings(is_capture, crate::shares::insights::captures_default(&state).await);
     let switches = crate::shares::insights::apply_after_mint(&state, &account_id, &link.share_token, wanted).await;
     // A preview is drawn from the file on this computer; a cloud-only
-    // capture has none here, so it gets no preview, as from the tray.
-    if file_id.is_none() {
+    // capture has none here, so it gets no preview, as from the tray. Only a
+    // capture gets one by default (Settings' choice is about captures), as in
+    // the share dialog.
+    if is_capture && file_id.is_none() {
         let source = crate::capture::deliver::LinkSource::Synced {
             label: folder_label.clone(),
             rel_path: relative_path.clone(),
@@ -530,21 +613,64 @@ mod tests {
         assert_eq!(pick_reusable(&[link(1, Some(48), Some("alive"), false)], now).as_deref(), Some("alive"));
     }
 
-    /// A link made from the Insights panel follows Settings' "Track views,
-    /// comments and reactions" like every capture link, and the plan rule
-    /// still gives the free plan's link none, as for any new link.
+    /// A capture's link made from the Insights panel follows Settings' "Track
+    /// views, comments and reactions" like every capture link, and the plan
+    /// rule still gives the free plan's link none, as for any new link.
     #[test]
     fn the_insights_panels_link_follows_the_settings_choice_within_the_plan() {
         use crate::shares::insights::within_plan;
-        assert_eq!(insights_panel_link_settings(true), LinkSettings::all(true));
+        assert_eq!(insights_panel_link_settings(true, true), LinkSettings::all(true));
         assert_eq!(
-            insights_panel_link_settings(false),
+            insights_panel_link_settings(true, false),
             LinkSettings::all(false),
             "tracking turned off in Settings"
         );
-        assert_eq!(within_plan(insights_panel_link_settings(true), Some(true)), LinkSettings::all(true));
-        assert_eq!(within_plan(insights_panel_link_settings(true), Some(false)), LinkSettings::all(false));
-        assert_eq!(within_plan(insights_panel_link_settings(true), None), LinkSettings::all(false));
+        assert_eq!(within_plan(insights_panel_link_settings(true, true), Some(true)), LinkSettings::all(true));
+        assert_eq!(
+            within_plan(insights_panel_link_settings(true, true), Some(false)),
+            LinkSettings::all(false)
+        );
+        assert_eq!(within_plan(insights_panel_link_settings(true, true), None), LinkSettings::all(false));
+    }
+
+    /// Any other file's link made from the Insights panel asks for all three,
+    /// whatever the capture Setting says, and the free plan still gets none.
+    #[test]
+    fn a_non_capture_files_panel_link_asks_for_insights_within_the_plan() {
+        use crate::shares::insights::within_plan;
+        assert_eq!(insights_panel_link_settings(false, false), LinkSettings::all(true));
+        assert_eq!(insights_panel_link_settings(false, true), LinkSettings::all(true));
+        assert_eq!(
+            within_plan(insights_panel_link_settings(false, false), Some(false)),
+            LinkSettings::all(false)
+        );
+    }
+
+    /// The panel's words come from what Create link would actually give: on
+    /// only where the server takes the switch and the plan includes it.
+    #[test]
+    fn the_panels_link_default_matches_what_create_link_asks_for() {
+        let caps = ServerCapabilities {
+            share_insights: true,
+            share_comments: true,
+            ..ServerCapabilities::default()
+        };
+        let paid = panel_link_default(false, false, &caps, Some(true));
+        assert!(!paid.is_capture);
+        assert_eq!(paid.settings.on, LinkSettings::all(true));
+        let free = panel_link_default(false, true, &caps, Some(false));
+        assert_eq!(free.settings.on, LinkSettings::all(false));
+        assert_eq!(free.settings.switches_in_plan, Some(false));
+        assert!(free.settings.offered.insights);
+        let tracking_off = panel_link_default(true, false, &caps, Some(true));
+        assert_eq!(tracking_off.settings.on, LinkSettings::all(false));
+        let old_server = panel_link_default(false, true, &ServerCapabilities::default(), Some(true));
+        assert_eq!(old_server.settings.on, LinkSettings::all(false));
+        assert!(!old_server.settings.offered.insights);
+        let wire = serde_json::to_value(paid).expect("serializes");
+        assert_eq!(wire["isCapture"], false);
+        assert_eq!(wire["on"]["insights"], true);
+        assert_eq!(wire["switchesInPlan"], true);
     }
 
     /// Create link in Insights gives the capture's existing link again, with

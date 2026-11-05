@@ -8,7 +8,7 @@ import {
   isCaptureName,
   isCaptureMedia,
   newestShareToken,
-  useCaptureInsightsItem,
+  useFileInsightsItem,
   VIEW_INSIGHTS_LABEL,
 } from "../useCaptureInsightsItem";
 import { DriveRouteContext, type DriveRoute } from "../driveRoute";
@@ -42,11 +42,11 @@ function setup(basePath: string, caps: ServerCapabilities = CAPS) {
       <DriveRouteContext.Provider value={route}>{children}</DriveRouteContext.Provider>
     </Provider>
   );
-  const { result } = renderHook(() => useCaptureInsightsItem(), { wrapper });
+  const { result } = renderHook(() => useFileInsightsItem(), { wrapper });
   return { item: result.current, store };
 }
 
-describe("useCaptureInsightsItem", () => {
+describe("useFileInsightsItem", () => {
   it("picks the newest link", () => {
     expect(newestShareToken(ROWS)).toBe("new");
     expect(newestShareToken([])).toBeNull();
@@ -82,6 +82,27 @@ describe("useCaptureInsightsItem", () => {
     expect(setup("/captures").item({ ...FILE, name: "Other.png", actualFileName: "Other.png" }, "Other.png")).toHaveLength(1);
   });
 
+  it("offers View insights for every other file, in every drive, opening the Create link step", () => {
+    const pdf = { ...FILE, name: "notes.pdf", actualFileName: "Docs/notes.pdf", label: "Work", size: 42 } as FormattedUserFile;
+    for (const route of ["/files", "/captures", "/shared-drives", "/"]) {
+      expect(setup(route).item(pdf, "Docs/notes.pdf").map((i) => i.itemTitle)).toEqual([VIEW_INSIGHTS_LABEL]);
+    }
+    const { item, store } = setup("/files");
+    item(pdf, "Docs/notes.pdf")[0].onItemClick?.();
+    expect(store.get(insightsSheetAtom)).toEqual({
+      shareToken: null,
+      fileName: "Docs/notes.pdf",
+      file: pdf,
+      capture: { label: "Work", relativePath: "Docs/notes.pdf", fileId: null, size: 42 },
+    });
+  });
+
+  it("opens a file's newest link off the Captures page too", () => {
+    const { item, store } = setup("/files");
+    item(FILE, "Screenshot.png")[0].onItemClick?.();
+    expect(store.get(insightsSheetAtom)?.shareToken).toBe("new");
+  });
+
   it("passes the server id of a capture with no copy on this computer", () => {
     const cloud = { ...FILE, fileId: "abc123", source: undefined };
     const { item, store } = setup("/captures");
@@ -89,11 +110,12 @@ describe("useCaptureInsightsItem", () => {
     expect(store.get(insightsSheetAtom)?.capture).toEqual({ label: "Captures", relativePath: "Screenshot.png", fileId: "abc123" });
   });
 
-  it("offers nothing elsewhere, for a folder, for another kind of file, or on a server without Insights", () => {
-    expect(setup("/files").item(FILE, "Screenshot.png")).toEqual([]);
+  it("offers nothing for a folder, a row with no drive, or on a server without Insights", () => {
+    expect(setup("/files").item({ ...FILE, isFolder: true }, "Screenshot.png")).toEqual([]);
     expect(setup("/captures").item({ ...FILE, isFolder: true }, "Screenshot.png")).toEqual([]);
-    expect(setup("/captures").item({ ...FILE, name: "notes.pdf", actualFileName: "notes.pdf" }, "notes.pdf")).toEqual([]);
+    expect(setup("/files").item({ ...FILE, label: undefined } as FormattedUserFile, "Screenshot.png")).toEqual([]);
     expect(setup("/captures", { shares: true } as ServerCapabilities).item(FILE, "Screenshot.png")).toEqual([]);
+    expect(setup("/files", { shares: true } as ServerCapabilities).item({ ...FILE, name: "a.pdf", actualFileName: "a.pdf" }, "a.pdf")).toEqual([]);
   });
 });
 

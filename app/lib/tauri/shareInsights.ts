@@ -239,6 +239,21 @@ export function getLinkSettingsDefault(
   });
 }
 
+/** What the Insights panel's Create link would give a file, and whether it is a capture. */
+export interface InsightsPanelLinkDefault extends LinkSettingsDefault {
+  isCapture: boolean;
+}
+
+/**
+ * What the Insights panel's "Create link" would give this file: Rust's
+ * `insights_panel_link_default` (a capture follows Settings' "Track views,
+ * comments and reactions", any other file asks for all three; the plan and
+ * the server decide).
+ */
+export function getInsightsPanelLinkDefault(folderLabel: string, fileName: string): Promise<InsightsPanelLinkDefault> {
+  return invoke<InsightsPanelLinkDefault>("insights_panel_link_default", { folderLabel, fileName });
+}
+
 /**
  * Whether the signed-in account's plan includes the link switches: `false`
  * on the free plan, `null` when Rust could not read the plan.

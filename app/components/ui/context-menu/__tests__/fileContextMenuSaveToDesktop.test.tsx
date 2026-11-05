@@ -22,6 +22,16 @@ vi.mock("@/app/utils/hooks/useUrlParams", () => ({
   useUrlParams: () => ({ getParam: () => null }),
 }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: vi.fn() }));
+// "View insights" reads the share listing; these tests are about other items.
+vi.mock("@/app/lib/hooks/useSharedFiles", () => ({
+  useSharedFiles: () => ({
+    getSharesFor: () => [],
+    getUnplacedSharesNamed: () => [],
+    isLoading: false,
+    isError: false,
+    refetch: () => {},
+  }),
+}));
 vi.mock("@/app/components/page-sections/drive/useExistingLinks", () => ({
   useExistingLinks: () => ({ linkFor: () => null, isLoadingFor: () => false }),
 }));
