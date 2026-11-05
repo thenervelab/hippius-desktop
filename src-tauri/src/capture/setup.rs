@@ -1318,7 +1318,10 @@ mod tests {
     }
 
     /// What the Captures page and Settings read, in each state.
-    #[allow(clippy::await_holding_lock)]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "HOME_LOCK is held across awaits so no other test changes $HOME mid-test; #[tokio::test] is current-thread, see test_helpers.rs"
+    )]
     #[tokio::test]
     async fn the_status_follows_the_setup() {
         let _home = crate::test_helpers::HOME_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -17,7 +17,7 @@ use crate::sync::mnemonic::{
     account_dir, config_dir_for_folder, derive_folder_mnemonic, ensure_derived_mnemonic, master_mnemonic_path, report_rekey_marker,
 };
 use hcfs_client::engine::manager::DriveManager;
-use hcfs_client::engine::runner::{DriveSlot, SyncRunner};
+use hcfs_client::engine::runner::{DriveSlot, SyncRunner, lock_drive};
 use hcfs_client::engine::types::build_synced_paths_from_state;
 use sqlx::sqlite::SqlitePool;
 use std::error::Error as _;
@@ -491,7 +491,7 @@ fn spawn_reconcile_timestamps(app: &AppHandle, sync: Arc<SyncRunner>, manager_ar
         // its guard is `Send` and safely held across `.await`
         // points (Async Lock Hygiene axiom applies to
         // `std::sync::Mutex` guards, not Tokio's).
-        let manager = manager_arc.lock().await;
+        let manager = lock_drive(&manager_arc, &label, "reconcile_timestamps").await;
         let outcome = manager.reconcile_with_retry(RetryPolicy::first_reconcile_default()).await;
 
         match &outcome {
@@ -2741,6 +2741,37 @@ mod tests {
         assert!(removed_path.is_none(), "nonexistent label should yield None path");
     }
 
+    /// A label with no registered drive (a paused drive, or one whose init
+    /// failed) still reports the DB row's path, so removing it unregisters
+    /// its Finder root and drops its cached directory stats.
+    #[tokio::test]
+    async fn remove_drive_inmemory_returns_the_hint_when_no_drive_is_registered() {
+        let sync = test_sync_runner();
+        let hint = PathBuf::from("/tmp/paused-drive");
+
+        let (remaining, removed_path) = remove_drive_inmemory(&sync, "paused", Some(hint.clone())).await;
+
+        assert_eq!(remaining, 0);
+        assert_eq!(removed_path, Some(hint));
+    }
+
+    /// A registered drive's own path wins over the hint: the slot is what
+    /// the runner was watching.
+    #[tokio::test]
+    async fn remove_drive_inmemory_prefers_the_slot_path_over_the_hint() {
+        let sync = test_sync_runner();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let sync_path = tmp.path().join("sync");
+        std::fs::create_dir_all(&sync_path).expect("create sync dir");
+        let manager = DriveManager::new(sync_path.clone(), tmp.path().join("config"));
+        sync.add_drive("live".to_string(), DriveSlot::new(manager, CancellationToken::new()))
+            .await;
+
+        let (_, removed_path) = remove_drive_inmemory(&sync, "live", Some(PathBuf::from("/tmp/stale-row"))).await;
+
+        assert_eq!(removed_path, Some(sync_path));
+    }
+
     /// Re-initializing a live drive must not blank its Finder badges or Files
     /// listing while the init runs: the entry teardown removes the slot but
     /// keeps the label root and the synced-paths cache that `register_drive`
@@ -3022,11 +3053,8 @@ mod tests {
 
     #[test]
     fn clear_persisted_sync_state_removes_baseline_files() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let account = "5TestClearStateAccount";
         let label = "to-be-removed";
@@ -3065,11 +3093,8 @@ mod tests {
 
     #[test]
     fn clear_persisted_sync_state_tolerates_missing_files() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         // Documents the "best-effort" contract: removing a drive that never
         // wrote any state (immediate cancel before first sync, or a label
@@ -3360,11 +3385,8 @@ mod tests {
     /// state IS re-derived (the legacy repair this check exists for).
     #[test]
     fn prepare_config_dir_member_gate_preserves_the_owner_seal() {
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().expect("tempdir");
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         const ACCOUNT: &str = "5PrepareCfgMemberGateTestAccount";
         const LABEL: &str = "team";

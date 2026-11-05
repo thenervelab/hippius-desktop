@@ -38,7 +38,7 @@ whose **Subject exactly matches** the manifest `Publisher`.
 
 ```powershell
 # From repo root, on Windows:
-cargo build --release --manifest-path windows/HippiusShell/Cargo.toml
+cargo build --release --locked --manifest-path windows/HippiusShell/Cargo.toml
 # Build DLL + sparse package (dev: unsigned; prod: pass -CertThumbprint):
 windows/HippiusShell/build-and-package.ps1 -Publisher "CN=Hippius, O=Hippius, C=US" -CertThumbprint <thumb>
 # Register for dev (self-signed cert must be trusted in Trusted People first):

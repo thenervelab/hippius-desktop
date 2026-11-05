@@ -99,6 +99,10 @@ pub struct ServerCapabilities {
     /// The moment of the recording each reaction was made at (hcfs #803).
     /// Absent on older servers: reactions are totals only.
     pub share_reaction_moments: bool,
+    /// Document views (`kind: "document"`) and the per-page Insights they
+    /// feed: drop-off and time per page, and each viewer's pages seen. Absent
+    /// on older servers: the Insights sheet has no Pages tab.
+    pub share_document_views: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -236,7 +240,7 @@ mod tests {
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
-            r#""share_reaction_moments":true}"#,
+            r#""share_reaction_moments":true,"share_document_views":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -255,6 +259,7 @@ mod tests {
         assert!(caps.share_insights_seen);
         assert!(caps.share_comment_replies);
         assert!(caps.share_reaction_moments);
+        assert!(caps.share_document_views);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
 
@@ -276,6 +281,7 @@ mod tests {
                 "share_owner_wrap",
                 "share_comment_replies",
                 "share_comments",
+                "share_document_views",
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
@@ -305,6 +311,7 @@ mod tests {
         assert!(!old.share_insights_seen, "a server without last-seen shows no new dot");
         assert!(!old.share_comment_replies, "a server without replies lists comments flat");
         assert!(!old.share_reaction_moments, "a server without reaction moments shows totals only");
+        assert!(!old.share_document_views, "a server without document views shows no Pages tab");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="

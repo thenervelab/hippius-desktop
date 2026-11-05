@@ -207,6 +207,13 @@ static TEST_HOME: std::sync::LazyLock<PathBuf> = std::sync::LazyLock::new(|| {
     let dir = tempfile::TempDir::new().expect("home tempdir");
     let path = dir.path().to_path_buf();
     std::mem::forget(dir);
+    // SAFETY: not fully discharged, and accepted because this is test-only.
+    // `set_var` requires that no other thread reads or writes the
+    // environment during the call. What holds: LazyLock runs this once, every
+    // test that reads what is set here forces TEST_HOME first, and std
+    // serializes its own env access, so no Rust code sees a torn value. What
+    // is not ruled out: a parallel test's C code (SQLite, the system
+    // resolver) calling `getenv` during this write.
     unsafe {
         std::env::set_var("HOME", &path);
         std::env::set_var("HIPPIUS_DISABLE_TOKEN_KEYCHAIN", "1");

@@ -29,7 +29,7 @@ $out = Join-Path $here "out"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 Write-Host "==> Building HippiusShell.dll (release)"
-cargo build --release --manifest-path "$here\Cargo.toml"
+cargo build --release --locked --manifest-path "$here\Cargo.toml"
 Copy-Item "$here\target\release\hippius_shell.dll" "$out\HippiusShell.dll" -Force
 
 Write-Host "==> Generating a self-signed code-signing cert (Subject=$Publisher)"

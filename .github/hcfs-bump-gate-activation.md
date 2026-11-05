@@ -6,14 +6,16 @@ deliberately changes nothing on the remote (the maintainer flips it when ready).
 
 ## What the gate is
 
-- **`hcfs-bump.yml`** — weekly (Mon 06:00 UTC) + manual workflow. Resolves `thenervelab/hcfs`
-  `main` HEAD over SSH, and when it differs from the pinned rev, `sed`-updates both
-  `hcfs-client` + `hcfs-shared` revs in `src-tauri/Cargo.toml`, `cargo update`s the lock, and
-  opens a PR.
-- **`ci.yml`** — runs on every PR + pushes to `main`/`redesign`. `rust` job (macOS): `clippy
-  -D warnings` + `cargo test` (blocking). `frontend` job (ubuntu): `pnpm lint` + `pnpm test`
-  (blocking). The Rust job is what executes the wire-contract guards below, so a breaking bump
-  fails the PR instead of shipping.
+- **`hcfs-bump.yml`** — manual workflow (its weekly Monday 06:00 UTC schedule is off while the
+  pin moves in planned bumps; the workflow header says when it returns). Resolves `thenervelab/hcfs`
+  `main` HEAD over SSH, and when it differs from the pinned rev, `sed`-updates the
+  `hcfs-client`, `hcfs-shared` and `hcfs-crypto` revs in `src-tauri/Cargo.toml`, re-locks only
+  those three, and opens a PR against `staging` from a per-rev branch,
+  `automated/hcfs-bump-<12-char rev>`.
+- **`ci.yml`** — runs on every PR + pushes to `main`/`staging`. `rust-linux`, `rust-macos` and
+  `rust-windows` lanes: `clippy -D warnings` + `cargo test` (blocking). `frontend` job (ubuntu):
+  `pnpm lint` + `pnpm test` (blocking). The Rust lanes execute the wire-contract guards below, so
+  a breaking bump fails the PR instead of shipping.
 
 ## What the guards cover (as of this branch)
 
@@ -49,7 +51,7 @@ branch before merging.** That rule is also in [`docs/testing-policy.md`](../docs
 (live lane vs hermetic pins).
 
 ```bash
-gh workflow run e2e-live.yml --ref automated/hcfs-bump -f suite=both
+gh workflow run e2e-live.yml --ref <bump branch> -f suite=all
 ```
 
 It is a manual workflow (no cron, not a required check) and it needs the live-account
@@ -57,15 +59,15 @@ secrets listed in its header. It sets `HCFS_DESKTOP_E2E_REQUIRE=1`, so a missing
 fails the run instead of skipping the tests green.
 
 Same default-branch prerequisite as step 1 below: `workflow_dispatch` resolves
-`e2e-live.yml` **by path on the default branch**, so `--ref automated/hcfs-bump` runs the
+`e2e-live.yml` **by path on the default branch**, so `--ref <bump branch>` runs the
 bump branch's *code* but only once the workflow file itself exists on `main`. Until then
 the dispatch fails with "workflow does not exist".
 
 ## Activation steps (run when ready — none done yet)
 
-1. **Push the gate to `main`.** `ci.yml` must exist on `main` because `hcfs-bump.yml` opens its
-   PR against the default branch (`base: main`); the PR's CI run uses the workflow as it exists
-   on the base. Until then the gate runs nowhere (`gh run list` shows it has never executed).
+1. **Push the gate to `main`.** `hcfs-bump.yml` opens its PR against `staging`, so that PR's
+   CI run uses `ci.yml` from `staging` (the bump PR does not change it). A dispatch of
+   `hcfs-bump.yml` itself resolves the workflow file on the default branch, `main`.
 
 2. **Add the `HCFS_BUMP_TOKEN` PAT.** A PR opened with the default `GITHUB_TOKEN` does **not**
    trigger other workflows (GitHub's documented anti-recursion rule), so the bump PR would open
@@ -81,13 +83,13 @@ the dispatch fails with "workflow does not exist".
    a bump PR could be merged with no Rust run at all.
 
 4. **Smoke-test the loop once.** Trigger `hcfs-bump.yml` via `workflow_dispatch` and confirm the
-   `automated/hcfs-bump` PR shows the `rust` check **running and visible** before trusting the
-   Monday cron. (When pinned == `main` HEAD the workflow correctly no-ops and opens no PR.)
+   `automated/hcfs-bump-<rev>` PR shows the `rust` checks **running and visible** before
+   trusting it. (When pinned == `main` HEAD the workflow correctly no-ops and opens no PR.)
 
 ## Notes
 
-- `ci.yml` `push` branches are `[main, redesign]`; the `automated/hcfs-bump` branch relies on the
-  `pull_request` trigger (step 2), not push, so the PAT is the load-bearing fix.
+- `ci.yml` `push` branches are `[main, staging]`; the `automated/hcfs-bump-<rev>` branches rely on
+  the `pull_request` trigger (step 2), not push, so the PAT is the load-bearing fix.
 - The frontend `pnpm test` job is **not** part of the hcfs-bump defense — the bump reaches the FE
   only through Rust serde shapes, which Vitest never exercises. The `rust` job is the sole line of
   defense for wire-shape drift.
