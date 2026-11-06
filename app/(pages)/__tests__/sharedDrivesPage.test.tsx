@@ -47,6 +47,7 @@ vi.mock("@/components/page-sections/drive/DriveContainer", async () => {
 });
 
 import SharedDrivesPage from "../shared-drives/page";
+import { currentOsDropTarget } from "@/app/lib/drive/osDrop";
 import { sharedDrivesDriveRoute } from "@/app/lib/routes";
 
 const go = (href: string) => {
@@ -119,5 +120,18 @@ describe("the Shared Drives page", () => {
     expect(screen.queryByTestId("drive")).not.toBeInTheDocument();
     expect(screen.getByTestId("list-view")).toBeVisible();
     expect(screen.getByText("Tab: Shared with you")).toBeInTheDocument();
+  });
+
+  // A file dropped on the list asks which drive it goes to; once a drive is
+  // open, the drive's own container says where (the stub registers none).
+  it("asks which drive for a drop on the list, and stands aside for an open drive", () => {
+    const { navigate, unmount } = renderPage();
+    expect(currentOsDropTarget()?.destination).toEqual({ kind: "choose" });
+    navigate(DRIVE);
+    expect(currentOsDropTarget()).toBeNull();
+    navigate("/shared-drives");
+    expect(currentOsDropTarget()?.destination).toEqual({ kind: "choose" });
+    unmount();
+    expect(currentOsDropTarget()).toBeNull();
   });
 });

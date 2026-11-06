@@ -49,6 +49,96 @@ interface RemoteUploadAction {
   busy: boolean;
 }
 
+interface RemotePathsUpload {
+  account: string;
+  /** Drive label; a browsed shared drive carries its wire identity in it. */
+  label: string;
+  /** Folder-relative path inside the drive; absent for its root. */
+  parentPath?: string;
+  onUploaded?: () => void;
+  /** The plan gate refused: open the same dialog as every storage refusal. */
+  onStorageFull: () => void;
+}
+
+/**
+ * Upload files already chosen (picked, or dropped on the window) straight
+ * to the server. The picker button and a drop on a remote drive both run
+ * this, so the two cannot differ in what they tell the user.
+ */
+export async function uploadPathsToRemoteFolder({
+  account,
+  label,
+  parentPath,
+  paths,
+  onUploaded,
+  onStorageFull,
+}: RemotePathsUpload & { paths: string[] }): Promise<void> {
+  // A brief "it started" toast, then out of the way. The sync widget
+  // shows each file moving, but it lives in the sidebar and is easy to
+  // miss, so an upload could look like nothing had happened; a toast
+  // that STAYS for the length of a large upload is the opposite
+  // problem, covering the thing the user is trying to watch. Fixed id
+  // so a second pick replaces the first rather than stacking.
+  reportRemoteUploadStarted(paths.length);
+  try {
+    const failures = await uploadFilesToRemoteFolder(
+      account,
+      label,
+      paths,
+      parentPath,
+      // A shared drive browsed without syncing it carries its wire
+      // identity IN the label, so nothing has to thread it separately.
+      parseSharedDriveLabel(label) ?? undefined,
+    );
+    reportRemoteUploadOutcome(paths.length, failures);
+    if (paths.length - failures.length > 0) onUploaded?.();
+  } catch (err) {
+    // The plan gate refuses before any encryption happens, and the way
+    // out is a bigger plan: same dialog as every other storage refusal.
+    if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+      onStorageFull();
+    } else {
+      toast.error(err instanceof Error ? err.message : "Upload failed", {
+        id: REMOTE_UPLOAD_TOAST_ID,
+      });
+    }
+  }
+}
+
+/** Upload one folder already chosen (picked, or dropped) straight to the server. */
+export async function uploadFolderPathToRemoteFolder({
+  account,
+  label,
+  parentPath,
+  folderPath,
+  onUploaded,
+  onStorageFull,
+}: RemotePathsUpload & { folderPath: string }): Promise<void> {
+  // The file count is not known until Rust has walked the tree, so the
+  // start notice speaks of the folder rather than promising a number
+  // that would be wrong.
+  reportRemoteFolderUploadStarted();
+  try {
+    const failures = await uploadFolderToRemoteFolder(
+      account,
+      label,
+      folderPath,
+      parentPath,
+      parseSharedDriveLabel(label) ?? undefined,
+    );
+    reportRemoteUploadOutcomeForFolder(failures);
+    onUploaded?.();
+  } catch (err) {
+    // The plan gate refuses before anything is read, and the way out is
+    // a bigger plan: same dialog as every other storage refusal.
+    if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
+      onStorageFull();
+    } else {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    }
+  }
+}
+
 /** Pick files and upload them straight to the server. */
 export function useRemoteFileUpload({
   label,
@@ -71,36 +161,15 @@ export function useRemoteFileUpload({
     if (paths.length === 0) return;
 
     setBusy(true);
-    // A brief "it started" toast, then out of the way. The sync widget
-    // shows each file moving, but it lives in the sidebar and is easy to
-    // miss, so an upload could look like nothing had happened; a toast
-    // that STAYS for the length of a large upload is the opposite
-    // problem, covering the thing the user is trying to watch. Fixed id
-    // so a second pick replaces the first rather than stacking.
-    reportRemoteUploadStarted(paths.length);
     try {
-      const failures = await uploadFilesToRemoteFolder(
-        polkadotAddress,
+      await uploadPathsToRemoteFolder({
+        account: polkadotAddress,
         label,
-        paths,
         parentPath,
-        // A shared drive browsed without syncing it carries its wire
-        // identity IN the label, so nothing has to thread it separately.
-        parseSharedDriveLabel(label) ?? undefined,
-      );
-      reportRemoteUploadOutcome(paths.length, failures);
-      const uploaded = paths.length - failures.length;
-      if (uploaded > 0) onUploaded?.();
-    } catch (err) {
-      // The plan gate refuses before any encryption happens, and the way
-      // out is a bigger plan — same dialog as every other storage refusal.
-      if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
-        setInsufficient("file-upload");
-      } else {
-        toast.error(err instanceof Error ? err.message : "Upload failed", {
-          id: REMOTE_UPLOAD_TOAST_ID,
-        });
-      }
+        paths,
+        onUploaded,
+        onStorageFull: () => setInsufficient("file-upload"),
+      });
     } finally {
       setBusy(false);
     }
@@ -137,28 +206,15 @@ export function useRemoteFolderUpload({
     if (!folderPath) return;
 
     setBusy(true);
-    // The file count is not known until Rust has walked the tree, so the
-    // start notice speaks of the folder rather than promising a number
-    // that would be wrong.
-    reportRemoteFolderUploadStarted();
     try {
-      const failures = await uploadFolderToRemoteFolder(
-        polkadotAddress,
+      await uploadFolderPathToRemoteFolder({
+        account: polkadotAddress,
         label,
-        folderPath,
         parentPath,
-        parseSharedDriveLabel(label) ?? undefined,
-      );
-      reportRemoteUploadOutcomeForFolder(failures);
-      onUploaded?.();
-    } catch (err) {
-      // The plan gate refuses before anything is read, and the way out is
-      // a bigger plan — same dialog as every other storage refusal.
-      if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
-        setInsufficient("folder-upload");
-      } else {
-        toast.error(err instanceof Error ? err.message : "Upload failed");
-      }
+        folderPath,
+        onUploaded,
+        onStorageFull: () => setInsufficient("folder-upload"),
+      });
     } finally {
       setBusy(false);
     }
