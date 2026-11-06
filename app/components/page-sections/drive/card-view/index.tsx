@@ -32,7 +32,7 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
-import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useFileInsightsItem } from "../useCaptureInsightsItem";
 import { useCopyLinkItem } from "../useCopyExistingLink";
 import { linkPathFor } from "../existingLink";
 import SelectionActionBar from "../SelectionActionBar";
@@ -107,7 +107,7 @@ const CardView: FC<CardViewProps> = ({
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
-  const captureInsightsItem = useCaptureInsightsItem();
+  const fileInsightsItem = useFileInsightsItem();
   const copyLinkItem = useCopyLinkItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
@@ -432,8 +432,8 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
-                          // Insights for a capture's link, on the Captures page.
-                          ...captureInsightsItem(
+                          // View insights for any file, after Share via link.
+                          ...fileInsightsItem(
                             file,
                             shareTargetFor(file, currentSubfolderPath).relativePath,
                             () => setOpenMenuIndex(null),

@@ -1332,7 +1332,7 @@ async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &
     })
 }
 
-async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapabilities {
+pub(crate) async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapabilities {
     match fetch_capabilities(state, account_id).await {
         Ok(caps) => caps,
         Err(e) => {
@@ -1663,6 +1663,24 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
     patch_settings(&state.api_client, &api, &share_token, &patch).await
 }
 
+/// Whether a file is a screenshot or recording this app took: it sits in one
+/// of the account's capture drives, or carries a capture's own name. The one
+/// rule the share dialog's defaults and the Insights panel's Create link use.
+///
+/// # Errors
+///
+/// The database is not open.
+pub(crate) async fn is_capture_file(state: &AppState, account_id: &str, folder_label: Option<&str>, file_name: &str) -> Result<bool> {
+    let pool = state.pool()?;
+    let in_captures_drive = match folder_label {
+        Some(label) => crate::capture::destination::own_capture_labels(pool, account_id)
+            .await
+            .is_ok_and(|labels| labels.iter().any(|l| l == label)),
+        None => false,
+    };
+    Ok(in_captures_drive || super::preview::is_capture_name(file_name))
+}
+
 /// Where the share dialog's Insights, Comments and Reactions switches start
 /// for a file, and which it shows. Same capture rule as the chat preview's
 /// switch: a screenshot or recording by its drive or its name.
@@ -1674,14 +1692,7 @@ pub async fn share_link_settings_default(
     is_folder: bool,
 ) -> Result<LinkSettingsDefault> {
     let account_id = state.current_account_id()?;
-    let pool = state.pool()?;
-    let in_captures_drive = match folder_label {
-        Some(label) => crate::capture::destination::own_capture_labels(pool, &account_id)
-            .await
-            .is_ok_and(|labels| labels.contains(&label)),
-        None => false,
-    };
-    let is_capture = in_captures_drive || super::preview::is_capture_name(&file_name);
+    let is_capture = is_capture_file(&state, &account_id, folder_label.as_deref(), &file_name).await?;
     let kind = LinkKind::of(is_folder, is_capture, &file_name);
     let (caps, switches_in_plan) = tokio::join!(capabilities_or_none(&state, &account_id), read_switches_in_plan(&state, &account_id),);
     Ok(default_for(kind, captures_default(&state).await, &caps, switches_in_plan))
