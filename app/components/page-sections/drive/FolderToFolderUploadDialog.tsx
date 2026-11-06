@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { errorMessage } from "@/lib/utils/errorUtils";
 import { UPLOAD_FOLDER_LABEL } from "./uploadActions";
 import { AlertCircle, FolderIcon, FolderPlus } from "lucide-react";
@@ -38,6 +38,8 @@ type Props = {
     subFolderPath?: string;
     /** Resolved sync root path (avoids incorrect getPrivateSyncPath in multi-drive). */
     syncBasePath?: string;
+    /** A folder dropped on the window, filled in when the dialog opens. */
+    initialFolderPath?: string;
 };
 
 export default function FolderToFolderUploadDialog({
@@ -48,6 +50,7 @@ export default function FolderToFolderUploadDialog({
     mainFolderActualName,
     subFolderPath,
     syncBasePath,
+    initialFolderPath,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
@@ -57,6 +60,15 @@ export default function FolderToFolderUploadDialog({
 
     const [folderPath, setFolderPath] = useState<string>("");
     const [folderError, setFolderError] = useState<string | null>(null);
+
+    // A drop opens the dialog with the dropped folder already chosen, the
+    // way the drive root's FolderUploadDialog does.
+    useEffect(() => {
+        if (open && initialFolderPath) {
+            setFolderPath(initialFolderPath);
+            setFolderError(null);
+        }
+    }, [open, initialFolderPath]);
 
     const handleSelectFolder = async () => {
         try {

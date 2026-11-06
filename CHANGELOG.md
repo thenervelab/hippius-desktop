@@ -15,6 +15,14 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+## [0.6.20] - 2026-11-06
+
+Dropping files onto the app uploads them again.
+
+### Fixed
+
+- **Dropping files onto the app uploads them again.** Drag files or a folder from Finder, Explorer or your file manager onto Overview, the Drive page, Shared Drives, or any drive or folder, including drives that are not synced to this computer. Inside a drive or folder they go straight there; elsewhere the app asks which drive to put them in. When a drop cannot be uploaded, the app now says why instead of doing nothing.
+
 ## [0.6.19] - 2026-11-04
 
 Plans & Billing now opens as its own page, right in the app, instead of inside Settings.
