@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,7 +18,7 @@ import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
-import { actionErrorLine, DEFINITIONS, loadErrorLine } from "./insightsView";
+import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
 import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
@@ -26,14 +26,17 @@ import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelS
 export const SETTINGS_TRIGGER_ATTR = "data-link-settings-trigger";
 
 /**
- * A link's Insights, Comments and Reactions switches: what the header's line
- * says and what Link settings changes. Each change sends only the switch
- * flipped, shows at once, is put back if the server refuses it, and is then
- * read back from the server, so what shows is what the link has.
+ * A link's Insights, Comments and Reactions switches (and Allow download,
+ * where the server has it): what the header's line says and what Link
+ * settings changes. Each change sends only the switch flipped, shows at
+ * once, is put back if the server refuses it, and is then read back from the
+ * server, so what shows is what the link has. Turning downloads off refused
+ * for the plan shows the upgrade prompt (`downloadRefused`), not a toast.
  */
 export function useLinkSwitches(shareToken: string) {
   const queryClient = useQueryClient();
   const key = linkSettingsQueryKey(shareToken);
+  const [downloadRefused, setDownloadRefused] = useState(false);
   const current = useQuery({
     queryKey: key,
     queryFn: () => getLinkSettings(shareToken),
@@ -46,16 +49,28 @@ export function useLinkSwitches(shareToken: string) {
       // A read still in flight would land over the change shown here.
       await queryClient.cancelQueries({ queryKey: key });
       const before = queryClient.getQueryData<LinkSettingsDefault>(key);
-      if (before) queryClient.setQueryData<LinkSettingsDefault>(key, { ...before, on: { ...before.on, ...change } });
+      if (before) {
+        const { download, ...switches } = change;
+        queryClient.setQueryData<LinkSettingsDefault>(key, {
+          ...before,
+          on: { ...before.on, ...switches },
+          download: download ?? before.download,
+        });
+      }
+      setDownloadRefused(false);
       return { before };
     },
     onError: (err, _change, ctx) => {
       if (ctx?.before) queryClient.setQueryData(key, ctx.before);
+      if (isDownloadNotInPlan(err)) {
+        setDownloadRefused(true);
+        return;
+      }
       toast.error(actionErrorLine("change that setting", err, navigator.onLine));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
-  return { current, save };
+  return { current, save, downloadRefused };
 }
 
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
@@ -89,7 +104,7 @@ export function LinkSettingsPopover({
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const { current, save } = switches;
+  const { current, save, downloadRefused } = switches;
   const online = useIsOnline();
 
   // The panel hands a new `onClose` every render; the listeners read the latest.
@@ -160,6 +175,9 @@ export function LinkSettingsPopover({
           disabled={save.isPending}
           switchesInPlan={current.data.switchesInPlan ?? null}
           onChange={(next) => save.mutate(switchChange(current.data.on, next))}
+          download={current.data.download ?? null}
+          onDownloadChange={(download) => save.mutate({ download })}
+          downloadRefused={downloadRefused}
           onUpgrade={() => {
             onLeave();
             router.push(BILLING_ROUTE);

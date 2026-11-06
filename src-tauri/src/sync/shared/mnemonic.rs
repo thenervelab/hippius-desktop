@@ -8,6 +8,7 @@ use tracing::{info, warn};
 use crate::auth::account_key::account_key;
 use crate::error::Result;
 use crate::sync::config::get_drive_password;
+use hcfs_client::engine::lock_drive;
 use hcfs_client::engine::manager::DriveManager;
 use std::io::{Cursor, Write as _};
 use std::path::{Path, PathBuf};
@@ -435,11 +436,11 @@ pub async fn get_mnemonic_for_account(app_state: &crate::app_state::AppState, ac
 
     // Stage 3: first active drive's folder mnemonic (pre-migration state).
     warn!("Master mnemonic not found at {:?}, falling back to per-folder mnemonic", master_path);
-    let first_arc = app_state.sync.drive_managers().await.into_iter().next().map(|(_, manager)| manager);
-    if let Some(arc) = first_arc
+    let first_drive = app_state.sync.drive_managers().await.into_iter().next();
+    if let Some((label, arc)) = first_drive
         && let Ok(drive_password) = get_drive_password(pool, account_id, None).await
     {
-        let m = arc.lock().await;
+        let m = lock_drive(&arc, &label, "get_mnemonic_for_account").await;
         if m.is_initialized()
             && let Ok(mnemonic) = m.export_mnemonic(&drive_password)
             && candidate_is_account_master(&mnemonic, account_id)
@@ -899,7 +900,7 @@ pub(crate) async fn reencrypt_all_folder_mnemonics(
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::await_holding_lock,
     reason = "Tests hold HOME_LOCK across awaits to serialise $HOME overrides. #[tokio::test] runs on a current-thread runtime so awaits don't contend on this lock — see test_helpers.rs."
 )]
@@ -1157,12 +1158,9 @@ mod tests {
     async fn reencrypt_overwrites_existing_folder_mnemonics_under_new_password() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
         // `config_dir_for_folder` and the account_id hashing path look at $HOME.
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
@@ -1252,11 +1250,8 @@ mod tests {
     async fn reencrypt_with_zero_folders_returns_ok() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")
@@ -1276,11 +1271,8 @@ mod tests {
     async fn reencrypt_with_invalid_master_returns_err_naming_all_folders() {
         use sqlx::sqlite::SqlitePoolOptions;
 
-        let _home_guard = crate::test_helpers::HOME_LOCK.lock().unwrap();
         let tmp = tempfile::TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("HOME", tmp.path());
-        }
+        let _home = crate::test_helpers::set_test_home(tmp.path());
 
         let pool = SqlitePoolOptions::new().max_connections(1).connect("sqlite::memory:").await.unwrap();
         sqlx::query("CREATE TABLE sync_paths (owner TEXT NOT NULL, path TEXT NOT NULL, label TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 0, owner_ss58 TEXT, wire_folder_hash TEXT)")

@@ -94,11 +94,14 @@ mod tests {
         assert_eq!(hits.load(Ordering::SeqCst), 1, "same account must share one fetch");
     }
 
-    #[tokio::test]
+    // Paused time: the fetches' sleeps advance a virtual clock, so the test
+    // measures how the cache schedules them, not how busy the machine is. A
+    // wall-clock bound flaked on CI (#735).
+    #[tokio::test(start_paused = true)]
     async fn different_accounts_fetch_in_parallel() {
         let cache = Arc::new(PerAccountCache::new(Duration::from_secs(30)));
         let hits = Arc::new(AtomicU32::new(0));
-        let started = Instant::now();
+        let started = tokio::time::Instant::now();
 
         let run = |cache: Arc<PerAccountCache<u32>>, hits: Arc<AtomicU32>, acct: &'static str, value: u32| async move {
             cache
@@ -122,8 +125,9 @@ mod tests {
 
         let leaked = cache.get_or_fetch("acct-b", || async { Ok::<_, AppError>(7) }).await.expect("cached b");
         assert_eq!(leaked, 2, "a later fetch of acct-b must not see another account");
+        // Two 80 ms fetches: 80 ms when they overlap, 160 ms in series.
         assert!(
-            started.elapsed() < Duration::from_millis(200),
+            started.elapsed() < Duration::from_millis(160),
             "two accounts must not serialize behind one global lock"
         );
     }

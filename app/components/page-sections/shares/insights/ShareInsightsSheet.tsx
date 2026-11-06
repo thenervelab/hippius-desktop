@@ -5,7 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BarChart3, Eye, EyeOff, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import { BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -25,10 +25,12 @@ import { createCaptureLink } from "@/app/lib/tauri/shares";
 import { newestShare, useCaptureShares } from "@/components/page-sections/drive/useCaptureInsightsItem";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
-  getLinkSettingsDefault,
+  getInsightsPanelLinkDefault,
   getShareInsights,
   getShareReactions,
   listShareComments,
+  type Gated,
+  type InsightsPages,
   type LinkSettingsDefault,
   type InsightsViewer,
   type ReactionCount,
@@ -49,7 +51,10 @@ import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQuer
 import { RetentionChart } from "./RetentionChart";
 import {
   COMPARE_PLANS,
+  PAGES_PAGE,
   PRICING_URL,
+  SAMPLE_DOCUMENT_VIEWERS,
+  SAMPLE_PAGES,
   SAMPLE_AVERAGE_WATCH_MS,
   SAMPLE_COMPLETION,
   SAMPLE_RETENTION,
@@ -61,6 +66,7 @@ import {
   UPGRADE_PLAN,
   VIEWERS_PAGE,
   biggestDrop,
+  biggestPageDrop,
   countLabel,
   defaultInsightsTab,
   estimateDurationMs,
@@ -71,6 +77,9 @@ import {
   headerLine,
   loadErrorLine,
   lockCopy,
+  pagesLockCopy,
+  pagesSeenLabel,
+  pagesTabShown,
   switchOffLine,
   switchesOffLine,
   tabLabel,
@@ -210,31 +219,36 @@ export const CREATE_LINK = "Create link";
 /** Said with every no-link step: what kind of link Create link makes. */
 export const NO_LINK_PUBLIC = "Anyone with the link can open it, and it keeps working until you turn it off.";
 /**
- * What Create link would give this capture, from Rust's answer for a new
- * capture link (`share_link_settings_default`: the plan and Settings'
- * "Track views, comments and reactions"), or `null` before it answers.
+ * What Create link would give this file, from Rust's answer
+ * (`insights_panel_link_default`: the plan, the server, and for a capture
+ * Settings' "Track views, comments and reactions"), or `null` before it
+ * answers. A screenshot or recording is "this capture"; anything else, and
+ * anything before Rust answers, is "this file".
  */
-export function noLinkBody(defaults: Pick<LinkSettingsDefault, "offered" | "on" | "switchesInPlan"> | null): string {
-  let first = "Create a link to share this capture.";
+export function noLinkBody(
+  defaults: (Pick<LinkSettingsDefault, "offered" | "on" | "switchesInPlan"> & { isCapture?: boolean }) | null,
+): string {
+  const noun = defaults?.isCapture === false || !defaults ? "file" : "capture";
+  let first = `Create a link to share this ${noun}.`;
   if (defaults?.on.insights) {
     first = defaults.on.comments
-      ? "Create a link to see how many people view this capture, and their comments and reactions, here."
-      : "Create a link to see how many people view this capture here.";
+      ? `Create a link to see how many people view this ${noun}, and their comments and reactions, here.`
+      : `Create a link to see how many people view this ${noun} here.`;
   } else if (defaults?.switchesInPlan === false && defaults.offered.insights) {
-    first = "Create a link to share this capture. Counting views, comments and reactions comes with paid Drive plans.";
-  } else if (defaults?.switchesInPlan === true && defaults.offered.insights) {
-    first = "Create a link to share this capture. It won't count views, comments or reactions: that's turned off in Settings, Screenshots & Recording.";
+    first = `Create a link to share this ${noun}. Counting views, comments and reactions comes with paid Drive plans.`;
+  } else if (defaults?.switchesInPlan === true && defaults.offered.insights && defaults.isCapture !== false) {
+    first = `Create a link to share this ${noun}. It won't count views, comments or reactions: that's turned off in Settings, Screenshots & Recording.`;
   }
   return `${first} ${NO_LINK_PUBLIC}`;
 }
 
-/** Create link found the capture's own link and gave that one again. */
-export const REUSED_COPIED = "This capture already had a link. It's copied.";
-export const REUSED = "This capture already had a link.";
+/** Create link found the file's own link and gave that one again. */
+export const REUSED_COPIED = "This file already had a link. It's copied.";
+export const REUSED = "This file already had a link.";
 
-/** The capture's links could not be read: say so, and offer to try again. */
+/** The file's links could not be read: say so, and offer to try again. */
 export const LISTING_ERROR_TITLE = "Couldn't check for a link";
-export const LISTING_ERROR_BODY = "Hippius couldn't load this capture's links, so it can't tell yet whether it already has one.";
+export const LISTING_ERROR_BODY = "Hippius couldn't load this file's links, so it can't tell yet whether it already has one.";
 
 function ListingErrorPanel({ target, onClose, onRetry }: { target: InsightsSheetTarget; onClose: () => void; onRetry: () => void }) {
   return (
@@ -285,11 +299,11 @@ function NoLinkPanel({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const capture = target.capture;
-  // What a new link for this capture would get, so the words promise only
+  // What a new link for this file would get, so the words promise only
   // that. Rust decides it; a failed read just keeps the plain wording.
   const defaults = useQuery({
-    queryKey: ["capture-link-defaults", capture?.label ?? null, target.fileName],
-    queryFn: () => getLinkSettingsDefault(capture?.label ?? null, target.fileName, false),
+    queryKey: ["insights-panel-link-defaults", capture?.label ?? null, target.fileName],
+    queryFn: () => getInsightsPanelLinkDefault(capture?.label ?? "", target.fileName),
     enabled: Boolean(capture),
     retry: false,
   });
@@ -580,6 +594,9 @@ function InsightsPanelFor({
     });
   }
   if (insights.isSuccess) tabs.push({ tabKey: "viewers", tabName: tabLabel("Viewers", viewers ? viewers.length : null) });
+  // Only on a server with document views (Rust sends `pages` only then).
+  const pages = insights.data?.pages ?? null;
+  if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ tabKey: "pages", tabName: "Pages" });
   if (commentsEnabled) {
     tabs.push({ tabKey: "reactions", tabName: tabLabel("Reactions", reactions.isSuccess ? reactions.data.total : null) });
   }
@@ -613,6 +630,16 @@ function InsightsPanelFor({
             video={VIDEO_NAME.test(fileName)}
             durationMs={durationMs}
             comments={commentsEnabled ? commentList : []}
+          />
+        ) : null;
+      case "pages":
+        return pages ? (
+          <PagesTab
+            pages={pages}
+            notCounting={notCounting}
+            offLine={switchOffLine(settings, "insights")}
+            onTurnOn={openSettings}
+            onUpgrade={onClose}
           />
         ) : null;
       case "reactions":
@@ -977,6 +1004,104 @@ function ViewersTab({
 }
 
 /**
+ * The Pages tab, for a PDF, Word or PowerPoint link: how many visits reached
+ * each page (the drop-off) and the median time on it. On the free plan, the
+ * lock over sample pages and viewers.
+ */
+function PagesTab({
+  pages,
+  notCounting,
+  offLine,
+  onTurnOn,
+  onUpgrade,
+}: {
+  pages: Gated<InsightsPages | null>;
+  notCounting: boolean;
+  offLine: string | null;
+  onTurnOn: (from: HTMLElement) => void;
+  onUpgrade: () => void;
+}) {
+  if (pages.state === "locked") {
+    // SAMPLE data only, blurred: Rust sends no pages for a locked link.
+    return (
+      <Locked {...pagesLockCopy({ notCounting })} onUpgrade={onUpgrade}>
+        <div className="flex flex-col gap-4 p-3.5 pt-10">
+          <PageRows pages={SAMPLE_PAGES} />
+          <ViewerRows viewers={SAMPLE_DOCUMENT_VIEWERS} video={false} />
+        </div>
+      </Locked>
+    );
+  }
+  const notice = offLine ? <SwitchOffNotice line={offLine} onTurnOn={onTurnOn} /> : null;
+  if (!pages.value) {
+    return (
+      <>
+        {notice}
+        <EmptyLine icon={<FileText />} text="No page views yet" />
+      </>
+    );
+  }
+  const drop = biggestPageDrop(pages.value.reach);
+  return (
+    <div className="flex flex-col gap-5">
+      {notice}
+      <Section title="Drop-off by page" aside={drop ? `Most left after page ${drop.afterPage}` : undefined}>
+        <PageRows pages={pages.value} paged />
+      </Section>
+    </div>
+  );
+}
+
+/**
+ * One row a page: its number, a bar and the share of visits that reached it,
+ * and the median time on it. `paged` lists `PAGES_PAGE` at a time.
+ */
+function PageRows({ pages, paged = false }: { pages: InsightsPages; paged?: boolean }) {
+  const [limit, setLimit] = useState(PAGES_PAGE);
+  const all = pages.reach.map((reach, i) => ({ page: i + 1, reach, ms: pages.medianMs[i] ?? 0 }));
+  const shown = paged ? all.slice(0, limit) : all;
+  return (
+    <>
+      <div aria-hidden className={cn("mb-1 flex items-center gap-3 text-[11.5px]", MUTED)}>
+        <span className="w-14 shrink-0">Page</span>
+        <span className="min-w-0 flex-1">Reached</span>
+        <span className="w-11 shrink-0 text-right">Time</span>
+      </div>
+      <ul className="flex flex-col" aria-label="Pages">
+        {shown.map(({ page, reach, ms }) => (
+          <li key={page} className="flex items-center gap-3 py-1.5">
+            <span className={cn("w-14 shrink-0 text-[13px] tabular-nums", STRONG)}>Page {page}</span>
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <div className={cn(BAR_TRACK, "min-w-0 flex-1")} aria-hidden>
+                <div className={BAR_FILL} style={{ width: `${Math.round(reach)}%` }} />
+              </div>
+              <span className={cn("w-9 shrink-0 text-right text-xs tabular-nums", MUTED)}>
+                <span className="sr-only">reached by </span>
+                {Math.round(reach)}%
+              </span>
+            </div>
+            <span className={cn("w-11 shrink-0 text-right text-xs tabular-nums", MUTED)}>
+              <span className="sr-only">, median time </span>
+              {formatWatched(ms)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {shown.length < all.length && (
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <button type="button" className={TEXT_LINK} onClick={() => setLimit((n) => n + PAGES_PAGE)}>
+            Show more pages
+          </button>
+          <span className={cn("text-xs tabular-nums", MUTED)}>
+            {shown.length} of {all.length}
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
  * The panel's one empty block: an icon, a line and a sentence on a quiet
  * card. `compact` is the one-line form a tab uses inside a busier panel.
  */
@@ -1132,6 +1257,12 @@ function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolea
         </p>
         {v.lastViewedAt && <p className={cn("mt-px text-xs", MUTED)}>{formatAgo(v.lastViewedAt)}</p>}
       </div>
+      {/* A document's viewer: how many of its pages they saw. */}
+      {!video && v.pagesSeen != null && v.pageCount != null && (
+        <p className={cn("shrink-0 whitespace-nowrap text-xs tabular-nums", MUTED)}>
+          {pagesSeenLabel(v.pagesSeen, v.pageCount)}
+        </p>
+      )}
       {video && v.completion !== null && (
         <>
           <div className={cn(BAR_TRACK, "w-[72px] shrink-0")} aria-hidden>

@@ -28,6 +28,12 @@ export interface LinkSettingsDefault {
    * locked, and a new link starts all three off).
    */
   switchesInPlan: boolean | null;
+  /**
+   * Allow download, as the link has it. Absent or `null` where there is no
+   * such switch: a server without it, or a link not made yet (every link
+   * starts with downloads allowed). Turning it off needs a paid plan.
+   */
+  download?: boolean | null;
 }
 
 /**
@@ -48,6 +54,22 @@ export interface InsightsViewer {
   lastViewedAt: string | null;
   comments: number;
   reactions: number;
+  /**
+   * For a document: how many of its pages this viewer saw, and how many it
+   * has. Absent or `null` for anything else, and on a server without
+   * document views.
+   */
+  pagesSeen?: number | null;
+  pageCount?: number | null;
+}
+
+/** A document link's page by page numbers (`share_document_views`). */
+export interface InsightsPages {
+  pageCount: number;
+  /** One per page: the percentage (0 to 100) of document visits that saw it. */
+  reach: number[];
+  /** One per page: the median milliseconds on it, over the visits that saw it. */
+  medianMs: number[];
 }
 
 export interface ShareInsights {
@@ -59,6 +81,13 @@ export interface ShareInsights {
   /** 100 buckets of 0 to 100; `null` inside when there is no video data. */
   retention: Gated<number[] | null>;
   viewers: Gated<InsightsViewer[]>;
+  /**
+   * Page by page numbers. `null` (or absent), and no Pages tab, until the
+   * server reports them: a pages block on a paid link, or `pages` locked on
+   * the free plan. Rust never sends it from the server's capability alone.
+   * `null` inside for a block with no readable page count.
+   */
+  pages?: Gated<InsightsPages | null> | null;
 }
 
 export interface ShareComment {
@@ -185,7 +214,7 @@ export function getLinkSettings(shareToken: string): Promise<LinkSettingsDefault
 }
 
 /** A change to a link's switches: only the ones flipped. */
-export type LinkSettingsChange = Partial<LinkSettings>;
+export type LinkSettingsChange = Partial<LinkSettings> & { download?: boolean };
 
 /**
  * Flip some of a link's switches. Only the switches in `change` are sent, so
@@ -215,6 +244,21 @@ export function getLinkSettingsDefault(
     fileName,
     isFolder,
   });
+}
+
+/** What the Insights panel's Create link would give a file, and whether it is a capture. */
+export interface InsightsPanelLinkDefault extends LinkSettingsDefault {
+  isCapture: boolean;
+}
+
+/**
+ * What the Insights panel's "Create link" would give this file: Rust's
+ * `insights_panel_link_default` (a capture follows Settings' "Track views,
+ * comments and reactions", any other file asks for all three; the plan and
+ * the server decide).
+ */
+export function getInsightsPanelLinkDefault(folderLabel: string, fileName: string): Promise<InsightsPanelLinkDefault> {
+  return invoke<InsightsPanelLinkDefault>("insights_panel_link_default", { folderLabel, fileName });
 }
 
 /**

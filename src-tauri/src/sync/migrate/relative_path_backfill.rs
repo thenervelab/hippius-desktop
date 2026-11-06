@@ -42,6 +42,7 @@ use crate::sync::config::build_hcfs_config;
 use crate::sync::mnemonic::folder_hash;
 use crate::sync::remote::get_server_url;
 use hcfs_client::client::HcfsClient;
+use hcfs_client::engine::lock_drive;
 use hcfs_shared::network::{MAX_REGISTER_RELATIVE_PATHS_BATCH, RegisterRelativePathEntry};
 use sqlx::sqlite::SqlitePool;
 use std::path::PathBuf;
@@ -226,7 +227,7 @@ async fn snapshot_path_index(state: &AppState, label: &str) -> Option<std::colle
     // guard immediately after keeps upload/download on this drive
     // responsive during the HTTP round-trips that follow.
     let state_snapshot = {
-        let manager = drive_arc.lock().await;
+        let manager = lock_drive(&drive_arc, label, "relative_path_backfill").await;
         if !manager.is_unlocked() {
             return None;
         }

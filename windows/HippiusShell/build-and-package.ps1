@@ -24,7 +24,7 @@ $ErrorActionPreference = "Stop"
 $here = $PSScriptRoot
 
 Write-Host "==> Building HippiusShell.dll (release)"
-cargo build --release --manifest-path "$here\Cargo.toml"
+cargo build --release --locked --manifest-path "$here\Cargo.toml"
 # cdylib output is the snake_case lib name; the manifest expects HippiusShell.dll.
 $dll = "$here\target\release\hippius_shell.dll"
 if (-not (Test-Path $dll)) { throw "DLL not found at $dll" }

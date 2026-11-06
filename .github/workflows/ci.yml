@@ -46,9 +46,10 @@ name: ci
 #
 # Runners: the Linux jobs can run on our own GitHub Actions runners. Repo
 # variable CI_RUNS_ON_LINUX names the label (e.g. hippius-medium) and
-# CI_RUNS_ON_LINUX_LARGE the one for the Rust builds (e.g. hippius-large,
-# falling back to CI_RUNS_ON_LINUX); unset, every job stays on GitHub-hosted
-# ubuntu-latest, so deleting a variable switches back. This repo is public,
+# CI_RUNS_ON_LINUX_LARGE the one for the Rust builds (e.g. hippius-large).
+# Each is read alone, with no fallback between them, so the Rust builds can
+# go back to GitHub-hosted runners without the light jobs. Unset, a job stays
+# on GitHub-hosted ubuntu-latest, so deleting a variable switches back. This repo is public,
 # so a pull request from a FORK always runs hosted: our runners must never
 # execute code from outside the repo. Each Linux job repeats one guard:
 #   (github.event_name != 'pull_request' ||
@@ -206,7 +207,7 @@ jobs:
     # Skipped when the PR touches no Rust-relevant path (frontend-only PRs).
     # Pushes always run.
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX_LARGE || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -233,7 +234,7 @@ jobs:
   rust-linux-test:
     needs: changes
     if: github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX_LARGE || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -693,7 +694,7 @@ jobs:
     # as capture-runtime-windows.
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.capture_runtime == 'true'
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (vars.CI_RUNS_ON_LINUX_LARGE || vars.CI_RUNS_ON_LINUX) || 'ubuntu-latest' }}
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RUNS_ON_LINUX_LARGE || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -790,8 +791,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release
-          cargo test
+          cargo build --release --locked
+          cargo test --locked
 
       # Validate the full packaging pipeline (build DLL -> self-signed cert ->
       # stamp manifest -> makeappx pack -> signtool sign/verify -> export cert)

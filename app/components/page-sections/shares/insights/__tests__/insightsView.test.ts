@@ -2,6 +2,15 @@ import { describe, it, expect } from "vitest";
 
 import type { InsightsViewer } from "@/app/lib/tauri/shareInsights";
 import {
+  PAGES_LOCK_BODY,
+  PAGES_LOCK_BODY_NOT_COUNTING,
+  PAGES_LOCK_TITLE,
+  biggestPageDrop,
+  pagesLockCopy,
+  pagesSeenLabel,
+  pagesTabShown,
+  DOWNLOAD_NOT_IN_PLAN,
+  isDownloadNotInPlan,
   actionErrorLine,
   loadErrorLine,
   OFFLINE_LINE,
@@ -370,5 +379,46 @@ describe("what Insights promise the owner", () => {
     for (const video of [true, false])
       for (const notCounting of [true, false]) words.push(...Object.values(view.lockCopy({ video, notCounting })));
     for (const w of words) expect(w).not.toMatch(/\bwho (viewed|watched|watches|views|opened)\b/i);
+  });
+});
+
+describe("the Pages tab helpers", () => {
+  const SHOWN = { state: "shown" as const, value: { pageCount: 3, reach: [100, 60, 50], medianMs: [1, 2, 3] } };
+
+  it("shows the tab only when Rust sends pages, for a document or a link with page numbers", () => {
+    expect(pagesTabShown(null, "Deck.pdf")).toBe(false);
+    expect(pagesTabShown(undefined, "Deck.pdf")).toBe(false);
+    expect(pagesTabShown({ state: "locked" }, "Deck.pdf")).toBe(true);
+    expect(pagesTabShown({ state: "locked" }, "plan.DOCX")).toBe(true);
+    expect(pagesTabShown({ state: "shown", value: null }, "slides.pptx")).toBe(true);
+    expect(pagesTabShown({ state: "locked" }, "Recording.mp4")).toBe(false);
+    expect(pagesTabShown({ state: "shown", value: null }, "photo.png")).toBe(false);
+    expect(pagesTabShown(SHOWN, "renamed-without-extension")).toBe(true);
+  });
+
+  it("knows Rust's refusal to turn downloads off on the free plan", () => {
+    expect(DOWNLOAD_NOT_IN_PLAN).toBe("Turning off downloads is available on paid Drive plans.");
+    expect(isDownloadNotInPlan({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN })).toBe(true);
+    expect(isDownloadNotInPlan({ kind: "Api", message: DOWNLOAD_NOT_IN_PLAN })).toBe(false);
+    expect(isDownloadNotInPlan({ kind: "Validation", message: "Insights, comments and reactions are available on paid Drive plans." })).toBe(false);
+    expect(isDownloadNotInPlan(null)).toBe(false);
+    expect(isDownloadNotInPlan("nope")).toBe(false);
+  });
+
+  it("finds the page after which the most visits left", () => {
+    expect(biggestPageDrop([100, 92, 80, 41, 40])).toEqual({ afterPage: 3, drop: 39 });
+    expect(biggestPageDrop([100, 100, 99])).toBeNull();
+    expect(biggestPageDrop([100])).toBeNull();
+    expect(biggestPageDrop([])).toBeNull();
+  });
+
+  it("says a viewer's pages", () => {
+    expect(pagesSeenLabel(5, 12)).toBe("5 of 12 pages");
+    expect(pagesSeenLabel(1, 1)).toBe("1 of 1 page");
+  });
+
+  it("locks with its own words, counting or not", () => {
+    expect(pagesLockCopy({ notCounting: false })).toEqual({ title: PAGES_LOCK_TITLE, body: PAGES_LOCK_BODY });
+    expect(pagesLockCopy({ notCounting: true }).body).toBe(PAGES_LOCK_BODY_NOT_COUNTING);
   });
 });

@@ -239,8 +239,4 @@ async fn require_eligible_prices_uploads_by_byte_count() {
     require_eligible(&state, account_id, InsufficientCreditsAction::FileUpload, too_many_bytes)
         .await
         .expect("upload passes when the balance covers the old priced cost too");
-
-    unsafe {
-        std::env::remove_var("HIPPIUS_API_BASE_URL");
-    }
 }
