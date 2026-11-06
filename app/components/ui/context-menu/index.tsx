@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput } from "lucide-react";
+import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput, FolderSymlink } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -46,10 +46,11 @@ import {
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { canRenameFile, MOVE_DISABLED_TOOLTIP, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { copyLinkLabel, linkPathFor } from "@/app/components/page-sections/drive/existingLink";
 import { useExistingLinks } from "@/app/components/page-sections/drive/useExistingLinks";
 import { useCopyExistingLink } from "@/app/components/page-sections/drive/useCopyExistingLink";
+import { useDriveMove } from "@/app/components/page-sections/drive/move/DriveMoveProvider";
 
 interface ContextMenuProps {
   x: number;
@@ -79,6 +80,11 @@ interface ContextMenuProps {
    */
   onRename?: (file: FormattedUserFile) => void;
   /**
+   * Open the Move to… picker for this row. Hidden when omitted, and under
+   * the same write and sync gates as Rename.
+   */
+  onMove?: (file: FormattedUserFile) => void;
+  /**
    * The drive-relative folder the listing is showing (the table's
    * `currentSubfolderPath`). A folder row may carry only its basename, so
    * "Share folder" resolves its path against this, the same way "Share via
@@ -99,6 +105,7 @@ export default function FileContextMenu({
   onFileDownload,
   onShareFile,
   onRename,
+  onMove,
   basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
@@ -123,6 +130,7 @@ export default function FileContextMenu({
   // lookup as the row's link icon and the three-dots menu.
   const { linkFor } = useExistingLinks();
   const copyExistingLink = useCopyExistingLink();
+  const driveMove = useDriveMove();
 
   useEffect(() => {
     setMounted(true);
@@ -410,6 +418,25 @@ export default function FileContextMenu({
             >
               <Pencil className="size-4" />
               <span>Rename</span>
+            </button>
+          )}
+
+          {onMove && driveMove?.offersMove(file) && (
+            <button
+              className={cn(menuItemClass, {
+                "opacity-60 cursor-not-allowed": !driveMove.canMove(file),
+              })}
+              disabled={!driveMove.canMove(file)}
+              title={!driveMove.canMove(file) ? MOVE_DISABLED_TOOLTIP : undefined}
+              onClick={() => {
+                if (driveMove.canMove(file)) {
+                  onMove(file);
+                  onClose();
+                }
+              }}
+            >
+              <FolderSymlink className="size-4" />
+              <span>Move to{"\u2026"}</span>
             </button>
           )}
 

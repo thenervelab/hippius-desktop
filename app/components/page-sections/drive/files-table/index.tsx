@@ -99,7 +99,12 @@ import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { FormattedTimestamp } from "@/app/components/ui";
-import { useFileSelection } from "@/app/contexts/FileSelectionContext";
+import { useFileSelection, selectionKey } from "@/app/contexts/FileSelectionContext";
+import { useDriveMove } from "../move/DriveMoveProvider";
+import { dropStateClass, useHoverExpand, useMoveRow } from "../move/useMoveDnd";
+import { rangeBetween } from "@/app/lib/drive-move/moveLogic";
+import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { FolderSymlink } from "lucide-react";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -303,6 +308,12 @@ interface DriveRowCtx {
     previewSiblings?: FormattedUserFile[],
   ) => void;
   handleToggleTopLevelRow: (file: FormattedUserFile) => void;
+  /** Cmd/Ctrl-click toggles a row, Shift-click selects up to it. */
+  modifierSelect: (file: FormattedUserFile, range: boolean) => void;
+  /** A plain click outside selection mode drops a Cmd/Shift selection. */
+  clearModifierSelection: () => void;
+  /** Open a collapsed folder row (hovered mid-drag). */
+  expandFolder: (file: FormattedUserFile) => void;
   createTableItems: ExpandedFolderRowsProps["createTableItems"];
   onSelectFile: ExpandedFolderRowsProps["onSelectFile"];
   onOpenFolder: ExpandedFolderRowsProps["onOpenFolder"];
@@ -428,10 +439,17 @@ const DriveFileRow = memo(function DriveFileRow({
       : rowData.parentRelativePath,
   };
   const ctx = ctxRef.current;
+  const move = useMoveRow(annotatedRow, normalizedSubfolderPath, { disabled: isDeleting });
+  useHoverExpand(
+    Boolean(rowData.isFolder) && canInlineExpand && !isExpanded && move.dropState === "valid",
+    () => ctxRef.current.expandFolder(rowData),
+  );
 
   return (
     <>
       <TableModule.Tr
+        ref={move.setRef}
+        {...move.dragProps}
         // "Show in folder" finds the row by this (`highlightEntry.ts`).
         data-drive-entry={entryKey(rowData)}
         rowHover={!isDeleting}
@@ -442,19 +460,33 @@ const DriveFileRow = memo(function DriveFileRow({
           rowState === "error" && "bg-red-200/20",
           isDeleting && "opacity-50 cursor-not-allowed pointer-events-none",
           isSelectionMode && canSelectRow && "cursor-pointer",
-          isSelectionMode &&
-            isSelectedRow &&
-            canSelectRow &&
-            "bg-primary-60/10",
+          // A Cmd/Shift selection highlights the same way, without the mode.
+          isSelectedRow && canSelectRow && "bg-primary-60/10",
           isSelectionMode &&
             !isSelectedRow &&
             canSelectRow &&
             "hover:bg-primary-60/8",
           isSelectionMode && !canSelectRow && "opacity-50 cursor-not-allowed",
+          move.isDragging && "opacity-50",
+          dropStateClass(move.dropState),
         )}
         onContextMenu={(e) => {
           if (isDeleting) return;
           ctxRef.current.localHandleContextMenu(e, rowData);
+        }}
+        onClickCapture={(e) => {
+          if (isDeleting || isSelectionMode) return;
+          const target = e.target as HTMLElement;
+          if (target.closest(".action-menu-area")) return;
+          if (e.metaKey || e.ctrlKey || e.shiftKey) {
+            // Captured before the name cell sees it, so a modified click
+            // selects instead of opening the file or folder.
+            e.preventDefault();
+            e.stopPropagation();
+            if (canSelectRow) ctxRef.current.modifierSelect(rowData, e.shiftKey);
+            return;
+          }
+          ctxRef.current.clearModifierSelection();
         }}
         onClick={(e) => {
           if (isDeleting) {
@@ -822,7 +854,10 @@ const FilesTable: FC<FilesTableProps> = memo(
       toggleFolderSelection,
       removeFileFromSelection,
       addFilesToSelection,
+      selectAllFiles,
+      unselectAllFiles,
     } = useFileSelection();
+    const driveMove = useDriveMove();
     const {
       isVisuallySelected,
       classifyVisualSelection,
@@ -1388,6 +1423,28 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
+          // Move to…: the Rename gates, offered only inside a drive folder.
+          ...(driveMove?.offersMove(file)
+            ? [
+                {
+                  icon: <FolderSymlink className="size-4" />,
+                  itemTitle: "Move to\u2026",
+                  disabled: itemDeleting || !driveMove.canMove(file),
+                  tooltip:
+                    !itemDeleting && !driveMove.canMove(file)
+                      ? MOVE_DISABLED_TOOLTIP
+                      : undefined,
+                  onItemClick: () => {
+                    if (!itemDeleting && driveMove.canMove(file)) {
+                      driveMove.openMoveDialog(
+                        [file],
+                        parentSubFolderPath ?? normalizedSubfolderPath,
+                      );
+                    }
+                  },
+                },
+              ]
+            : []),
           // Delete is gated by both sync state (unassigned files are
           // mid-upload) and live deletion state (already in flight).
           // Cloud-only rows hide it entirely — the delete pipeline removes
@@ -1446,6 +1503,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         listingDriveLabel,
         sharedFolders,
         setRenameModalFile,
+        driveMove,
         isItemDeleting,
         normalizedSubfolderPath,
         resolveRelativePath,
@@ -2244,9 +2302,38 @@ const FilesTable: FC<FilesTableProps> = memo(
 
     // Latest-render snapshot for `DriveFileRow` (see the component's docs).
     // Reassigned every render, mirroring `cellCtxRef`.
+    // Shift-click extends from the last Cmd/Ctrl-clicked row, over the
+    // rows in the order they are shown.
+    const selectionAnchorRef = useRef<string | null>(null);
+    const annotateTopLevel = (file: FormattedUserFile): FormattedUserFile => ({
+      ...file,
+      parentRelativePath: file.isFolder ? normalizedSubfolderPath : file.parentRelativePath,
+    });
+    const modifierSelect = (file: FormattedUserFile, range: boolean) => {
+      const annotated = annotateTopLevel(file);
+      const key = selectionKey(annotated);
+      if (range) {
+        const rows = (visibleRows ?? []).map((row) => annotateTopLevel(row.original));
+        selectAllFiles(rangeBetween(rows, selectionKey, selectionAnchorRef.current, key));
+        return;
+      }
+      selectionAnchorRef.current = key;
+      if (annotated.isFolder) toggleFolderSelection(annotated);
+      else toggleFileSelection(annotated);
+    };
+
     const rowCtx: DriveRowCtx = {
       localHandleContextMenu,
       handleToggleTopLevelRow,
+      modifierSelect,
+      clearModifierSelection: () => {
+        selectionAnchorRef.current = null;
+        if (!isSelectionMode && selectedFiles.length > 0) unselectAllFiles();
+      },
+      expandFolder: (file) => {
+        const key = getFolderKey(file);
+        setExpandedFolders((previous) => (previous[key] ? previous : { ...previous, [key]: true }));
+      },
       createTableItems,
       onSelectFile: handleSetSelectedFile,
       onOpenFolder: (childFile, parentPath) => {
@@ -2397,7 +2484,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         </div>
 
         {/* Selection action bar positioned above pagination */}
-        {isSelectionMode && (
+        {(isSelectionMode || selectedFiles.length > 0) && (
           <SelectionActionBar
             onDelete={handleDeleteSelectedFiles}
             isDeleting={isDeleting}
