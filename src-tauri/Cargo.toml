@@ -299,19 +299,28 @@ sha3 = "0.10"
 #
 # Now at hcfs main 778f886e, the merge commit of #1170: hcfs-client declares
 # base64's `std` feature itself (#1165), so the desktop no longer turns it on.
-# `Manifest` gains `capture` (#1148), which the desktop leaves `None`.
+# `Manifest` gains `capture` (#1148).
+#
+# Now at hcfs main b945dec5, the merge commit of #1242. It brings #1206,
+# the Free plan's recording limits on the client side: `declare_capture`
+# (the desktop declares each recording it delivers into a synced drive,
+# `capture::deliver::declare_placed`, and puts it on the manifest of a direct
+# upload) and `FileFailureKind::RecordingLimit` for the server's 403s,
+# mapped to the desktop's `recordingLimit` failure kind. The rest since
+# 778f886e is server-side or internal to hcfs-client and changes no type
+# the desktop uses (the build needed no other change).
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b945dec58587e300a5fa17aaceff55931022f1b6" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b945dec58587e300a5fa17aaceff55931022f1b6" }
 # The file cipher, path hash and `FileKey`, which hcfs-client uses but does
 # not re-export. Same rev as hcfs-client so a `FileKey` is the type its API takes.
-hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "b945dec58587e300a5fa17aaceff55931022f1b6" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
