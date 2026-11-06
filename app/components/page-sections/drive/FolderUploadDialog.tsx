@@ -34,6 +34,7 @@ import {
   saveLastBrowseDirectory,
 } from "@/lib/utils/userPreferencesDb";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
+import { useClaimOsDrops } from "@/app/lib/drive/useOsDropTarget";
 
 type Props = {
   open: boolean;
@@ -81,6 +82,8 @@ export default function FolderUploadDialog({
   const [selectedIsRemote, setSelectedIsRemote] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // While open, a drop lands in this dialog's own field, not as a new upload.
+  useClaimOsDrops(open);
 
   const handleSelectFolder = async () => {
     try {
