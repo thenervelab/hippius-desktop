@@ -80,6 +80,12 @@ export interface ServerCapabilities {
    */
   share_document_views?: boolean;
   /**
+   * The owner's Allow download switch on a file link. Read by Rust only (it
+   * sends `download` in the link settings only then); listed so the type
+   * matches the wire.
+   */
+  share_download_switch?: boolean;
+  /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
    */

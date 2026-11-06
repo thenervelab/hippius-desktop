@@ -16,6 +16,22 @@ export const ANONYMOUS = "Anonymous viewer";
  * Reactions switch is turned on: the same words the web app uses.
  */
 export const LOCKED_PROMPT = "Insights, comments and reactions are available on paid Drive plans";
+/** The upgrade prompt where Allow download is turned off on the free plan. */
+export const DOWNLOAD_LOCKED_PROMPT = "Turning off downloads is available on paid Drive plans";
+/** The line under it. */
+export const DOWNLOAD_UPGRADE_BODY = "Upgrade to hide the download button on your links.";
+/**
+ * Rust's refusal when downloads are turned off on the free plan (its
+ * `DOWNLOAD_NOT_IN_PLAN`, word for word), which shows the prompt above.
+ */
+export const DOWNLOAD_NOT_IN_PLAN = "Turning off downloads is available on paid Drive plans.";
+
+/** Whether `err` is Rust's refusal to turn downloads off on the free plan. */
+export function isDownloadNotInPlan(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  return kind === "Validation" && message === DOWNLOAD_NOT_IN_PLAN;
+}
 /** Every upgrade button in Insights says this, as the sheet's own does. */
 export const LOCKED_ACTION = "Upgrade plan";
 /** The line under the prompt where a switch was turned on. */
@@ -84,9 +100,11 @@ export type InsightsTab = "comments" | "viewers" | "pages" | "reactions";
 export const DOCUMENT_NAME = /\.(pdf|docx|pptx)$/i;
 
 /**
- * Whether the Pages tab shows: only on a server with document views (Rust
- * sends `pages` only then), for a document's link, or for any link that
- * already has page numbers. On the free plan it is the lock.
+ * Whether the Pages tab shows: only when Rust sends `pages`, which it does
+ * only when the server reports them (a pages block on a paid link, or
+ * `pages` locked on the free plan), never from the capability alone. Then
+ * for a document's link, or any link that already has page numbers. On the
+ * free plan it is the lock.
  */
 export function pagesTabShown(pages: Gated<InsightsPages | null> | null | undefined, fileName: string): boolean {
   if (!pages) return false;
@@ -450,7 +468,11 @@ export const SAMPLE_VIEWERS: InsightsViewer[] = [
   { viewerId: "sample-2", name: "Example viewer", visits: 1, watchedMs: 47_000, completion: 0.41, lastViewedAt: null, comments: 0, reactions: 1 },
 ];
 
-/** The sample pages behind the Pages tab's lock: a 10 page document. */
+/**
+ * The sample pages behind the Pages tab's lock: a 10 page document. Drawn
+ * only when the server locks `pages` itself, so a sample never stands in for
+ * a feature the server does not report yet.
+ */
 export const SAMPLE_PAGES: InsightsPages = {
   pageCount: 10,
   reach: [100, 92, 84, 80, 61, 58, 55, 41, 38, 30],
