@@ -172,6 +172,11 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
     let pool = state.pool()?;
     let home = home_dir()?;
     let drives = destination::drives_here(pool, account_id).await?;
+    // Captures were kept only in a folder whose drive could not be added
+    // before: on a first choice there is nothing kept to declare, and the
+    // app's recordings already in that folder (an old captures folder,
+    // copies from another drive) are not this setup's to count.
+    let was_pending = load_pending(pool, account_id).await?.is_some_and(|p| p.path == dir);
     if let Place::InDrive { label, folder } = check_location(dir, &home, &drives)? {
         let root = drives
             .iter()
@@ -186,7 +191,11 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
         // still marks their later uploads. Measured from the drive's own
         // root, not `dir`, which may reach it through a symlink and would
         // then not strip against it (`deliver::declare_placed`).
-        let kept = measure_kept(&root.join(&folder)).await;
+        let kept = if was_pending {
+            measure_kept(&root.join(&folder)).await
+        } else {
+            Vec::new()
+        };
         declare_kept(account_id, &root, &label, kept).await;
         clear_pending(pool, account_id).await?;
         // Made now, so the folder is there to open before the first capture
@@ -219,7 +228,7 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
     let base = CAPTURES_DIR_NAME.to_string();
     // Measured before the drive is added, declared right after (its label,
     // and so its config folder, is only known then): see `declare_kept`.
-    let kept = measure_kept(dir).await;
+    let kept = if was_pending { measure_kept(dir).await } else { Vec::new() };
     match crate::sync::lifecycle::add_local_sync_folder(app.clone(), account_id.to_string(), path, base, None).await {
         Ok(label) => {
             declare_kept(account_id, dir, &label, kept).await;
@@ -247,7 +256,9 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
 /// (`naming::is_app_recording_name`), so a video of the user's own in the
 /// folder is never declared: it would count against the plan's recordings
 /// and the server would then refuse it. A recording the user renamed is
-/// missed, and uploads uncounted.
+/// missed, and uploads uncounted. So is one whose keep was still moving it
+/// in when this ran (`commands::keep_here` moves after `ensure` releases
+/// [`ENSURE_LOCK`]); only the card's own capture is delivered again.
 async fn measure_kept(dir: &Path) -> Vec<(PathBuf, hcfs_shared::network::Capture)> {
     let dir = dir.to_path_buf();
     tokio::task::spawn_blocking(move || app_recordings_in(&dir)).await.unwrap_or_else(|e| {
@@ -272,16 +283,18 @@ fn app_recordings_in(dir: &Path) -> Vec<(PathBuf, hcfs_shared::network::Capture)
 }
 
 /// Declare `kept` (from [`measure_kept`]) on the drive `label` rooted at
-/// `root`, which was just added, so the server counts them (thenervelab/hcfs#1133).
+/// `root`, so the server counts them (thenervelab/hcfs#1133).
 ///
-/// After the drive is added, not before: its label, and so its config
-/// folder, is allocated inside the folder add. The files were in the root
-/// before the drive was registered, so this relies on what
+/// On a new drive, right after it is added, not before: its label, and so
+/// its config folder, is allocated inside the folder add. The files were in
+/// the root before the drive was registered, so this relies on what
 /// `deliver::declare_placed` does, and on a longer window: the drive's first
 /// cycle scans and hashes every file and lists the server before it builds
 /// any upload's manifest, against the tail of the drive's setup plus one
 /// small file write per recording here (their lengths were read before).
-/// Losing that race uploads a recording uncounted. A failure is logged.
+/// Losing that race uploads a recording uncounted. On a drive that already
+/// existed, the caller says what a late declaration still does. A failure
+/// is logged.
 ///
 /// Every kept recording is declared, past the plan's room too: the server
 /// then refuses the ones over its limit, and their sync rows say why and
@@ -1456,8 +1469,8 @@ mod tests {
     }
 
     /// The recordings the app named in the chosen folder are measured; a
-    /// screenshot, a renamed recording, a user's own video and anything in a
-    /// subfolder are not.
+    /// screenshot, any other video (renamed or the user's own) and anything
+    /// in a subfolder are not.
     #[test]
     fn only_the_app_s_recordings_in_the_chosen_folder_are_kept() {
         let tmp = tempfile::tempdir().unwrap();

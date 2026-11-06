@@ -42,22 +42,28 @@ pub fn capture_file_name(kind: CaptureKind, at: NaiveDateTime) -> String {
 
 /// Whether `name` is a recording this app named ([`capture_file_name`]),
 /// with or without the ` (N)` a move into a folder adds when the name is
-/// taken (`deliver::move_into`). A renamed recording is not one.
+/// taken (`deliver::free_name`: 2 to 9999). A renamed recording is not one.
+///
+/// The name is rebuilt from the time it parses to and compared, so only a
+/// name [`capture_file_name`] could have written matches (no lenient
+/// widths), whatever its format becomes.
 #[must_use]
 pub fn is_app_recording_name(name: &str) -> bool {
     let Some(stem) = name.strip_prefix("Recording ").and_then(|rest| rest.strip_suffix(".mp4")) else {
         return false;
     };
-    let stem = match stem.rsplit_once(" (") {
-        Some((head, n))
-            if n.strip_suffix(')')
-                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) =>
-        {
-            head
-        }
-        _ => stem,
+    let (stamp, suffix) = match stem.rsplit_once(" (") {
+        Some((head, n)) => match n.strip_suffix(')') {
+            Some(n) => (head, Some(n)),
+            None => (stem, None),
+        },
+        None => (stem, None),
     };
-    NaiveDateTime::parse_from_str(stem, "%Y-%m-%d at %H.%M.%S").is_ok()
+    let suffix_ok = suffix.is_none_or(|n| !n.starts_with('0') && n.parse::<u16>().is_ok_and(|n| (2..=9_999).contains(&n)));
+    let Ok(at) = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d at %H.%M.%S") else {
+        return false;
+    };
+    suffix_ok && capture_file_name(CaptureKind::Recording, at) == format!("Recording {stamp}.mp4")
 }
 
 #[cfg(test)]
@@ -97,6 +103,10 @@ mod tests {
             "Holiday.mp4",
             "Recording 2026-09-22 at 09.00.05 (x).mp4",
             "Recording 2026-09-22 at 09.00.05 ().mp4",
+            "Recording 2026-09-22 at 09.00.05 (1).mp4",
+            "Recording 2026-09-22 at 09.00.05 (02).mp4",
+            "Recording 2026-09-22 at 09.00.05 (10000).mp4",
+            "Recording 2026-9-2 at 9.0.5.mp4",
             "My Recording 2026-09-22 at 09.00.05.mp4",
         ] {
             assert!(!is_app_recording_name(other), "{other}");

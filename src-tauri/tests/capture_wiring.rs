@@ -162,6 +162,8 @@ fn captures_kept_in_the_chosen_folder_are_declared_when_its_drive_is_added() {
     let measured = add.rfind("measure_kept(").expect("measured for the new drive");
     let declared = add.rfind("declare_kept(").expect("declared on the new drive");
     assert!(measured < added && added < declared, "measured before the add, declared after");
+    let pending = add.find("was_pending").expect("only a folder that was pending is measured");
+    assert!(pending < add.find("measure_kept(").unwrap(), "decided before either branch measures");
 }
 
 /// Both ways a capture reaches a drive tell the server what it is, so a Free
