@@ -55,3 +55,6 @@ export function canRenameFile(file: FormattedUserFile): boolean {
 
 export const RENAME_DISABLED_TOOLTIP =
   "Only items synced on this device can be renamed. Wait for sync to finish and try again.";
+
+export const MOVE_DISABLED_TOOLTIP =
+  "Only items synced on this device can be moved. Wait for sync to finish and try again.";

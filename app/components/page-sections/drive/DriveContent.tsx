@@ -38,6 +38,9 @@ import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import { useDriveRoute } from "./driveRoute";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
+import { useDriveMove } from "./move/DriveMoveProvider";
+import MoveHint from "./move/MoveHint";
+import { isInAppDragActive } from "@/app/lib/drive-move/inAppDrag";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -163,6 +166,8 @@ const DriveContent: FC<DriveContentProps> = ({
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+  // Moving within the drive on screen; null outside a drive folder view.
+  const driveMove = useDriveMove();
 
   // Use shared functionality between FilesTable and CardView
   const sharedState = useFileViewShared();
@@ -325,6 +330,8 @@ const DriveContent: FC<DriveContentProps> = ({
           position: { x: number; y: number };
         }>("tauri://drag-enter", (event) => {
           console.log("[DragDrop] drag-enter event received", event.payload);
+          // A row dragged inside the app is a move, never an upload.
+          if (isInAppDragActive()) return;
           if (isSyncPathEmpty && !isRecentFiles) return;
           // Don't show background overlay if either upload dialog is open —
           // both have their own dropzone visuals.
@@ -352,6 +359,7 @@ const DriveContent: FC<DriveContentProps> = ({
           position: { x: number; y: number };
         }>("tauri://drag-drop", async (event) => {
           console.log("[DragDrop] drag-drop event received", event.payload);
+          if (isInAppDragActive()) return;
           setIsDragging(false);
           setAnimateCloud(false);
           if (dragTimeoutRef.current) {
@@ -635,6 +643,7 @@ const DriveContent: FC<DriveContentProps> = ({
             </div>
           </div>
         )}
+        {!isRecentFiles && !isLoading && <MoveHint rows={filteredData} />}
         {renderContent()}
       </div>
 
@@ -731,6 +740,14 @@ const DriveContent: FC<DriveContentProps> = ({
             setRenameModalFile(file);
             setContextMenu(null);
           }}
+          onMove={
+            driveMove
+              ? (file) => {
+                  driveMove.openMoveDialog([file], currentSubfolderPath);
+                  setContextMenu(null);
+                }
+              : undefined
+          }
           basePath={currentSubfolderPath}
         />
       )}
