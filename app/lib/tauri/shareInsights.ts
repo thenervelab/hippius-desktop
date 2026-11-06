@@ -28,6 +28,12 @@ export interface LinkSettingsDefault {
    * locked, and a new link starts all three off).
    */
   switchesInPlan: boolean | null;
+  /**
+   * Allow download, as the link has it. Absent or `null` where there is no
+   * such switch: a server without it, or a link not made yet (every link
+   * starts with downloads allowed). Turning it off needs a paid plan.
+   */
+  download?: boolean | null;
 }
 
 /**
@@ -76,9 +82,10 @@ export interface ShareInsights {
   retention: Gated<number[] | null>;
   viewers: Gated<InsightsViewer[]>;
   /**
-   * Page by page numbers. `null` (or absent) on a server without document
-   * views, which shows nothing about pages; `null` inside while the link has
-   * no document visit.
+   * Page by page numbers. `null` (or absent), and no Pages tab, until the
+   * server reports them: a pages block on a paid link, or `pages` locked on
+   * the free plan. Rust never sends it from the server's capability alone.
+   * `null` inside for a block with no readable page count.
    */
   pages?: Gated<InsightsPages | null> | null;
 }
@@ -207,7 +214,7 @@ export function getLinkSettings(shareToken: string): Promise<LinkSettingsDefault
 }
 
 /** A change to a link's switches: only the ones flipped. */
-export type LinkSettingsChange = Partial<LinkSettings>;
+export type LinkSettingsChange = Partial<LinkSettings> & { download?: boolean };
 
 /**
  * Flip some of a link's switches. Only the switches in `change` are sent, so

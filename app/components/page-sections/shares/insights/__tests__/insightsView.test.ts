@@ -9,6 +9,8 @@ import {
   pagesLockCopy,
   pagesSeenLabel,
   pagesTabShown,
+  DOWNLOAD_NOT_IN_PLAN,
+  isDownloadNotInPlan,
   actionErrorLine,
   loadErrorLine,
   OFFLINE_LINE,
@@ -383,7 +385,7 @@ describe("what Insights promise the owner", () => {
 describe("the Pages tab helpers", () => {
   const SHOWN = { state: "shown" as const, value: { pageCount: 3, reach: [100, 60, 50], medianMs: [1, 2, 3] } };
 
-  it("shows the tab only on a server with document views, for a document or a link with page numbers", () => {
+  it("shows the tab only when Rust sends pages, for a document or a link with page numbers", () => {
     expect(pagesTabShown(null, "Deck.pdf")).toBe(false);
     expect(pagesTabShown(undefined, "Deck.pdf")).toBe(false);
     expect(pagesTabShown({ state: "locked" }, "Deck.pdf")).toBe(true);
@@ -392,6 +394,15 @@ describe("the Pages tab helpers", () => {
     expect(pagesTabShown({ state: "locked" }, "Recording.mp4")).toBe(false);
     expect(pagesTabShown({ state: "shown", value: null }, "photo.png")).toBe(false);
     expect(pagesTabShown(SHOWN, "renamed-without-extension")).toBe(true);
+  });
+
+  it("knows Rust's refusal to turn downloads off on the free plan", () => {
+    expect(DOWNLOAD_NOT_IN_PLAN).toBe("Turning off downloads is available on paid Drive plans.");
+    expect(isDownloadNotInPlan({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN })).toBe(true);
+    expect(isDownloadNotInPlan({ kind: "Api", message: DOWNLOAD_NOT_IN_PLAN })).toBe(false);
+    expect(isDownloadNotInPlan({ kind: "Validation", message: "Insights, comments and reactions are available on paid Drive plans." })).toBe(false);
+    expect(isDownloadNotInPlan(null)).toBe(false);
+    expect(isDownloadNotInPlan("nope")).toBe(false);
   });
 
   it("finds the page after which the most visits left", () => {
