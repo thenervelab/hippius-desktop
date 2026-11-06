@@ -148,6 +148,28 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
     }
 }
 
+/// A capture kept in the chosen folder while its drive could not be added
+/// is remembered, and declared when the drive is added, before the pending
+/// row that lists it is cleared: on both ways `add_drive` adds it (a new
+/// drive, or a folder inside an existing one). `setup::tests` covers the
+/// list and the declaration; this pins the calls.
+#[test]
+fn captures_kept_in_the_chosen_folder_are_declared_when_its_drive_is_added() {
+    let commands = read("src/capture/commands.rs");
+    let keep = fn_body(&commands, "async fn keep_here(");
+    assert!(keep.contains("remember_kept("), "a kept capture is remembered");
+
+    let setup = read("src/capture/setup.rs");
+    let add = fn_body(&setup, "async fn add_drive(");
+    let clears: Vec<usize> = add.match_indices("clear_pending(").map(|(i, _)| i).collect();
+    let declares: Vec<usize> = add.match_indices("declare_kept(").map(|(i, _)| i).collect();
+    assert_eq!(clears.len(), 2, "both ways in clear the pending row");
+    assert_eq!(declares.len(), 2, "both ways in declare the kept captures");
+    for (declare, clear) in declares.iter().zip(&clears) {
+        assert!(declare < clear, "declared while the pending row still lists them");
+    }
+}
+
 /// Both ways a capture reaches a drive tell the server what it is, so a Free
 /// plan's recordings are counted and held to their length (#1133): a synced
 /// drive through hcfs's declaration, made after the move picks the name and

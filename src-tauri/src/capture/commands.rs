@@ -4825,6 +4825,14 @@ async fn keep_here(app: &AppHandle, path: &Path, card_id: Option<u64>, kept_as: 
     let kept = match kept {
         Ok(kept) => {
             remove_temp_dir(path);
+            // Kept in the chosen folder of a drive not added yet: declared
+            // when it is (`setup::declare_kept`).
+            if let Ok(pool) = state.pool()
+                && let Ok(account_id) = state.current_account_id()
+                && let Err(e) = super::setup::remember_kept(pool, &account_id, &kept).await
+            {
+                tracing::warn!(error = %e, "kept capture not remembered; it uploads uncounted when its drive is added");
+            }
             kept
         }
         Err(e) => {

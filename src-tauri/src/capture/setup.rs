@@ -182,6 +182,7 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
             ..CaptureDestination::own(&label, &drive_name(&root, &label))
         };
         destination::save(pool, account_id, &chosen).await?;
+        declare_kept(pool, account_id, dir, &root, &label).await;
         clear_pending(pool, account_id).await?;
         // Made now, so the folder is there to open before the first capture
         // lands in it. Delivery makes it too, so a failure here costs nothing.
@@ -215,6 +216,7 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
         Ok(label) => {
             let chosen = CaptureDestination::own(&label, &drive_name(dir, &label));
             destination::save(pool, account_id, &chosen).await?;
+            declare_kept(pool, account_id, dir, dir, &label).await;
             clear_pending(pool, account_id).await?;
             tracing::info!(label = %label, "captures drive added");
             Ok(Added::Ready(chosen))
@@ -568,6 +570,14 @@ pub fn ask_for_location(app: &tauri::AppHandle) {
 struct Pending {
     path: PathBuf,
     why: SetupBlocked,
+    /// The captures kept in `path` while its drive could not be added
+    /// ([`remember_kept`]). Declared to hcfs when the drive is added
+    /// ([`declare_kept`]): the folder is the drive's root from then on, and
+    /// its first cycle uploads them. Only these: other videos the user had
+    /// in the folder are theirs, and declaring them would count them
+    /// against the plan's recordings.
+    #[serde(default)]
+    kept: Vec<PathBuf>,
 }
 
 fn pending_key(account_id: &str) -> String {
@@ -579,13 +589,94 @@ async fn load_pending(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Optio
     Ok(raw.and_then(|v| serde_json::from_str::<Pending>(&v).ok()))
 }
 
+/// Remember `dir` as the chosen folder whose drive could not be added. The
+/// captures kept there so far stay remembered when it is the same folder.
 async fn save_pending(pool: &sqlx::SqlitePool, account_id: &str, dir: &Path, why: SetupBlocked) -> Result<()> {
-    let value = serde_json::to_string(&Pending {
-        path: dir.to_path_buf(),
-        why,
-    })
-    .map_err(|e| AppError::Other(format!("Could not store the captures folder: {e}")))?;
+    let kept = match load_pending(pool, account_id).await? {
+        Some(before) if before.path == dir => before.kept,
+        _ => Vec::new(),
+    };
+    write_pending(
+        pool,
+        account_id,
+        &Pending {
+            path: dir.to_path_buf(),
+            why,
+            kept,
+        },
+    )
+    .await
+}
+
+async fn write_pending(pool: &sqlx::SqlitePool, account_id: &str, pending: &Pending) -> Result<()> {
+    let value = serde_json::to_string(pending).map_err(|e| AppError::Other(format!("Could not store the captures folder: {e}")))?;
     crate::utils::preferences::save_user_preference_internal(pool, &pending_key(account_id), &value).await
+}
+
+/// Remember `kept`, a capture just kept on this computer, when it is in the
+/// pending chosen folder (`kept_in_chosen`), so it is declared when that
+/// folder's drive is added. A capture kept anywhere else (the waiting
+/// folder, whose moves declare their own) is left alone.
+///
+/// # Errors
+///
+/// The pending row could not be read or written.
+pub async fn remember_kept(pool: &sqlx::SqlitePool, account_id: &str, kept: &Path) -> Result<()> {
+    let Some(mut pending) = load_pending(pool, account_id).await? else {
+        return Ok(());
+    };
+    if kept.parent() != Some(pending.path.as_path()) || pending.kept.iter().any(|k| k == kept) {
+        return Ok(());
+    }
+    pending.kept.push(kept.to_path_buf());
+    write_pending(pool, account_id, &pending).await
+}
+
+/// Declare the recordings kept in `dir` while its drive could not be added,
+/// now that it has been: the drive `label`, rooted at `root`. Called before
+/// the pending row is cleared, right after the drive was added, on the same
+/// reasoning as `deliver::declare_placed`: the drive's first cycle scans,
+/// hashes and fetches the server's listing before it builds any upload's
+/// manifest. A failure is logged; the captures still sync, uncounted.
+async fn declare_kept(pool: &sqlx::SqlitePool, account_id: &str, dir: &Path, root: &Path, label: &str) {
+    let kept = match load_pending(pool, account_id).await {
+        Ok(Some(pending)) if pending.path == dir => pending.kept,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, "captures kept in the chosen folder not declared: pending row unread");
+            return;
+        }
+    };
+    if kept.is_empty() {
+        return;
+    }
+    let config_dir = match crate::sync::mnemonic::config_dir_for_folder(account_id, label) {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(error = %e, "captures kept in the chosen folder not declared: config folder unread");
+            return;
+        }
+    };
+    let root = root.to_path_buf();
+    let declared = tokio::task::spawn_blocking(move || declare_kept_files(&root, &config_dir, &kept)).await;
+    match declared {
+        Ok(count) => tracing::info!(count, "captures kept in the chosen folder declared"),
+        Err(e) => tracing::warn!(error = %e, "captures kept in the chosen folder not declared: task failed"),
+    }
+}
+
+/// Declare each of `kept` that is still there and is a recording. Returns
+/// how many recordings it declared (`declare_placed` logs a failed write).
+/// Blocking.
+fn declare_kept_files(root: &Path, config_dir: &Path, kept: &[PathBuf]) -> usize {
+    let mut count = 0;
+    for file in kept.iter().filter(|file| file.is_file()) {
+        if let Some(capture) = super::recording_length::capture_for(file) {
+            super::deliver::declare_placed(root, config_dir, file, capture);
+            count += 1;
+        }
+    }
+    count
 }
 
 async fn clear_pending(pool: &sqlx::SqlitePool, account_id: &str) -> Result<()> {
@@ -1374,6 +1465,67 @@ mod tests {
         pool
     }
 
+    /// A pending row stored before kept captures were remembered still reads.
+    #[test]
+    fn a_pending_row_without_kept_captures_still_reads() {
+        let old: Pending = serde_json::from_str(r#"{"path":"/x/Hippius Captures","why":"offline"}"#).unwrap();
+        assert!(old.kept.is_empty());
+    }
+
+    /// A capture kept in the pending folder is remembered once; one kept
+    /// anywhere else, or with no pending folder, is not. Blocking the same
+    /// folder again keeps the list; choosing another folder drops it.
+    #[tokio::test]
+    async fn captures_kept_in_the_pending_folder_are_remembered() {
+        let pool = pool().await;
+        let dir = home().join("Documents/Hippius Captures");
+        let rec = dir.join("Recording.mp4");
+        remember_kept(&pool, "5Alice", &rec).await.unwrap();
+        assert_eq!(load_pending(&pool, "5Alice").await.unwrap(), None, "no pending folder, nothing kept");
+
+        save_pending(&pool, "5Alice", &dir, SetupBlocked::Offline).await.unwrap();
+        remember_kept(&pool, "5Alice", &rec).await.unwrap();
+        remember_kept(&pool, "5Alice", &rec).await.unwrap();
+        remember_kept(&pool, "5Alice", &home().join(".hippius/capture-waiting/x/Other.mp4"))
+            .await
+            .unwrap();
+        assert_eq!(load_pending(&pool, "5Alice").await.unwrap().unwrap().kept, vec![rec.clone()]);
+
+        save_pending(&pool, "5Alice", &dir, SetupBlocked::StorageFull).await.unwrap();
+        let again = load_pending(&pool, "5Alice").await.unwrap().unwrap();
+        assert_eq!((again.why, again.kept), (SetupBlocked::StorageFull, vec![rec]));
+
+        save_pending(&pool, "5Alice", &home().join("Elsewhere"), SetupBlocked::Offline)
+            .await
+            .unwrap();
+        assert!(load_pending(&pool, "5Alice").await.unwrap().unwrap().kept.is_empty());
+    }
+
+    /// When the drive is added, each kept recording still in the folder is
+    /// declared; a screenshot and a file since moved away are not.
+    #[test]
+    fn kept_recordings_are_declared_when_their_drive_is_added() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Hippius Captures");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&root).unwrap();
+        let rec = root.join("Recording.mp4");
+        let shot = root.join("Screenshot.png");
+        std::fs::write(&rec, b"recorded").unwrap();
+        std::fs::write(&shot, b"png").unwrap();
+        let gone = root.join("Moved away.mp4");
+
+        assert_eq!(declare_kept_files(&root, &config_dir, &[rec, shot, gone]), 1);
+        // hcfs-client's declaration files; see the pin note on
+        // `deliver::tests::a_placed_recording_is_declared_under_the_name_it_landed_with`.
+        let declarations: Vec<String> = std::fs::read_dir(config_dir.join("captures"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(declarations.len(), 1, "{declarations:?}");
+        assert!(declarations[0].contains("Recording.mp4"), "{}", declarations[0]);
+    }
+
     /// The chosen folder is remembered per account until its drive exists.
     #[tokio::test]
     async fn a_chosen_folder_is_remembered_until_its_drive_exists() {
@@ -1385,7 +1537,8 @@ mod tests {
             load_pending(&pool, "5Alice").await.unwrap(),
             Some(Pending {
                 path: dir.clone(),
-                why: SetupBlocked::Offline
+                why: SetupBlocked::Offline,
+                kept: Vec::new(),
             })
         );
         assert_eq!(load_pending(&pool, "5Bob").await.unwrap(), None, "per account");
