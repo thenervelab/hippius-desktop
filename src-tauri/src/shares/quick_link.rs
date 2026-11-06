@@ -417,6 +417,8 @@ pub fn panel_link_default(
             offered,
             on,
             switches_in_plan,
+            // Not made yet: a new link always starts with downloads allowed.
+            download: None,
         },
         is_capture,
     }

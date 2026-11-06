@@ -77,6 +77,12 @@ import {
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
+import DriveMoveProvider, { type MoveTarget } from "./move/DriveMoveProvider";
+import {
+  FROZEN_REASON,
+  READ_ONLY_REASON,
+  normalizePath as normalizeMovePath,
+} from "@/app/lib/drive-move/moveLogic";
 import {
   parseSharedDriveLabel,
   browseNameFromUrl,
@@ -1889,6 +1895,32 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     labelDisplayNames,
   ]);
 
+  // Where a move starts from: the drive and folder on screen. Only inside a
+  // drive; Recent Files and the drive list move nothing. The reason is the
+  // short form for the drag label, not the full refusal sentence.
+  const moveTarget = useMemo<MoveTarget | null>(() => {
+    if (!newFolderTarget?.label) return null;
+    return {
+      label: newFolderTarget.label,
+      remote: newFolderTarget.kind === "remote",
+      parentPath: normalizeMovePath(newFolderTarget.parentPath),
+      driveName: openDriveName ?? newFolderTarget.label,
+      syncPath: drivePathsByLabel[newFolderTarget.label] ?? null,
+      readOnlyReason: openDriveFrozen
+        ? FROZEN_REASON
+        : openDriveWriteRefusal || !openDriveCanWrite
+          ? READ_ONLY_REASON
+          : null,
+    };
+  }, [
+    newFolderTarget,
+    openDriveName,
+    drivePathsByLabel,
+    openDriveFrozen,
+    openDriveWriteRefusal,
+    openDriveCanWrite,
+  ]);
+
   // The crumbs after the root (`driveTrail`): the open drive, then each
   // folder down to the one on screen. The root crumb itself is the page the
   // drive was opened from, drawn by the breadcrumb.
@@ -1918,6 +1950,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       label: step.label,
       title: step.label,
       onClick: step.target ? go(step.target) : undefined,
+      // A crumb above the folder on screen takes a drop: the drive's top
+      // level, or that folder's drive-relative path.
+      dropPath: step.target
+        ? step.target.kind === "drive"
+          ? ""
+          : normalizeMovePath(step.target.subPath)
+        : undefined,
     }));
   }, [
     isRecentFiles,
@@ -2537,8 +2576,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             }
 
             // Drive view — DriveHeader owns the nested card structure and
-            // hosts DriveContent as its children.
-            return driveHeader;
+            // hosts DriveContent as its children. The move provider wraps
+            // both, so a breadcrumb crumb takes a drop like a folder row.
+            return <DriveMoveProvider target={moveTarget}>{driveHeader}</DriveMoveProvider>;
           })()}
         </div>
       </FileSelectionProvider>
