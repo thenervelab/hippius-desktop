@@ -148,6 +148,24 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
     }
 }
 
+/// The recordings kept in the chosen folder while its drive could not be
+/// added are declared when it is, on both ways `add_drive` adds it, and on
+/// the new drive measured before it is added and declared after.
+/// `setup::tests` covers which files; this pins the calls.
+#[test]
+fn captures_kept_in_the_chosen_folder_are_declared_when_its_drive_is_added() {
+    let setup = read("src/capture/setup.rs");
+    let add = fn_body(&setup, "async fn add_drive(");
+    assert_eq!(add.matches("measure_kept(").count(), 2, "both ways in measure them");
+    assert_eq!(add.matches("declare_kept(").count(), 2, "both ways in declare them");
+    let added = add.find("add_local_sync_folder(").expect("a new drive is added");
+    let measured = add.rfind("measure_kept(").expect("measured for the new drive");
+    let declared = add.rfind("declare_kept(").expect("declared on the new drive");
+    assert!(measured < added && added < declared, "measured before the add, declared after");
+    let pending = add.find("was_pending").expect("only a folder that was pending is measured");
+    assert!(pending < add.find("measure_kept(").unwrap(), "decided before either branch measures");
+}
+
 /// Both ways a capture reaches a drive tell the server what it is, so a Free
 /// plan's recordings are counted and held to their length (#1133): a synced
 /// drive through hcfs's declaration, made after the move picks the name and
