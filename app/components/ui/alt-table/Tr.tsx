@@ -4,6 +4,8 @@ export interface TrProps extends React.HTMLAttributes<HTMLTableRowElement> {
   rowHover?: boolean;
   transparent?: boolean;
   roundedHeader?: boolean;
+  /** A plain prop under React 19; a drag-and-drop row registers its node. */
+  ref?: React.Ref<HTMLTableRowElement>;
 }
 
 export const Tr: React.FC<TrProps> = ({

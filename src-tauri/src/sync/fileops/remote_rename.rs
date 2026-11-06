@@ -274,7 +274,7 @@ fn assert_destination_available(folders: &[String], files: &[String], old_path: 
 }
 
 /// Every page of one directory level.
-async fn browse_directory(
+pub(super) async fn browse_directory(
     client: &hcfs_client::client::HcfsClient,
     ss58: &str,
     folder_hash: &str,
@@ -451,14 +451,34 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     let sibling_file_paths: Vec<String> = sibling_files.iter().filter_map(|f| f.relative_path.clone()).collect();
     assert_destination_available(&sibling_folder_paths, &sibling_file_paths, &old_prefix, &new_prefix)?;
 
-    let tree = collect_folder_tree(&client, &identity.wire_ss58, &folder_hash, &old_prefix, &encryption_key).await?;
-    let plan = plan_folder_rename(&tree, &old_prefix, &new_prefix)?;
+    move_folder_by_batches(&client, account_id, identity, &encryption_key, &signing_key, &old_prefix, &new_prefix).await
+}
+
+/// Move every file and directory row under `old_prefix` to `new_prefix`,
+/// with `/rename_files` batches and the folder-entry calls.
+///
+/// The body of a remote folder rename, shared with a move: a move is the
+/// same operation with a prefix in another parent folder. Also the
+/// fallback when `/rename_folder` refuses a folder as too large. The
+/// caller checks the destination is free first.
+pub(super) async fn move_folder_by_batches(
+    client: &hcfs_client::client::HcfsClient,
+    account_id: &str,
+    identity: &DriveIdentity,
+    encryption_key: &hcfs_crypto::FileKey,
+    signing_key: &ed25519_dalek::SigningKey,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Result<usize> {
+    let folder_hash = identity.wire_folder_hash.clone();
+    let tree = collect_folder_tree(client, &identity.wire_ss58, &folder_hash, old_prefix, encryption_key).await?;
+    let plan = plan_folder_rename(&tree, old_prefix, new_prefix)?;
 
     let mut moved = 0usize;
     for batch in plan.files.chunks(RENAME_BATCH) {
         let mut renames = Vec::with_capacity(batch.len());
         for item in batch {
-            let new_encrypted_path = hcfs_crypto::encrypt_small(item.new_path.as_bytes(), &encryption_key)
+            let new_encrypted_path = hcfs_crypto::encrypt_small(item.new_path.as_bytes(), encryption_key)
                 .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
             renames.push(SingleRename {
                 old_path_hash: item.old_path_hash,

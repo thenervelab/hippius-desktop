@@ -11,5 +11,6 @@ pub mod listing_cache;
 pub mod recent_uploads;
 pub mod rekey_probe;
 pub mod remote;
+pub mod remote_move;
 pub mod remote_rename;
 pub mod remote_upload;
