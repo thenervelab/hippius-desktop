@@ -25,7 +25,7 @@ import { createCaptureLink } from "@/app/lib/tauri/shares";
 import { newestShare, useCaptureShares } from "@/components/page-sections/drive/useCaptureInsightsItem";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
-  getLinkSettingsDefault,
+  getInsightsPanelLinkDefault,
   getShareInsights,
   getShareReactions,
   listShareComments,
@@ -219,31 +219,36 @@ export const CREATE_LINK = "Create link";
 /** Said with every no-link step: what kind of link Create link makes. */
 export const NO_LINK_PUBLIC = "Anyone with the link can open it, and it keeps working until you turn it off.";
 /**
- * What Create link would give this capture, from Rust's answer for a new
- * capture link (`share_link_settings_default`: the plan and Settings'
- * "Track views, comments and reactions"), or `null` before it answers.
+ * What Create link would give this file, from Rust's answer
+ * (`insights_panel_link_default`: the plan, the server, and for a capture
+ * Settings' "Track views, comments and reactions"), or `null` before it
+ * answers. A screenshot or recording is "this capture"; anything else, and
+ * anything before Rust answers, is "this file".
  */
-export function noLinkBody(defaults: Pick<LinkSettingsDefault, "offered" | "on" | "switchesInPlan"> | null): string {
-  let first = "Create a link to share this capture.";
+export function noLinkBody(
+  defaults: (Pick<LinkSettingsDefault, "offered" | "on" | "switchesInPlan"> & { isCapture?: boolean }) | null,
+): string {
+  const noun = defaults?.isCapture === false || !defaults ? "file" : "capture";
+  let first = `Create a link to share this ${noun}.`;
   if (defaults?.on.insights) {
     first = defaults.on.comments
-      ? "Create a link to see how many people view this capture, and their comments and reactions, here."
-      : "Create a link to see how many people view this capture here.";
+      ? `Create a link to see how many people view this ${noun}, and their comments and reactions, here.`
+      : `Create a link to see how many people view this ${noun} here.`;
   } else if (defaults?.switchesInPlan === false && defaults.offered.insights) {
-    first = "Create a link to share this capture. Counting views, comments and reactions comes with paid Drive plans.";
-  } else if (defaults?.switchesInPlan === true && defaults.offered.insights) {
-    first = "Create a link to share this capture. It won't count views, comments or reactions: that's turned off in Settings, Screenshots & Recording.";
+    first = `Create a link to share this ${noun}. Counting views, comments and reactions comes with paid Drive plans.`;
+  } else if (defaults?.switchesInPlan === true && defaults.offered.insights && defaults.isCapture !== false) {
+    first = `Create a link to share this ${noun}. It won't count views, comments or reactions: that's turned off in Settings, Screenshots & Recording.`;
   }
   return `${first} ${NO_LINK_PUBLIC}`;
 }
 
-/** Create link found the capture's own link and gave that one again. */
-export const REUSED_COPIED = "This capture already had a link. It's copied.";
-export const REUSED = "This capture already had a link.";
+/** Create link found the file's own link and gave that one again. */
+export const REUSED_COPIED = "This file already had a link. It's copied.";
+export const REUSED = "This file already had a link.";
 
-/** The capture's links could not be read: say so, and offer to try again. */
+/** The file's links could not be read: say so, and offer to try again. */
 export const LISTING_ERROR_TITLE = "Couldn't check for a link";
-export const LISTING_ERROR_BODY = "Hippius couldn't load this capture's links, so it can't tell yet whether it already has one.";
+export const LISTING_ERROR_BODY = "Hippius couldn't load this file's links, so it can't tell yet whether it already has one.";
 
 function ListingErrorPanel({ target, onClose, onRetry }: { target: InsightsSheetTarget; onClose: () => void; onRetry: () => void }) {
   return (
@@ -294,11 +299,11 @@ function NoLinkPanel({
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const capture = target.capture;
-  // What a new link for this capture would get, so the words promise only
+  // What a new link for this file would get, so the words promise only
   // that. Rust decides it; a failed read just keeps the plain wording.
   const defaults = useQuery({
-    queryKey: ["capture-link-defaults", capture?.label ?? null, target.fileName],
-    queryFn: () => getLinkSettingsDefault(capture?.label ?? null, target.fileName, false),
+    queryKey: ["insights-panel-link-defaults", capture?.label ?? null, target.fileName],
+    queryFn: () => getInsightsPanelLinkDefault(capture?.label ?? "", target.fileName),
     enabled: Boolean(capture),
     retry: false,
   });

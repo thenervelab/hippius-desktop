@@ -12,6 +12,7 @@ import {
   offersWriteAction,
   isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
+  shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
 import {
   canShareFolderGrant,
@@ -50,6 +51,7 @@ import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGa
 import { copyLinkLabel, linkPathFor } from "@/app/components/page-sections/drive/existingLink";
 import { useExistingLinks } from "@/app/components/page-sections/drive/useExistingLinks";
 import { useCopyExistingLink } from "@/app/components/page-sections/drive/useCopyExistingLink";
+import { useFileInsightsItem } from "@/app/components/page-sections/drive/useCaptureInsightsItem";
 
 interface ContextMenuProps {
   x: number;
@@ -123,6 +125,8 @@ export default function FileContextMenu({
   // lookup as the row's link icon and the three-dots menu.
   const { linkFor } = useExistingLinks();
   const copyExistingLink = useCopyExistingLink();
+  // View insights for any file, by the same rule as the row menus.
+  const fileInsightsItem = useFileInsightsItem();
 
   useEffect(() => {
     setMounted(true);
@@ -195,6 +199,9 @@ export default function FileContextMenu({
 
   const linkPath = linkPathFor(file, basePath);
   const existingLink = linkFor(file, linkPath);
+  // Resolved as Share via link resolves it (`shareTargetFor`), so the panel's
+  // Create link makes the link for the same file Share would.
+  const insightsItems = fileInsightsItem(file, shareTargetFor(file, basePath).relativePath, onClose);
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
@@ -347,6 +354,18 @@ export default function FileContextMenu({
                 <span>Share via link</span>
               </button>
             )}
+
+          {/* View insights: every file, after Share via link. */}
+          {insightsItems.map((item, i) => (
+            <button
+              key={`insights-${i}`}
+              className={menuItemClass}
+              onClick={(e) => item.onItemClick?.(e)}
+            >
+              {item.icon}
+              <span>{item.itemTitle}</span>
+            </button>
+          ))}
 
           {/* Share folder: a folder invite. Join is console-only. */}
           {SHARED_DRIVES_ENABLED
