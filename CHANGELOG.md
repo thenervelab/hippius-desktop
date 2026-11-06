@@ -224,6 +224,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Dropping files onto the app uploads them again.** Drag files or a folder from Finder, Explorer or your file manager onto Overview, the Drive page, Shared Drives, or any drive or folder, including drives that are not synced to this computer. Inside a drive or folder they go straight there; elsewhere the app asks which drive to put them in. When a drop cannot be uploaded, the app now says why instead of doing nothing.
 - **A link made in the web app, the browser extension or on another computer now shows on any file, not only screenshots and recordings.** A PDF or any other file you shared elsewhere gets its link icon, Copy link in its menu and its existing link in Share via link, without restarting the app.
 - **Dragging a capture's picture into another app drops it on Mac.** Dragging the picture on the capture card into WhatsApp, Slack, Mattermost, Finder or any other app now drops the screenshot or recording there, instead of sliding back to the card. A click on the picture still opens the editor, and a drag never opens it too.
 - **Screenshots and recordings over full-screen apps on Mac.** The capture shortcut now opens the crosshairs and capture bar right on top of an app in full screen, and the recording controls, camera and capture card show there too, so you are no longer taken out of full screen before you can capture it. Opening it from the menu bar window still needs you to leave full screen for now.
