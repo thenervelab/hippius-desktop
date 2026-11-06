@@ -40,6 +40,26 @@ pub fn capture_file_name(kind: CaptureKind, at: NaiveDateTime) -> String {
     format!("{stem} {} at {}.{ext}", at.format("%Y-%m-%d"), at.format("%H.%M.%S"))
 }
 
+/// Whether `name` is a recording this app named ([`capture_file_name`]),
+/// with or without the ` (N)` a move into a folder adds when the name is
+/// taken (`deliver::move_into`). A renamed recording is not one.
+#[must_use]
+pub fn is_app_recording_name(name: &str) -> bool {
+    let Some(stem) = name.strip_prefix("Recording ").and_then(|rest| rest.strip_suffix(".mp4")) else {
+        return false;
+    };
+    let stem = match stem.rsplit_once(" (") {
+        Some((head, n))
+            if n.strip_suffix(')')
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) =>
+        {
+            head
+        }
+        _ => stem,
+    };
+    NaiveDateTime::parse_from_str(stem, "%Y-%m-%d at %H.%M.%S").is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +83,24 @@ mod tests {
             capture_file_name(CaptureKind::Recording, at(9, 0, 5)),
             "Recording 2026-09-22 at 09.00.05.mp4"
         );
+    }
+
+    #[test]
+    fn an_app_recording_is_known_by_its_name() {
+        let name = capture_file_name(CaptureKind::Recording, at(9, 0, 5));
+        assert!(is_app_recording_name(&name));
+        assert!(is_app_recording_name("Recording 2026-09-22 at 09.00.05 (2).mp4"));
+        for other in [
+            capture_file_name(CaptureKind::Screenshot, at(9, 0, 5)).as_str(),
+            "Recording 2026-09-22 at 09.00.05.mov",
+            "Recording 2026-09-22.mp4",
+            "Holiday.mp4",
+            "Recording 2026-09-22 at 09.00.05 (x).mp4",
+            "Recording 2026-09-22 at 09.00.05 ().mp4",
+            "My Recording 2026-09-22 at 09.00.05.mp4",
+        ] {
+            assert!(!is_app_recording_name(other), "{other}");
+        }
     }
 
     /// A name Windows cannot write is a file a Windows user cannot download.
