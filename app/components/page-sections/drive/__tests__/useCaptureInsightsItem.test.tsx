@@ -122,12 +122,18 @@ describe("captureSharesFrom", () => {
     expect(captureSharesFrom(lookups, "Captures", "Clips/Recording 2026-10-28 at 16.04.09.mp4", 101)).toEqual([placed]);
   });
 
-  it("matches by name only for a capture's own name", () => {
-    expect(captureSharesFrom(lookups, "Captures", "report.pdf", 100)).toEqual([]);
-    // A plain picture name is not specific enough: another file's link
-    // made elsewhere under the same name must not show on this one.
-    const plain = { ...lookups, getUnplacedSharesNamed: (name: string | null | undefined) => (name === "image.png" ? [elsewhere] : []) };
+  it("matches any other file by its name only when the sizes agree", () => {
+    // A console link to a PDF in a regular drive shows on the PDF's row.
+    expect(captureSharesFrom(lookups, "Docs", "Work/report.pdf", 100)).toEqual([elsewhere]);
+    expect(captureSharesFrom(lookups, "Docs", "Work/report.pdf", 101)).toEqual([]);
+    // Without the file's size a plain name is not specific enough.
+    expect(captureSharesFrom(lookups, "Docs", "Work/report.pdf")).toEqual([]);
+    const unsized = { ...elsewhere, plaintextSize: 0 };
+    const plain = { ...lookups, getUnplacedSharesNamed: (name: string | null | undefined) => (name === "image.png" ? [unsized] : []) };
     expect(captureSharesFrom(plain, "Captures", "image.png", 100)).toEqual([]);
+  });
+
+  it("knows a capture's own name", () => {
     expect(isCaptureName("Screenshot 2026-10-28 at 16.04.09.png")).toBe(true);
     expect(isCaptureName("Recording 2026-10-28 at 16.04.09 (edited).mp4")).toBe(true);
     expect(isCaptureName("Screenshot.png")).toBe(false);
