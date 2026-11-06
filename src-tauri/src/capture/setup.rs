@@ -599,7 +599,7 @@ async fn clear_pending(pool: &sqlx::SqlitePool, account_id: &str) -> Result<()> 
 /// same name), except `except`: the card's capture, which its own delivery
 /// moves. Hidden files stay. Returns how many moved.
 pub fn move_waiting(from: &Path, to: &Path, except: Option<&Path>) -> usize {
-    move_waiting_within(from, to, except, None).moved.len()
+    move_waiting_within(from, to, except, None, None).moved.len()
 }
 
 /// What [`move_waiting_within`] did.
@@ -611,11 +611,24 @@ pub struct Moved {
     pub held: Vec<PathBuf>,
 }
 
+/// The synced drive a move lands in, for declaring its recordings: the
+/// drive's root and its config directory (`deliver::declare_placed`).
+#[derive(Debug, Clone, Copy)]
+pub struct DeclareIn<'a> {
+    pub root: &'a Path,
+    pub config_dir: &'a Path,
+}
+
 /// [`move_waiting`], oldest first, moving at most `recordings` videos when
 /// it is `Some`: a recording moved into a synced drive uploads, so on a
 /// limited plan only as many go as it has room for, and the rest come back
 /// in [`Moved::held`]. Screenshots always move.
-pub fn move_waiting_within(from: &Path, to: &Path, except: Option<&Path>, recordings: Option<usize>) -> Moved {
+///
+/// With `declare`, each recording is declared right after its own move, its
+/// length read before it, as `deliver::place` does: declaring the batch
+/// after moving it all would leave each file in the drive, undeclared, for
+/// the time the rest take to move and measure.
+pub fn move_waiting_within(from: &Path, to: &Path, except: Option<&Path>, recordings: Option<usize>, declare: Option<DeclareIn<'_>>) -> Moved {
     let Ok(entries) = std::fs::read_dir(from) else {
         return Moved::default();
     };
@@ -639,12 +652,33 @@ pub fn move_waiting_within(from: &Path, to: &Path, except: Option<&Path>, record
             }
             *left -= 1;
         }
+        let capture = declare.and_then(|_| super::recording_length::capture_for(&path));
         match super::deliver::keep_in_folder(to, &path) {
-            Ok(now) => out.moved.push(now),
+            Ok(now) => {
+                if let (Some(into), Some(capture)) = (declare, capture) {
+                    super::deliver::declare_placed(into.root, into.config_dir, &now, capture);
+                }
+                out.moved.push(now);
+            }
             Err(e) => tracing::warn!(error = %e, "a waiting capture could not be moved into the captures drive; left where it was"),
         }
     }
     out
+}
+
+/// Where the captures drive `label` is on this computer and its config
+/// directory, for declaring the recordings moved into it. `None`, logged,
+/// when either cannot be found.
+async fn declare_target(pool: &sqlx::SqlitePool, account_id: &str, label: &str) -> Option<(PathBuf, PathBuf)> {
+    let root = super::destination::own_local_path(pool, account_id, label)
+        .await
+        .inspect_err(|e| tracing::warn!(error = %e, "captures drive folder unread; waiting recordings not declared"))
+        .ok()
+        .flatten();
+    let config_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, label)
+        .inspect_err(|e| tracing::warn!(error = %e, "captures drive config folder unread; waiting recordings not declared"))
+        .ok();
+    root.zip(config_dir)
 }
 
 /// Waiting recordings the free plan has no room for: each goes into a
@@ -887,24 +921,16 @@ pub async fn capture_drive_create(state: tauri::State<'_, AppState>, app: tauri:
             let waiting = waiting_dir(&home, &account_id);
             let target = dir.clone();
             // Into a drive that uploads them, each recording is declared as
-            // it lands, as `deliver::place` declares one (the server counts
-            // only declared recordings).
+            // it lands (the server counts only declared recordings). The
+            // drive is already added, so a failure to find where it is must
+            // not stop the move: the captures still go in, undeclared.
             let declare = match &ready {
-                Some(d) => super::destination::own_local_path(pool, &account_id, &d.label)
-                    .await?
-                    .zip(crate::sync::mnemonic::config_dir_for_folder(&account_id, &d.label).ok()),
+                Some(d) => declare_target(pool, &account_id, &d.label).await,
                 None => None,
             };
             let moved = tokio::task::spawn_blocking(move || {
-                let moved = move_waiting_within(&waiting, &target, on_card.as_deref(), room);
-                if let Some((root, config_dir)) = declare {
-                    for file in &moved.moved {
-                        if let Some(capture) = super::recording_length::capture_for(file) {
-                            super::deliver::declare_placed(&root, &config_dir, file, capture);
-                        }
-                    }
-                }
-                moved
+                let into = declare.as_ref().map(|(root, config_dir)| DeclareIn { root, config_dir });
+                move_waiting_within(&waiting, &target, on_card.as_deref(), room, into)
             })
             .await
             .unwrap_or_default();
@@ -1300,15 +1326,46 @@ mod tests {
             std::fs::File::options().write(true).open(&file).unwrap().set_modified(at).unwrap();
         }
         assert_eq!(waiting_recordings_in(&waiting), 3);
-        let moved = move_waiting_within(&waiting, &drive, None, Some(1));
+        let moved = move_waiting_within(&waiting, &drive, None, Some(1), None);
         assert_eq!(moved.moved, vec![drive.join("old.mp4"), drive.join("shot.png")]);
         assert_eq!(moved.held, vec![waiting.join("middle.mov"), waiting.join("new.mp4")]);
         assert!(waiting.join("middle.mov").exists() && waiting.join("new.mp4").exists());
         assert_eq!(waiting_recordings_in(&waiting), 2);
         // No limit: everything goes.
-        let rest = move_waiting_within(&waiting, &drive, None, None);
+        let rest = move_waiting_within(&waiting, &drive, None, None, None);
         assert_eq!(rest.moved.len(), 2);
         assert!(rest.held.is_empty());
+    }
+
+    /// Moved into a drive that uploads them, waiting recordings are declared
+    /// under the names they landed with; screenshots are not.
+    #[test]
+    fn waiting_recordings_moved_into_a_drive_are_declared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let waiting = tmp.path().join("waiting");
+        let root = tmp.path().join("drive");
+        let config_dir = tmp.path().join("config");
+        std::fs::create_dir_all(&waiting).unwrap();
+        std::fs::create_dir_all(root.join("Captures")).unwrap();
+        std::fs::write(root.join("Captures").join("rec.mp4"), b"an earlier file").unwrap();
+        std::fs::write(waiting.join("rec.mp4"), b"recorded").unwrap();
+        std::fs::write(waiting.join("shot.png"), b"png").unwrap();
+
+        let into = DeclareIn {
+            root: &root,
+            config_dir: &config_dir,
+        };
+        let moved = move_waiting_within(&waiting, &root.join("Captures"), None, None, Some(into));
+        assert_eq!(moved.moved.len(), 2);
+
+        // hcfs-client's declaration files; see the pin note on
+        // `deliver::tests::a_placed_recording_is_declared_under_the_name_it_landed_with`.
+        let declarations: Vec<String> = std::fs::read_dir(config_dir.join("captures"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(declarations.len(), 1, "the recording only: {declarations:?}");
+        assert!(declarations[0].contains("Captures/rec (2).mp4"), "{}", declarations[0]);
     }
 
     async fn pool() -> sqlx::SqlitePool {

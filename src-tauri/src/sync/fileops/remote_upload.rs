@@ -413,6 +413,17 @@ fn upload_failure(step: &str, error: &hcfs_client::sync::SyncError) -> AppError 
     }
 }
 
+/// The upload widget row's text for a file that failed. A recording the
+/// server refused for the Free plan's count reads as the sync path's row
+/// does (`recording_limit_reached_copy`), not as the `NotReady` sentence the
+/// pre-record dialog shows.
+fn failure_text(error: &AppError) -> String {
+    match error {
+        AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached) => crate::sync::events::recording_limit_reached_copy(),
+        other => other.to_string(),
+    }
+}
+
 /// Read chunk `index` of the ciphertext at `path`, on the blocking pool so
 /// an 8 MiB read does not stall the async runtime.
 async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<bytes::Bytes> {
@@ -728,7 +739,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
             failures.push(RemoteUploadFailure {
                 name: source.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string(),
                 // Rust owns the sentence the user reads — never reqwest's Display.
-                error: e.to_string(),
+                error: failure_text(&e),
                 cause: e,
             });
         }
@@ -925,7 +936,7 @@ pub async fn upload_folder_to_remote_folder(
             tracing::warn!(file = %item.source.display(), error = %e, "remote folder upload failed for one file");
             failures.push(RemoteUploadFailure {
                 name: item.source.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(),
-                error: e.to_string(),
+                error: failure_text(&e),
                 cause: e,
             });
         }
@@ -950,9 +961,9 @@ mod tests {
     use super::*;
 
     /// The server's recording refusals come back typed, so the capture card
-    /// answers them by kind (`capture::deliver::failure_reason`); the widget
-    /// row's text is the same copy the sync path shows. Any other failure
-    /// stays Rust's sentence for its kind.
+    /// answers them by kind (`capture::deliver::failure_reason`), and the
+    /// widget row's text for each is the copy the sync path shows. Any other
+    /// failure stays Rust's sentence for its kind.
     #[test]
     fn a_recording_refusal_stays_typed() {
         use crate::error::NotReadyKind;
@@ -964,10 +975,11 @@ mod tests {
 
         let limit = upload_failure("finalize", &refused("recording_limit_reached"));
         assert!(matches!(limit, AppError::NotReady(NotReadyKind::RecordingLimitReached)), "{limit:?}");
+        assert_eq!(failure_text(&limit), crate::sync::events::recording_limit_reached_copy());
 
         let long = upload_failure("finalize", &refused("recording_too_long"));
         assert!(matches!(long, AppError::NotReady(NotReadyKind::RecordingTooLong)), "{long:?}");
-        assert_eq!(long.to_string(), crate::sync::events::recording_too_long_copy());
+        assert_eq!(failure_text(&long), crate::sync::events::recording_too_long_copy());
 
         let other = upload_failure("finalize", &refused("forbidden"));
         assert!(matches!(other, AppError::Hcfs(_)), "{other:?}");
