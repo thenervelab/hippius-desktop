@@ -822,6 +822,57 @@ mod tests {
         assert!(!disk.contains("GiB"), "{disk}");
     }
 
+    /// The server's recording refusals (a 403 with hcfs-server's code, typed
+    /// `RecordingLimit` by hcfs) reach the FE as their own kind with copy
+    /// that names the limit and the way past it. They used to fall into the
+    /// wildcard arm and read "Sync failed. Please try again.".
+    #[test]
+    fn a_recording_refused_by_the_free_plan_says_why() {
+        use hcfs_client::engine::events::FileFailureKind;
+        use hcfs_client::sync::SyncError;
+
+        let refused = |code: &str| SyncError::Http {
+            status: 403,
+            code: Some(code.to_string()),
+            message: "refused".to_string(),
+        };
+        for (code, copy) in [
+            ("recording_limit_reached", recording_limit_reached_copy()),
+            ("recording_too_long", recording_too_long_copy()),
+        ] {
+            let (kind, status) = FileFailureKind::classify(&refused(code));
+            assert_eq!(status, Some(403), "{code}");
+
+            let payload = FileFailureKindPayload::from(&kind);
+            let wire = serde_json::to_value(&payload).expect("serialize");
+            assert_eq!(wire["kind"], "recordingLimit", "{code}");
+            assert_eq!(wire["reason"], copy.as_str(), "the persisted reason is the copy shown");
+            assert_eq!(payload.display_reason(), copy);
+            assert!(copy.contains("Upgrade"), "{copy}");
+            assert!(!payload.is_transient(), "only an upgrade or a deletion lifts it: {copy}");
+            assert!(!is_transient_reason(&copy));
+        }
+
+        assert!(recording_limit_reached_copy().contains("25 free recordings"));
+        assert!(recording_too_long_copy().contains("5 minutes"));
+        // Another 403 is not a recording refusal.
+        let (other, _) = FileFailureKind::classify(&refused("forbidden"));
+        assert!(matches!(
+            FileFailureKindPayload::from(&other),
+            FileFailureKindPayload::ServerError { status: 403 }
+        ));
+    }
+
+    #[test]
+    fn a_blank_recording_limit_reason_falls_back_to_upgrade_copy() {
+        let blank = FileFailureKindPayload::RecordingLimit { reason: " ".to_string() };
+        assert_eq!(blank.display_reason(), RECORDING_LIMIT_FALLBACK_REASON);
+        let unknown = FileFailureKindPayload::from(&hcfs_client::engine::events::FileFailureKind::RecordingLimit {
+            code: "recording_something_new".to_string(),
+        });
+        assert_eq!(unknown.display_reason(), RECORDING_LIMIT_FALLBACK_REASON);
+    }
+
     /// A refusal hcfs adds later, whose text this build does not know, still
     /// reads as a refusal the user must act on, never as hcfs's own words.
     #[test]
@@ -1625,6 +1676,7 @@ pub struct FilesFailedRepeatedlyPayload {
 /// {"kind":"network"}
 /// {"kind":"gone"}
 /// {"kind":"refused","reason":"Not synced: could not be read (…)"}
+/// {"kind":"recordingLimit","reason":"You've used your 25 free recordings, …"}
 /// {"kind":"other","message":"unrecognised upload failure"}
 /// ```
 #[derive(Serialize, Clone, Debug)]
@@ -1680,6 +1732,16 @@ pub enum FileFailureKindPayload {
     /// persisted row outlives clean cycles (see
     /// `failure_repo::clear_retryable_failures_for_label`).
     Refused { reason: String },
+    /// The server refused a screen recording under the Free plan's limits:
+    /// its recordings are used up, or this one is longer than the plan
+    /// allows. Mirrors upstream `FileFailureKind::RecordingLimit`.
+    ///
+    /// `reason` is Rust's copy for the server's code
+    /// ([`recording_limit_copy`]), shown verbatim. Not transient: only an
+    /// upgrade or a deleted recording lifts it. hcfs leaves the file out of
+    /// its uploads until a cycle ends clean and then tries it again, so the
+    /// row clears and comes back like a full plan's 402 does.
+    RecordingLimit { reason: String },
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
     Other { message: String },
@@ -1741,6 +1803,47 @@ const UNDECRYPTABLE_DISPLAY_REASON: &str = "Can't be decrypted on this device �
 /// change the outcome. Must stay word-identical to the FE's
 /// `REFUSED_FALLBACK_MESSAGE` (pinned by `tests/failure_copy_parity.rs`).
 const REFUSED_FALLBACK_REASON: &str = "Not synced. This file needs your attention before it can sync.";
+
+/// Shown for a recording-limit row whose reason is blank. Never expected
+/// (Rust always writes one), but a row must not render an empty reason.
+/// Must stay word-identical to the FE's `RECORDING_LIMIT_FALLBACK_MESSAGE`
+/// (pinned by `tests/failure_copy_parity.rs`).
+const RECORDING_LIMIT_FALLBACK_REASON: &str = "This recording is over your plan's recording limit. Upgrade your plan to upload it.";
+
+/// hcfs-server's code for a 403 refusing a recording because the Free
+/// plan's recordings are used up (`billing/recordings.rs`).
+const RECORDING_LIMIT_REACHED_CODE: &str = "recording_limit_reached";
+
+/// hcfs-server's code for a 403 refusing a recording longer than the Free
+/// plan allows.
+const RECORDING_TOO_LONG_CODE: &str = "recording_too_long";
+
+/// The user's copy for the server refusing a recording: a Free plan with its
+/// recordings used up.
+#[must_use]
+pub fn recording_limit_reached_copy() -> String {
+    use crate::capture::recording_allowance::{LIMIT_BODY, LIMIT_TITLE};
+    format!("{LIMIT_TITLE}, so this recording wasn't uploaded. {LIMIT_BODY}")
+}
+
+/// The user's copy for the server refusing a recording longer than the Free
+/// plan allows.
+#[must_use]
+pub fn recording_too_long_copy() -> String {
+    let minutes = crate::capture::allowance::FREE_MAX_RECORDING.as_secs() / 60;
+    format!("This recording is longer than the Free plan's {minutes} minutes, so it wasn't uploaded. Upgrade your plan to upload it.")
+}
+
+/// The user's copy for the server's recording-limit `code`. hcfs sends only
+/// the two codes above (`SyncError::is_recording_limit`); anything else gets
+/// the generic [`RECORDING_LIMIT_FALLBACK_REASON`].
+fn recording_limit_copy(code: &str) -> String {
+    match code {
+        RECORDING_LIMIT_REACHED_CODE => recording_limit_reached_copy(),
+        RECORDING_TOO_LONG_CODE => recording_too_long_copy(),
+        _ => RECORDING_LIMIT_FALLBACK_REASON.to_string(),
+    }
+}
 
 /// One hcfs refusal message, split around the value it interpolates: a
 /// message is that refusal when it starts with `prefix` and ends with
@@ -2008,6 +2111,14 @@ impl FileFailureKindPayload {
                     trimmed.to_string()
                 }
             }
+            Self::RecordingLimit { reason } => {
+                let trimmed = reason.trim();
+                if trimmed.is_empty() {
+                    RECORDING_LIMIT_FALLBACK_REASON.to_string()
+                } else {
+                    trimmed.to_string()
+                }
+            }
             // `Other` already carries upstream display text; fall back to a
             // generic line when it's empty/whitespace so the row never shows a
             // blank reason. Network-shaped leftovers (reqwest Display, nested
@@ -2077,6 +2188,12 @@ impl From<&hcfs_client::engine::events::FileFailureKind> for FileFailureKindPayl
             // per-file debug log the failure callback writes.
             K::Refused { reason } => Self::Refused {
                 reason: refusal_copy(reason),
+            },
+            // The server's code, worded for the user. Without this arm the
+            // refusal reached the wildcard below and read "Sync failed.
+            // Please try again.", which a retry never fixes.
+            K::RecordingLimit { code } => Self::RecordingLimit {
+                reason: recording_limit_copy(code),
             },
             // Carve the mid-upload-modification case out of the upstream
             // catch-all before it reaches `Other` — it is self-resolving and

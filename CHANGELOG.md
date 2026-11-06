@@ -221,6 +221,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A recording the Free plan can't take says why.** When a recording can't upload because your 25 free recordings are used up, or because it is longer than the Free plan's 5 minutes, the sync list and the file's row now say so, and the capture card offers Upgrade, instead of "Sync failed. Please try again."
+
 - **Dragging a capture's picture into another app drops it on Mac.** Dragging the picture on the capture card into WhatsApp, Slack, Mattermost, Finder or any other app now drops the screenshot or recording there, instead of sliding back to the card. A click on the picture still opens the editor, and a drag never opens it too.
 - **Screenshots and recordings over full-screen apps on Mac.** The capture shortcut now opens the crosshairs and capture bar right on top of an app in full screen, and the recording controls, camera and capture card show there too, so you are no longer taken out of full screen before you can capture it. Opening it from the menu bar window still needs you to leave full screen for now.
 - **Links you already made show everywhere, and Copy link copies them.** A screenshot or recording shared from the web app, the browser extension or another computer now shows its link icon in Recent Files on the Overview and in the menu bar window, not only on the Captures page. Copy link in the menu bar window copies that link straight away instead of making a second one, so you no longer end up with two links and a second upload counted against your storage. If the link was made somewhere this computer can't copy it from, Hippius says so rather than making another.

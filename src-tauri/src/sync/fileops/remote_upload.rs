@@ -227,6 +227,9 @@ struct SealRequest<'a> {
     encrypted_path: Vec<u8>,
     file_name: &'a str,
     relative_path: &'a str,
+    /// The screen capture this file is, for the server's Free plan
+    /// recording limits; `None` for every file that is not a capture.
+    capture: Option<hcfs_shared::network::Capture>,
 }
 
 /// Encrypt the file and describe it in the manifest the server verifies.
@@ -262,6 +265,7 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
         encrypted_path: req.encrypted_path,
         file_name: Some(req.file_name.to_string()),
         relative_path: Some(req.relative_path.to_string()),
+        capture: req.capture,
         ..Default::default()
     })
 }
@@ -462,7 +466,7 @@ pub async fn upload_to_remote_folder(
 ) -> Result<()> {
     let mnemonic = crate::sync::fileops::remote::session_mnemonic(state)?;
     let keys = crate::sync::fileops::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity).await?;
-    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &keys, None).await
+    upload_to_remote_folder_with_progress(pool, account_id, label, parent_path, source, identity, &keys, None, None).await
 }
 
 #[allow(clippy::too_many_arguments)] // one file's worth of context, not a call site's
@@ -480,6 +484,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
     // the same key.
     keys: &crate::sync::fileops::remote::DriveKeyMaterial,
     batch: Option<&UploadBatch>,
+    capture: Option<hcfs_shared::network::Capture>,
 ) -> Result<()> {
     let file_name = source
         .file_name()
@@ -544,6 +549,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
         encrypted_path,
         file_name: &file_name,
         relative_path: &relative_path,
+        capture,
     });
 
     // The ciphertext is a plaintext-equivalent artifact; remove it whether
@@ -613,7 +619,18 @@ pub async fn upload_files_to_remote_folder(
     folder_hash: Option<String>,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = state.require_session_account(&account_id)?;
-    upload_files_to_remote_folder_inner(state.inner(), app, &account_id, &label, parent_path, &file_paths, owner_ss58, folder_hash).await
+    upload_files_to_remote_folder_inner(
+        state.inner(),
+        app,
+        &account_id,
+        &label,
+        parent_path,
+        &file_paths,
+        owner_ss58,
+        folder_hash,
+        None,
+    )
+    .await
 }
 
 /// Body of [`upload_files_to_remote_folder`], for callers inside the backend
@@ -621,7 +638,9 @@ pub async fn upload_files_to_remote_folder(
 /// here, so a capture takes exactly the path, gate and progress rows a
 /// dropped file does rather than a second upload path.
 ///
-/// `account_id` MUST already be the validated session account.
+/// `account_id` MUST already be the validated session account. `capture` is
+/// declared on every file in `file_paths`, so only a capture delivery passes
+/// one, with its one file.
 #[allow(clippy::too_many_arguments)] // the IPC payload's shape, passed through
 pub(crate) async fn upload_files_to_remote_folder_inner(
     state: &AppState,
@@ -632,6 +651,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
     file_paths: &[String],
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
+    capture: Option<hcfs_shared::network::Capture>,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = account_id.to_string();
     let label = label.to_string();
@@ -691,7 +711,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
     let mut failures = Vec::new();
     for path in file_paths {
         let source = std::path::Path::new(path);
-        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &keys, Some(&batch)).await;
+        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &parent, source, &identity, &keys, Some(&batch), capture).await;
         if let Err(e) = sent {
             tracing::warn!(file = %path, error = %e, "remote upload failed");
             failures.push(RemoteUploadFailure {
@@ -877,7 +897,18 @@ pub async fn upload_folder_to_remote_folder(
 
     let mut failures = Vec::new();
     for item in &planned {
-        let sent = upload_to_remote_folder_with_progress(pool, &account_id, &label, &item.parent, &item.source, &identity, &keys, Some(&batch)).await;
+        let sent = upload_to_remote_folder_with_progress(
+            pool,
+            &account_id,
+            &label,
+            &item.parent,
+            &item.source,
+            &identity,
+            &keys,
+            Some(&batch),
+            None,
+        )
+        .await;
         if let Err(e) = sent {
             tracing::warn!(file = %item.source.display(), error = %e, "remote folder upload failed for one file");
             failures.push(RemoteUploadFailure {
