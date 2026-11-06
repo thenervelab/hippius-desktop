@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import type { LinkSettings, OfferedSwitches } from "@/app/lib/tauri/shareInsights";
 import {
+  DOWNLOAD_LOCKED_PROMPT,
+  DOWNLOAD_UPGRADE_BODY,
   LOCKED_ACTION,
   LOCKED_PROMPT,
   SWITCH_UPGRADE_BODY,
@@ -53,6 +55,19 @@ export const FREE_OFF_NOTE = "On the free plan, a switch you turn off can't be t
 export const INSIGHTS_LOCKED_DESCRIPTION = LINK_SWITCHES[0].locked;
 
 /**
+ * The Allow download switch. Its plan rule runs the other way: turning it
+ * off is what the free plan does not include.
+ */
+export const DOWNLOAD_SWITCH = {
+  label: "Allow download",
+  description: "Viewers can download the file.",
+  locked: "Viewers can download the file. Only paid Drive plans can turn it off.",
+} as const;
+
+/** The upgrade card's accessible name for Allow download. */
+export const DOWNLOAD_UPGRADE_LABEL = "Upgrade to turn off downloads";
+
+/**
  * A link's Insights, Comments and Reactions switches, in the share dialog,
  * on the finished link and in the Insights sheet. Only the switches Rust says
  * this server takes (`offered`) are drawn; with none, nothing is.
@@ -62,6 +77,11 @@ export const INSIGHTS_LOCKED_DESCRIPTION = LINK_SWITCHES[0].locked;
  * on; a link that already has one on keeps it and can still turn it off. A
  * plan that could not be read (`null`) locks nothing: the switches work, and
  * Rust still starts a new link's switches off.
+ *
+ * `download` adds Allow download under them, for a link that has the switch
+ * (Rust sends it only on a server that takes it). On the free plan turning
+ * it off shows the upgrade prompt instead, and so does `downloadRefused`,
+ * set when the server refused it for the plan.
  */
 export default function LinkEngagementSwitches({
   offered,
@@ -71,6 +91,9 @@ export default function LinkEngagementSwitches({
   onChange,
   onUpgrade,
   layout = "stack",
+  download = null,
+  onDownloadChange,
+  downloadRefused = false,
 }: {
   /**
    * `stack` (the share dialog): rows one under another. `list` (the Insights
@@ -84,10 +107,16 @@ export default function LinkEngagementSwitches({
   onChange: (next: LinkSettings) => void;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
+  /** Allow download as the link has it; `null` draws no such switch. */
+  download?: boolean | null;
+  onDownloadChange?: (on: boolean) => void;
+  /** The server refused turning downloads off for the plan. */
+  downloadRefused?: boolean;
 }) {
-  const [asking, setAsking] = useState(false);
+  const [asking, setAsking] = useState<"switches" | "download" | null>(null);
   const shown = LINK_SWITCHES.filter((s) => offered[s.key]);
-  if (shown.length === 0) return null;
+  const downloadShown = download !== null && onDownloadChange !== undefined;
+  if (shown.length === 0 && !downloadShown) return null;
   const locked = switchesInPlan === false;
   const list = layout === "list";
   return (
@@ -122,7 +151,7 @@ export default function LinkEngagementSwitches({
                 disabled={disabled}
                 onCheckedChange={(on) => {
                   if (on && locked) {
-                    setAsking(true);
+                    setAsking("switches");
                     return;
                   }
                   onChange({ ...value, [key]: on });
@@ -131,6 +160,35 @@ export default function LinkEngagementSwitches({
             </div>
           );
         })}
+        {downloadShown && (
+          <div className={cn("flex items-center justify-between gap-3", list && "px-3 py-2.5")}>
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "font-medium",
+                  list ? "text-[13px] text-grey-10 dark:text-white" : "text-xs text-grey-30 dark:text-grey-dark-700",
+                )}
+              >
+                {DOWNLOAD_SWITCH.label}
+              </p>
+              <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+                {locked ? DOWNLOAD_SWITCH.locked : DOWNLOAD_SWITCH.description}
+              </p>
+            </div>
+            <SettingsToggle
+              ariaLabel={DOWNLOAD_SWITCH.label}
+              checked={download === true}
+              disabled={disabled}
+              onCheckedChange={(on) => {
+                if (!on && locked) {
+                  setAsking("download");
+                  return;
+                }
+                onDownloadChange?.(on);
+              }}
+            />
+          </div>
+        )}
       </div>
       {/* On the free plan an older link can keep a switch it has on, but one
           turned off cannot come back without upgrading: say so before it is. */}
@@ -140,7 +198,18 @@ export default function LinkEngagementSwitches({
         </p>
       )}
       <div aria-live="polite">
-        {asking && locked && <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />}
+        {asking === "switches" && locked && (
+          <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />
+        )}
+        {downloadShown && (downloadRefused || (asking === "download" && locked)) && (
+          <SwitchesUpgradeNotice
+            onUpgrade={onUpgrade}
+            className={list ? "mt-3" : undefined}
+            label={DOWNLOAD_UPGRADE_LABEL}
+            prompt={DOWNLOAD_LOCKED_PROMPT}
+            body={DOWNLOAD_UPGRADE_BODY}
+          />
+        )}
       </div>
     </div>
   );
@@ -159,15 +228,22 @@ export const UPGRADE_NOTICE_LABEL = "Upgrade for Insights, comments and reaction
 export function SwitchesUpgradeNotice({
   onUpgrade,
   className,
+  label = UPGRADE_NOTICE_LABEL,
+  prompt = LOCKED_PROMPT,
+  body = SWITCH_UPGRADE_BODY,
 }: {
   onUpgrade: () => void;
   className?: string;
+  /** Another feature's words (Allow download); the switches' by default. */
+  label?: string;
+  prompt?: string;
+  body?: string;
 }) {
   return (
     <div className={cn("@container", className)}>
       <div
         role="region"
-        aria-label={UPGRADE_NOTICE_LABEL}
+        aria-label={label}
         className="flex flex-col gap-3 rounded-lg border border-primary-50/25 bg-primary-50/[0.06] p-3 @md:flex-row @md:items-center dark:border-primary-50/30 dark:bg-primary-50/10"
       >
         <div className="flex min-w-0 flex-1 items-start gap-3">
@@ -179,10 +255,10 @@ export function SwitchesUpgradeNotice({
           </span>
           <div className="min-w-0">
             <p className="break-words text-[13px] font-medium leading-5 text-grey-10 dark:text-white">
-              {LOCKED_PROMPT}
+              {prompt}
             </p>
             <p className="mt-0.5 break-words text-xs leading-5 text-grey-40 dark:text-grey-dark-600">
-              {SWITCH_UPGRADE_BODY}
+              {body}
             </p>
           </div>
         </div>

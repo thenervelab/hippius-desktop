@@ -28,7 +28,7 @@
 //! - `GET /v1/shares/{token}/meta`: the link's switches as they stand
 //!   (`settings`), for the sheet's Link settings.
 //! - `PATCH /v1/shares/{token}/settings`: `{insights, comments, reactions}`,
-//!   partial. A new link's defaults are sent right after it is minted, in the
+//!   partial, plus `download` on a server with `share_download_switch`. A new link's defaults are sent right after it is minted, in the
 //!   background and best-effort ([`spawn_apply`]), the way a chat preview is
 //!   (`shares::preview`): a failure never fails or slows the share.
 //!
@@ -153,9 +153,10 @@ pub struct ShareInsights {
     pub retention: Gated<Option<Vec<f64>>>,
     /// Newest visit first.
     pub viewers: Gated<Vec<InsightsViewer>>,
-    /// Page by page numbers. `None` on a server without document views
-    /// (`share_document_views`), which shows nothing about pages;
-    /// `Shown(None)` while the link has no document visit.
+    /// Page by page numbers. `None` (no Pages tab) unless the server reports
+    /// them: a pages block on a paid link, or `pages` named in `locked`, and
+    /// only on a server with document views (`share_document_views`).
+    /// `Shown(None)` for a block that holds no readable page count.
     pub pages: Option<Gated<Option<InsightsPages>>>,
 }
 
@@ -254,7 +255,9 @@ fn percent(x: f64) -> f64 {
 /// plan that is not paid: whatever arrives for it is dropped.
 ///
 /// `document_views` is the server's `share_document_views`: without it,
-/// nothing about pages is read, so the screen shows what it does today.
+/// nothing about pages is read, so the screen shows what it does today. With
+/// it, pages are still `None` until the response carries a pages block or
+/// names `pages` in `locked`.
 fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
     let wire: WireInsights = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("insights parse failed: {e}")))?;
     let plan = if wire.plan == "paid" { InsightsPlan::Paid } else { InsightsPlan::Free };
@@ -306,13 +309,17 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
         Gated::Shown(rows)
     };
 
-    let pages = document_views.then(|| {
-        if is_locked("pages") {
-            Gated::Locked
-        } else {
-            Gated::Shown(wire.pages.and_then(pages_from_wire))
-        }
-    });
+    // The Pages tab is drawn only from what the server reports: a pages
+    // block on a paid link, or `pages` named in `locked`. The capability
+    // alone says the server knows document views, not that it reports them,
+    // so without either there is no tab at all.
+    let pages = if !document_views {
+        None
+    } else if locked.contains("pages") || (plan != InsightsPlan::Paid && wire.pages.is_some()) {
+        Some(Gated::Locked)
+    } else {
+        wire.pages.map(|block| Gated::Shown(pages_from_wire(block)))
+    };
 
     Ok(ShareInsights {
         plan,
@@ -691,11 +698,22 @@ pub struct SettingsPatch {
     pub comments: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reactions: Option<bool>,
+    /// Allow download, sent only to a server with `share_download_switch`
+    /// (any other refuses the key). Never part of a new link's switches: a
+    /// link starts with downloads allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<bool>,
 }
 
 impl SettingsPatch {
     const fn is_empty(self) -> bool {
-        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none()
+        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none() && self.download.is_none()
+    }
+
+    /// Whether this patch turns downloads off, which, like turning a switch
+    /// on, needs a paid plan.
+    const fn turns_download_off(self) -> bool {
+        matches!(self.download, Some(false))
     }
 
     /// The switches this patch turns (or keeps) on; one it leaves out or
@@ -721,19 +739,23 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
         insights: offered.insights.then_some(wanted.insights),
         comments: offered.comments.then_some(wanted.comments),
         reactions: offered.reactions.then_some(wanted.reactions),
+        download: None,
     };
     (!patch.is_empty()).then_some(patch)
 }
 
 /// `change` cut to the switches a server offering `offered` takes, or `None`
 /// when nothing is left to send. Unlike [`patch_for`], a switch the change
-/// leaves out stays out: the server keeps it as it stands.
+/// leaves out stays out: the server keeps it as it stands. `download` goes
+/// only to a server that takes it (`download_offered`, its
+/// `share_download_switch`): any other answers the key with a 400.
 #[must_use]
-pub fn change_for(change: SettingsPatch, offered: OfferedSwitches) -> Option<SettingsPatch> {
+pub fn change_for(change: SettingsPatch, offered: OfferedSwitches, download_offered: bool) -> Option<SettingsPatch> {
     let patch = SettingsPatch {
         insights: change.insights.filter(|_| offered.insights),
         comments: change.comments.filter(|_| offered.comments),
         reactions: change.reactions.filter(|_| offered.reactions),
+        download: change.download.filter(|_| download_offered),
     };
     (!patch.is_empty()).then_some(patch)
 }
@@ -749,6 +771,10 @@ pub struct LinkSettingsDefault {
     /// them on shows the upgrade prompt instead; `None` when the plan could
     /// not be read, which locks nothing but starts all three off.
     pub switches_in_plan: Option<bool>,
+    /// Allow download, as the link has it: `None` where there is no such
+    /// switch (a server without `share_download_switch`, or a link not made
+    /// yet, which always starts with downloads allowed).
+    pub download: Option<bool>,
 }
 
 /// The file kinds a share link tracks as a document (PDF, Word and
@@ -823,6 +849,7 @@ pub fn default_for(kind: LinkKind, captures_default: bool, caps: &ServerCapabili
             switches_in_plan,
         ),
         switches_in_plan,
+        download: None,
     }
 }
 
@@ -875,14 +902,20 @@ pub const fn refuses_switching_on(wanted: LinkSettings, was: LinkSettings, switc
 /// read it as paid (`403 paid_plan_required`).
 pub const SWITCHES_NOT_IN_PLAN: &str = "Insights, comments and reactions are available on paid Drive plans.";
 
+/// The refusal for turning downloads off from the free plan. The app shows
+/// the upgrade prompt for it (`DOWNLOAD_NOT_IN_PLAN` in the sheet's words),
+/// so this is matched there word for word.
+pub const DOWNLOAD_NOT_IN_PLAN: &str = "Turning off downloads is available on paid Drive plans.";
+
 /// The server could not read the Drive plan to check a switch turned on
 /// (`502 billing_unavailable`). Nothing changed, and trying again may work.
 const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
 
 /// The server's refusals of a settings change, in the app's words: turning a
-/// switch on without a paid plan is the upgrade prompt's sentence, and a plan
-/// the server could not read says so. Anything else is left as it was.
-fn settings_refusal(err: AppError) -> AppError {
+/// switch on (or downloads off, `download_off`) without a paid plan is the
+/// upgrade prompt's sentence, and a plan the server could not read says so.
+/// Anything else is left as it was.
+fn settings_refusal(err: AppError, download_off: bool) -> AppError {
     let AppError::Api { status, body } = &err else {
         return err;
     };
@@ -890,6 +923,7 @@ fn settings_refusal(err: AppError) -> AppError {
         .ok()
         .and_then(|v| v.get("error").and_then(serde_json::Value::as_str).map(str::to_owned));
     match (*status, code.as_deref()) {
+        (403, Some("paid_plan_required")) if download_off => AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()),
         (403, Some("paid_plan_required")) => AppError::Validation(SWITCHES_NOT_IN_PLAN.into()),
         (502, Some("billing_unavailable")) => AppError::Validation(PLAN_UNREADABLE.into()),
         _ => err,
@@ -922,13 +956,29 @@ pub(crate) async fn read_switches_in_plan(state: &AppState, account_id: &str) ->
 /// predates them omits the field, which reads as all off, the way a new
 /// link starts.
 fn parse_meta_settings(body: &str) -> Result<LinkSettings> {
+    parse_meta(body).map(|(on, _)| on)
+}
+
+/// [`parse_meta_settings`] and Allow download beside them. A server that
+/// predates the download switch omits `download`, which reads as allowed, as
+/// every link was before it.
+fn parse_meta(body: &str) -> Result<(LinkSettings, bool)> {
     #[derive(Deserialize)]
     struct Wire {
         #[serde(default)]
-        settings: Option<LinkSettings>,
+        settings: Option<WireSettings>,
+    }
+    #[derive(Deserialize)]
+    struct WireSettings {
+        #[serde(flatten)]
+        on: LinkSettings,
+        #[serde(default)]
+        download: Option<bool>,
     }
     let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("share meta parse failed: {e}")))?;
-    Ok(wire.settings.unwrap_or_default())
+    Ok(wire
+        .settings
+        .map_or((LinkSettings::default(), true), |s| (s.on, s.download.unwrap_or(true))))
 }
 
 /// What a capture's automatic link gets: everything on when Settings says
@@ -1204,7 +1254,10 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .send()
         .await
         .map_err(|e| transport("share settings", e))?;
-    read_ok(resp).await.map(|_| ()).map_err(settings_refusal)
+    read_ok(resp)
+        .await
+        .map(|_| ())
+        .map_err(|e| settings_refusal(e, patch.turns_download_off() && !patch.asked_on().any()))
 }
 
 async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<NotificationPreferences> {
@@ -1560,7 +1613,8 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     // A new link's own switches first, so what is read is what it has.
     after_mint_switches_sent(&share_token).await;
-    let offered = OfferedSwitches::from_caps(&capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?);
+    let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
+    let offered = OfferedSwitches::from_caps(&caps);
     if !offered.insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
@@ -1569,11 +1623,12 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
         get_meta_body(&state.api_client, &api, &share_token),
         read_switches_in_plan(&state, &account_id),
     );
-    let on = parse_meta_settings(&meta?)?;
+    let (on, download) = parse_meta(&meta?)?;
     Ok(LinkSettingsDefault {
         offered,
         on,
         switches_in_plan,
+        download: caps.share_download_switch.then_some(download),
     })
 }
 
@@ -1586,15 +1641,20 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     after_mint_switches_sent(&share_token).await;
     let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
-    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps)) else {
+    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps), caps.share_download_switch) else {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
     let api = Api::for_account(&state, &account_id).await?;
     // A switch asked to be on, on the free plan: allowed only if this link
     // already has it on (an older link keeps what it has), so the link's
-    // switches are read only then. Turning switches off never asks.
+    // switches are read only then. Turning switches off never asks, and nor
+    // does allowing downloads; turning them off is refused on the free plan,
+    // as the server would.
     let asked_on = patch.asked_on();
-    if asked_on.any() && read_switches_in_plan(&state, &account_id).await == Some(false) {
+    if (asked_on.any() || patch.turns_download_off()) && read_switches_in_plan(&state, &account_id).await == Some(false) {
+        if patch.turns_download_off() {
+            return Err(AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()));
+        }
         let was = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?;
         if refuses_switching_on(asked_on, was, Some(false)) {
             return Err(AppError::Validation(SWITCHES_NOT_IN_PLAN.into()));
@@ -1819,6 +1879,20 @@ mod tests {
         assert!(json["pages"].is_null());
     }
 
+    /// The server can say it knows document views before its Insights report
+    /// any: a response with no pages block and no `pages` in `locked` has no
+    /// Pages tab, on either plan, so nobody sees an empty tab or a lock over a
+    /// feature that reports nothing.
+    #[test]
+    fn document_views_alone_show_no_pages() {
+        let paid = r#"{"plan":"paid","total_views":4,"unique_viewers":2,"completion_rate":0.5,"viewers":[],"locked":[]}"#;
+        assert_eq!(parse_insights(paid, true, no_names).unwrap().pages, None);
+        let free = r#"{"plan":"free","total_views":2,"unique_viewers":1,"locked":["completion_rate","viewers","retention"]}"#;
+        assert_eq!(parse_insights(free, true, no_names).unwrap().pages, None);
+        let json = serde_json::to_value(parse_insights(free, true, no_names).unwrap()).unwrap();
+        assert!(json["pages"].is_null());
+    }
+
     /// The free plan's `locked` names `pages` and sends none: it is locked,
     /// with no value to draw, and so is anything a server sends anyway.
     #[test]
@@ -1835,8 +1909,8 @@ mod tests {
         assert_eq!(parse_insights(partly, true, no_names).unwrap().pages, Some(Gated::Locked));
     }
 
-    /// A link with no document visit yet has `pages: null`; a block outside
-    /// the contract (no pages, too many) is none; arrays that do not match the
+    /// `pages: null` is no block, so no tab; a block outside the contract (no
+    /// pages, too many) holds nothing to draw; arrays that do not match the
     /// page count are cut or filled with zeros, and reach stays a percentage.
     #[test]
     fn a_pages_block_is_held_to_the_contract() {
@@ -1844,7 +1918,7 @@ mod tests {
             let body = format!(r#"{{"plan":"paid","total_views":1,"unique_viewers":1,"pages":{block},"locked":[]}}"#);
             parse_insights(&body, true, no_names).unwrap().pages
         };
-        assert_eq!(pages_of("null"), Some(Gated::Shown(None)));
+        assert_eq!(pages_of("null"), None);
         assert_eq!(pages_of(r#"{"page_count":0,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
         assert_eq!(pages_of(r#"{"page_count":1001,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
         assert_eq!(
@@ -2304,6 +2378,7 @@ mod tests {
             insights: Some(false),
             comments: Some(true),
             reactions: None,
+            download: None,
         };
         assert_eq!(
             patch.asked_on(),
@@ -2361,15 +2436,50 @@ mod tests {
         };
         let change: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": false})).unwrap();
         assert_eq!(
-            serde_json::to_value(change_for(change, all).unwrap()).unwrap(),
+            serde_json::to_value(change_for(change, all, true).unwrap()).unwrap(),
             serde_json::json!({"comments": false})
         );
         let insights_only = OfferedSwitches {
             insights: true,
             ..Default::default()
         };
-        assert_eq!(change_for(change, insights_only), None, "a switch the server does not take is not sent");
-        assert_eq!(change_for(SettingsPatch::default(), all), None, "nothing flipped, nothing sent");
+        assert_eq!(
+            change_for(change, insights_only, true),
+            None,
+            "a switch the server does not take is not sent"
+        );
+        assert_eq!(change_for(SettingsPatch::default(), all, true), None, "nothing flipped, nothing sent");
+    }
+
+    /// Allow download goes only to a server with `share_download_switch`:
+    /// any other refuses the key with a 400. A new link never sends it, as
+    /// every link starts with downloads allowed.
+    #[test]
+    fn download_is_sent_only_to_a_server_that_takes_it() {
+        let all = OfferedSwitches {
+            insights: true,
+            comments: true,
+            reactions: true,
+        };
+        let off: SettingsPatch = serde_json::from_value(serde_json::json!({"download": false})).unwrap();
+        assert_eq!(off.download, Some(false));
+        assert_eq!(
+            serde_json::to_value(change_for(off, all, true).unwrap()).unwrap(),
+            serde_json::json!({"download": false})
+        );
+        assert_eq!(change_for(off, all, false), None, "a server without the switch is never sent download");
+        let both: SettingsPatch = serde_json::from_value(serde_json::json!({"insights": true, "download": true})).unwrap();
+        assert_eq!(
+            serde_json::to_value(change_for(both, all, false).unwrap()).unwrap(),
+            serde_json::json!({"insights": true})
+        );
+        // The FE's older shape, without the key, still reads.
+        let old: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": true})).unwrap();
+        assert_eq!(old.download, None);
+        let new_link = patch_for(LinkSettings::all(true), all, true).unwrap();
+        assert!(serde_json::to_value(new_link).unwrap().get("download").is_none());
+        assert!(off.turns_download_off());
+        assert!(!both.turns_download_off());
     }
 
     /// The owner can flip a switch on a link made seconds ago. Its own
@@ -2520,6 +2630,7 @@ mod tests {
             insights: Some(true),
             comments: Some(false),
             reactions: None,
+            download: None,
         };
         patch_settings(&reqwest::Client::new(), &api, "tok_1", &patch).await.unwrap();
         let s = seen.lock().unwrap()[0].clone();
@@ -2552,6 +2663,53 @@ mod tests {
             Err(AppError::Api { status: 500, .. })
         ));
         assert!(matches!(patch_settings(&http, &api, "gone", &patch).await, Err(AppError::NotFound(m)) if m == LINK_GONE));
+    }
+
+    /// `/meta` reports Allow download beside the switches; a server that
+    /// predates it omits the key, and every link then still allows downloads.
+    #[test]
+    fn allow_download_is_read_from_meta_and_missing_means_allowed() {
+        let off = r#"{"settings":{"insights":true,"comments":false,"reactions":false,"download":false}}"#;
+        let (on, download) = parse_meta(off).unwrap();
+        assert!(on.insights && !on.comments && !on.reactions);
+        assert!(!download);
+        assert!(
+            parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false}}"#)
+                .unwrap()
+                .1
+        );
+        assert!(parse_meta(r#"{"ciphertext_size":1}"#).unwrap().1);
+        assert_eq!(parse_meta_settings(off).unwrap(), on);
+    }
+
+    /// Turning downloads off from a plan the server reads as free is refused
+    /// in the download prompt's words, not the switches' ones.
+    #[tokio::test]
+    async fn the_servers_refusal_to_turn_downloads_off_reads_as_its_own_prompt() {
+        let (base, _) = mock(|_| {
+            (
+                403,
+                r#"{"error":"paid_plan_required","message":"insights, comments, reactions and view-only links need a paid Drive plan; upgrade the plan to use them"}"#.into(),
+            )
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "b"));
+        let off = SettingsPatch {
+            download: Some(false),
+            ..Default::default()
+        };
+        assert!(matches!(
+            patch_settings(&http, &api, "free", &off).await,
+            Err(AppError::Validation(m)) if m == DOWNLOAD_NOT_IN_PLAN
+        ));
+        let on = SettingsPatch {
+            insights: Some(true),
+            ..Default::default()
+        };
+        assert!(matches!(
+            patch_settings(&http, &api, "free", &on).await,
+            Err(AppError::Validation(m)) if m == SWITCHES_NOT_IN_PLAN
+        ));
     }
 
     /// The server checks the plan too (hcfs `paid_plan_required`): its
