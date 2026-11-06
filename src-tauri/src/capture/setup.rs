@@ -886,9 +886,28 @@ pub async fn capture_drive_create(state: tauri::State<'_, AppState>, app: tauri:
             }
             let waiting = waiting_dir(&home, &account_id);
             let target = dir.clone();
-            let moved = tokio::task::spawn_blocking(move || move_waiting_within(&waiting, &target, on_card.as_deref(), room))
-                .await
-                .unwrap_or_default();
+            // Into a drive that uploads them, each recording is declared as
+            // it lands, as `deliver::place` declares one (the server counts
+            // only declared recordings).
+            let declare = match &ready {
+                Some(d) => super::destination::own_local_path(pool, &account_id, &d.label)
+                    .await?
+                    .zip(crate::sync::mnemonic::config_dir_for_folder(&account_id, &d.label).ok()),
+                None => None,
+            };
+            let moved = tokio::task::spawn_blocking(move || {
+                let moved = move_waiting_within(&waiting, &target, on_card.as_deref(), room);
+                if let Some((root, config_dir)) = declare {
+                    for file in &moved.moved {
+                        if let Some(capture) = super::recording_length::capture_for(file) {
+                            super::deliver::declare_placed(&root, &config_dir, file, capture);
+                        }
+                    }
+                }
+                moved
+            })
+            .await
+            .unwrap_or_default();
             if !moved.moved.is_empty() {
                 tracing::info!(moved = moved.moved.len(), "waiting captures moved into the captures drive");
             }

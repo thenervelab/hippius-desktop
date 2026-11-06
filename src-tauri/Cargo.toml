@@ -299,7 +299,7 @@ sha3 = "0.10"
 #
 # Now at hcfs main 778f886e, the merge commit of #1170: hcfs-client declares
 # base64's `std` feature itself (#1165), so the desktop no longer turns it on.
-# `Manifest` gains `capture` (#1148), which the desktop leaves `None`.
+# `Manifest` gains `capture` (#1148).
 #
 # Now at hcfs main b945dec5, the merge commit of #1242. It brings #1206,
 # the Free plan's recording limits on the client side: `declare_capture`

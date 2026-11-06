@@ -26,7 +26,8 @@ export type FileFailureKind =
   | "refused"
   /** The server refused a screen recording under the Free plan's limits
    *  (recordings used up, or this one too long). `message` is Rust's copy
-   *  for it. Retryable: an upgrade or a deleted recording lifts it. */
+   *  for it. Retryable: an upgrade lifts it, and for the count so does
+   *  deleting an older recording. */
   | "recordingLimit"
   | "other";
 

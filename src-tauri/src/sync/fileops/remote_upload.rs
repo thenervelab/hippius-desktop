@@ -396,10 +396,21 @@ where
 /// The error a person reads for a failed upload step: Rust's sentence for
 /// its failure kind, never hcfs's text (which carries transport causes and
 /// server slugs). The hcfs error goes to the debug log, tagged with `step`.
+///
+/// The server's two recording refusals stay typed, so a capture delivered
+/// here gets the card's Upgrade without its text being matched.
 fn upload_failure(step: &str, error: &hcfs_client::sync::SyncError) -> AppError {
+    use crate::error::NotReadyKind;
+    use crate::sync::events::{RECORDING_LIMIT_REACHED_CODE, RECORDING_TOO_LONG_CODE};
+    use hcfs_client::engine::events::FileFailureKind;
+
     tracing::debug!(step, error = %error, "remote upload step failed");
-    let (kind, _) = hcfs_client::engine::events::FileFailureKind::classify(error);
-    AppError::Hcfs(crate::sync::events::FileFailureKindPayload::from(&kind).display_reason())
+    let (kind, _) = FileFailureKind::classify(error);
+    match &kind {
+        FileFailureKind::RecordingLimit { code } if code == RECORDING_LIMIT_REACHED_CODE => AppError::NotReady(NotReadyKind::RecordingLimitReached),
+        FileFailureKind::RecordingLimit { code } if code == RECORDING_TOO_LONG_CODE => AppError::NotReady(NotReadyKind::RecordingTooLong),
+        _ => AppError::Hcfs(crate::sync::events::FileFailureKindPayload::from(&kind).display_reason()),
+    }
 }
 
 /// Read chunk `index` of the ciphertext at `path`, on the blocking pool so
@@ -718,6 +729,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
                 name: source.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string(),
                 // Rust owns the sentence the user reads — never reqwest's Display.
                 error: e.to_string(),
+                cause: e,
             });
         }
     }
@@ -914,6 +926,7 @@ pub async fn upload_folder_to_remote_folder(
             failures.push(RemoteUploadFailure {
                 name: item.source.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string(),
                 error: e.to_string(),
+                cause: e,
             });
         }
     }
@@ -926,11 +939,39 @@ pub async fn upload_folder_to_remote_folder(
 pub struct RemoteUploadFailure {
     pub name: String,
     pub error: String,
+    /// The error `error` was written from, for a backend caller that answers
+    /// it by kind (a capture's card). Not sent to the UI.
+    #[serde(skip)]
+    pub cause: AppError,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The server's recording refusals come back typed, so the capture card
+    /// answers them by kind (`capture::deliver::failure_reason`); the widget
+    /// row's text is the same copy the sync path shows. Any other failure
+    /// stays Rust's sentence for its kind.
+    #[test]
+    fn a_recording_refusal_stays_typed() {
+        use crate::error::NotReadyKind;
+        let refused = |code: &str| hcfs_client::sync::SyncError::Http {
+            status: 403,
+            code: Some(code.to_string()),
+            message: "refused".to_string(),
+        };
+
+        let limit = upload_failure("finalize", &refused("recording_limit_reached"));
+        assert!(matches!(limit, AppError::NotReady(NotReadyKind::RecordingLimitReached)), "{limit:?}");
+
+        let long = upload_failure("finalize", &refused("recording_too_long"));
+        assert!(matches!(long, AppError::NotReady(NotReadyKind::RecordingTooLong)), "{long:?}");
+        assert_eq!(long.to_string(), crate::sync::events::recording_too_long_copy());
+
+        let other = upload_failure("finalize", &refused("forbidden"));
+        assert!(matches!(other, AppError::Hcfs(_)), "{other:?}");
+    }
 
     /// The wire path is hashed and encrypted, so a Windows separator would
     /// give the same logical file a different identity than a Mac client's.

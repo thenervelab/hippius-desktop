@@ -1737,10 +1737,12 @@ pub enum FileFailureKindPayload {
     /// allows. Mirrors upstream `FileFailureKind::RecordingLimit`.
     ///
     /// `reason` is Rust's copy for the server's code
-    /// ([`recording_limit_copy`]), shown verbatim. Not transient: only an
-    /// upgrade or a deleted recording lifts it. hcfs leaves the file out of
+    /// ([`recording_limit_copy`]), shown verbatim. Not transient: an upgrade
+    /// lifts it, and for the count so does deleting an older recording.
+    /// hcfs leaves the file out of
     /// its uploads until a cycle ends clean and then tries it again, so the
-    /// row clears and comes back like a full plan's 402 does.
+    /// row clears and comes back like a full plan's 402 does. For a
+    /// recording too long for the plan, only an upgrade lifts it.
     RecordingLimit { reason: String },
     /// Fallback for failures we have not categorised. `message` is for
     /// display only — the FE MUST NOT parse it as a stable contract.
@@ -1812,11 +1814,11 @@ const RECORDING_LIMIT_FALLBACK_REASON: &str = "This recording is over your plan'
 
 /// hcfs-server's code for a 403 refusing a recording because the Free
 /// plan's recordings are used up (`billing/recordings.rs`).
-const RECORDING_LIMIT_REACHED_CODE: &str = "recording_limit_reached";
+pub const RECORDING_LIMIT_REACHED_CODE: &str = "recording_limit_reached";
 
 /// hcfs-server's code for a 403 refusing a recording longer than the Free
 /// plan allows.
-const RECORDING_TOO_LONG_CODE: &str = "recording_too_long";
+pub const RECORDING_TOO_LONG_CODE: &str = "recording_too_long";
 
 /// The user's copy for the server refusing a recording: a Free plan with its
 /// recordings used up.
