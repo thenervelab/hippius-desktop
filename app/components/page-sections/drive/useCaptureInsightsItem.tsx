@@ -18,7 +18,7 @@ import { cloudFileIdFor } from "@/app/lib/tray/trayRowActions";
 import { captureSharesFrom, isCaptureMedia, newestShare } from "@/app/lib/utils/fileLinks";
 import { useDriveRoute } from "./driveRoute";
 
-/** The words for opening a capture's Insights, wherever it is offered. */
+/** The words for opening a file's Insights, wherever it is offered. */
 export const VIEW_INSIGHTS_LABEL = "View insights";
 
 export { captureSharesFrom, isCaptureMedia, isCaptureName, newestShare } from "@/app/lib/utils/fileLinks";
@@ -65,8 +65,9 @@ export function useCaptureLinkTokens() {
  * about. `offered` is true for every screenshot and recording (never a
  * folder) once the server has Insights; `share` is its newest link, or
  * `null` while it has none, when the Insights sheet offers to make one.
- * Off the Captures page nothing is offered. Shared by the row's Insights
- * button and its menu item so the two can never disagree.
+ * Off the Captures page nothing is offered. Only the row's Insights button
+ * reads this; the menus offer "View insights" for every file
+ * ({@link useFileInsightsShare}).
  */
 export function useCaptureInsightsShare() {
   const { basePath } = useDriveRoute();
@@ -89,7 +90,32 @@ export function useCaptureInsightsShare() {
 }
 
 /**
- * What "Create link" in the Insights sheet makes a capture's link from: its
+ * Whether a file offers "View insights" in its menus, and the link they are
+ * about: every file (never a folder) in every drive, on every plan, once the
+ * server has Insights (the free plan sees the sheet's lock and upgrade
+ * prompt). `share` is its newest link, or `null` while it has none, when the
+ * sheet offers to make one. The Captures row's own Insights button stays
+ * capture-only ({@link useCaptureInsightsShare}).
+ */
+export function useFileInsightsShare() {
+  const enabled = useAtomValue(shareInsightsEnabledAtom);
+  const { sharesFor } = useCaptureShares();
+  return useCallback(
+    (
+      label: string | null | undefined,
+      relativePath: string | null | undefined,
+      isFolder: boolean,
+      size?: number,
+    ): { offered: boolean; share: ShareSummary | null } => {
+      if (!enabled || isFolder || !label || !relativePath) return { offered: false, share: null };
+      return { offered: true, share: newestShare(sharesFor(label, relativePath, size)) };
+    },
+    [enabled, sharesFor],
+  );
+}
+
+/**
+ * What "Create link" in the Insights sheet makes a file's link from: its
  * drive and path, and its server id when there is no copy on this computer
  * (the Share dialog's cloud-only dispatch).
  */
@@ -104,14 +130,14 @@ export function captureLinkSource(file: FormattedUserFile, relativePath: string)
 }
 
 /**
- * The "View insights" item for a row on the Captures page: offered for every
- * screenshot and recording once the server has Insights, with a link or not
- * (the sheet offers to make one). Elsewhere it adds nothing. `relativePath`
- * is the row's drive-relative path, resolved by the caller the same way its
- * Share item is.
+ * The "View insights" item for any file row (Drive, Captures, Recent Files,
+ * shared drives), placed after its Share via link: offered for every file
+ * once the server has Insights, with a link or not (the sheet offers to make
+ * one). A folder gets nothing. `relativePath` is the row's drive-relative
+ * path, resolved by the caller the same way its Share item is.
  */
-export function useCaptureInsightsItem() {
-  const shareFor = useCaptureInsightsShare();
+export function useFileInsightsItem() {
+  const shareFor = useFileInsightsShare();
   const open = useSetAtom(insightsSheetAtom);
   return useCallback(
     (file: FormattedUserFile, relativePath: string, onOpen?: () => void): ActionItem[] => {

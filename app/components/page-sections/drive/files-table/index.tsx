@@ -127,7 +127,7 @@ import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
 import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
 import { entryKey } from "../highlightEntry";
-import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useFileInsightsItem } from "../useCaptureInsightsItem";
 import { useCopyLinkItem } from "../useCopyExistingLink";
 import { linkPathFor } from "../existingLink";
 
@@ -725,7 +725,7 @@ const FilesTable: FC<FilesTableProps> = memo(
       ? manageableMemberDriveLabels
       : undefined;
     const setShareModalFile = useSetAtom(shareModalFileAtom);
-    const captureInsightsItem = useCaptureInsightsItem();
+    const fileInsightsItem = useFileInsightsItem();
     const copyLinkItem = useCopyLinkItem();
     const setInviteDialogTarget = useSetAtom(shareDialogAtom);
     const setManageAccessTarget = useSetAtom(shareDriveModalAtom);
@@ -1317,8 +1317,8 @@ const FilesTable: FC<FilesTableProps> = memo(
                 },
               ]
             : []),
-          // Insights for a capture's link, on the Captures page.
-          ...captureInsightsItem(
+          // View insights for any file, after Share via link.
+          ...fileInsightsItem(
             file,
             shareTargetFor(file, parentSubFolderPath ?? normalizedSubfolderPath).relativePath,
           ),
@@ -1508,7 +1508,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         normalizedSubfolderPath,
         resolveRelativePath,
         queryClient,
-        captureInsightsItem,
+        fileInsightsItem,
       ],
     );
 
