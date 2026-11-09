@@ -225,6 +225,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Dropping files onto the app uploads them again.** Drag files or a folder from Finder, Explorer or your file manager onto Overview, the Drive page, Shared Drives, or any drive or folder, including drives that are not synced to this computer. Inside a drive or folder they go straight there; elsewhere the app asks which drive to put them in. When a drop cannot be uploaded, the app now says why instead of doing nothing.
 - **No empty Pages tab in Insights.** Insights for a PDF, Word or PowerPoint link shows its Pages tab only once Hippius reports page by page numbers for it, so you no longer see an empty tab, or a locked one on the free plan, for numbers that aren't there yet.
 - **A link made in the web app, the browser extension or on another computer now shows on any file, not only screenshots and recordings.** A PDF or any other file you shared elsewhere gets its link icon, Copy link in its menu and its existing link in Share via link, without restarting the app.
 - **Dragging a capture's picture into another app drops it on Mac.** Dragging the picture on the capture card into WhatsApp, Slack, Mattermost, Finder or any other app now drops the screenshot or recording there, instead of sliding back to the card. A click on the picture still opens the editor, and a drag never opens it too.

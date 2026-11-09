@@ -634,6 +634,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           mainFolderActualName={nestedMainFolderActualName ?? undefined}
           subFolderPath={nestedSubfolderPath ?? undefined}
           syncBasePath={nestedSyncBasePath ?? undefined}
+          initialFolderPath={folderUploadInitialPath}
         />
       ) : (
         <FolderUploadDialog

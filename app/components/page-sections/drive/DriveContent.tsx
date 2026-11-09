@@ -2,7 +2,7 @@
 
 import type { SortingState } from "@tanstack/react-table";
 
-import { FC, useState, useRef, useEffect, useCallback, memo, useMemo } from "react";
+import { FC, useEffect, useCallback, memo, useMemo } from "react";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import FilesTable from "./files-table";
 import FilesTableSkeleton from "./files-table/FilesTableSkeleton";
@@ -16,11 +16,9 @@ import ConfirmationDialog from "@/app/components/ConfirmationDialog";
 import { Trash2 } from "lucide-react";
 import { UnifiedMediaDialog } from "./file-preview";
 import { toast } from "sonner";
-import { takeTrayDrop, TRAY_DROP_WAITING_EVENT } from "@/app/lib/tray/trayDrop";
 import { useFileViewShared } from "./shared/FileViewUtils";
 import FileContextMenu from "@/app/components/ui/context-menu";
 import { useRemoteFileUpload, useRemoteFolderUpload } from "@/app/lib/hooks/useRemoteUploadActions";
-import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import type { NewFolderTarget } from "@/app/lib/global-atoms/contextMenuAtoms";
 import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
@@ -30,7 +28,6 @@ import { shareModalFileAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { shareTargetFor } from "@/app/lib/utils/folderShareGating";
 import { renameModalFileAtom } from "@/app/lib/global-atoms/renameAtoms";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
-import { CloudUploadIcon, HardDrive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -40,7 +37,6 @@ import { useDriveRoute } from "./driveRoute";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
 import { useDriveMove } from "./move/DriveMoveProvider";
 import MoveHint from "./move/MoveHint";
-import { isInAppDragActive } from "@/app/lib/drive-move/inAppDrag";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -51,11 +47,6 @@ interface DriveContentProps {
   activeFilters: ActiveFilter[];
   viewMode: "list" | "card";
   error?: unknown;
-  addButtonRef?: React.RefObject<{
-    openWithFiles(files: FileList): void;
-    openWithPaths(paths: string[]): void;
-    isDialogOpen(): boolean;
-  } | null>;
   hasMore: boolean;
   loadMore: () => void;
   /** A remote server page is being fetched — renders a skeleton strip under
@@ -71,15 +62,6 @@ interface DriveContentProps {
   /** Receives the level in the order the table sorts it (list view only). */
   onSortedLevel?: (source: readonly FormattedUserFile[], rows: readonly FormattedUserFile[]) => void;
   isSyncPathEmpty?: boolean;
-  /**
-   * Why a drop into this drive will be refused, or `null` when it will not.
-   *
-   * A Viewer on a drive somebody shared with them. The file has already
-   * landed by the time anything can check, so the refusal is spoken rather
-   * than silent -- see `shared-drives/writeRefusal.ts` for the wording and
-   * why it names the role.
-   */
-  writeRefusal?: string | null;
   /** True when the user has insufficient credits to upload files.
    *  Swaps the empty-state into the "Add Credits" variant. */
   isStorageFull?: boolean;
@@ -93,14 +75,6 @@ interface DriveContentProps {
   onUploadFile?: () => void;
   onAddFolder?: () => void;
   onAddSyncFolder?: () => void;
-  /** Routes a folder dropped on the files table into the
-   *  FolderUploadDialog with its path pre-filled. Pure files keep
-   *  flowing through `addButtonRef.openWithPaths`. */
-  onAddFolderFromDrop?: (folderPath: string) => void;
-  /** True while the FolderUploadDialog is open. Used to suppress the
-   *  table-level drag-drop handler so a drop onto the dialog isn't
-   *  also processed by the table behind it. */
-  isFolderUploadOpen?: boolean;
   drivePathsByLabel?: Record<string, string>;
   currentSubfolderPath?: string | null;
   /** Where the menu's New Folder creates; defaults to the main drive. */
@@ -123,7 +97,6 @@ const DriveContent: FC<DriveContentProps> = ({
   activeFilters,
   viewMode,
   error,
-  addButtonRef,
   hasMore,
   loadMore,
   isLoadingMore = false,
@@ -134,7 +107,6 @@ const DriveContent: FC<DriveContentProps> = ({
   windowStart,
   onSortedLevel,
   isSyncPathEmpty = false,
-  writeRefusal = null,
   isStorageFull = false,
   isRemoteView = false,
   searchTermTooShort = false,
@@ -142,8 +114,6 @@ const DriveContent: FC<DriveContentProps> = ({
   onUploadFile,
   onAddFolder,
   onAddSyncFolder,
-  onAddFolderFromDrop,
-  isFolderUploadOpen = false,
   drivePathsByLabel,
   currentSubfolderPath,
   newFolderTarget,
@@ -151,16 +121,12 @@ const DriveContent: FC<DriveContentProps> = ({
   driveOwnerSs58,
   driveOwnerName,
 }) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [animateCloud, setAnimateCloud] = useState(false);
-  const dragTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // Opens `ShareFileModal` (mounted at the layout level) for the
   // selected file. Setting the atom is the only handoff — the modal
   // owns its own lifecycle from there.
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   // Same handoff for `RenameDialog` (also mounted at the layout level).
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
-  const { requireUploadRoom } = useCreditCheck();
   // The page's own empty state for a pinned drive's root (Captures).
   const { pinned, emptyState: pinnedEmptyState } = useDriveRoute();
 
@@ -214,203 +180,8 @@ const DriveContent: FC<DriveContentProps> = ({
     }
   }, [filteredData, fileDetailsFile, setFileDetailsFile]);
 
-  // Tauri native drag-and-drop via global event listeners.
-  //
-  // `cancelled` + the per-await guard exist because the effect's deps
-  // include `isSyncPathEmpty` / `isRecentFiles`. When those change while
-  // an `await listen(...)` is still in flight, the synchronous cleanup
-  // runs against an empty `unlisteners` array, then the awaited listener
-  // resolves and registers itself with the now-stale captured value.
-  // Without the guard, a "set up sync folder" toast leaks from the stale
-  // listener even after the real listener correctly opens the upload
-  // dialog.
-  useEffect(() => {
-    let cancelled = false;
-    const unlisteners: Array<() => void> = [];
-
-    const safePush = (un: () => void) => {
-      if (cancelled) {
-        un();
-        return;
-      }
-      unlisteners.push(un);
-    };
-
-    // One path for every drop: one on this page, and files dropped on the
-    // tray popover, which `TrayNavigationListener` parks in `trayDrop` after
-    // sending the window here. A popover drop also reaches the page's own
-    // listener when it is mounted (Tauri delivers a webview's drop to every
-    // window listening for any target). Both open the same dialog with the
-    // same files, and once it is open `isDialogOpen` stops the later one.
-    const handleDroppedPaths = async (paths: string[] | null | undefined) => {
-      // If either upload dialog is already open, the dialog's own
-      // drag-drop listener handles the drop. Skipping here prevents
-      // the table from also showing a "folders not allowed" toast on
-      // a folder drop that the open FolderUploadDialog accepted.
-      if (addButtonRef?.current?.isDialogOpen()) return;
-      if (isFolderUploadOpen) return;
-
-      // A drop has already landed by the time anything can check, so the
-      // refusal has to be spoken. Silence reads as the app being broken,
-      // and the server's own error reads as a fault rather than a
-      // permission.
-      if (writeRefusal) {
-        toast.error(writeRefusal);
-        return;
-      }
-
-      // No plan / full: same dialog as the toolbar buttons, never
-      // open the picker or folder-upload path from a drop.
-      if (!(await requireUploadRoom("file-upload", isStorageFull))) {
-        return;
-      }
-
-      if (isSyncPathEmpty && !isRecentFiles) {
-        toast.info("Please set up sync folder first to upload files.");
-        return;
-      }
-
-      if (!paths || paths.length === 0 || !addButtonRef?.current) return;
-
-      // Classify the drop. Files flow into the AddFile dialog;
-      // a folder drop opens the FolderUploadDialog with the path
-      // pre-filled (one folder at a time: FolderUploadDialog
-      // accepts a single root). Mixed drops upload the files and
-      // surface a single toast about the dropped folders.
-      try {
-        const { filterDroppedPaths } =
-          await import("@/lib/utils/filterDroppedPaths");
-        const { files, folders } = await filterDroppedPaths(paths);
-
-        if (files.length === 0 && folders.length > 0) {
-          if (onAddFolderFromDrop) {
-            if (folders.length > 1) {
-              toast.info("Only the first dropped folder will be used.");
-            }
-            onAddFolderFromDrop(folders[0]);
-          } else {
-            toast.error("Folder uploads aren't available in this view.");
-          }
-          return;
-        }
-
-        if (files.length > 0) {
-          if (folders.length > 0) {
-            toast.info(
-              'Folders were skipped. Use "Upload Folder" to upload a folder.',
-            );
-          }
-          addButtonRef.current.openWithPaths(files);
-        }
-      } catch (err) {
-        console.error("[DragDrop] Error checking paths:", err);
-        // Fallback: pass all paths through; the uploader will surface
-        // per-path errors itself.
-        addButtonRef.current.openWithPaths(paths);
-      }
-    };
-
-    const takeParkedTrayDrop = () => {
-      const paths = takeTrayDrop();
-      if (paths) void handleDroppedPaths(paths);
-    };
-    window.addEventListener(TRAY_DROP_WAITING_EVENT, takeParkedTrayDrop);
-    unlisteners.push(() => window.removeEventListener(TRAY_DROP_WAITING_EVENT, takeParkedTrayDrop));
-    takeParkedTrayDrop();
-
-    (async () => {
-      try {
-        const { listen } = await import("@tauri-apps/api/event");
-        if (cancelled) return;
-
-        console.log("[DragDrop] Registering global Tauri drag-drop listeners");
-
-        const unDragEnter = await listen<{
-          paths: string[];
-          position: { x: number; y: number };
-        }>("tauri://drag-enter", (event) => {
-          console.log("[DragDrop] drag-enter event received", event.payload);
-          // A row dragged inside the app is a move, never an upload.
-          if (isInAppDragActive()) return;
-          if (isSyncPathEmpty && !isRecentFiles) return;
-          // Don't show background overlay if either upload dialog is open —
-          // both have their own dropzone visuals.
-          if (addButtonRef?.current?.isDialogOpen()) return;
-          if (isFolderUploadOpen) return;
-          setIsDragging(true);
-          dragTimeoutRef.current = setTimeout(() => {
-            setAnimateCloud(true);
-          }, 200);
-        });
-        safePush(unDragEnter);
-        if (cancelled) return;
-
-        const unDragOver = await listen<{ position: { x: number; y: number } }>(
-          "tauri://drag-over",
-          () => {
-            // Keep showing drag state
-          },
-        );
-        safePush(unDragOver);
-        if (cancelled) return;
-
-        const unDragDrop = await listen<{
-          paths: string[];
-          position: { x: number; y: number };
-        }>("tauri://drag-drop", async (event) => {
-          console.log("[DragDrop] drag-drop event received", event.payload);
-          if (isInAppDragActive()) return;
-          setIsDragging(false);
-          setAnimateCloud(false);
-          if (dragTimeoutRef.current) {
-            clearTimeout(dragTimeoutRef.current);
-            dragTimeoutRef.current = null;
-          }
-          await handleDroppedPaths(event.payload.paths);
-        });
-        safePush(unDragDrop);
-        if (cancelled) return;
-
-        const unDragLeave = await listen("tauri://drag-leave", () => {
-          console.log("[DragDrop] drag-leave event received");
-          setIsDragging(false);
-          setAnimateCloud(false);
-          if (dragTimeoutRef.current) {
-            clearTimeout(dragTimeoutRef.current);
-            dragTimeoutRef.current = null;
-          }
-        });
-        safePush(unDragLeave);
-
-        console.log("[DragDrop] All listeners registered successfully");
-      } catch (err) {
-        console.error(
-          "[DragDrop] Failed to register drag-drop listeners:",
-          err,
-        );
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      unlisteners.forEach((fn) => fn());
-      if (dragTimeoutRef.current) {
-        clearTimeout(dragTimeoutRef.current);
-        dragTimeoutRef.current = null;
-      }
-    };
-  }, [
-    addButtonRef,
-    isSyncPathEmpty,
-    isRecentFiles,
-    isFolderUploadOpen,
-    onAddFolderFromDrop,
-    // The listener closes over it; without this a role that arrives after
-    // mount would leave a stale refusal (or none) in the handler.
-    writeRefusal,
-    isStorageFull,
-    requireUploadRoom,
-  ]);
+  // Files dropped from the OS are handled once for the whole window by
+  // `OsDropHost`; DriveContainer tells it where this view's drops go.
 
   const handleFileDownload = (
     file: FormattedUserFile,
@@ -615,34 +386,8 @@ const DriveContent: FC<DriveContentProps> = ({
             !isRecentFiles &&
             "mt-[11px]",
           isRecentFiles && "-mt-3",
-          isDragging &&
-            "after:absolute after:inset-0 after:bg-gray-50/50 after:border-2 after:border-primary-50 after:border-dashed after:rounded-lg after:z-10",
         )}
       >
-        {isDragging && (
-          <div className="absolute inset-0 bg-opacity-80 flex flex-col items-center justify-center z-20 pointer-events-none">
-            <div
-              className={cn(
-                "relative transition-all duration-500 ease-in-out",
-                animateCloud ? "scale-110 transform -translate-y-2" : "",
-              )}
-            >
-              <div className="size-15 p-2 rounded-full flex items-center justify-center">
-                <CloudUploadIcon className="size-10 text-[#3167dc] animate-slide-up" />
-              </div>
-            </div>
-
-            <div className="mt-2 font-medium text-center bg-primary-50 p-4 rounded-lg shadow-lg">
-              <div className="text-white text-base">
-                Drop files here to upload them to
-              </div>
-              <div className="flex items-center justify-center">
-                <HardDrive className="size-6 text-white mr-2" />
-                <div className="text-white text-lg font-bold">Drive</div>
-              </div>
-            </div>
-          </div>
-        )}
         {!isRecentFiles && !isLoading && <MoveHint rows={filteredData} />}
         {renderContent()}
       </div>
