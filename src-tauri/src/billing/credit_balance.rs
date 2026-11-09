@@ -88,7 +88,7 @@ struct FreeCreditsPage {
 /// or duplicated across a page boundary. Harmless here: the series collapses to
 /// one reading per day, so losing one intra-day row of many changes nothing.
 async fn fetch_all_rows(state: &crate::app_state::AppState, account_id: &str) -> Result<Vec<FreeCreditRow>, AppError> {
-    let indexer = IndexerClient::from_env(state.api_client.clone())?;
+    let indexer = IndexerClient::for_session(state, state.api_client.clone())?;
     let limit_str = PAGE_LIMIT.to_string();
     let mut all = Vec::new();
 
@@ -266,7 +266,7 @@ fn render_points(dates: &[NaiveDate], by_day: &BTreeMap<NaiveDate, (f64, &str)>,
 #[tauri::command]
 pub async fn get_credit_balance_chart(
     state: tauri::State<'_, crate::app_state::AppState>,
-    account_id: String,
+    account_id: crate::app_state::SessionAccount,
     range: String,
 ) -> Result<Vec<ChartPoint>, AppError> {
     let account_id = state.require_session_account(&account_id)?;

@@ -11,9 +11,9 @@
 //! not `InsufficientCredits`, since the two send the user to different
 //! places.
 //!
-//! One `#[tokio::test]`, because the three env vars below are process-wide
-//! and `INDEXER_API_KEY` / `HIPPIUS_INDEXER_URL` are additionally read into
-//! a `OnceLock` on first use — a second test could not re-point them.
+//! One `#[tokio::test]`, because the two env vars below are process-wide and
+//! `HIPPIUS_INDEXER_URL` is additionally read into a `OnceLock` on first use —
+//! a second test could not re-point it.
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -227,13 +227,15 @@ async fn assert_refused(state: &AppState, account_id: &str, action: Insufficient
 async fn the_gate_follows_the_servers_preflight_verdict() {
     let (base_url, mock) = spawn_mock().await;
 
-    // SAFETY: single test fn in this binary, so nothing races these. The
-    // indexer pair is read into a `OnceLock` on first use — they are set
-    // before the first `require_eligible` below and never change.
+    // SAFETY: single test fn in this binary, so nothing races these. The indexer
+    // URL is read into a `OnceLock` on first use — it is set before the first
+    // `require_eligible` below and never changes.
+    //
+    // No indexer credential is set: the client authenticates as the session account,
+    // whose token `setup_pool_with_token` puts in the pool below.
     unsafe {
         std::env::set_var("HIPPIUS_API_BASE_URL", &base_url);
         std::env::set_var("HIPPIUS_INDEXER_URL", &base_url);
-        std::env::set_var("INDEXER_API_KEY", "test-key");
     }
 
     let account_id = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
