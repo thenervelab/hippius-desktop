@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput } from "lucide-react";
+import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput, FolderSymlink } from "lucide-react";
 import { Icons } from "@/components/ui";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
@@ -12,6 +12,7 @@ import {
   offersWriteAction,
   isMemberDriveLabel,
   FOLDER_SHARE_DISABLED_TOOLTIP,
+  shareTargetFor,
 } from "@/app/lib/utils/folderShareGating";
 import {
   canShareFolderGrant,
@@ -46,10 +47,12 @@ import {
   shareFeatureEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { FOLDER_ROLES_ENABLED, SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
-import { canRenameFile, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
+import { canRenameFile, MOVE_DISABLED_TOOLTIP, RENAME_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { copyLinkLabel, linkPathFor } from "@/app/components/page-sections/drive/existingLink";
 import { useExistingLinks } from "@/app/components/page-sections/drive/useExistingLinks";
 import { useCopyExistingLink } from "@/app/components/page-sections/drive/useCopyExistingLink";
+import { useDriveMove } from "@/app/components/page-sections/drive/move/DriveMoveProvider";
+import { useFileInsightsItem } from "@/app/components/page-sections/drive/useCaptureInsightsItem";
 
 interface ContextMenuProps {
   x: number;
@@ -79,6 +82,11 @@ interface ContextMenuProps {
    */
   onRename?: (file: FormattedUserFile) => void;
   /**
+   * Open the Move to… picker for this row. Hidden when omitted, and under
+   * the same write and sync gates as Rename.
+   */
+  onMove?: (file: FormattedUserFile) => void;
+  /**
    * The drive-relative folder the listing is showing (the table's
    * `currentSubfolderPath`). A folder row may carry only its basename, so
    * "Share folder" resolves its path against this, the same way "Share via
@@ -99,6 +107,7 @@ export default function FileContextMenu({
   onFileDownload,
   onShareFile,
   onRename,
+  onMove,
   basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
@@ -123,6 +132,9 @@ export default function FileContextMenu({
   // lookup as the row's link icon and the three-dots menu.
   const { linkFor } = useExistingLinks();
   const copyExistingLink = useCopyExistingLink();
+  const driveMove = useDriveMove();
+  // View insights for any file, by the same rule as the row menus.
+  const fileInsightsItem = useFileInsightsItem();
 
   useEffect(() => {
     setMounted(true);
@@ -195,6 +207,9 @@ export default function FileContextMenu({
 
   const linkPath = linkPathFor(file, basePath);
   const existingLink = linkFor(file, linkPath);
+  // Resolved as Share via link resolves it (`shareTargetFor`), so the panel's
+  // Create link makes the link for the same file Share would.
+  const insightsItems = fileInsightsItem(file, shareTargetFor(file, basePath).relativePath, onClose);
 
   const menuItemClass = "flex items-center gap-2 p-2 text-xs font-medium !text-grey-30 hover:!text-grey-40 hover:bg-grey-90 border-b border-grey-80 cursor-pointer dark:!text-grey-dark-200 dark:hover:!text-grey-light-100 dark:hover:bg-white/5 dark:border-black-300";
 
@@ -348,6 +363,18 @@ export default function FileContextMenu({
               </button>
             )}
 
+          {/* View insights: every file, after Share via link. */}
+          {insightsItems.map((item, i) => (
+            <button
+              key={`insights-${i}`}
+              className={menuItemClass}
+              onClick={(e) => item.onItemClick?.(e)}
+            >
+              {item.icon}
+              <span>{item.itemTitle}</span>
+            </button>
+          ))}
+
           {/* Share folder: a folder invite. Join is console-only. */}
           {SHARED_DRIVES_ENABLED
             && file.isFolder
@@ -410,6 +437,25 @@ export default function FileContextMenu({
             >
               <Pencil className="size-4" />
               <span>Rename</span>
+            </button>
+          )}
+
+          {onMove && driveMove?.offersMove(file) && (
+            <button
+              className={cn(menuItemClass, {
+                "opacity-60 cursor-not-allowed": !driveMove.canMove(file),
+              })}
+              disabled={!driveMove.canMove(file)}
+              title={!driveMove.canMove(file) ? MOVE_DISABLED_TOOLTIP : undefined}
+              onClick={() => {
+                if (driveMove.canMove(file)) {
+                  onMove(file);
+                  onClose();
+                }
+              }}
+            >
+              <FolderSymlink className="size-4" />
+              <span>Move to{"\u2026"}</span>
             </button>
           )}
 

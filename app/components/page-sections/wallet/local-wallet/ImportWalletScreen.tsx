@@ -21,6 +21,7 @@ import {
 import { useLocalWallet } from "@/app/contexts/LocalWalletContext";
 import { getDiagonalTextureSvgBackgroundImage } from "@/app/lib/ui-textures";
 import RecoveryWarningDialog from "./RecoveryWarningDialog";
+import { useClaimOsDrops } from "@/app/lib/drive/useOsDropTarget";
 
 const cornerTextureLight = getDiagonalTextureSvgBackgroundImage({
   opacity: 0.21,
@@ -114,6 +115,8 @@ const ImportWalletScreen: React.FC<ImportWalletScreenProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  // A dropped key file is this screen's, never a Drive upload.
+  useClaimOsDrops(true);
   // Two-step submit: clicking Import opens the recovery warning. The
   // actual importEncryptedWallet IPC only fires after the user acks
   // they have saved the wallet password and access key themselves —

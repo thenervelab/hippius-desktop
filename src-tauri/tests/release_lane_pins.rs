@@ -1198,6 +1198,15 @@ fn our_own_runners_never_run_a_fork_pull_request() {
         guarded += 1;
     }
     assert!(guarded > 0, "no ci.yml job reads its runner from a variable any more; update this pin");
+    // The Rust builds read only the large label: deleting it must send them
+    // to GitHub-hosted runners, not down to the light jobs' smaller ones.
+    for name in ["rust-linux-clippy", "rust-linux-test", "capture-runtime-linux"] {
+        let runs_on = document["jobs"][name]["runs-on"].as_str().unwrap_or_default();
+        assert!(
+            runs_on == format!("{FORK_GUARD}vars.CI_RUNS_ON_LINUX_LARGE {HOSTED_FALLBACK}"),
+            "{name} runs on CI_RUNS_ON_LINUX_LARGE or GitHub-hosted, nothing else: {runs_on}"
+        );
+    }
     assert_eq!(
         document["jobs"]["release-deps-linux"]["runs-on"].as_str(),
         Some("ubuntu-22.04"),

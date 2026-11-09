@@ -21,6 +21,9 @@ mod dir_stats;
 mod exclude_match;
 mod export_zip;
 mod listing;
+// `pub(crate)` so the browsed-drive move (`remote_move`) shares its
+// path checks and clash rules rather than keeping a second copy.
+pub(crate) mod move_entries;
 mod new_folder;
 // `pub(crate)` so every walk that uploads a local tree (the remote folder
 // upload, the outside-folder share scan in `shares::folder_scan`) shares
@@ -38,6 +41,7 @@ pub use asset_scope::{allow_asset_directory, allow_asset_scope};
 pub use delete::{DeleteFilesResult, FileDeleteError, FileDeleteRequest, delete_files};
 pub use export_zip::export_folder_zip;
 pub use listing::{FileEntry, GroupedListing, list_sync_folder, list_sync_folder_grouped, list_sync_folder_grouped_inner};
+pub use move_entries::{MoveEntriesRequest, MoveEntriesResult, move_entries};
 pub use new_folder::create_sync_folder;
 pub use recent::{RecentFile, get_recent_files};
 pub use rename::{FileRenameRequest, RenameEntryResult, rename_entry};

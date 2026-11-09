@@ -77,6 +77,12 @@ import {
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
+import DriveMoveProvider, { type MoveTarget } from "./move/DriveMoveProvider";
+import {
+  FROZEN_REASON,
+  READ_ONLY_REASON,
+  normalizePath as normalizeMovePath,
+} from "@/app/lib/drive-move/moveLogic";
 import {
   parseSharedDriveLabel,
   browseNameFromUrl,
@@ -113,6 +119,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { HIGHLIGHT_OPEN_LIMIT_MS, type HighlightRequest } from "./highlightEntry";
 import { useDriveHighlight } from "./useDriveHighlight";
 import { useDriveRoute } from "./driveRoute";
+import { DROP_READ_ONLY, resolveDriveDropDestination } from "@/app/lib/drive/osDrop";
+import { useOsDropTarget } from "@/app/lib/drive/useOsDropTarget";
 import {
   driveRootHref,
   driveTrail,
@@ -330,16 +338,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   );
   const { requireUploadRoom } = useCreditCheck();
 
-  const handleAddFolderFromDrop = useCallback(
-    async (path: string) => {
-      // Overview no-plan / full is checked inside requireUploadRoom; the
-      // polled flag covers the rare case Overview still shows room.
-      if (!(await requireUploadRoom("folder-upload", isStorageFull))) return;
-      setFolderUploadInitialPath(path);
-      setIsFolderUploadOpen(true);
-    },
-    [requireUploadRoom, isStorageFull],
-  );
+  // A folder dropped on a local drive opens this drive's own folder dialog
+  // with it filled in. `OsDropHost` has already applied the upload gates.
+  const openFolderUploadWithPath = useCallback((path: string) => {
+    setFolderUploadInitialPath(path);
+    setIsFolderUploadOpen(true);
+  }, []);
 
   // Per-drive sync status is owned by Rust and pushed via the
   // `useDriveStatuses` hook mounted in `SyncEventLogger`. The previous
@@ -1889,6 +1893,32 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     labelDisplayNames,
   ]);
 
+  // Where a move starts from: the drive and folder on screen. Only inside a
+  // drive; Recent Files and the drive list move nothing. The reason is the
+  // short form for the drag label, not the full refusal sentence.
+  const moveTarget = useMemo<MoveTarget | null>(() => {
+    if (!newFolderTarget?.label) return null;
+    return {
+      label: newFolderTarget.label,
+      remote: newFolderTarget.kind === "remote",
+      parentPath: normalizeMovePath(newFolderTarget.parentPath),
+      driveName: openDriveName ?? newFolderTarget.label,
+      syncPath: drivePathsByLabel[newFolderTarget.label] ?? null,
+      readOnlyReason: openDriveFrozen
+        ? FROZEN_REASON
+        : openDriveWriteRefusal || !openDriveCanWrite
+          ? READ_ONLY_REASON
+          : null,
+    };
+  }, [
+    newFolderTarget,
+    openDriveName,
+    drivePathsByLabel,
+    openDriveFrozen,
+    openDriveWriteRefusal,
+    openDriveCanWrite,
+  ]);
+
   // The crumbs after the root (`driveTrail`): the open drive, then each
   // folder down to the one on screen. The root crumb itself is the page the
   // drive was opened from, drawn by the breadcrumb.
@@ -1918,6 +1948,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       label: step.label,
       title: step.label,
       onClick: step.target ? go(step.target) : undefined,
+      // A crumb above the folder on screen takes a drop: the drive's top
+      // level, or that folder's drive-relative path.
+      dropPath: step.target
+        ? step.target.kind === "drive"
+          ? ""
+          : normalizeMovePath(step.target.subPath)
+        : undefined,
     }));
   }, [
     isRecentFiles,
@@ -2160,6 +2197,61 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     return hasPrivate;
   }, [isRecentFiles, selectedPrivateFolderPath, isLoadingPrivatePath]);
 
+  // Where a file dropped from the OS goes on this view (`OsDropHost`).
+  // Recent Files and the drive list ask which drive; inside a drive or a
+  // folder of one the drop goes there, local or remote alike.
+  const dropShowsDriveList =
+    isRecentFiles ||
+    !(isNested || isRemoteRoot || isLocalDriveOpen) ||
+    (showCurrentStartSyncingSelector && !isNested && !isRemoteRoot);
+  const dropLocalLabel = isNested ? (nestedDrive?.label ?? null) : activeSyncFolderLabel;
+  const { destination: dropDestination, blockedReason: dropBlockedReason } =
+    resolveDriveDropDestination({
+      isRecentFiles,
+      showsDriveList: dropShowsDriveList,
+      remote:
+        isRemoteView && remoteUploadLabel
+          ? {
+              label: remoteUploadLabel,
+              parentPath: isNested ? urlSubFolderPath || undefined : undefined,
+            }
+          : null,
+      local: {
+        label: dropLocalLabel,
+        syncPathMissing: isNested
+          ? !nestedDrive?.syncPath
+          : !(dropLocalLabel && drivePathsByLabel[dropLocalLabel]),
+        folder:
+          isNested && urlFolderName
+            ? {
+                name: urlFolderName,
+                subfolder: urlSubFolderPath ?? undefined,
+                syncBasePath: nestedDrive?.syncPath || undefined,
+              }
+            : null,
+      },
+    });
+  useOsDropTarget({
+    destination: dropDestination,
+    blockedReason: dropBlockedReason,
+    name: dropShowsDriveList
+      ? "Drive"
+      : (isNested ? urlFolderName : null) || openDriveName || "Drive",
+    // A drop lands whatever the permission, so a Viewer is told why rather
+    // than watching nothing happen.
+    writeRefusal: dropShowsDriveList
+      ? null
+      : (openDriveWriteRefusal ?? (openDriveCanWrite ? null : DROP_READ_ONLY)),
+    storageBlocked: isStorageFull,
+    openFolder:
+      dropDestination?.kind === "local" ? openFolderUploadWithPath : undefined,
+    onUploaded: isRemoteView
+      ? () => setNestedRefreshKey((k) => k + 1)
+      : isNested
+        ? refreshNestedListing
+        : undefined,
+  });
+
   // Determine what content to render
   let content;
 
@@ -2297,9 +2389,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             // inner white card per Figma).
             const driveContent = (
               <DriveContent
-                // A drop lands whatever the permission, so a Viewer is told
-                // why rather than watching nothing happen.
-                writeRefusal={openDriveWriteRefusal}
                 isRecentFiles={isRecentFiles}
                 isLoading={isLoading}
                 filteredData={statusFilteredData}
@@ -2312,7 +2401,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 activeFilters={activeFilters}
                 viewMode={viewMode}
                 error={error}
-                addButtonRef={addButtonRef}
                 hasMore={browsePagingActive ? false : effectiveHasMore}
                 loadMore={browsePagingActive ? noopLoadMore : effectiveLoadMore}
                 isLoadingMore={browsePagingActive ? false : remoteIsLoadingMore}
@@ -2344,10 +2432,6 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
                 onAddSyncFolder={
                   isRemoteView ? undefined : handleContextAddSyncFolder
                 }
-                onAddFolderFromDrop={
-                  isRemoteView ? undefined : handleAddFolderFromDrop
-                }
-                isFolderUploadOpen={isFolderUploadOpen}
                 drivePathsByLabel={drivePathsByLabel}
                 currentSubfolderPath={
                   isNested ? (urlSubFolderPath ?? "") : null
@@ -2537,8 +2621,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             }
 
             // Drive view — DriveHeader owns the nested card structure and
-            // hosts DriveContent as its children.
-            return driveHeader;
+            // hosts DriveContent as its children. The move provider wraps
+            // both, so a breadcrumb crumb takes a drop like a folder row.
+            return <DriveMoveProvider target={moveTarget}>{driveHeader}</DriveMoveProvider>;
           })()}
         </div>
       </FileSelectionProvider>
