@@ -11,6 +11,7 @@ import InfoTooltip from "@/components/ui/info-tooltip";
 import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import { SHARED_DRIVES_DOCS_URL } from "@/components/page-sections/shared-drives/ShareADriveEmptyState";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
+import { useOsDropTarget } from "@/app/lib/drive/useOsDropTarget";
 
 const renderHeader = (actions?: ReactNode) => (
   <PageHeader
@@ -43,6 +44,13 @@ const renderHeader = (actions?: ReactNode) => (
 const SharedDrivesPage: FC = () => {
   const { getParam } = useUrlParams();
   const driveOpen = isDriveOpenInUrl(getParam);
+  // The list names no drive, so a file dropped on it asks which drive to
+  // upload to. An open drive registers its own target (its container).
+  useOsDropTarget(
+    !driveOpen && SHARED_DRIVES_ENABLED
+      ? { destination: { kind: "choose" }, name: "Drive" }
+      : null,
+  );
   return (
     <FeatureDisabledRedirect enabled={SHARED_DRIVES_ENABLED}>
       {driveOpen && <SharedDriveOpenView header={renderHeader()} />}
