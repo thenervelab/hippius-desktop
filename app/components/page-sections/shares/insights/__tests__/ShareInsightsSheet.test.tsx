@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react
 
 import { MotionGlobalConfig } from "framer-motion";
 
-import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY, VERIFIED_EMAIL } from "../ShareInsightsSheet";
+import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
 import { OFFLINE_LINE, UNREACHABLE_LINE } from "../insightsView";
 import { DOWNLOAD_SWITCH } from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { GATE_LABEL } from "../EmailGateSettings";
@@ -1510,7 +1510,7 @@ describe("the Insights Pages tab", () => {
     expect(within(viewers).getByText("2 of 4 pages")).toBeInTheDocument();
   });
 
-  it("names a viewer by the email they confirmed, with the verified mark", async () => {
+  it("names a viewer by the email they confirmed, with no verified mark", async () => {
     const viewers: ShareInsights["viewers"] = {
       state: "shown",
       value: [
@@ -1525,13 +1525,13 @@ describe("the Insights Pages tab", () => {
     const rows = within(within(panel).getByRole("list", { name: "Viewers" })).getAllByRole("listitem");
     // No name chosen: the email is the name.
     expect(rows[0]).toHaveTextContent("alice@acme.com");
-    expect(within(rows[0]).getByText(VERIFIED_EMAIL)).toBeInTheDocument();
     // A chosen name stays first, the email under it.
     expect(rows[1]).toHaveTextContent(/Bob.*bob@acme\.com/);
-    expect(within(rows[1]).getByText(VERIFIED_EMAIL)).toBeInTheDocument();
-    // No email Rust could verify: no mark.
+    // No email Rust could verify: anonymous, with no email.
     expect(rows[2]).toHaveTextContent("Anonymous viewer");
-    expect(within(rows[2]).queryByText(VERIFIED_EMAIL)).toBeNull();
+    expect(rows[2]).not.toHaveTextContent("@");
+    // Every email shown is a proven one, so no row carries a "verified" mark.
+    for (const row of rows) expect(within(row).queryByText(/verified/i)).toBeNull();
   });
 
   it("says no page views yet on a document link nobody has read", async () => {

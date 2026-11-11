@@ -5,7 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BadgeCheck, BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import { BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
 import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
@@ -1243,14 +1243,13 @@ function ViewerRows({ viewers, video, paged = false }: { viewers: InsightsViewer
   );
 }
 
-/** The words beside a viewer's email that Rust checked against the email they proved. */
-export const VERIFIED_EMAIL = "Verified email";
-
 /**
  * One viewer, most recent first: their avatar, name and when they last
  * looked, and for a recording how much of it they watched. A viewer who
  * confirmed an email on a link that asks for one is named by it when they
- * chose no name, with the verified mark; with a name, the email goes under it.
+ * chose no name; with a name, the email goes under it. No mark says it is
+ * verified, as on the console: Rust drops every email that fails the
+ * server's check, so an email on screen is always a proven one.
  */
 function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolean }) {
   const watched = formatWatched(v.watchedMs);
@@ -1263,12 +1262,6 @@ function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolea
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-center gap-1.5">
           <PersonName name={shownName} className="text-[13px]" />
-          {email !== null && (
-            <span className="shrink-0 text-primary-50 dark:text-primary-brand-dark" title={VERIFIED_EMAIL}>
-              <BadgeCheck aria-hidden className="size-3.5" />
-              <span className="sr-only">{VERIFIED_EMAIL}</span>
-            </span>
-          )}
           {v.visits > 1 && <span className={cn("shrink-0 whitespace-nowrap text-xs", MUTED)}>{v.visits} visits</span>}
         </p>
         {emailLine && (
