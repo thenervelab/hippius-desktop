@@ -47,9 +47,9 @@ const FOLDER_WRAPS_PATH: &str = "/v1/folder-shares/owner-wraps";
 /// Deriving it costs a BIP-39 PBKDF2-HMAC-SHA512 at 2048 iterations, so a
 /// per-entry derive turns a listing of N shares into N of them on a tokio
 /// worker. Every batch path here derives once and passes this down.
-type WrapKey = Zeroizing<[u8; 32]>;
+pub(crate) type WrapKey = Zeroizing<[u8; 32]>;
 
-fn derive_wrap_key(master_mnemonic: &str) -> std::result::Result<WrapKey, String> {
+pub(crate) fn derive_wrap_key(master_mnemonic: &str) -> std::result::Result<WrapKey, String> {
     let mnemonic = Mnemonic::from_str(master_mnemonic).map_err(|e| e.to_string())?;
     let mut seed = mnemonic.to_seed("");
     let key = blake3::derive_key(KDF_CONTEXT, &seed[..32]);

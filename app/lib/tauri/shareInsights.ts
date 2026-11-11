@@ -61,6 +61,12 @@ export interface InsightsViewer {
    */
   pagesSeen?: number | null;
   pageCount?: number | null;
+  /**
+   * The email they confirmed on a link that asks for one. Rust sends it only
+   * once it has opened it with the link's key and matched it against the
+   * server's check of the email they proved, so it is shown as verified.
+   */
+  email?: string;
 }
 
 /** A document link's page by page numbers (`share_document_views`). */

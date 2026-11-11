@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Ask for an email before a share link opens.** A file link can now ask viewers to confirm their email with a code before it opens, from the Share dialog and from Insights' Link settings. Let in only certain addresses or whole company domains, or keep some out. It comes with paid Drive plans and appears once Hippius offers it for your account.
+- **See who opened a link that asks for an email.** Insights names each viewer by the email they confirmed, with a verified mark, so you know exactly who read your document.
+- **Allow download on a new link, and watermarked PDFs.** The Share dialog's finished link now has the Allow download switch too, and it says what turning it off does: the link's page hides its download button and marks each page of a PDF with who is looking.
 - **Turn off downloads on a share link.** Insights' Link settings has an Allow download switch for each file link. Turn it off and the link's page hides its download button, so people view the file without a one-click download. It only discourages saving: anyone with the link can still keep what they see. Turning it off comes with paid Drive plans, and on the free plan the switch shows an upgrade prompt instead. It appears once Hippius offers it for your account.
 - **Move files and folders within a drive.** Choose Move to… from a file or folder's menu, the right-click menu or the selection bar, pick a folder (or make a new one) and press Move here. Or drag files onto a folder, an open folder's rows or a folder in the path at the top. Cmd-click (Ctrl-click on Windows and Linux) and Shift-click pick several files at once. Moved files are not uploaded again, the message after a move has Undo, and when a file of the same name is already there you choose Keep both, Replace or Skip.
 - **Insights for every file, not just captures.** Any file in any drive now has "View insights" in its menu. A file without a share link opens Insights with a "Create link" button: press it and the link is made and copied, with views, comments and reactions counted where your plan includes them. Insights says beforehand exactly what the new link will count.
@@ -225,6 +228,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Pages seen per viewer.** Insights for a PDF, Word or PowerPoint link now says how many pages each viewer saw ("3 of 12 pages"); the count was missing for every viewer.
 - **Dropping files onto the app uploads them again.** Drag files or a folder from Finder, Explorer or your file manager onto Overview, the Drive page, Shared Drives, or any drive or folder, including drives that are not synced to this computer. Inside a drive or folder they go straight there; elsewhere the app asks which drive to put them in. When a drop cannot be uploaded, the app now says why instead of doing nothing.
 - **No empty Pages tab in Insights.** Insights for a PDF, Word or PowerPoint link shows its Pages tab only once Hippius reports page by page numbers for it, so you no longer see an empty tab, or a locked one on the free plan, for numbers that aren't there yet.
 - **A link made in the web app, the browser extension or on another computer now shows on any file, not only screenshots and recordings.** A PDF or any other file you shared elsewhere gets its link icon, Copy link in its menu and its existing link in Share via link, without restarting the app.

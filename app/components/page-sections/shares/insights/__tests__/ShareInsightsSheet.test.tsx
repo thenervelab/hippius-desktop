@@ -6,8 +6,10 @@ import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react
 
 import { MotionGlobalConfig } from "framer-motion";
 
-import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
+import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY, VERIFIED_EMAIL } from "../ShareInsightsSheet";
 import { OFFLINE_LINE, UNREACHABLE_LINE } from "../insightsView";
+import { DOWNLOAD_SWITCH } from "@/components/page-sections/drive/LinkEngagementSwitches";
+import { GATE_LABEL } from "../EmailGateSettings";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
@@ -732,6 +734,37 @@ describe("ShareInsightsSheet", () => {
     });
   });
 
+  it("offers Ask for email in Link settings only where Rust says the server has email gates", async () => {
+    const gate = { offered: true, on: true, allowCount: 0, blockCount: 0, lists: { allow: [], block: [] }, inPlan: true };
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_gate: gate,
+    });
+    renderSheet();
+    const settings = await openSettings();
+    const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
+    expect(ask).toHaveAttribute("aria-checked", "true");
+    expect(within(settings).getByRole("textbox", { name: "Only allow" })).toBeInTheDocument();
+  });
+
+  it("has no Ask for email on a server without email gates", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_gate: { offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null },
+    });
+    renderSheet();
+    const settings = await openSettings();
+    await within(settings).findByRole("switch", { name: "Insights" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_gate", { shareToken: "tok" }));
+    expect(within(settings).queryByRole("switch", { name: GATE_LABEL })).toBeNull();
+  });
+
   describe("Allow download", () => {
     const ALL = { insights: true, comments: true, reactions: true };
     function link({ plan, download, refuse = false }: { plan: boolean; download?: boolean | null; refuse?: boolean }) {
@@ -777,7 +810,7 @@ describe("ShareInsightsSheet", () => {
       renderSheet();
       const settings = await openSettings();
       const allow = await within(settings).findByRole("switch", { name: "Allow download" });
-      expect(within(settings).getByText("Viewers can download the file. Only paid Drive plans can turn it off.")).toBeInTheDocument();
+      expect(within(settings).getByText(DOWNLOAD_SWITCH.locked)).toBeInTheDocument();
       fireEvent.click(allow);
       expect(allow).toHaveAttribute("aria-checked", "true");
       const prompt = within(settings).getByRole("region", { name: "Upgrade to turn off downloads" });
@@ -1475,6 +1508,30 @@ describe("the Insights Pages tab", () => {
     renderSheet(DOC_CAPS, undefined, DOC);
     const viewers = await showTab("Viewers");
     expect(within(viewers).getByText("2 of 4 pages")).toBeInTheDocument();
+  });
+
+  it("names a viewer by the email they confirmed, with the verified mark", async () => {
+    const viewers: ShareInsights["viewers"] = {
+      state: "shown",
+      value: [
+        { viewerId: "a", name: null, email: "alice@acme.com", visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+        { viewerId: "b", name: "Bob", email: "bob@acme.com", visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+        { viewerId: "c", name: null, visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+      ],
+    };
+    answer({ share_get_insights: { ...PAID_DOC, viewers }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const panel = await showTab("Viewers");
+    const rows = within(within(panel).getByRole("list", { name: "Viewers" })).getAllByRole("listitem");
+    // No name chosen: the email is the name.
+    expect(rows[0]).toHaveTextContent("alice@acme.com");
+    expect(within(rows[0]).getByText(VERIFIED_EMAIL)).toBeInTheDocument();
+    // A chosen name stays first, the email under it.
+    expect(rows[1]).toHaveTextContent(/Bob.*bob@acme\.com/);
+    expect(within(rows[1]).getByText(VERIFIED_EMAIL)).toBeInTheDocument();
+    // No email Rust could verify: no mark.
+    expect(rows[2]).toHaveTextContent("Anonymous viewer");
+    expect(within(rows[2]).queryByText(VERIFIED_EMAIL)).toBeNull();
   });
 
   it("says no page views yet on a document link nobody has read", async () => {
