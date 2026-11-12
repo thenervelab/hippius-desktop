@@ -230,7 +230,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" update
-          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm zlib1g-dev
 
       - name: Set up MSYS2 (Windows)
         if: runner.os == 'Windows'

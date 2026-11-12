@@ -522,7 +522,7 @@ jobs:
       # H.264 encoder: Linux has no system one to call.
       - name: Build the video preview engine
         run: |
-          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm zlib1g-dev
           bash scripts/video-engine/build-ffmpeg.sh
 
       - name: Install Rust
