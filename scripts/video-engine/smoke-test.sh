@@ -58,6 +58,27 @@ for candidate in "${video[@]}"; do
   echo "encoder unavailable: ${candidate} ($(tail -1 "${work}/enc.log"))"
 done
 if [[ -z "${picked}" ]]; then
+  # Windows Server (the hosted CI image) ships without Microsoft's H.264
+  # encoder, and adding it needs a reboot. Desktop Windows has it; where it
+  # is missing (N editions without the Media Feature Pack) the app finds no
+  # encoder at launch and shows the download fallback. On a server, prove
+  # what can be proven: both OS encoders are built in and a WMV decodes.
+  product_type=""
+  if [[ "$(uname -s)" != Darwin ]] && command -v powershell.exe >/dev/null 2>&1; then
+    product_type="$(powershell.exe -NoProfile -Command '(Get-CimInstance Win32_OperatingSystem).ProductType' 2>/dev/null | tr -d '\r[:space:]')"
+  fi
+  if [[ -n "${product_type}" && "${product_type}" != 1 ]]; then
+    echo "::warning::Windows Server has no Media Foundation H.264 encoder; checking the build and WMV decoding only"
+    encoders="$("${engine}" -hide_banner -encoders 2>/dev/null)"
+    for name in h264_mf aac_mf; do
+      grep -qE "^ *[VA][^ ]* +${name} " <<<"${encoders}" || { echo "::error::the engine lacks ${name}"; exit 1; }
+    done
+    "${engine}" -hide_banner -nostdin -loglevel error -i "${fixtures}/clip.wmv" -f null - \
+      || { echo "::error::the engine cannot decode the WMV clip"; exit 1; }
+    echo "encoders built in: h264_mf aac_mf; WMV decodes"
+    echo "smoke test passed (no conversion on Windows Server)"
+    exit 0
+  fi
   echo "::error::no OS H.264 encoder works with this engine on this runner"
   exit 1
 fi
