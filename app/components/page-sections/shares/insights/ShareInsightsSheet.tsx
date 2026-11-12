@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -692,6 +693,7 @@ function InsightsPanelFor({
       {settingsOpen && !turnedOff && (
         <LinkSettingsPopover
           id={popoverId}
+          shareToken={shareToken}
           switches={switches}
           top={settingsTop}
           opener={settingsOpener}
@@ -1243,18 +1245,30 @@ function ViewerRows({ viewers, video, paged = false }: { viewers: InsightsViewer
 
 /**
  * One viewer, most recent first: their avatar, name and when they last
- * looked, and for a recording how much of it they watched.
+ * looked, and for a recording how much of it they watched. A viewer who
+ * confirmed an email on a link that asks for one is named by it when they
+ * chose no name; with a name, the email goes under it. No mark says it is
+ * verified, as on the console: Rust drops every email that fails the
+ * server's check, so an email on screen is always a proven one.
  */
 function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolean }) {
   const watched = formatWatched(v.watchedMs);
+  const email = v.email ?? null;
+  const shownName = v.name ?? email;
+  const emailLine = v.name !== null && email !== null;
   return (
     <li className="flex items-center gap-3 py-3">
-      <InsightsAvatar name={v.name} size="md" />
+      <InsightsAvatar name={shownName} size="md" />
       <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-baseline gap-1.5">
-          <PersonName name={v.name} className="text-[13px]" />
+        <p className="flex min-w-0 items-center gap-1.5">
+          <PersonName name={shownName} className="text-[13px]" />
           {v.visits > 1 && <span className={cn("shrink-0 whitespace-nowrap text-xs", MUTED)}>{v.visits} visits</span>}
         </p>
+        {emailLine && (
+          <p className={cn("mt-px block min-w-0 overflow-hidden text-xs", MUTED)}>
+            <MiddleTruncate text={email} kind="email" />
+          </p>
+        )}
         {v.lastViewedAt && <p className={cn("mt-px text-xs", MUTED)}>{formatAgo(v.lastViewedAt)}</p>}
       </div>
       {/* A document's viewer: how many of its pages they saw. */}
