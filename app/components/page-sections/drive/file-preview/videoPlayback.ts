@@ -59,12 +59,13 @@ export function useVideoPlayback(localPath: string): { playback: VideoPlayback |
  * (`video_preview_open`, `src-tauri/src/video_engine/`). `native`: the
  * existing path above. `file`: a converted copy at `path`, played like any
  * local video. `stream`: an HLS playlist whose segments Rust converts on
- * request (`hlsIpcLoader.ts`). `unsupported`: no player, Rust's line.
+ * request (`hlsIpcLoader.ts`). Either may carry a `notice` (its sound was
+ * left out) to show beside the player. `unsupported`: no player, Rust's line.
  */
 export type VideoPreview =
   | { kind: "native" }
-  | { kind: "file"; path: string }
-  | { kind: "stream"; url: string; durationSecs: number }
+  | { kind: "file"; path: string; notice?: string | null }
+  | { kind: "stream"; url: string; durationSecs: number; notice?: string | null }
   | { kind: "unsupported"; message: string };
 
 /** What the viewer shows while Rust prepares, and then what it plays. */

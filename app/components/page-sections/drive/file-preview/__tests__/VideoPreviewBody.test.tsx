@@ -344,6 +344,26 @@ describe("VideoPreviewBody conversion", () => {
     });
   });
 
+  it("says beside the player when the video plays without its sound", async () => {
+    const NOTICE = "Playing without sound: Hippius can't play this video's audio track.";
+    tauri.onInvoke("video_preview_open", () => ({
+      kind: "file",
+      path: "/home/.hippius/preview-cache/converted/s.mp4",
+      notice: NOTICE,
+    }));
+    tauri.onInvoke("video_playback_source", () => ({ kind: "webview" }));
+    render(<VideoPreviewBody file={wmv} handleFileDownload={vi.fn()} />);
+    expect(await screen.findByTestId("video-player")).toBeInTheDocument();
+    expect(screen.getByText(NOTICE)).toHaveAttribute("role", "status");
+  });
+
+  it("shows no line when the sound plays", async () => {
+    tauri.onInvoke("video_preview_open", () => ({ kind: "stream", url: HLS_URL, durationSecs: 60, notice: null }));
+    render(<VideoPreviewBody file={wmv} handleFileDownload={vi.fn()} />);
+    expect(await screen.findByTestId("video-player")).toBeInTheDocument();
+    expect(screen.queryByText(/Playing without sound/)).toBeNull();
+  });
+
   it("says plainly when the video cannot be previewed and offers Download", async () => {
     tauri.onInvoke("video_preview_open", () => ({
       kind: "unsupported",

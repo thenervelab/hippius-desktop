@@ -233,6 +233,14 @@ const VideoPreviewBody: React.FC<{
           <PreviewLoading title={preparingTitle} />
         )}
       </div>
+      {converted?.notice ? (
+        <p
+          role="status"
+          className="mt-3 w-full shrink-0 px-4 text-center text-sm text-grey-50 dark:text-grey-light-300"
+        >
+          {converted.notice}
+        </p>
+      ) : null}
       {stuttered && localPath ? (
         <div
           role="status"
