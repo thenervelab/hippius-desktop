@@ -43,6 +43,7 @@ mod test_helpers;
 pub mod tray;
 pub mod updates;
 mod utils;
+pub mod video_engine;
 pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
@@ -534,6 +535,11 @@ fn main() {
             // loopback stream (WebKitGTK cannot play media from `asset://`).
             crate::video_stream::video_playback_source,
             crate::video_stream::video_stream_release,
+            // Previews for videos the webview cannot play (WMV, AVI, MKV, ...):
+            // a remuxed copy or a stream converted by the bundled engine.
+            crate::video_engine::video_preview_open,
+            crate::video_engine::video_preview_close,
+            crate::video_engine::video_preview_segment,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
@@ -994,6 +1000,10 @@ fn main() {
             #[cfg(any(unix, windows))]
             tauri::RunEvent::Exit => {
                 let state = app_handle.state::<crate::app_state::AppState>();
+                // Stop every video preview's engine and delete converted
+                // copies. Best effort: an engine missed here exits on its
+                // own when its pipe closes with this process.
+                state.video_engine.close_all();
                 if state.on_final_exit() {
                     info!("waiting briefly for cancelled Finder shares before exit");
                     // Blocking the main thread is the point: the process ends
@@ -1164,6 +1174,8 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
+        // Converted video previews a crash left in the private cache.
+        tauri::async_runtime::spawn_blocking(crate::video_engine::sweep_converted_at_launch);
 
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before
