@@ -79,18 +79,106 @@ fn the_viewer_lists_every_extension_rust_previews() {
     assert!(!list.contains("\"ts\""), ".ts stays TypeScript");
 }
 
-/// The engine is LGPL and stays that way: the build refuses GPL, nonfree
-/// and version-3 code, and the script never asks for any.
+/// The engine is LGPL and patent-minimal, and stays that way: no GPL,
+/// nonfree or version-3 code; no decoder for H.264, HEVC, AAC or the other
+/// pooled codecs; no encoder but the operating system's; no OpenH264.
 #[test]
-fn the_engine_build_stays_lgpl() {
+fn the_engine_build_stays_lgpl_and_patent_minimal() {
     let script = read("../scripts/video-engine/build-ffmpeg.sh");
-    for flag in ["--enable-gpl", "--enable-nonfree", "--enable-version3", "libx264", "libx265", "libfdk"] {
-        let used = script
-            .lines()
-            .filter(|l| !l.trim_start().starts_with('#'))
-            .any(|l| l.contains(flag) && !l.contains("grep"));
+    let code: Vec<&str> = script.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
+    for flag in [
+        "--enable-gpl",
+        "--enable-nonfree",
+        "--enable-version3",
+        "openh264",
+        "libx264",
+        "libx265",
+        "libfdk",
+    ] {
+        let used = code.iter().any(|l| l.contains(flag) && !l.contains("grep"));
         assert!(!used, "{flag} in the engine build");
     }
     assert!(script.contains("--disable-everything"));
     assert!(script.contains("FFMPEG_SHA256="), "the source is pinned by checksum");
+    let list = |prefix: &str| -> Vec<String> {
+        code.iter()
+            .flat_map(|l| l.split_whitespace())
+            .filter_map(|w| w.trim_end_matches(')').strip_prefix(prefix))
+            .flat_map(|v| v.split(','))
+            .map(str::to_string)
+            .collect()
+    };
+    let decoders = list("--enable-decoder=");
+    assert!(decoders.iter().any(|d| d == "wmv3") && decoders.iter().any(|d| d == "vc1"));
+    for banned in [
+        "h264", "hevc", "svq3", "prores", "aac", "aac_latm", "eac3", "dca", "truehd", "mlp", "amrnb", "amrwb", "wmavoice",
+    ] {
+        assert!(!decoders.iter().any(|d| d == banned), "decoder {banned} in the engine build");
+    }
+    let encoders = list("--enable-encoder=");
+    for encoder in &encoders {
+        assert!(
+            ["wrapped_avframe", "pcm_s16le", "h264_videotoolbox", "aac_at", "h264_mf", "aac_mf"].contains(&encoder.as_str()),
+            "encoder {encoder} is not the OS's"
+        );
+    }
+    let hwaccels = list("--enable-hwaccel=");
+    assert!(hwaccels.iter().all(|h| !h.starts_with("h264") && !h.starts_with("hevc")), "{hwaccels:?}");
+}
+
+/// Every release lane builds the engine, bundles it, and attaches the exact
+/// source and configuration it was built from (the LGPL's corresponding
+/// source) to the release.
+#[test]
+fn every_release_lane_ships_the_engine_with_its_source() {
+    for lane in ["tauri-staging.yml", "tauri-beta.yml", "tauri-build.yml"] {
+        let text = read(&format!("../.github/workflows/{lane}"));
+        assert_eq!(
+            text.matches("scripts/video-engine/build-ffmpeg.sh").count(),
+            3,
+            "{lane}: one engine build per OS job (macOS, Linux, Windows)"
+        );
+        assert!(text.contains("build-ffmpeg.sh --universal"), "{lane}: the macOS engine is universal");
+        assert_eq!(
+            text.matches("--config src-tauri/tauri.video-engine.conf.json").count(),
+            if lane == "tauri-staging.yml" { 4 } else { 3 },
+            "{lane}: every Tauri build bundles it"
+        );
+        assert!(
+            text.contains("scripts/video-engine/attach-source.sh"),
+            "{lane}: the source goes up with the release"
+        );
+    }
+    let attach = read("../scripts/video-engine/attach-source.sh");
+    assert!(attach.contains("ffmpeg-${FFMPEG_VERSION}.tar.xz") || attach.contains("ffmpeg-*.tar.xz"));
+    assert!(attach.contains("build-ffmpeg.sh") && attach.contains("buildconf"));
+}
+
+/// The app names ffmpeg and its licence, links the exact source, and ships
+/// the notice and the licence text inside every install.
+#[test]
+fn the_notices_name_ffmpeg_its_licence_and_its_source() {
+    let notices = read("THIRD_PARTY_NOTICES.md");
+    let script = read("../scripts/video-engine/build-ffmpeg.sh");
+    let version = script
+        .lines()
+        .find_map(|l| l.strip_prefix("FFMPEG_VERSION=\"").map(|v| v.trim_end_matches('"').to_string()))
+        .expect("FFMPEG_VERSION");
+    assert!(notices.contains("FFmpeg") && notices.contains("LGPL"), "names ffmpeg and its licence");
+    assert!(
+        notices.contains(&format!("https://ffmpeg.org/releases/ffmpeg-{version}.tar.xz")),
+        "links the exact source"
+    );
+    assert!(read("licenses/LGPL-2.1.txt").contains("GNU LESSER GENERAL PUBLIC LICENSE"));
+    let conf: serde_json::Value = serde_json::from_str(&read("tauri.conf.json")).unwrap();
+    let resources: Vec<&str> = conf["bundle"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        resources.contains(&"THIRD_PARTY_NOTICES.md") && resources.contains(&"licenses/*"),
+        "{resources:?}"
+    );
 }

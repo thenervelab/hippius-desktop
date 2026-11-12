@@ -25,7 +25,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use super::plan::{self, Encoder};
+use super::plan::{self, AudioPlan, Encoder};
 use super::probe::MediaInfo;
 use super::segmenter::Segmenter;
 
@@ -95,13 +95,14 @@ pub struct EngineLauncher {
     pub input: String,
     pub info: MediaInfo,
     pub encoder: Encoder,
+    pub audio: AudioPlan,
 }
 
 impl Launcher for EngineLauncher {
     fn command(&self, start_index: u32) -> (PathBuf, Vec<String>) {
         (
             self.engine.clone(),
-            plan::transcode_args(&self.input, &self.info, self.encoder, start_index),
+            plan::transcode_args(&self.input, &self.info, self.encoder, self.audio, start_index),
         )
     }
 }

@@ -27,7 +27,11 @@ pub struct VideoStream {
     /// The engine's codec name: `h264`, `hevc`, `wmv3`, `vc1`, `mpeg2video`, ...
     pub codec: String,
     /// The pixel format without its colour detail: `yuv420p`, `yuv420p10le`.
+    /// `None` when the engine has no decoder for the codec (H.264 and HEVC
+    /// in the shipped engine), which it reports as `none`.
     pub pix_fmt: Option<String>,
+    /// The codec profile the stream declares: `High`, `High 10`, `Main 10`.
+    pub profile: Option<String>,
     pub width: u32,
     pub height: u32,
     pub fps: Option<f64>,
@@ -121,7 +125,8 @@ fn parse_stream(rest: &str, info: &mut MediaInfo) {
         let pix_fmt = fields
             .get(1)
             .map(|f| f.split('(').next().unwrap_or("").trim().to_string())
-            .filter(|f| !f.is_empty());
+            .filter(|f| !f.is_empty() && f != "none");
+        let profile = profile_of(fields.first().map_or("", String::as_str));
         let (width, height) = fields.iter().find_map(|f| parse_size(f)).unwrap_or((0, 0));
         let fps = fields
             .iter()
@@ -130,6 +135,7 @@ fn parse_stream(rest: &str, info: &mut MediaInfo) {
             index,
             codec: codec.to_string(),
             pix_fmt,
+            profile,
             width,
             height,
             fps,
@@ -175,6 +181,15 @@ fn top_level_fields(spec: &str) -> Vec<String> {
         out.push(current.trim().to_string());
     }
     out
+}
+
+/// The profile in `h264 (High 10) ([27][0][0][0] / 0x001B)`: the first
+/// parenthesised group that is not a codec tag (`(WMV3 / 0x33564D57)`).
+fn profile_of(field: &str) -> Option<String> {
+    field.split('(').skip(1).find_map(|group| {
+        let group = group.split(')').next()?.trim();
+        (!group.is_empty() && !group.contains('/') && !group.contains('[')).then(|| group.to_string())
+    })
 }
 
 /// `1280x720` or `1280x720 [SAR 1:1 DAR 16:9]`.
@@ -239,6 +254,7 @@ At least one output file must be specified
         let video = info.video.unwrap();
         assert_eq!(video.codec, "h264");
         assert_eq!(video.pix_fmt.as_deref(), Some("yuv420p10le"));
+        assert_eq!(video.profile.as_deref(), Some("High"));
         assert_eq!((video.width, video.height), (1920, 1080));
         assert_eq!(video.fps, Some(29.97));
         assert_eq!(info.audio.unwrap().codec, "ac3");
@@ -256,6 +272,26 @@ At least one output file must be specified
         assert_eq!(info.duration, None);
         assert_eq!(info.video.unwrap().codec, "mpeg4");
         assert!(info.audio.is_none());
+    }
+
+    /// The shipped engine has no H.264 or HEVC decoder: the pixel format is
+    /// `none`, and the profile is what is left to judge the stream by.
+    #[test]
+    fn without_a_decoder_the_pixel_format_is_unknown_and_the_profile_remains() {
+        let mkv = "Input #0, matroska,webm, from 'a.mkv':
+  Duration: 00:00:02.00, start: 0.000000, bitrate: 62 kb/s
+  Stream #0:0: Video: h264 (High 10), none(progressive), 1920x1080, SAR 1:1 DAR 16:9, 25 fps, 25 tbr, 1k tbn
+";
+        let video = parse_probe(mkv).unwrap().video.unwrap();
+        assert_eq!(video.pix_fmt, None);
+        assert_eq!(video.profile.as_deref(), Some("High 10"));
+        let mp4 = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'a.mp4':
+  Duration: 00:00:10.00, start: 0.000000, bitrate: 2 kb/s
+  Stream #0:0[0x1](und): Video: hevc (hvc1 / 0x31637668), none(progressive), 1280x720, 30 fps
+";
+        let video = parse_probe(mp4).unwrap().video.unwrap();
+        assert_eq!(video.profile, None, "a codec tag is not a profile");
+        assert_eq!(profile_of("wmv3 (Main) (WMV3 / 0x33564D57)").as_deref(), Some("Main"));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use tokio::sync::OnceCell;
 
-use super::plan::{Encoder, Platform};
+use super::plan::{AudioEncoder, Capabilities, Encoder, Platform};
 use super::probe::{MediaInfo, parse_probe};
 
 /// The engine's file name.
@@ -57,12 +57,14 @@ pub fn locate() -> Option<PathBuf> {
     candidate.is_file().then_some(candidate)
 }
 
-/// The engine and the H.264 encoder that works on this machine, found once.
+/// The engine and what it can do on this machine, found once.
 #[derive(Debug, Clone)]
 pub struct Engine {
     pub path: PathBuf,
-    /// `None`: no encoder passed its test, so only remuxes are possible.
-    pub encoder: Option<Encoder>,
+    /// The OS encoders that passed their test encode. Without a video one
+    /// only remuxes are possible; without an audio one, audio the webview
+    /// cannot play is left out.
+    pub caps: Capabilities,
 }
 
 /// Finds the engine and tests its encoders on first use, once per launch.
@@ -76,21 +78,39 @@ impl EngineCell {
         self.cell
             .get_or_init(|| async {
                 let path = locate()?;
-                let encoder = pick_encoder(&path, Platform::current()).await;
-                tracing::info!(engine = %path.display(), encoder = ?encoder, "video engine ready");
-                Some(Engine { path, encoder })
+                let caps = capabilities(&path, Platform::current()).await;
+                tracing::info!(engine = %path.display(), ?caps, "video engine ready");
+                Some(Engine { path, caps })
             })
             .await
             .clone()
     }
 }
 
-/// The first encoder for `platform` that encodes a tenth of a second of test
+/// What the engine at `engine` can do on `platform`, by test encodes.
+pub async fn capabilities(engine: &Path, platform: Platform) -> Capabilities {
+    let video_encoder = pick_encoder(engine, platform).await;
+    let audio_encoder = match AudioEncoder::candidate(platform) {
+        Some(encoder) if encodes(engine, "sine=frequency=440:sample_rate=48000", &encoder.args()).await => Some(encoder),
+        Some(encoder) => {
+            tracing::info!(encoder = encoder.name(), "video engine audio encoder unavailable");
+            None
+        }
+        None => None,
+    };
+    Capabilities {
+        platform,
+        video_encoder,
+        audio_encoder,
+    }
+}
+
+/// The first encoder for `platform` that encodes a fifth of a second of test
 /// picture: a listed encoder can still fail at runtime (no GPU encoder, a
 /// Windows N edition without Media Foundation).
 pub async fn pick_encoder(engine: &Path, platform: Platform) -> Option<Encoder> {
     for &encoder in Encoder::candidates(platform) {
-        if encoder_works(engine, encoder).await {
+        if encodes(engine, "testsrc2=size=320x240:rate=25", &encoder.args(500)).await {
             return Some(encoder);
         }
         tracing::info!(encoder = encoder.name(), "video engine encoder unavailable");
@@ -98,23 +118,13 @@ pub async fn pick_encoder(engine: &Path, platform: Platform) -> Option<Encoder> 
     None
 }
 
-async fn encoder_works(engine: &Path, encoder: Encoder) -> bool {
-    let mut args: Vec<String> = [
-        "-hide_banner",
-        "-nostdin",
-        "-loglevel",
-        "error",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc2=size=320x240:rate=25",
-        "-t",
-        "0.2",
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
-    args.extend(encoder.args(500));
+/// Whether the engine encodes 0.2 s of the lavfi `source` with `codec_args`.
+async fn encodes(engine: &Path, source: &str, codec_args: &[String]) -> bool {
+    let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-loglevel", "error", "-f", "lavfi", "-i", source, "-t", "0.2"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    args.extend(codec_args.iter().cloned());
     args.extend(["-f".into(), "null".into(), "-".into()]);
     let run = command(engine).args(&args).stdout(Stdio::null()).stderr(Stdio::null()).status();
     matches!(tokio::time::timeout(ENCODER_TEST_TIMEOUT, run).await, Ok(Ok(status)) if status.success())

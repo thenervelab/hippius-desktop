@@ -1,6 +1,10 @@
 //! Previews for videos the webview cannot play: WMV/ASF, AVI, MKV, FLV,
-//! MPEG-PS/TS, 3GP, and (after the webview fails on one) HEVC or other
-//! codecs in MP4/MOV.
+//! MPEG-PS/TS, 3GP, and (after the webview fails on one) other codecs in
+//! MP4/MOV.
+//!
+//! The engine decodes no H.264, HEVC or AAC and encodes only with the
+//! operating system's encoders (see `plan.rs`), so on Linux it copies
+//! streams and nothing more.
 //!
 //! The work is done by a small LGPL ffmpeg shipped beside the app
 //! (`engine.rs`), run as a child process: never linked in, so a decoder
@@ -16,8 +20,10 @@
 //! - **file**: the picture is already playable (H.264 in MKV/AVI/TS/FLV);
 //!   it is copied into an MP4 in the private cache (`remux.rs`), lossless
 //!   and as fast as the disk, with progress, and played like any MP4.
-//! - **stream**: it must be converted (WMV, VC-1, MPEG-2, ...): an HLS
-//!   playlist whose segments are converted on demand to H.264 + AAC and
+//!   Audio nothing here can play is left out, with a `notice` saying so.
+//! - **stream** (macOS, Windows): it must be converted (WMV, VC-1, MPEG-2,
+//!   ...): an HLS playlist whose segments are converted on demand by the
+//!   OS encoders to H.264 + AAC and
 //!   handed to the player over IPC (`session.rs`, [`video_preview_segment`]);
 //!   playback starts after the first four seconds are ready, and a seek
 //!   restarts the conversion at the segment it lands in.
@@ -41,7 +47,7 @@ use serde::Serialize;
 use tauri::Emitter;
 
 use crate::error::{AppError, Result};
-use plan::{Decision, Platform};
+use plan::Decision;
 use session::{EngineLauncher, HlsSession, SegmentFailure};
 
 /// What the viewer says when a video cannot be previewed.
@@ -64,9 +70,14 @@ pub enum VideoPreview {
     /// Play the file itself, as before.
     Native,
     /// Play this converted copy (a local path, like any other video).
-    File { path: String },
-    /// Play this HLS playlist.
-    Stream { url: String, duration_secs: f64 },
+    /// `notice` is a line to show beside it (its sound was left out).
+    File { path: String, notice: Option<String> },
+    /// Play this HLS playlist, with the same optional `notice`.
+    Stream {
+        url: String,
+        duration_secs: f64,
+        notice: Option<String>,
+    },
     /// No player: this line and Download.
     Unsupported { message: String },
 }
@@ -247,7 +258,7 @@ pub async fn video_preview_open(
         tracing::info!("video preview: the engine does not recognise the file");
         return Ok(VideoPreview::unsupported());
     };
-    let decision = plan::decide(&info, Platform::current());
+    let decision = plan::decide(&info, engine.caps);
     tracing::info!(
         formats = ?info.formats,
         video = ?info.video.as_ref().map(|v| (&v.codec, v.width, v.height)),
@@ -257,8 +268,8 @@ pub async fn video_preview_open(
     );
     match decision {
         Decision::Unsupported(_) => Ok(VideoPreview::unsupported()),
-        Decision::Transcode => {
-            let (Some(encoder), Some(duration)) = (engine.encoder, info.duration) else {
+        Decision::Transcode { audio } => {
+            let (Some(encoder), Some(duration)) = (engine.caps.video_encoder, info.duration) else {
                 return Ok(VideoPreview::unsupported());
             };
             let launcher = EngineLauncher {
@@ -266,56 +277,71 @@ pub async fn video_preview_open(
                 input: source.to_string_lossy().into_owned(),
                 info,
                 encoder,
+                audio,
             };
             let session = HlsSession::new(duration, Arc::new(launcher));
             state.video_engine.insert(&session_id, Entry::Stream { session, account });
             Ok(VideoPreview::Stream {
                 url: format!("{STREAM_SCHEME}://{session_id}/index.m3u8"),
                 duration_secs: duration,
+                notice: audio.notice().map(str::to_string),
             })
         }
-        Decision::Remux { audio } => {
-            let dir = tokio::task::spawn_blocking(remux::converted_dir)
-                .await
-                .map_err(|e| AppError::Other(format!("preview folder task failed: {e}")))??;
-            let output = dir.join(format!("{session_id}.mp4"));
-            let app_for_progress = app.clone();
-            let id = session_id.clone();
-            let mut last = u8::MAX;
-            let engine_path = engine.path.clone();
-            let out = output.clone();
-            let task = tokio::spawn(async move {
-                remux::remux(&engine_path, &source, &out, &info, audio, move |fraction| {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let percent = (fraction * 100.0).floor() as u8;
-                    if percent != last {
-                        last = percent;
-                        let _ = app_for_progress.emit(PROGRESS_EVENT, Progress { session_id: &id, percent });
-                    }
-                })
-                .await
-            });
-            state.video_engine.insert(
-                &session_id,
-                Entry::Remux {
-                    path: output.clone(),
-                    task: Some(task.abort_handle()),
-                },
-            );
-            match task.await {
-                Ok(Ok(())) => Ok(VideoPreview::File {
-                    path: output.to_string_lossy().into_owned(),
-                }),
-                Ok(Err(e)) => {
-                    tracing::warn!(error = %e, "video preview remux failed");
-                    state.video_engine.close(&session_id);
-                    Ok(VideoPreview::unsupported())
-                }
-                Err(_) => {
-                    state.video_engine.close(&session_id);
-                    Err(AppError::Validation("the preview was closed".into()))
-                }
+        Decision::Remux { audio } => remux_preview(&app, &state, &engine.path, source, info, audio, &session_id).await,
+    }
+}
+
+/// Copy the playable picture into an MP4 in the private cache, reporting
+/// progress, and answer with it (or the fallback when the copy fails).
+async fn remux_preview(
+    app: &tauri::AppHandle,
+    state: &crate::app_state::AppState,
+    engine_path: &Path,
+    source: PathBuf,
+    info: probe::MediaInfo,
+    audio: plan::AudioPlan,
+    session_id: &str,
+) -> Result<VideoPreview> {
+    let dir = tokio::task::spawn_blocking(remux::converted_dir)
+        .await
+        .map_err(|e| AppError::Other(format!("preview folder task failed: {e}")))??;
+    let output = dir.join(format!("{session_id}.mp4"));
+    let app_for_progress = app.clone();
+    let id = session_id.to_string();
+    let mut last = u8::MAX;
+    let engine_path = engine_path.to_path_buf();
+    let out = output.clone();
+    let task = tokio::spawn(async move {
+        remux::remux(&engine_path, &source, &out, &info, audio, move |fraction| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let percent = (fraction * 100.0).floor() as u8;
+            if percent != last {
+                last = percent;
+                let _ = app_for_progress.emit(PROGRESS_EVENT, Progress { session_id: &id, percent });
             }
+        })
+        .await
+    });
+    state.video_engine.insert(
+        session_id,
+        Entry::Remux {
+            path: output.clone(),
+            task: Some(task.abort_handle()),
+        },
+    );
+    match task.await {
+        Ok(Ok(())) => Ok(VideoPreview::File {
+            path: output.to_string_lossy().into_owned(),
+            notice: audio.notice().map(str::to_string),
+        }),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "video preview remux failed");
+            state.video_engine.close(session_id);
+            Ok(VideoPreview::unsupported())
+        }
+        Err(_) => {
+            state.video_engine.close(session_id);
+            Err(AppError::Validation("the preview was closed".into()))
         }
     }
 }
@@ -423,11 +449,12 @@ mod tests {
         let stream = serde_json::to_value(VideoPreview::Stream {
             url: "hippius-video://a/index.m3u8".into(),
             duration_secs: 12.5,
+            notice: None,
         })
         .unwrap();
         assert_eq!(
             stream,
-            serde_json::json!({"kind": "stream", "url": "hippius-video://a/index.m3u8", "durationSecs": 12.5})
+            serde_json::json!({"kind": "stream", "url": "hippius-video://a/index.m3u8", "durationSecs": 12.5, "notice": null})
         );
         assert_eq!(serde_json::to_value(VideoPreview::Native).unwrap(), serde_json::json!({"kind": "native"}));
         assert_eq!(
@@ -435,8 +462,12 @@ mod tests {
             serde_json::json!({"kind": "unsupported", "message": CANNOT_PREVIEW})
         );
         assert_eq!(
-            serde_json::to_value(VideoPreview::File { path: "/p.mp4".into() }).unwrap(),
-            serde_json::json!({"kind": "file", "path": "/p.mp4"})
+            serde_json::to_value(VideoPreview::File {
+                path: "/p.mp4".into(),
+                notice: Some(plan::SILENT_NOTICE.into()),
+            })
+            .unwrap(),
+            serde_json::json!({"kind": "file", "path": "/p.mp4", "notice": plan::SILENT_NOTICE})
         );
     }
 

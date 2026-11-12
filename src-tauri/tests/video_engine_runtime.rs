@@ -1,6 +1,12 @@
-//! The video preview engine run for real: a generated WMV is converted
-//! segment by segment, a seek restarts the conversion where it lands, a
-//! playable MKV is remuxed, and closing a preview kills its engine.
+//! The video preview engine run for real: a WMV is converted segment by
+//! segment (where the OS has an H.264 encoder, and refused where it has
+//! not), a seek restarts the conversion where it lands, a playable MKV is
+//! remuxed, closing a preview kills its engine, and the engine carries no
+//! patent-pooled decoder and no encoder but the OS's.
+//!
+//! The clips are two tiny committed files (`tests/fixtures/video/`): the
+//! shipped engine has no encoder that could make a WMV or an H.264 file, so
+//! they are lengthened at test time by copying, never re-encoded.
 //!
 //! Needs the engine binary (`scripts/video-engine/build-ffmpeg.sh`). It is
 //! found at `$HIPPIUS_VIDEO_ENGINE`, else at `binaries/hippius-ffmpeg-<host>`.
@@ -11,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri_project_lib::video_engine::engine::{self, pick_encoder, probe};
-use tauri_project_lib::video_engine::plan::{self, AudioPlan, Decision, Platform, SEGMENT_SECS};
+use tauri_project_lib::video_engine::engine::{self, capabilities, probe};
+use tauri_project_lib::video_engine::plan::{self, AudioPlan, Capabilities, Decision, Platform, SEGMENT_SECS};
 use tauri_project_lib::video_engine::remux;
 use tauri_project_lib::video_engine::session::{EngineLauncher, HlsSession, SegmentFailure};
 
@@ -39,18 +45,24 @@ fn host_triple() -> Option<String> {
         .find_map(|l| l.strip_prefix("host: ").map(str::to_string))
 }
 
-/// Make a fixture with the engine itself (nothing binary is committed).
-fn generate(engine: &Path, out: &Path, seconds: u32, codec_args: &[&str]) {
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/video").join(name)
+}
+
+/// `fixture` looped to `seconds` long, by stream copy, as `format`.
+fn lengthen(engine: &Path, name: &str, out: &Path, seconds: u32, format: &str) {
     let status = std::process::Command::new(engine)
-        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])
-        .arg("testsrc2=size=320x240:rate=25")
-        .args(["-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100", "-t"])
-        .arg(seconds.to_string())
-        .args(codec_args)
+        .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-stream_loop", "-1", "-i"])
+        .arg(fixture(name))
+        .args(["-t", &seconds.to_string(), "-c", "copy", "-f", format])
         .arg(out)
         .status()
         .expect("engine runs");
-    assert!(status.success(), "fixture {} was not generated", out.display());
+    assert!(status.success(), "{} was not made", out.display());
+}
+
+fn required() -> bool {
+    std::env::var("HIPPIUS_REQUIRE_VIDEO_ENGINE").as_deref() == Ok("1")
 }
 
 const PACKET: usize = 188;
@@ -79,27 +91,37 @@ fn assert_transport_stream(segment: &[u8]) {
     assert!(segment.chunks(PACKET).all(|p| p[0] == 0x47), "every packet starts with the sync byte");
 }
 
+/// A `seconds`-long WMV session, or `None` where the OS has no H.264
+/// encoder, after checking such a machine refuses the WMV outright.
 async fn wmv_session(engine: &Path, dir: &Path, seconds: u32) -> Option<(Arc<HlsSession>, f64)> {
     let wmv = dir.join("clip.wmv");
-    generate(engine, &wmv, seconds, &["-c:v", "wmv2", "-b:v", "500k", "-c:a", "wmav2", "-b:a", "64k"]);
-    let info = probe(engine, &wmv).await.expect("the engine reads its own WMV");
+    lengthen(engine, "clip.wmv", &wmv, seconds, "asf");
+    let info = probe(engine, &wmv).await.expect("the engine reads the WMV");
     assert_eq!(info.video.as_ref().map(|v| v.codec.as_str()), Some("wmv2"));
     assert_eq!(info.audio.as_ref().map(|a| a.codec.as_str()), Some("wmav2"));
-    assert_eq!(plan::decide(&info, Platform::current()), Decision::Transcode);
     let duration = info.duration.expect("duration");
     assert!((duration - f64::from(seconds)).abs() < 0.5, "{duration}");
-    let Some(encoder) = pick_encoder(engine, Platform::current()).await else {
+    let caps = capabilities(engine, Platform::current()).await;
+    let decision = plan::decide(&info, caps);
+    let Some(encoder) = caps.video_encoder else {
+        // Linux, or an OS whose encoder failed its test: no conversion.
+        assert!(matches!(decision, Decision::Unsupported(_)), "{decision:?}");
         assert!(
-            std::env::var("HIPPIUS_REQUIRE_VIDEO_ENGINE").as_deref() != Ok("1"),
-            "no H.264 encoder works here"
+            !required() || Platform::current() == Platform::Linux,
+            "the OS H.264 encoder did not pass its test here"
         );
         return None;
     };
+    let Decision::Transcode { audio } = decision else {
+        panic!("a WMV is converted where the OS encodes: {decision:?}");
+    };
+    assert!(matches!(audio, AudioPlan::Encode(_)), "WMA becomes AAC: {audio:?}");
     let launcher = EngineLauncher {
         engine: engine.to_path_buf(),
         input: wmv.to_string_lossy().into_owned(),
         info,
         encoder,
+        audio,
     };
     Some((HlsSession::new(duration, Arc::new(launcher)), duration))
 }
@@ -131,7 +153,7 @@ async fn a_wmv_converts_into_h264_aac_segments_that_cover_its_whole_length() {
     std::fs::write(&joined, &whole).unwrap();
     let out = probe(&engine, &joined).await.expect("the output is readable");
     assert_eq!(out.video.as_ref().map(|v| v.codec.as_str()), Some("h264"));
-    assert_eq!(out.video.as_ref().map(|v| (v.width, v.height)), Some((320, 240)));
+    assert_eq!(out.video.as_ref().map(|v| (v.width, v.height)), Some((128, 96)));
     assert_eq!(out.audio.as_ref().map(|a| a.codec.as_str()), Some("aac"));
     let got = out.duration.expect("duration");
     assert!((got - duration).abs() < 0.5, "converted {got} s of {duration} s");
@@ -221,36 +243,80 @@ fn process_alive(pid: u32) -> bool {
     String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
 }
 
-/// H.264 + AC-3 in Matroska: the picture is copied, the audio becomes AAC,
-/// and the MP4 is as long as the source.
+/// H.264 + AC-3 in Matroska: the picture is copied untouched, the AC-3
+/// becomes AAC through the OS encoder (left out where there is none), and
+/// the MP4 is as long as the source.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_playable_mkv_is_remuxed_losslessly_into_mp4() {
     let Some(engine) = engine_path() else { return };
-    let Some(encoder) = pick_encoder(&engine, Platform::current()).await else {
-        return;
-    };
+    let caps = capabilities(&engine, Platform::current()).await;
     let dir = tempfile::tempdir().unwrap();
     let mkv = dir.path().join("clip.mkv");
-    let mut args: Vec<String> = vec!["-pix_fmt".into(), "yuv420p".into()];
-    args.extend(encoder.args(500));
-    args.extend(["-c:a".into(), "ac3".into()]);
-    let args: Vec<&str> = args.iter().map(String::as_str).collect();
-    generate(&engine, &mkv, 6, &args);
+    lengthen(&engine, "clip_h264_ac3.mkv", &mkv, 6, "matroska");
     let info = probe(&engine, &mkv).await.unwrap();
-    assert_eq!(plan::decide(&info, Platform::current()), Decision::Remux { audio: AudioPlan::Encode });
+    let expected_audio = caps.audio_encoder.map_or(AudioPlan::Drop, AudioPlan::Encode);
+    assert_eq!(plan::decide(&info, caps), Decision::Remux { audio: expected_audio });
 
     let out = dir.path().join("out.mp4");
     let mut seen = Vec::new();
-    remux::remux(&engine, &mkv, &out, &info, AudioPlan::Encode, |f| seen.push(f))
-        .await
-        .unwrap();
+    remux::remux(&engine, &mkv, &out, &info, expected_audio, |f| seen.push(f)).await.unwrap();
     assert_eq!(seen.last().copied(), Some(1.0), "progress ends at 100%");
     assert!(seen.windows(2).all(|w| w[0] <= w[1]), "progress only goes up");
     let result = probe(&engine, &out).await.unwrap();
     assert!(result.formats.iter().any(|f| f == "mp4"), "{:?}", result.formats);
-    assert_eq!(result.video.as_ref().map(|v| v.codec.as_str()), Some("h264"));
-    assert_eq!(result.audio.as_ref().map(|a| a.codec.as_str()), Some("aac"));
+    assert_eq!(
+        result.video.as_ref().map(|v| (v.codec.as_str(), v.width, v.height)),
+        Some(("h264", 128, 96))
+    );
+    let audio = result.audio.as_ref().map(|a| a.codec.as_str());
+    match expected_audio {
+        AudioPlan::Encode(_) => assert_eq!(audio, Some("aac")),
+        _ => assert_eq!(audio, None, "the AC-3 is left out, not passed through"),
+    }
     assert!((result.duration.unwrap() - 6.0).abs() < 0.3);
+}
+
+/// The engine this machine runs carries no decoder for H.264, HEVC or AAC
+/// (or the other patent-pooled codecs) and no encoder but the OS's.
+#[test]
+fn the_engine_decodes_no_pooled_codec_and_encodes_only_with_the_os() {
+    let Some(engine) = engine_path() else { return };
+    let list = |flag: &str| -> Vec<String> {
+        let out = std::process::Command::new(&engine)
+            .args(["-hide_banner", flag])
+            .output()
+            .expect("engine runs");
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        text.lines()
+            .skip_while(|l| !l.trim_start().starts_with("---"))
+            .skip(1)
+            .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+            .collect()
+    };
+    let decoders = list("-decoders");
+    assert!(decoders.iter().any(|d| d == "wmv3"), "the list was read: {decoders:?}");
+    for banned in [
+        "h264", "hevc", "aac", "aac_latm", "eac3", "dca", "truehd", "mlp", "amrnb", "amrwb", "prores", "svq3", "wmavoice",
+    ] {
+        assert!(!decoders.iter().any(|d| d == banned), "{banned} decoder in the engine");
+    }
+    let os: &[&str] = match Platform::current() {
+        Platform::MacOs => &["h264_videotoolbox", "aac_at"],
+        Platform::Windows => &["h264_mf", "aac_mf"],
+        Platform::Linux => &[],
+    };
+    for encoder in list("-encoders") {
+        assert!(
+            os.contains(&encoder.as_str()) || matches!(encoder.as_str(), "wrapped_avframe" | "pcm_s16le"),
+            "{encoder} encoder in the engine"
+        );
+    }
+    let caps: Capabilities = tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(capabilities(&engine, Platform::current()));
+    if Platform::current() == Platform::Linux {
+        assert_eq!((caps.video_encoder, caps.audio_encoder), (None, None));
+    }
 }
 
 #[test]

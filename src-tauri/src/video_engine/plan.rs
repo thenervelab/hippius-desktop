@@ -1,18 +1,27 @@
 //! What to do with a video the webview cannot play, and the engine command
 //! lines that do it. Pure: every decision here is unit-tested on every OS.
 //!
+//! The engine has no H.264, HEVC or AAC decoder and no encoder of its own
+//! (see `scripts/video-engine/build-ffmpeg.sh`): H.264 and HEVC are only ever
+//! copied, and anything converted is encoded by the operating system
+//! (VideoToolbox and AudioToolbox on macOS, Media Foundation on Windows).
+//!
 //! - **Remux** when the picture is already something the webview decodes
-//!   (H.264 8-bit 4:2:0 everywhere; HEVC on macOS, whose WebKit plays it):
-//!   the video is copied untouched into an MP4, the audio copied when the
-//!   webview plays it (AAC, MP3) or re-encoded to AAC (AC-3, DTS, WMA, ...),
-//!   which costs almost nothing. Lossless and as fast as the disk.
-//! - **Transcode** everything else (WMV, VC-1, MPEG-2, MPEG-4 Part 2,
-//!   10-bit H.264, ...) to H.264 + AAC, a few seconds at a time, as the
-//!   player asks for them (`session.rs`).
+//!   (H.264 up to High profile everywhere; HEVC on macOS, whose WebKit plays
+//!   it): the video is copied untouched into an MP4. Lossless and as fast as
+//!   the disk. Audio the webview plays (AAC, MP3, Opus) is copied; audio it
+//!   does not (AC-3, WMA, FLAC, ...) is re-encoded to AAC by the OS; where
+//!   there is no OS encoder (Linux) or no decoder (E-AC-3, DTS) the video
+//!   plays without sound and the viewer says so.
+//! - **Transcode** the old formats (WMV, VC-1, MPEG-2, MPEG-4 Part 2, FLV,
+//!   ...) to H.264 + AAC with the OS encoders, a few seconds at a time, as
+//!   the player asks for them (`session.rs`). Only where the OS has an H.264
+//!   encoder: on Linux these are not previewable.
+//! - **Unsupported** otherwise, which the viewer shows with Download.
 
 use std::fmt::Write as _;
 
-use super::probe::MediaInfo;
+use super::probe::{AudioStream, MediaInfo};
 
 /// The OS the decision is for (the webview differs per OS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,20 +44,52 @@ impl Platform {
     }
 }
 
-/// What happens to the audio in a remux.
+/// What this machine can do: its OS, and which of the OS encoders passed
+/// their test encode (`engine.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Capabilities {
+    pub platform: Platform,
+    pub video_encoder: Option<Encoder>,
+    pub audio_encoder: Option<AudioEncoder>,
+}
+
+/// What happens to the audio.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioPlan {
+    /// Copied as it is (the player decodes it).
     Copy,
-    Encode,
+    /// Decoded and encoded to AAC by this OS encoder.
+    Encode(AudioEncoder),
+    /// The file has no audio.
     None,
+    /// The file has audio nothing here can play: the video plays silent and
+    /// the viewer says so ([`SILENT_NOTICE`]).
+    Drop,
 }
+
+impl AudioPlan {
+    /// The viewer's line beside a video whose sound was left out.
+    #[must_use]
+    pub const fn notice(self) -> Option<&'static str> {
+        match self {
+            Self::Drop => Some(SILENT_NOTICE),
+            _ => None,
+        }
+    }
+}
+
+/// What the viewer says under a video playing without its sound.
+/// Worded like the web console's line for the same case.
+pub const SILENT_NOTICE: &str = "Playing without sound: Hippius can't play this video's audio track.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     Remux {
         audio: AudioPlan,
     },
-    Transcode,
+    Transcode {
+        audio: AudioPlan,
+    },
     /// Not previewable; the string is for the log, never for the user.
     Unsupported(&'static str),
 }
@@ -76,40 +117,121 @@ pub fn is_webview_extension(ext: &str) -> bool {
     WEBVIEW_EXTENSIONS.contains(&ext.as_str())
 }
 
-/// Decide for `info` on `platform`.
+/// Video codecs the engine decodes, so can convert where the OS encodes.
+/// Mirrors the build script's `--enable-decoder` list.
+const DECODABLE_VIDEO: &[&str] = &[
+    "vc1",
+    "wmv1",
+    "wmv2",
+    "wmv3",
+    "mpeg1video",
+    "mpeg2video",
+    "mpeg4",
+    "msmpeg4v1",
+    "msmpeg4v2",
+    "msmpeg4v3",
+    "h263",
+    "h263p",
+    "flv1",
+    "vp6",
+    "vp6a",
+    "vp6f",
+    "vp8",
+    "vp9",
+    "theora",
+    "mjpeg",
+    "dvvideo",
+    "cinepak",
+    "msvideo1",
+    "rawvideo",
+];
+
+/// Audio codecs the engine decodes, so can re-encode to AAC.
+fn decodable_audio(codec: &str) -> bool {
+    matches!(
+        codec,
+        "mp1"
+            | "mp2"
+            | "mp3"
+            | "ac3"
+            | "wmav1"
+            | "wmav2"
+            | "wmapro"
+            | "wmalossless"
+            | "flac"
+            | "opus"
+            | "vorbis"
+            | "alac"
+            | "adpcm_ms"
+            | "adpcm_ima_wav"
+    ) || codec.starts_with("pcm_")
+}
+
+/// Whether the webview decodes this picture as it is.
+fn picture_plays(info: &MediaInfo, platform: Platform) -> bool {
+    let Some(video) = &info.video else { return false };
+    // The engine cannot decode H.264 or HEVC, so their pixel format is
+    // usually unknown; the profile says whether it is beyond what webviews
+    // play (10-bit, 4:2:2, 4:4:4).
+    let profile = video.profile.as_deref().unwrap_or("");
+    let beyond_8bit_420 = ["10", "4:2:2", "4:4:4", "Rext"].iter().any(|p| profile.contains(p));
+    let pix_ok = video.pix_fmt.as_deref().is_none_or(|p| matches!(p, "yuv420p" | "yuvj420p" | "nv12"));
+    // 4K is the most any of the three webviews decodes reliably.
+    let fits = video.width > 0 && video.height > 0 && video.width <= 4096 && video.height <= 4096;
+    match video.codec.as_str() {
+        "h264" => !beyond_8bit_420 && pix_ok && fits,
+        // WebKit on macOS decodes HEVC, 8 or 10-bit (with the `hvc1` tag the
+        // remux writes); Windows needs a paid Store extension, Linux a plugin.
+        "hevc" => platform == Platform::MacOs && !profile.contains("4:") && !profile.contains("Rext") && fits,
+        _ => false,
+    }
+}
+
+/// The audio plan for `audio` into `container_plays` (what the target
+/// container and the webview play as they are).
+fn audio_plan(audio: Option<&AudioStream>, copyable: &[&str], encoder: Option<AudioEncoder>) -> AudioPlan {
+    let Some(audio) = audio else { return AudioPlan::None };
+    if copyable.contains(&audio.codec.as_str()) {
+        return AudioPlan::Copy;
+    }
+    match encoder {
+        Some(encoder) if decodable_audio(&audio.codec) => AudioPlan::Encode(encoder),
+        _ => AudioPlan::Drop,
+    }
+}
+
+/// Decide for `info` on a machine that can do `caps`.
 #[must_use]
-pub fn decide(info: &MediaInfo, platform: Platform) -> Decision {
+pub fn decide(info: &MediaInfo, caps: Capabilities) -> Decision {
     let Some(video) = &info.video else {
         return Decision::Unsupported("no video stream");
     };
-    let pix = video.pix_fmt.as_deref().unwrap_or("");
-    let eight_bit_420 = matches!(pix, "yuv420p" | "yuvj420p" | "nv12");
-    // 4K is the most any of the three webviews decodes reliably.
-    let fits = video.width > 0 && video.height > 0 && video.width <= 4096 && video.height <= 4096;
-    let video_plays = match video.codec.as_str() {
-        "h264" => eight_bit_420 && fits,
-        // WebKit on macOS decodes HEVC (with the `hvc1` tag the remux
-        // writes); Windows needs a paid Store extension, Linux a plugin.
-        "hevc" => platform == Platform::MacOs && (eight_bit_420 || pix == "yuv420p10le") && fits,
-        _ => false,
-    };
-    if video_plays {
-        let audio = match info.audio.as_ref().map(|a| a.codec.as_str()) {
-            None => AudioPlan::None,
-            Some("aac" | "mp3") => AudioPlan::Copy,
-            Some(_) => AudioPlan::Encode,
-        };
+    if picture_plays(info, caps.platform) {
+        // Into MP4, which every webview plays with AAC, MP3 or Opus in it.
+        let audio = audio_plan(info.audio.as_ref(), &["aac", "mp3", "opus"], caps.audio_encoder);
         return Decision::Remux { audio };
     }
+    if matches!(video.codec.as_str(), "h264" | "hevc") {
+        // Never decoded: a 10-bit H.264 or HEVC off macOS is not previewable.
+        return Decision::Unsupported("H.264/HEVC the webview cannot play");
+    }
+    if !DECODABLE_VIDEO.contains(&video.codec.as_str()) {
+        return Decision::Unsupported("no decoder for the video");
+    }
+    let Some(_) = caps.video_encoder else {
+        return Decision::Unsupported("no OS video encoder");
+    };
     // A transcode is a VOD playlist cut from the duration up front.
     if info.duration.is_none() {
         return Decision::Unsupported("unknown duration");
     }
-    Decision::Transcode
+    // Into MPEG-TS for hls.js and WebKit: AAC and MP3 travel as they are.
+    let audio = audio_plan(info.audio.as_ref(), &["aac", "mp3"], caps.audio_encoder);
+    Decision::Transcode { audio }
 }
 
-/// The H.264 encoder a transcode uses, picked once per launch by a test
-/// encode (`engine.rs`), best first.
+/// The H.264 encoder a transcode uses: the operating system's, picked once
+/// per launch by a test encode (`engine.rs`), best first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Encoder {
     /// macOS VideoToolbox (hardware; `allow_sw` covers a Mac without it).
@@ -118,18 +240,17 @@ pub enum Encoder {
     MediaFoundationHardware,
     /// Windows Media Foundation's own software encoder.
     MediaFoundation,
-    /// Cisco OpenH264, software, built into the Linux and Windows engines.
-    OpenH264,
 }
 
 impl Encoder {
-    /// Candidates for `platform`, best first.
+    /// Candidates for `platform`, best first. Linux has none: there is no
+    /// system H.264 encoder to call, and the engine carries none of its own.
     #[must_use]
     pub fn candidates(platform: Platform) -> &'static [Self] {
         match platform {
             Platform::MacOs => &[Self::VideoToolbox],
-            Platform::Windows => &[Self::MediaFoundationHardware, Self::MediaFoundation, Self::OpenH264],
-            Platform::Linux => &[Self::OpenH264],
+            Platform::Windows => &[Self::MediaFoundationHardware, Self::MediaFoundation],
+            Platform::Linux => &[],
         }
     }
 
@@ -139,7 +260,6 @@ impl Encoder {
         match self {
             Self::VideoToolbox => "h264_videotoolbox",
             Self::MediaFoundationHardware | Self::MediaFoundation => "h264_mf",
-            Self::OpenH264 => "libopenh264",
         }
     }
 
@@ -156,10 +276,48 @@ impl Encoder {
             Self::VideoToolbox => &["-allow_sw", "1", "-prio_speed", "1", "-profile:v", "high", "-bf", "0"],
             Self::MediaFoundationHardware => &["-hw_encoding", "1", "-scenario", "display_remoting", "-bf", "0"],
             Self::MediaFoundation => &["-scenario", "display_remoting", "-bf", "0"],
-            Self::OpenH264 => &["-allow_skip_frames", "0"],
         };
         out.extend(extra.iter().map(|s| (*s).to_string()));
         out
+    }
+}
+
+/// The AAC encoder: the operating system's, like the video one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioEncoder {
+    /// macOS AudioToolbox.
+    AudioToolbox,
+    /// Windows Media Foundation.
+    MediaFoundation,
+}
+
+impl AudioEncoder {
+    /// The candidate for `platform`, if it has one.
+    #[must_use]
+    pub const fn candidate(platform: Platform) -> Option<Self> {
+        match platform {
+            Platform::MacOs => Some(Self::AudioToolbox),
+            Platform::Windows => Some(Self::MediaFoundation),
+            Platform::Linux => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::AudioToolbox => "aac_at",
+            Self::MediaFoundation => "aac_mf",
+        }
+    }
+
+    /// `-c:a ...`: stereo 48 kHz at 160 kb/s, which Media Foundation's AAC
+    /// encoder accepts (it takes only 96, 128, 160 or 192 kb/s).
+    #[must_use]
+    pub fn args(self) -> Vec<String> {
+        ["-c:a", self.name(), "-b:a", "160k", "-ac", "2", "-ar", "48000"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
     }
 }
 
@@ -223,12 +381,25 @@ pub fn segment_start(index: u32) -> String {
     format!("{}", u64::from(index) * u64::from(SEGMENT_SECS))
 }
 
+/// The `-map`/`-c:a` arguments for `audio` under `plan` (`-an` to leave it out).
+fn audio_args(audio: Option<&AudioStream>, plan: AudioPlan) -> Vec<String> {
+    match (audio, plan) {
+        (Some(a), AudioPlan::Copy) => vec!["-map".into(), format!("0:{}", a.index), "-c:a".into(), "copy".into()],
+        (Some(a), AudioPlan::Encode(encoder)) => {
+            let mut out = vec!["-map".into(), format!("0:{}", a.index)];
+            out.extend(encoder.args());
+            out
+        }
+        _ => vec!["-an".into()],
+    }
+}
+
 /// The engine command line for a transcode starting at segment `start_index`,
 /// writing MPEG-TS to stdout. Keyframes are forced on every segment boundary
 /// so `segmenter.rs` can cut there, and timestamps carry the real position
 /// (`-output_ts_offset`) so segments from different runs line up.
 #[must_use]
-pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, start_index: u32) -> Vec<String> {
+pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, audio: AudioPlan, start_index: u32) -> Vec<String> {
     let video = info.video.as_ref();
     let (_, out_h) = video.map_or((MAX_WIDTH, MAX_HEIGHT), |v| output_size(v.width, v.height));
     let source_fps = video.and_then(|v| v.fps).filter(|f| f.is_finite() && *f > 0.0);
@@ -242,19 +413,12 @@ pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, start_ind
         .iter()
         .map(|s| (*s).to_string())
         .collect();
-    // Hardware decoding where it is cheap and the source is heavy.
-    if encoder == Encoder::VideoToolbox && video.is_some_and(|v| matches!(v.codec.as_str(), "hevc" | "h264")) {
-        args.extend(["-hwaccel".into(), "videotoolbox".into()]);
-    }
     if start_index > 0 {
         args.extend(["-ss".into(), start.clone()]);
     }
     args.extend(["-i".into(), input.into()]);
     if let Some(v) = video {
         args.extend(["-map".into(), format!("0:{}", v.index)]);
-    }
-    if let Some(a) = &info.audio {
-        args.extend(["-map".into(), format!("0:{}", a.index)]);
     }
     args.extend(["-sn".into(), "-dn".into(), "-vf".into(), video_filter()]);
     // Only for a source above the cap: `-fpsmax` on a 24 fps WMV made the
@@ -269,19 +433,13 @@ pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, start_ind
         "-force_key_frames".into(),
         format!("expr:gte(t,n_forced*{SEGMENT_SECS})"),
     ]);
-    if info.audio.is_some() {
-        args.extend(
-            ["-c:a", "aac", "-b:a", "160k", "-ac", "2", "-ar", "48000"]
-                .iter()
-                .map(|s| (*s).to_string()),
-        );
-    }
+    args.extend(audio_args(info.audio.as_ref(), audio));
     args.extend(["-output_ts_offset".into(), start, "-f".into(), "mpegts".into(), "pipe:1".into()]);
     args
 }
 
 /// The engine command line for a remux into `output` (an MP4), reporting
-/// progress as `key=value` lines on stdout.
+/// progress as `key=value` lines on stdout. The picture is always copied.
 #[must_use]
 pub fn remux_args(input: &str, output: &str, info: &MediaInfo, audio: AudioPlan) -> Vec<String> {
     let mut args: Vec<String> = ["-hide_banner", "-nostdin", "-loglevel", "error", "-nostats", "-progress", "pipe:1", "-y"]
@@ -296,17 +454,7 @@ pub fn remux_args(input: &str, output: &str, info: &MediaInfo, audio: AudioPlan)
             args.extend(["-tag:v".into(), "hvc1".into()]);
         }
     }
-    if let Some(a) = &info.audio {
-        match audio {
-            AudioPlan::Copy => args.extend(["-map".into(), format!("0:{}", a.index), "-c:a".into(), "copy".into()]),
-            AudioPlan::Encode => args.extend(
-                ["-map".to_string(), format!("0:{}", a.index)]
-                    .into_iter()
-                    .chain(["-c:a", "aac", "-b:a", "192k", "-ac", "2"].iter().map(|s| (*s).to_string())),
-            ),
-            AudioPlan::None => {}
-        }
-    }
+    args.extend(audio_args(info.audio.as_ref(), audio));
     args.extend(["-sn".into(), "-dn".into(), "-f".into(), "mp4".into(), output.into()]);
     args
 }
@@ -342,14 +490,36 @@ mod tests {
     use super::super::probe::{AudioStream, VideoStream};
     use super::*;
 
-    fn info(codec: &str, pix: &str, audio: Option<&str>) -> MediaInfo {
+    const MAC: Capabilities = Capabilities {
+        platform: Platform::MacOs,
+        video_encoder: Some(Encoder::VideoToolbox),
+        audio_encoder: Some(AudioEncoder::AudioToolbox),
+    };
+    const WINDOWS: Capabilities = Capabilities {
+        platform: Platform::Windows,
+        video_encoder: Some(Encoder::MediaFoundation),
+        audio_encoder: Some(AudioEncoder::MediaFoundation),
+    };
+    const LINUX: Capabilities = Capabilities {
+        platform: Platform::Linux,
+        video_encoder: None,
+        audio_encoder: None,
+    };
+
+    fn info(codec: &str, profile: Option<&str>, audio: Option<&str>) -> MediaInfo {
         MediaInfo {
             formats: vec!["matroska".into()],
             duration: Some(600.0),
             video: Some(VideoStream {
                 index: 0,
                 codec: codec.into(),
-                pix_fmt: Some(pix.into()),
+                // What the shipped engine reports for H.264/HEVC: no decoder.
+                pix_fmt: if matches!(codec, "h264" | "hevc") {
+                    None
+                } else {
+                    Some("yuv420p".into())
+                },
+                profile: profile.map(str::to_string),
                 width: 1920,
                 height: 1080,
                 fps: Some(25.0),
@@ -359,71 +529,168 @@ mod tests {
     }
 
     #[test]
-    fn playable_h264_is_remuxed_and_audio_is_copied_only_when_the_webview_plays_it() {
-        for platform in [Platform::MacOs, Platform::Windows, Platform::Linux] {
+    fn playable_h264_is_remuxed_everywhere_and_audio_follows_what_the_os_can_encode() {
+        for caps in [MAC, WINDOWS, LINUX] {
+            for copyable in ["aac", "mp3", "opus"] {
+                assert_eq!(
+                    decide(&info("h264", Some("High"), Some(copyable)), caps),
+                    Decision::Remux { audio: AudioPlan::Copy }
+                );
+            }
             assert_eq!(
-                decide(&info("h264", "yuv420p", Some("aac")), platform),
-                Decision::Remux { audio: AudioPlan::Copy }
-            );
-            assert_eq!(
-                decide(&info("h264", "yuv420p", Some("mp3")), platform),
-                Decision::Remux { audio: AudioPlan::Copy }
-            );
-            assert_eq!(
-                decide(&info("h264", "yuv420p", Some("ac3")), platform),
-                Decision::Remux { audio: AudioPlan::Encode }
-            );
-            assert_eq!(
-                decide(&info("h264", "yuv420p", None), platform),
+                decide(&info("h264", Some("Main"), None), caps),
                 Decision::Remux { audio: AudioPlan::None }
             );
+            // No decoder at all for these: the picture plays silent.
+            for undecodable in ["eac3", "dts", "truehd", "aac_latm", "amr_nb"] {
+                assert_eq!(
+                    decide(&info("h264", None, Some(undecodable)), caps),
+                    Decision::Remux { audio: AudioPlan::Drop }
+                );
+            }
         }
+        assert_eq!(
+            decide(&info("h264", None, Some("ac3")), MAC),
+            Decision::Remux {
+                audio: AudioPlan::Encode(AudioEncoder::AudioToolbox)
+            }
+        );
+        assert_eq!(
+            decide(&info("h264", None, Some("wmav2")), WINDOWS),
+            Decision::Remux {
+                audio: AudioPlan::Encode(AudioEncoder::MediaFoundation)
+            }
+        );
+        // Linux has no OS AAC encoder: AC-3 is left out and the viewer says so.
+        assert_eq!(
+            decide(&info("h264", None, Some("ac3")), LINUX),
+            Decision::Remux { audio: AudioPlan::Drop }
+        );
+        assert_eq!(AudioPlan::Drop.notice(), Some(SILENT_NOTICE));
+        assert_eq!(AudioPlan::Copy.notice(), None);
+    }
+
+    /// H.264 and HEVC are never decoded, so one the webview cannot play is
+    /// not previewable, never converted.
+    #[test]
+    fn h264_and_hevc_are_only_ever_copied() {
+        for profile in ["High 10", "High 4:2:2", "High 4:4:4 Predictive"] {
+            for caps in [MAC, WINDOWS, LINUX] {
+                assert!(
+                    matches!(decide(&info("h264", Some(profile), Some("aac")), caps), Decision::Unsupported(_)),
+                    "{profile}"
+                );
+            }
+        }
+        assert_eq!(
+            decide(&info("hevc", Some("Main 10"), Some("aac")), MAC),
+            Decision::Remux { audio: AudioPlan::Copy }
+        );
+        assert_eq!(decide(&info("hevc", None, Some("aac")), MAC), Decision::Remux { audio: AudioPlan::Copy });
+        assert!(matches!(
+            decide(&info("hevc", Some("Main"), Some("aac")), WINDOWS),
+            Decision::Unsupported(_)
+        ));
+        assert!(matches!(
+            decide(&info("hevc", Some("Main"), Some("aac")), LINUX),
+            Decision::Unsupported(_)
+        ));
+        let mut big = info("h264", Some("High"), None);
+        big.video.as_mut().unwrap().width = 7680;
+        big.video.as_mut().unwrap().height = 4320;
+        assert!(matches!(decide(&big, MAC), Decision::Unsupported(_)));
     }
 
     #[test]
-    fn wmv_vc1_mpeg2_and_10_bit_h264_are_transcoded() {
+    fn old_formats_are_converted_with_the_os_encoders_and_not_at_all_on_linux() {
         for codec in ["wmv3", "wmv2", "vc1", "mpeg2video", "mpeg4", "msmpeg4v3", "flv1", "vp6f"] {
             assert_eq!(
-                decide(&info(codec, "yuv420p", Some("wmav2")), Platform::MacOs),
-                Decision::Transcode,
+                decide(&info(codec, None, Some("wmav2")), MAC),
+                Decision::Transcode {
+                    audio: AudioPlan::Encode(AudioEncoder::AudioToolbox)
+                },
+                "{codec}"
+            );
+            assert_eq!(
+                decide(&info(codec, None, Some("mp3")), WINDOWS),
+                Decision::Transcode { audio: AudioPlan::Copy },
+                "{codec}"
+            );
+            assert!(
+                matches!(decide(&info(codec, None, Some("wmav2")), LINUX), Decision::Unsupported(_)),
                 "{codec}"
             );
         }
-        assert_eq!(decide(&info("h264", "yuv420p10le", None), Platform::Windows), Decision::Transcode);
-        assert_eq!(decide(&info("h264", "yuv422p", None), Platform::MacOs), Decision::Transcode);
-    }
-
-    /// Only macOS's WebKit plays HEVC without extra software.
-    #[test]
-    fn hevc_is_remuxed_on_macos_and_transcoded_elsewhere() {
+        // AAC travels into the stream as it is: it is never decoded.
         assert_eq!(
-            decide(&info("hevc", "yuv420p10le", Some("aac")), Platform::MacOs),
-            Decision::Remux { audio: AudioPlan::Copy }
+            decide(&info("vp6f", None, Some("aac")), MAC),
+            Decision::Transcode { audio: AudioPlan::Copy }
         );
-        assert_eq!(decide(&info("hevc", "yuv420p", Some("aac")), Platform::Windows), Decision::Transcode);
-        assert_eq!(decide(&info("hevc", "yuv420p", Some("aac")), Platform::Linux), Decision::Transcode);
+        // Opus goes into MPEG-TS as AAC.
+        assert_eq!(
+            decide(&info("mpeg4", None, Some("opus")), MAC),
+            Decision::Transcode {
+                audio: AudioPlan::Encode(AudioEncoder::AudioToolbox)
+            }
+        );
+        assert_eq!(
+            decide(&info("mpeg4", None, Some("dts")), MAC),
+            Decision::Transcode { audio: AudioPlan::Drop }
+        );
+        // A Mac whose encoder failed its test is like Linux.
+        let no_encoder = Capabilities { video_encoder: None, ..MAC };
+        assert!(matches!(decide(&info("wmv3", None, None), no_encoder), Decision::Unsupported(_)));
     }
 
     #[test]
-    fn oversized_h264_is_transcoded_down() {
-        let mut big = info("h264", "yuv420p", None);
-        big.video.as_mut().unwrap().width = 7680;
-        big.video.as_mut().unwrap().height = 4320;
-        assert_eq!(decide(&big, Platform::MacOs), Decision::Transcode);
-    }
-
-    #[test]
-    fn no_video_or_no_duration_for_a_transcode_is_unsupported() {
-        let mut none = info("wmv3", "yuv420p", None);
+    fn no_video_no_decoder_or_no_duration_for_a_transcode_is_unsupported() {
+        let mut none = info("wmv3", None, None);
         none.video = None;
-        assert!(matches!(decide(&none, Platform::MacOs), Decision::Unsupported(_)));
-        let mut endless = info("wmv3", "yuv420p", None);
+        assert!(matches!(decide(&none, MAC), Decision::Unsupported(_)));
+        assert!(matches!(decide(&info("prores", None, None), MAC), Decision::Unsupported(_)));
+        assert!(matches!(decide(&info("av1", None, None), MAC), Decision::Unsupported(_)));
+        let mut endless = info("wmv3", None, None);
         endless.duration = None;
-        assert!(matches!(decide(&endless, Platform::MacOs), Decision::Unsupported(_)));
+        assert!(matches!(decide(&endless, MAC), Decision::Unsupported(_)));
         // A remux needs no duration.
-        let mut copy = info("h264", "yuv420p", None);
+        let mut copy = info("h264", None, None);
         copy.duration = None;
-        assert!(matches!(decide(&copy, Platform::Linux), Decision::Remux { .. }));
+        assert!(matches!(decide(&copy, LINUX), Decision::Remux { .. }));
+    }
+
+    /// The decoders the decision counts on are the ones the build compiles.
+    #[test]
+    fn the_decodable_lists_match_the_engine_build() {
+        let script = std::fs::read_to_string(format!("{}/../scripts/video-engine/build-ffmpeg.sh", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let enabled: Vec<&str> = script
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("--enable-decoder="))
+            .flat_map(|l| l.split(','))
+            .collect();
+        // The build names the FLV decoder `flv`; streams report `flv1`.
+        for codec in DECODABLE_VIDEO.iter().map(|c| if *c == "flv1" { "flv" } else { c }) {
+            assert!(enabled.contains(&codec), "{codec} is not in the build");
+        }
+        for codec in ["mp2", "mp3", "ac3", "wmav2", "wmapro", "flac", "opus", "vorbis", "pcm_s16le"] {
+            assert!(decodable_audio(codec) && enabled.contains(&codec), "{codec}");
+        }
+        for codec in ["h264", "hevc", "aac", "eac3", "dca", "truehd"] {
+            assert!(!enabled.contains(&codec), "{codec} must not be decoded");
+            assert!(!decodable_audio(codec) && !DECODABLE_VIDEO.contains(&codec));
+        }
+    }
+
+    #[test]
+    fn only_os_encoders_are_ever_named() {
+        assert_eq!(Encoder::candidates(Platform::MacOs), &[Encoder::VideoToolbox]);
+        assert_eq!(
+            Encoder::candidates(Platform::Windows),
+            &[Encoder::MediaFoundationHardware, Encoder::MediaFoundation]
+        );
+        assert!(Encoder::candidates(Platform::Linux).is_empty());
+        assert_eq!(AudioEncoder::candidate(Platform::MacOs).map(AudioEncoder::name), Some("aac_at"));
+        assert_eq!(AudioEncoder::candidate(Platform::Windows).map(AudioEncoder::name), Some("aac_mf"));
+        assert_eq!(AudioEncoder::candidate(Platform::Linux), None);
     }
 
     #[test]
@@ -464,8 +731,9 @@ mod tests {
     }
 
     #[test]
-    fn a_transcode_seeks_to_its_segment_and_stamps_the_real_time() {
-        let args = transcode_args("/in.wmv", &info("wmv3", "yuv420p", Some("wmav2")), Encoder::VideoToolbox, 5);
+    fn a_transcode_seeks_to_its_segment_stamps_the_real_time_and_uses_os_encoders() {
+        let wmv = info("wmv3", None, Some("wmav2"));
+        let args = transcode_args("/in.wmv", &wmv, Encoder::VideoToolbox, AudioPlan::Encode(AudioEncoder::AudioToolbox), 5);
         let joined = args.join(" ");
         let ss = args.iter().position(|a| a == "-ss").expect("-ss");
         let input = args.iter().position(|a| a == "-i").expect("-i");
@@ -475,28 +743,39 @@ mod tests {
         assert!(joined.contains("-force_key_frames expr:gte(t,n_forced*4)"));
         assert!(joined.contains("-g 100"), "{joined}");
         assert!(joined.contains("-c:v h264_videotoolbox"));
-        assert!(joined.contains("-c:a aac"));
-        assert!(joined.contains("-map 0:0 -map 0:1"));
-        assert!(!joined.contains("-hwaccel"), "VC-1/WMV are decoded in software");
+        assert!(joined.contains("-map 0:1 -c:a aac_at -b:a 160k"));
+        assert!(!joined.contains("-hwaccel"));
         assert!(!joined.contains("-fpsmax"), "25 fps is under the cap");
         assert!(!joined.contains("-maxrate"));
-        let mut fast = info("wmv3", "yuv420p", None);
+        let copy = transcode_args("/in.flv", &info("vp6f", None, Some("aac")), Encoder::MediaFoundation, AudioPlan::Copy, 0).join(" ");
+        assert!(
+            copy.contains("-c:v h264_mf") && copy.contains("-map 0:1 -c:a copy") && !copy.contains("-ss"),
+            "{copy}"
+        );
+        let silent = transcode_args("/in.avi", &info("mpeg4", None, Some("dts")), Encoder::VideoToolbox, AudioPlan::Drop, 0).join(" ");
+        assert!(silent.contains("-an") && !silent.contains("-c:a"), "{silent}");
+        let mut fast = info("wmv3", None, None);
         fast.video.as_mut().unwrap().fps = Some(120.0);
-        let fast = transcode_args("/in.wmv", &fast, Encoder::VideoToolbox, 0).join(" ");
+        let fast = transcode_args("/in.wmv", &fast, Encoder::VideoToolbox, AudioPlan::None, 0).join(" ");
         assert!(fast.contains("-fpsmax 60") && fast.contains("-g 240"), "{fast}");
-        let first = transcode_args("/in.wmv", &info("h264", "yuv420p10le", None), Encoder::OpenH264, 0);
-        assert!(!first.contains(&"-ss".to_string()));
-        assert!(!first.contains(&"-c:a".to_string()));
     }
 
     #[test]
-    fn a_remux_copies_video_tags_hevc_and_reports_progress() {
-        let args = remux_args("/in.mkv", "/out.mp4", &info("hevc", "yuv420p", Some("ac3")), AudioPlan::Encode).join(" ");
+    fn a_remux_copies_the_picture_tags_hevc_and_reports_progress() {
+        let args = remux_args(
+            "/in.mkv",
+            "/out.mp4",
+            &info("hevc", None, Some("ac3")),
+            AudioPlan::Encode(AudioEncoder::AudioToolbox),
+        )
+        .join(" ");
         assert!(args.contains("-progress pipe:1"));
         assert!(args.contains("-c:v copy -tag:v hvc1"));
-        assert!(args.contains("-c:a aac"));
+        assert!(args.contains("-c:a aac_at"));
         assert!(args.ends_with("-f mp4 /out.mp4"));
-        let copy = remux_args("/in.mkv", "/out.mp4", &info("h264", "yuv420p", Some("aac")), AudioPlan::Copy).join(" ");
+        let copy = remux_args("/in.mkv", "/out.mp4", &info("h264", None, Some("aac")), AudioPlan::Copy).join(" ");
         assert!(copy.contains("-c:a copy") && !copy.contains("hvc1"));
+        let silent = remux_args("/in.mkv", "/out.mp4", &info("h264", None, Some("ac3")), AudioPlan::Drop).join(" ");
+        assert!(silent.contains("-an") && !silent.contains("-c:a"), "{silent}");
     }
 }
