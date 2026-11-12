@@ -11,6 +11,7 @@ pub mod client;
 pub mod commands;
 pub mod comment_crypto;
 pub(crate) mod folder_scan;
+pub mod gate;
 pub mod history;
 pub mod insights;
 pub mod keystore;

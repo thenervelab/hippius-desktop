@@ -27,6 +27,7 @@ pub mod infra;
 pub mod media_preview;
 pub mod notifications;
 pub mod power;
+pub mod preview_archive;
 pub mod recovery;
 pub mod recovery_binding;
 pub mod recovery_proof;

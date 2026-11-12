@@ -78,6 +78,8 @@ import {
   type OfferedSwitches,
 } from "@/app/lib/tauri/shareInsights";
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
+import EmailGateSettings from "@/components/page-sections/shares/insights/EmailGateSettings";
+import { isDownloadNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
 import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -1236,6 +1238,10 @@ function DoneBody({
   const [switchesSaving, setSwitchesSaving] = useState(false);
   const [switchesNote, setSwitchesNote] = useState<string | null>(null);
   const switchesTouched = useRef(false);
+  // Allow download, as the link has it: `null` until read, and for good on a
+  // server without the switch (Rust sends none), which draws no row.
+  const [download, setDownload] = useState<boolean | null>(null);
+  const [downloadRefused, setDownloadRefused] = useState(false);
   // The expiry as chosen and as the server has it. A change is shown at once
   // and put back if the server refuses, like the switches.
   const [ttl, setTtl] = useState<ShareTtl>(expiry.ttl);
@@ -1264,13 +1270,18 @@ function DoneBody({
   // background. Read them back (Rust answers once that send is done), so the
   // switches show what the link has, and say so when one did not turn on. A
   // change the user already made wins over this read.
+  // The same read gives Allow download, so it is read for every file link
+  // whose switches are shown, not only when one was asked for.
   useEffect(() => {
     const asked = engagement?.value;
-    if (!asked || !(asked.insights || asked.comments || asked.reactions)) return;
+    if (!asked) return;
+    const askedAny = asked.insights || asked.comments || asked.reactions;
     let alive = true;
     getLinkSettings(link.shareToken)
       .then((real) => {
-        if (!alive || switchesTouched.current) return;
+        if (!alive) return;
+        setDownload(real.download ?? null);
+        if (!askedAny || switchesTouched.current) return;
         setSwitches(real.on);
         const missed = (["insights", "comments", "reactions"] as const).some(
           (key) => asked[key] && real.offered[key] && !real.on[key],
@@ -1298,6 +1309,24 @@ function DoneBody({
     } catch (err) {
       setSwitches(before);
       toast.error(errorMessage(err));
+    } finally {
+      setSwitchesSaving(false);
+    }
+  };
+
+  // Shown as changed at once, put back if Rust refuses; a refusal for the
+  // plan shows the upgrade card instead of a toast.
+  const changeDownload = async (next: boolean) => {
+    const before = download;
+    setDownload(next);
+    setDownloadRefused(false);
+    setSwitchesSaving(true);
+    try {
+      await setLinkSettings(link.shareToken, { download: next });
+    } catch (err) {
+      setDownload(before);
+      if (isDownloadNotInPlan(err)) setDownloadRefused(true);
+      else toast.error(errorMessage(err));
     } finally {
       setSwitchesSaving(false);
     }
@@ -1410,6 +1439,9 @@ function DoneBody({
             switchesInPlan={engagement.switchesInPlan}
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
+            download={download}
+            onDownloadChange={(next) => void changeDownload(next)}
+            downloadRefused={downloadRefused}
           />
           {switchesNote && (
             <p role="status" className="mt-2 text-xs leading-[1.45] text-error-50 dark:text-error-70">
@@ -1487,6 +1519,8 @@ function DoneBody({
             </p>
           </div>
         )}
+        {/* File links only: a folder link has no email gate. */}
+        {engagement && <EmailGateSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
         <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
       </SecureLinkSection>
 
