@@ -145,12 +145,13 @@ impl Encoder {
 
     /// `-c:v ...` and the options that make it a preview: a bitrate for the
     /// output size, no B-frames (simple timestamps across restarts) and
-    /// speed over quality where the encoder offers the choice.
+    /// speed over quality where the encoder offers the choice. No `-maxrate`:
+    /// VideoToolbox's data-rate limit made a 1080p WMV convert 1.8x slower,
+    /// and a preview has no buffer model to honour.
     #[must_use]
     pub fn args(self, bitrate_kbps: u32) -> Vec<String> {
         let rate = format!("{bitrate_kbps}k");
-        let maxrate = format!("{}k", bitrate_kbps * 3 / 2);
-        let mut out: Vec<String> = vec!["-c:v".into(), self.name().into(), "-b:v".into(), rate, "-maxrate".into(), maxrate];
+        let mut out: Vec<String> = vec!["-c:v".into(), self.name().into(), "-b:v".into(), rate];
         let extra: &[&str] = match self {
             Self::VideoToolbox => &["-allow_sw", "1", "-prio_speed", "1", "-profile:v", "high", "-bf", "0"],
             Self::MediaFoundationHardware => &["-hw_encoding", "1", "-scenario", "display_remoting", "-bf", "0"],
@@ -230,10 +231,8 @@ pub fn segment_start(index: u32) -> String {
 pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, start_index: u32) -> Vec<String> {
     let video = info.video.as_ref();
     let (_, out_h) = video.map_or((MAX_WIDTH, MAX_HEIGHT), |v| output_size(v.width, v.height));
-    let fps = video
-        .and_then(|v| v.fps)
-        .filter(|f| f.is_finite() && *f > 0.0)
-        .map_or(30.0, |f| f.min(f64::from(MAX_FPS)));
+    let source_fps = video.and_then(|v| v.fps).filter(|f| f.is_finite() && *f > 0.0);
+    let fps = source_fps.map_or(30.0, |f| f.min(f64::from(MAX_FPS)));
     // A GOP of one segment backs up the forced keyframes for an encoder that
     // ignores them.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -257,14 +256,12 @@ pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, start_ind
     if let Some(a) = &info.audio {
         args.extend(["-map".into(), format!("0:{}", a.index)]);
     }
-    args.extend([
-        "-sn".into(),
-        "-dn".into(),
-        "-vf".into(),
-        video_filter(),
-        "-fpsmax".into(),
-        MAX_FPS.to_string(),
-    ]);
+    args.extend(["-sn".into(), "-dn".into(), "-vf".into(), video_filter()]);
+    // Only for a source above the cap: `-fpsmax` on a 24 fps WMV made the
+    // whole conversion twice as slow while changing nothing.
+    if source_fps.is_some_and(|f| f > f64::from(MAX_FPS)) {
+        args.extend(["-fpsmax".into(), MAX_FPS.to_string()]);
+    }
     args.extend(encoder.args(bitrate_kbps(out_h)));
     args.extend([
         "-g".into(),
@@ -481,6 +478,12 @@ mod tests {
         assert!(joined.contains("-c:a aac"));
         assert!(joined.contains("-map 0:0 -map 0:1"));
         assert!(!joined.contains("-hwaccel"), "VC-1/WMV are decoded in software");
+        assert!(!joined.contains("-fpsmax"), "25 fps is under the cap");
+        assert!(!joined.contains("-maxrate"));
+        let mut fast = info("wmv3", "yuv420p", None);
+        fast.video.as_mut().unwrap().fps = Some(120.0);
+        let fast = transcode_args("/in.wmv", &fast, Encoder::VideoToolbox, 0).join(" ");
+        assert!(fast.contains("-fpsmax 60") && fast.contains("-g 240"), "{fast}");
         let first = transcode_args("/in.wmv", &info("h264", "yuv420p10le", None), Encoder::OpenH264, 0);
         assert!(!first.contains(&"-ss".to_string()));
         assert!(!first.contains(&"-c:a".to_string()));
