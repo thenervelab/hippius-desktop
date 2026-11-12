@@ -151,10 +151,11 @@ jobs:
           else
             echo "capture_helper=false" >> "$GITHUB_OUTPUT"
           fi
-          # The video preview engine is built only by the staging release, so
-          # its own job follows the engine's build and test scripts, the Rust
-          # that runs it, its runtime test, and the workflows that build it.
-          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(scripts/video-engine/|src-tauri/src/video_engine/|src-tauri/tests/video_engine_runtime\.rs$|\.github/workflows/(ci|tauri-staging)\.yml$)'; then
+          # The video preview engine is built only by the release workflows,
+          # so its own job follows the engine's build and test scripts, the
+          # Rust that runs it, its runtime test and clips, and the workflows
+          # that build it.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(scripts/video-engine/|src-tauri/src/video_engine/|src-tauri/tests/video_engine_runtime\.rs$|src-tauri/tests/fixtures/video/|\.github/workflows/(ci|tauri-staging|tauri-beta|tauri-build)\.yml$)'; then
             echo "video_engine=true" >> "$GITHUB_OUTPUT"
           else
             echo "video_engine=false" >> "$GITHUB_OUTPUT"
@@ -205,13 +206,15 @@ jobs:
 
   video-engine:
     # The video preview engine (scripts/video-engine/build-ffmpeg.sh) is built
-    # only by the staging release, so a build that breaks on one OS used to
-    # be found after merge. Each OS builds it as the release does and
-    # converts a WMV with it (smoke-test.sh: the app's encoder order, read
-    # back); Linux and macOS also run the Rust runtime test against it
-    # (HIPPIUS_REQUIRE_VIDEO_ENGINE=1, so a missing engine fails rather than
-    # skips). PR-only, path-gated, and never a required check: it depends on
-    # which encoders a hosted runner offers.
+    # only by the release workflows, so a build that breaks on one OS would
+    # be found after merge. Each OS builds it as the release does, which
+    # also refuses any patent-pooled decoder or non-OS encoder, then runs
+    # smoke-test.sh on the committed clips: a remux everywhere, a WMV
+    # converted by the OS encoders on macOS and Windows, and no encoder at
+    # all on Linux. Linux and macOS also run the Rust runtime test against
+    # it (HIPPIUS_REQUIRE_VIDEO_ENGINE=1, so a missing engine fails rather
+    # than skips). PR-only, path-gated, and never a required check: it
+    # depends on which encoders a hosted runner offers.
     needs: changes
     if: github.event_name == 'pull_request' && needs.changes.outputs.video_engine == 'true'
     strategy:

@@ -272,13 +272,14 @@ jobs:
       - name: Build the screen-recording helper
         run: bash macos/build-capture-helper.sh --universal
 
-      # The video preview engine: a small LGPL ffmpeg that converts videos
-      # the webview cannot play (WMV, AVI, MKV, ...) for the file viewer.
-      # Built universal here and shipped beside the app by Tauri's externalBin
-      # (src-tauri/tauri.video-engine.conf.json, passed to the build below),
-      # which signs it with the app. Staging only for now: beta and production
-      # build without it and preview what they did before.
+      # The video preview engine: a small LGPL ffmpeg that copies and, with
+      # the OS's own encoders, converts videos the webview cannot play (WMV,
+      # AVI, MKV, ...). Built universal here and shipped beside the app by
+      # Tauri's externalBin (src-tauri/tauri.video-engine.conf.json, passed
+      # to the build below); finalize-macos-release.sh re-signs it.
       - name: Build the video preview engine
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
         run: |
           brew install nasm
           bash scripts/video-engine/build-ffmpeg.sh --universal
@@ -386,6 +387,14 @@ jobs:
           # skipped, so fall back to Tauri's full build so a DMG is still produced
           # (unsigned, no extension) rather than nothing.
           args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app --config src-tauri/tauri.video-engine.conf.json' || '--target universal-apple-darwin --config src-tauri/tauri.video-engine.conf.json' }}
+
+      # The LGPL's corresponding source: the exact ffmpeg tarball, build
+      # script and configuration this release's engine was built from.
+      - name: Attach the video engine's source to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/video-engine/attach-source.sh "v$(jq -r .version src-tauri/tauri.conf.json)-staging" video-engine-build
 
       # Embed the universal Finder extension into the app (Tauri built app-only),
       # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
@@ -518,9 +527,11 @@ jobs:
       - name: Linux deps
         run: bash scripts/install-linux-release-deps.sh
 
-      # The video preview engine (see the macOS job), with OpenH264 as its
-      # H.264 encoder: Linux has no system one to call.
+      # The video preview engine (see the macOS job). Linux has no OS
+      # encoder, so this one only copies streams.
       - name: Build the video preview engine
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
         run: |
           bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm zlib1g-dev
           bash scripts/video-engine/build-ffmpeg.sh
@@ -581,6 +592,14 @@ jobs:
           # artifact (the capture plan's Linux checklist); beta and
           # production ship the .deb only, and no updater manifest names it.
           args: '--bundles deb,rpm --config src-tauri/tauri.video-engine.conf.json'
+
+      # The LGPL's corresponding source: the exact ffmpeg tarball, build
+      # script and configuration this release's engine was built from.
+      - name: Attach the video engine's source to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/video-engine/attach-source.sh "v$(jq -r .version src-tauri/tauri.conf.json)-staging" video-engine-build
 
   # Windows preview: the app installer (NSIS) + a separate, self-signed shell
   # extension bundle testers register manually (register-preview.ps1). The
@@ -669,8 +688,7 @@ jobs:
         working-directory: windows/HippiusShell
 
       # The video preview engine (see the macOS job), built with MinGW so it
-      # links statically. Its H.264 encoder is Media Foundation's (hardware
-      # where the machine has one), with OpenH264 for a Windows without it.
+      # links statically; its encoders are Media Foundation's.
       - name: Set up MSYS2 for the video preview engine
         uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
         with:
@@ -682,6 +700,8 @@ jobs:
 
       - name: Build the video preview engine
         shell: msys2 {0}
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
         run: bash scripts/video-engine/build-ffmpeg.sh
 
       - name: Build & publish (NSIS installer)
@@ -705,6 +725,14 @@ jobs:
           makeLatest: false
           overwrite: true
           args: '--bundles nsis --config src-tauri/tauri.video-engine.conf.json'
+
+      # The LGPL's corresponding source: the exact ffmpeg tarball, build
+      # script and configuration this release's engine was built from.
+      - name: Attach the video engine's source to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/video-engine/attach-source.sh "v$(jq -r .version src-tauri/tauri.conf.json)-staging" video-engine-build
 
       - name: Bundle + upload the shell extension for testers
         shell: pwsh
