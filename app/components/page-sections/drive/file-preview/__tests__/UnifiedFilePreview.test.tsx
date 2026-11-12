@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -16,6 +16,10 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 const resolved = vi.hoisted(() => ({
   value: { url: "", localPath: "/drive/file", isLoading: false, error: null as string | null },
 }));
+
+// Rust's archive check for the Office formats. Passes unless a test says not.
+const invoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 
 vi.mock("@/app/lib/hooks/useViewableFileUrl", () => ({
   useViewableFileUrl: () => resolved.value,
@@ -65,6 +69,8 @@ function fileNamed(name: string): FormattedUserFile {
 const noop = vi.fn();
 
 beforeEach(() => {
+  invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
   resolved.value = {
     url: "asset://x",
     localPath: "/drive/file",
@@ -87,16 +93,17 @@ describe("UnifiedFilePreview: one dispatcher, every format", () => {
     ["README.md", "markdown-body"],
     ["page.html", "html-body"],
     ["logo.svg", "svg-body"],
-  ])("mounts the %s renderer for %s", (filename, testId) => {
+  ])("mounts the %s renderer for %s", async (filename, testId) => {
     render(
       <UnifiedFilePreview file={fileNamed(filename)} handleFileDownload={noop} />,
     );
-    expect(screen.getByTestId(testId)).toBeInTheDocument();
+    // The Office renderers mount once Rust has vetted the archive.
+    expect(await screen.findByTestId(testId)).toBeInTheDocument();
   });
 
-  it("picks the renderer from the extension in any casing", () => {
+  it("picks the renderer from the extension in any casing", async () => {
     render(<UnifiedFilePreview file={fileNamed("DECK.PPTX")} handleFileDownload={noop} />);
-    expect(screen.getByTestId("presentation-body")).toBeInTheDocument();
+    expect(await screen.findByTestId("presentation-body")).toBeInTheDocument();
   });
 });
 
@@ -143,5 +150,66 @@ describe("UnifiedFilePreview: fallbacks", () => {
     resolved.value = { url: "", localPath: "", isLoading: true, error: null };
     render(<UnifiedFilePreview file={fileNamed("photo.png")} handleFileDownload={noop} />);
     expect(screen.getByTestId("image-body")).toBeInTheDocument();
+  });
+});
+
+describe("UnifiedFilePreview: the Office archive check", () => {
+  /** Rejects the way Rust refuses a malformed archive: the structured shape. */
+  const refusal = {
+    kind: "Validation",
+    message: "This file couldn't be read for a preview. Download it to open it.",
+  };
+
+  it.each([
+    ["deck.pptx", "presentation", "presentation-body"],
+    ["contract.docx", "document", "document-body"],
+    ["budget.xlsx", "spreadsheet", "spreadsheet-body"],
+  ])(
+    "shows the download fallback, not the renderer, when Rust refuses %s",
+    async (filename, format, testId) => {
+      invoke.mockRejectedValue(refusal);
+      const download = vi.fn();
+      const file = fileNamed(filename);
+      render(<UnifiedFilePreview file={file} handleFileDownload={download} />);
+
+      expect(await screen.findByText(refusal.message)).toBeInTheDocument();
+      expect(screen.getByText("This file can't be previewed")).toBeInTheDocument();
+      // The renderer, and so the JS zip reader, is never mounted.
+      expect(screen.queryByTestId(testId)).not.toBeInTheDocument();
+      expect(invoke).toHaveBeenCalledWith("check_preview_archive", {
+        sourcePath: "/drive/file",
+        maxBytes: expect.any(Number),
+        format,
+      });
+
+      screen.getByRole("button", { name: /download file/i }).click();
+      expect(download).toHaveBeenCalledWith(file, "5Test");
+    },
+  );
+
+  it("shows no renderer while the check is still out", () => {
+    invoke.mockReturnValue(new Promise(() => {}));
+    render(<UnifiedFilePreview file={fileNamed("deck.pptx")} handleFileDownload={noop} />);
+    expect(screen.getByText("Opening file…")).toBeInTheDocument();
+    expect(screen.queryByTestId("presentation-body")).not.toBeInTheDocument();
+  });
+
+  it("does not check formats that are not zip archives", async () => {
+    render(<UnifiedFilePreview file={fileNamed("notes.txt")} handleFileDownload={noop} />);
+    expect(screen.getByTestId("text-body")).toBeInTheDocument();
+    await waitFor(() => expect(invoke).not.toHaveBeenCalled());
+  });
+
+  it("checks the next file rather than reusing the previous verdict", async () => {
+    invoke.mockRejectedValueOnce(refusal).mockResolvedValue(undefined);
+    const { rerender } = render(
+      <UnifiedFilePreview file={fileNamed("bad.pptx")} handleFileDownload={noop} />,
+    );
+    expect(await screen.findByText(refusal.message)).toBeInTheDocument();
+
+    resolved.value = { ...resolved.value, localPath: "/drive/good.pptx" };
+    rerender(<UnifiedFilePreview file={fileNamed("good.pptx")} handleFileDownload={noop} />);
+    expect(await screen.findByTestId("presentation-body")).toBeInTheDocument();
+    expect(screen.queryByText(refusal.message)).not.toBeInTheDocument();
   });
 });
