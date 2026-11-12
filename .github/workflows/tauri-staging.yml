@@ -272,6 +272,17 @@ jobs:
       - name: Build the screen-recording helper
         run: bash macos/build-capture-helper.sh --universal
 
+      # The video preview engine: a small LGPL ffmpeg that converts videos
+      # the webview cannot play (WMV, AVI, MKV, ...) for the file viewer.
+      # Built universal here and shipped beside the app by Tauri's externalBin
+      # (src-tauri/tauri.video-engine.conf.json, passed to the build below),
+      # which signs it with the app. Staging only for now: beta and production
+      # build without it and preview what they did before.
+      - name: Build the video preview engine
+        run: |
+          brew install nasm
+          bash scripts/video-engine/build-ffmpeg.sh --universal
+
       # Apple code signing. The sandbox exceptions the Finder extension needs are honoured
       # only to code signed by Team V28B5X732P, so a real Developer ID cert is
       # required (the preview build was previously ad-hoc/unsigned). The CERT
@@ -374,7 +385,7 @@ jobs:
           # Tauri-built DMG/notarization). Without those creds, finalize is
           # skipped, so fall back to Tauri's full build so a DMG is still produced
           # (unsigned, no extension) rather than nothing.
-          args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app' || '--target universal-apple-darwin' }}
+          args: ${{ steps.apple.outputs.api_key != '' && '--target universal-apple-darwin --bundles app --config src-tauri/tauri.video-engine.conf.json' || '--target universal-apple-darwin --config src-tauri/tauri.video-engine.conf.json' }}
 
       # Embed the universal Finder extension into the app (Tauri built app-only),
       # inside-out re-sign, notarize + staple, then build the DMG + regenerate the
@@ -507,6 +518,13 @@ jobs:
       - name: Linux deps
         run: bash scripts/install-linux-release-deps.sh
 
+      # The video preview engine (see the macOS job), with OpenH264 as its
+      # H.264 encoder: Linux has no system one to call.
+      - name: Build the video preview engine
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm
+          bash scripts/video-engine/build-ffmpeg.sh
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
 
@@ -562,7 +580,7 @@ jobs:
           # Staging also builds an .rpm so Fedora can be tested from an
           # artifact (the capture plan's Linux checklist); beta and
           # production ship the .deb only, and no updater manifest names it.
-          args: '--bundles deb,rpm'
+          args: '--bundles deb,rpm --config src-tauri/tauri.video-engine.conf.json'
 
   # Windows preview: the app installer (NSIS) + a separate, self-signed shell
   # extension bundle testers register manually (register-preview.ps1). The
@@ -650,6 +668,22 @@ jobs:
         run: ./package-selfsigned.ps1
         working-directory: windows/HippiusShell
 
+      # The video preview engine (see the macOS job), built with MinGW so it
+      # links statically. Its H.264 encoder is Media Foundation's (hardware
+      # where the machine has one), with OpenH264 for a Windows without it.
+      - name: Set up MSYS2 for the video preview engine
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            make diffutils xz
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+
+      - name: Build the video preview engine
+        shell: msys2 {0}
+        run: bash scripts/video-engine/build-ffmpeg.sh
+
       - name: Build & publish (NSIS installer)
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
@@ -670,7 +704,7 @@ jobs:
           prerelease: true
           makeLatest: false
           overwrite: true
-          args: '--bundles nsis'
+          args: '--bundles nsis --config src-tauri/tauri.video-engine.conf.json'
 
       - name: Bundle + upload the shell extension for testers
         shell: pwsh

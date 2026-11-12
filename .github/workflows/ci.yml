@@ -99,6 +99,7 @@ jobs:
       capture: ${{ steps.diff.outputs.capture }}
       capture_runtime: ${{ steps.diff.outputs.capture_runtime }}
       capture_helper: ${{ steps.diff.outputs.capture_helper }}
+      video_engine: ${{ steps.diff.outputs.video_engine }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -122,6 +123,7 @@ jobs:
               echo "capture=true"
               echo "capture_runtime=false"
               echo "capture_helper=true"
+              echo "video_engine=false"
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -148,6 +150,14 @@ jobs:
             echo "capture_helper=true" >> "$GITHUB_OUTPUT"
           else
             echo "capture_helper=false" >> "$GITHUB_OUTPUT"
+          fi
+          # The video preview engine is built only by the staging release, so
+          # its own job follows the engine's build and test scripts, the Rust
+          # that runs it, its runtime test, and the workflows that build it.
+          if git diff --name-only "$BASE_SHA" HEAD | grep -qE '^(scripts/video-engine/|src-tauri/src/video_engine/|src-tauri/tests/video_engine_runtime\.rs$|\.github/workflows/(ci|tauri-staging)\.yml$)'; then
+            echo "video_engine=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "video_engine=false" >> "$GITHUB_OUTPUT"
           fi
           # Anything under src-tauri/ (the crate), .github/ (this pipeline and
           # its composite actions), or scripts/ (steps the jobs shell out to)
@@ -192,6 +202,79 @@ jobs:
 
       - name: Build the screen-recording helper
         run: bash macos/build-capture-helper.sh --universal
+
+  video-engine:
+    # The video preview engine (scripts/video-engine/build-ffmpeg.sh) is built
+    # only by the staging release, so a build that breaks on one OS used to
+    # be found after merge. Each OS builds it as the release does and
+    # converts a WMV with it (smoke-test.sh: the app's encoder order, read
+    # back); Linux and macOS also run the Rust runtime test against it
+    # (HIPPIUS_REQUIRE_VIDEO_ENGINE=1, so a missing engine fails rather than
+    # skips). PR-only, path-gated, and never a required check: it depends on
+    # which encoders a hosted runner offers.
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.video_engine == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Install nasm (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" update
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm
+
+      - name: Set up MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            make diffutils xz
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+
+      - name: Build the engine (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash scripts/video-engine/build-ffmpeg.sh
+
+      - name: Build the engine
+        if: runner.os != 'Windows'
+        run: bash scripts/video-engine/build-ffmpeg.sh
+
+      - name: Convert a WMV with it
+        shell: bash
+        run: |
+          set -euo pipefail
+          engine="$(find src-tauri/binaries -name 'hippius-ffmpeg-*' -type f | head -1)"
+          ls -l "${engine}"
+          bash scripts/video-engine/smoke-test.sh "${engine}"
+
+      - name: Rust CI setup
+        if: runner.os != 'Windows'
+        uses: ./.github/actions/rust-ci-setup
+        with:
+          deploy-key: ${{ secrets.HCFS_DEPLOY_KEY_B64 }}
+          tauri-env: ${{ secrets.TAURI_ENV_FILE }}
+          linux-deps: ${{ runner.os == 'Linux' && 'true' || 'false' }}
+          save-cache: "false"
+
+      - name: Runtime test
+        if: runner.os != 'Windows'
+        working-directory: src-tauri
+        env:
+          SQLX_OFFLINE: "true"
+          HIPPIUS_REQUIRE_VIDEO_ENGINE: "1"
+        run: cargo test --test video_engine_runtime
 
   # Each Rust lane is split in two jobs that run side by side, clippy and the
   # tests, so the lane takes max(clippy, tests) instead of their sum (the
