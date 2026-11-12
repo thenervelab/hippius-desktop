@@ -121,6 +121,8 @@ common_flags=(
 configure_and_build() {
   local arch="$1" out="$2"
   local obj="${build_dir}/obj-${arch}"
+  local exe="ffmpeg"
+  [[ "${os}" == windows ]] && exe="ffmpeg.exe"
   local prefix="${build_dir}/prefix-${arch}"
   rm -rf "${obj}"
   mkdir -p "${obj}" "${prefix}"
@@ -172,10 +174,9 @@ configure_and_build() {
       --pkg-config-flags=--static \
       --extra-cflags="${extra_cflags}" --extra-ldflags="${extra_ldflags}" \
       --extra-libs="$([[ "${want_openh264}" == 1 && "${os}" != windows ]] && echo "-lstdc++ -lm" || echo "")" >&2
-    make -j"${jobs}" ffmpeg >&2
+    # The make target carries the executable suffix (ffmpeg.exe on Windows).
+    make -j"${jobs}" "${exe}" >&2
   )
-  local exe="ffmpeg"
-  [[ "${os}" == windows ]] && exe="ffmpeg.exe"
   cp "${obj}/${exe}" "${out}"
   strip "${out}" 2>/dev/null || true
 }

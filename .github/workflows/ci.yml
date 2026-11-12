@@ -217,7 +217,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-latest, windows-latest]
+        # ubuntu-latest, not the releases' 22.04: the shared Rust setup's
+        # Linux packages do not install on 22.04's image. The engine itself
+        # builds the same on both.
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
