@@ -56,6 +56,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Security
 
+- **A damaged Word, Excel or PowerPoint file can no longer freeze Hippius.** Previews now check these files before opening them, and one that is broken or built to overload the viewer shows a Download button instead.
 - **Signing in with your recovery phrase uses an updated signing library that fixes a timing weakness.**
 - **Signing in with your recovery phrase now proves the whole wallet is yours.** Hippius checks this so nobody else can claim your wallet's account, and will soon require it, so update before then to keep signing in from the app.
 - **Share link addresses stay out of error messages and support logs.** When Insights or a chat preview can't reach Hippius, the message no longer shows the link's address, and logs you attach to a support ticket hide share links and their keys.

@@ -29,6 +29,7 @@ mod ipc_guard;
 pub mod media_preview;
 pub mod notifications;
 pub mod power;
+pub mod preview_archive;
 pub mod recovery;
 pub mod recovery_binding;
 mod recovery_proof;
@@ -88,7 +89,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
+use crate::media_preview::{check_preview_archive, open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -526,6 +527,7 @@ fn main() {
             get_thumbnail,
             prepare_motion_photo_preview,
             read_preview_bytes,
+            check_preview_archive,
             resolve_drive_file_source,
             open_in_default_app,
             // The viewer's video source: the asset URL, or on Linux the
