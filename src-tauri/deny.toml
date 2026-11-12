@@ -58,7 +58,21 @@ unmaintained = "workspace"
 #      bundle Info.plist / config, never attacker-controlled XML, so the
 #      quadratic-parse / allocation vectors don't apply.
 # Re-check and remove once tauri/plist ship a quick-xml >= 0.41 tree.
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195"]
+#
+# libsqlite3-sys 0.30.1: RUSTSEC-2026-0459 (CVE-2026-119375). The bundled
+# SQLite before 3.54.0 can return stale page-cache memory when a process opens
+# a database together with a crafted `-wal` file whose page size differs.
+# Ignored because:
+#   1. No upgrade path today. libsqlite3-sys comes from `sqlx` (sqlite
+#      feature), and every sqlx release, 0.9.0 included, requires
+#      libsqlite3-sys < 0.38. The fix ships only in libsqlite3-sys >= 0.39.
+#   2. Not reachable in our usage. The app opens only its own database, which
+#      it creates in its own data folder (`open_db_pool` in main.rs), plus
+#      in-memory and temp databases in tests. It never opens a database or
+#      `-wal` file from a download, a share or another user. Writing a crafted
+#      pair into the app's data folder already needs local access as the user.
+# Re-check and remove once sqlx accepts libsqlite3-sys >= 0.39.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0459"]
 
 [bans]
 # Lenient on purpose for the first gate. The graph has many legitimately
