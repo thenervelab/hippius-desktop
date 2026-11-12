@@ -263,6 +263,13 @@ impl Encoder {
         }
     }
 
+    /// Media Foundation needs an explicit output frame rate (see
+    /// `transcode_args`); VideoToolbox takes whatever ffmpeg derives.
+    #[must_use]
+    pub const fn needs_fixed_rate(self) -> bool {
+        matches!(self, Self::MediaFoundationHardware | Self::MediaFoundation)
+    }
+
     /// `-c:v ...` and the options that make it a preview: a bitrate for the
     /// output size, no B-frames (simple timestamps across restarts) and
     /// speed over quality where the encoder offers the choice. No `-maxrate`:
@@ -421,9 +428,15 @@ pub fn transcode_args(input: &str, info: &MediaInfo, encoder: Encoder, audio: Au
         args.extend(["-map".into(), format!("0:{}", v.index)]);
     }
     args.extend(["-sn".into(), "-dn".into(), "-vf".into(), video_filter()]);
-    // Only for a source above the cap: `-fpsmax` on a 24 fps WMV made the
-    // whole conversion twice as slow while changing nothing.
-    if source_fps.is_some_and(|f| f > f64::from(MAX_FPS)) {
+    if encoder.needs_fixed_rate() {
+        // Media Foundation's H.264 encoder refuses to open ("could not set
+        // output type") at the rate ffmpeg derives from an ASF file whose
+        // frame rate it can't read, which reports only a tbr such as 240 or
+        // 1k. Give it the probed rate under the cap, or 30 when unknown.
+        args.extend(["-r".into(), fps.to_string()]);
+    } else if source_fps.is_some_and(|f| f > f64::from(MAX_FPS)) {
+        // Only for a source above the cap: `-fpsmax` on a 24 fps WMV made the
+        // whole conversion twice as slow on VideoToolbox while changing nothing.
         args.extend(["-fpsmax".into(), MAX_FPS.to_string()]);
     }
     args.extend(encoder.args(bitrate_kbps(out_h)));
@@ -758,6 +771,30 @@ mod tests {
         fast.video.as_mut().unwrap().fps = Some(120.0);
         let fast = transcode_args("/in.wmv", &fast, Encoder::VideoToolbox, AudioPlan::None, 0).join(" ");
         assert!(fast.contains("-fpsmax 60") && fast.contains("-g 240"), "{fast}");
+        assert!(!joined.contains(" -r "), "VideoToolbox keeps the source rate: {joined}");
+    }
+
+    #[test]
+    fn media_foundation_always_gets_an_explicit_frame_rate() {
+        // A WMV whose rate ffmpeg can't read (only a tbr such as 240 or 1k)
+        // made Media Foundation refuse to open; it is given 30.
+        let unknown = info("wmv2", None, Some("wmav2"));
+        let mut unknown = unknown;
+        unknown.video.as_mut().unwrap().fps = None;
+        for encoder in [Encoder::MediaFoundation, Encoder::MediaFoundationHardware] {
+            let args = transcode_args("/in.wmv", &unknown, encoder, AudioPlan::Encode(AudioEncoder::MediaFoundation), 0);
+            let r = args.iter().position(|a| a == "-r").expect("-r");
+            assert_eq!(args[r + 1], "30", "{args:?}");
+            assert!(!args.iter().any(|a| a == "-fpsmax"), "{args:?}");
+        }
+        let mut film = info("wmv3", None, None);
+        film.video.as_mut().unwrap().fps = Some(23.976);
+        let args = transcode_args("/in.wmv", &film, Encoder::MediaFoundation, AudioPlan::None, 0).join(" ");
+        assert!(args.contains("-r 23.976"), "{args}");
+        let mut fast = info("wmv3", None, None);
+        fast.video.as_mut().unwrap().fps = Some(120.0);
+        let args = transcode_args("/in.wmv", &fast, Encoder::MediaFoundation, AudioPlan::None, 0).join(" ");
+        assert!(args.contains("-r 60") && !args.contains("-fpsmax"), "capped at 60: {args}");
     }
 
     #[test]

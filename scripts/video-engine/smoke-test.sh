@@ -33,7 +33,7 @@ echo "remux: ok"
 case "$(uname -s)" in
   Darwin) video=("h264_videotoolbox -allow_sw 1 -bf 0"); audio="aac_at" ;;
   Linux) video=(); audio="" ;;
-  *) video=("h264_mf -hw_encoding 1 -bf 0" "h264_mf -bf 0"); audio="aac_mf" ;;
+  *) video=("h264_mf -hw_encoding 1 -scenario display_remoting -bf 0" "h264_mf -scenario display_remoting -bf 0"); audio="aac_mf" ;;
 esac
 
 if ((${#video[@]} == 0)); then
@@ -86,10 +86,14 @@ echo "video encoder: ${picked}, audio encoder: ${audio}"
 
 "${engine}" -hide_banner -nostdin -loglevel error -stream_loop -1 -i "${fixtures}/clip.wmv" -t 6 -c copy -f asf "${work}/in.wmv"
 read -r -a enc <<<"${picked}"
+# As plan.rs::transcode_args: Media Foundation gets an explicit rate. The
+# lengthened clip reports no fps (only "240 tbr"), which it refuses.
+rate=()
+[[ "${enc[0]}" == h264_mf ]] && rate=(-r 30)
 start=$(date +%s)
 "${engine}" -hide_banner -nostdin -loglevel error -i "${work}/in.wmv" \
   -vf "scale=w='trunc(iw*sar/2)*2':h=ih,setsar=1,bwdif=deint=interlaced,format=yuv420p" \
-  -c:v "${enc[@]}" -b:v 1500k -force_key_frames 'expr:gte(t,n_forced*4)' \
+  "${rate[@]}" -c:v "${enc[@]}" -b:v 1500k -force_key_frames 'expr:gte(t,n_forced*4)' \
   -c:a "${audio}" -b:a 160k -ac 2 -ar 48000 -f mpegts "${work}/out.ts"
 echo "converted 6 s in $(($(date +%s) - start)) s"
 
