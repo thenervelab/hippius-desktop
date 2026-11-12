@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Preview WMV, AVI, MKV and other videos.** Videos the viewer could not play before, like Windows Media (.wmv), AVI, MKV, FLV, MPEG (.mpg) and camcorder (.mts, .m2ts) files, now play in Hippius. They are converted on your computer as they play, so even a long video starts in a few seconds and you can skip ahead, and nothing is sent anywhere. A video that still can't be shown says so and offers Download.
 - **Ask for an email before a share link opens.** A file link can now ask viewers to confirm their email with a code before it opens, from the Share dialog and from Insights' Link settings. Let in only certain addresses or whole company domains, or keep some out. It comes with paid Drive plans and appears once Hippius offers it for your account.
 - **See who opened a link that asks for an email.** Insights names each viewer by the email they confirmed, so you know exactly who read your document.
 - **Allow download on a new link, and watermarked PDFs.** The Share dialog's finished link now has the Allow download switch too, and it says what turning it off does: the link's page hides its download button and marks each page of a PDF with who is looking.
