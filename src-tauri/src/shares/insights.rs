@@ -53,7 +53,7 @@ use crate::error::{AppError, Result};
 use hcfs_client::client::share::{ShareKeystore, ShareSecret};
 
 /// How long one request may take. These back an open sheet, not a transfer.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The most comment pages read for one sheet. The server keeps at most 500
 /// comments a link, so this is a bound on a misbehaving cursor, not a limit
 /// anyone reaches.
@@ -64,7 +64,7 @@ const MAX_COMMENT_PAGES: usize = 25;
 /// some other way.
 const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
 const COMMENTS_UNAVAILABLE: &str = "Comments aren't available yet.";
-const LINK_GONE: &str = "This link isn't active any more.";
+pub(super) const LINK_GONE: &str = "This link isn't active any more.";
 /// Shown when the server could not be asked which switches it takes, so a
 /// link's switches can be neither read nor changed. Never "all off": that
 /// would be a guess dressed up as the link's state.
@@ -72,7 +72,7 @@ const SETTINGS_UNREACHABLE: &str = "Couldn't reach Hippius to check this link's 
 /// Shown when the server could not be asked whether it has Insights or
 /// comments at all. Never "aren't available yet", which reads as a feature
 /// that is missing rather than a connection that failed.
-const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
+pub(super) const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
 const COMMENT_GONE: &str = "That comment isn't on this link any more.";
 
 // ─── Insights ──────────────────────────────────────────────────────────────
@@ -120,6 +120,12 @@ pub struct InsightsViewer {
     /// document views (`share_document_views`).
     pub pages_seen: Option<u32>,
     pub page_count: Option<u32>,
+    /// The email this viewer proved on a link that asks for one, decrypted
+    /// with the link's key and shown only when it matches the server's check
+    /// of the email they proved ([`comment_crypto::open_viewer_email`]). The
+    /// latest such email when they proved more than one. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 /// Page by page numbers for a document link (`share_document_views`): how
@@ -238,6 +244,45 @@ struct WireViewer {
     pages_seen: Option<u32>,
     #[serde(default)]
     page_count: Option<u32>,
+    /// The link this row's visits came from. On a link's own insights it is
+    /// that link; a server that predates it omits it.
+    #[serde(default)]
+    share_token: Option<String>,
+    /// The emails this viewer proved on a gated link, oldest first.
+    #[serde(default)]
+    emails: Option<Vec<WireEmail>>,
+}
+
+/// One email a viewer proved: the server's check of it, and the copy the
+/// share page sealed under the link's key (`null` when it sent none).
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireEmail {
+    #[serde(default, rename = "email_check")]
+    pub(crate) check: Option<String>,
+    #[serde(default, rename = "email_ct")]
+    pub(crate) ct: Option<String>,
+    #[serde(default, rename = "email_nonce")]
+    pub(crate) nonce: Option<String>,
+}
+
+/// One viewer's proven emails, as [`parse_insights_with`] hands them over.
+pub(crate) struct ViewerEmails<'a> {
+    pub(crate) share_token: Option<&'a str>,
+    pub(crate) emails: &'a [WireEmail],
+}
+
+/// The email to show for a viewer of link `token`: the latest of their
+/// emails that opens with `key` and matches its check. A row from another
+/// link (group insights) is checked with that link's token, never this one,
+/// so it is left out here rather than checked against the wrong token.
+fn verified_email(key: &CommentKey, token: &str, row: ViewerEmails<'_>) -> Option<String> {
+    if row.share_token.is_some_and(|t| t != token) {
+        return None;
+    }
+    row.emails.iter().rev().find_map(|e| match (&e.nonce, &e.ct, &e.check) {
+        (Some(nonce), Some(ct), Some(check)) => comment_crypto::open_viewer_email(key, token, nonce, ct, check),
+        _ => None,
+    })
 }
 
 fn unit(x: f64) -> f64 {
@@ -258,7 +303,20 @@ fn percent(x: f64) -> f64 {
 /// nothing about pages is read, so the screen shows what it does today. With
 /// it, pages are still `None` until the response carries a pages block or
 /// names `pages` in `locked`.
-fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
+#[cfg(test)]
+fn parse_insights(body: &str, document_views: bool, names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
+    parse_insights_with(body, document_views, names, |_| None)
+}
+
+/// [`parse_insights`], and `emails` opens one viewer's proven emails: given
+/// the row's link token (when the server names it) and its emails, it
+/// answers the one to show, if any.
+fn parse_insights_with(
+    body: &str,
+    document_views: bool,
+    mut names: impl FnMut(&str, &str) -> Option<String>,
+    mut emails: impl FnMut(ViewerEmails<'_>) -> Option<String>,
+) -> Result<ShareInsights> {
     let wire: WireInsights = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("insights parse failed: {e}")))?;
     let plan = if wire.plan == "paid" { InsightsPlan::Paid } else { InsightsPlan::Free };
     let locked: HashSet<&str> = wire.locked.iter().map(String::as_str).collect();
@@ -274,6 +332,14 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
     } else {
         Gated::Shown(wire.retention.filter(|r| !r.is_empty()).map(|r| r.into_iter().map(percent).collect()))
     };
+    // The page count of the link's pages block, when it is shown: the server
+    // sends a viewer's pages seen without a count of their own, so a row
+    // reads "9 of 12 pages" against this one.
+    let link_page_count = if document_views && !is_locked("pages") {
+        wire.pages.as_ref().and_then(|p| page_count_ok(p.page_count))
+    } else {
+        None
+    };
     let viewers = if is_locked("viewers") {
         Gated::Locked
     } else {
@@ -286,10 +352,17 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
                     (Some(ct), Some(nonce)) => names(nonce, ct).map(readable_name),
                     _ => None,
                 };
-                // Pages seen only beside a valid page count, and never more
-                // than it has.
-                let page_count = v.page_count.filter(|_| document_views).and_then(page_count_ok);
+                // Pages seen only beside a valid page count (the viewer's
+                // own, else the link's), and never more than it has.
+                let page_count = v.page_count.filter(|_| document_views).and_then(page_count_ok).or(link_page_count);
                 let pages_seen = page_count.and_then(|n| v.pages_seen.map(|seen| seen.min(n)));
+                let email = match v.emails.as_deref() {
+                    Some(list) if !list.is_empty() => emails(ViewerEmails {
+                        share_token: v.share_token.as_deref(),
+                        emails: list,
+                    }),
+                    _ => None,
+                };
                 InsightsViewer {
                     viewer_id: v.viewer_id,
                     name,
@@ -301,6 +374,7 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
                     reactions: v.reactions,
                     pages_seen,
                     page_count: pages_seen.and(page_count),
+                    email,
                 }
             })
             .collect();
@@ -909,7 +983,7 @@ pub const DOWNLOAD_NOT_IN_PLAN: &str = "Turning off downloads is available on pa
 
 /// The server could not read the Drive plan to check a switch turned on
 /// (`502 billing_unavailable`). Nothing changed, and trying again may work.
-const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
+pub(super) const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
 
 /// The server's refusals of a settings change, in the app's words: turning a
 /// switch on (or downloads off, `download_off`) without a paid plan is the
@@ -1058,19 +1132,19 @@ fn preferences_body(prefs: NotificationPreferences) -> serde_json::Value {
 #[derive(Debug, Clone)]
 pub(crate) struct Api {
     base: String,
-    bearer: String,
+    pub(super) bearer: String,
 }
 
 impl Api {
     #[cfg(test)]
-    fn new(base: &str, bearer: &str) -> Self {
+    pub(super) fn new(base: &str, bearer: &str) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
             bearer: bearer.to_string(),
         }
     }
 
-    async fn for_account(state: &AppState, account_id: &str) -> Result<Self> {
+    pub(super) async fn for_account(state: &AppState, account_id: &str) -> Result<Self> {
         let pool = state.pool()?;
         let server_url = crate::sync::remote::get_server_url(pool, account_id).await?;
         let base = crate::sync::region::resolve_base_url(&server_url).trim_end_matches('/').to_string();
@@ -1080,7 +1154,7 @@ impl Api {
         Ok(Self { base, bearer })
     }
 
-    fn share_url(&self, token: &str, rest: &str) -> Result<String> {
+    pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
         Ok(format!("{}/v1/shares/{}{rest}", self.base, path_segment(token)?))
     }
 }
@@ -1114,7 +1188,7 @@ fn path_segment(s: &str) -> Result<&str> {
 
 /// The body of a 2xx, or the error for anything else. A 404 is the link
 /// that is no longer live (revoked or expired), worded for the sheet.
-async fn read_ok(resp: reqwest::Response) -> Result<String> {
+pub(super) async fn read_ok(resp: reqwest::Response) -> Result<String> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if status.is_success() {
@@ -1133,7 +1207,7 @@ async fn read_ok(resp: reqwest::Response) -> Result<String> {
 /// `Display` appends the request URL, and every route here carries the
 /// link's token in its path, which opens the link's unencrypted preview.
 /// This text reaches the Insights panel, screenshots of it and the logs.
-fn transport(what: &str, e: reqwest::Error) -> AppError {
+pub(super) fn transport(what: &str, e: reqwest::Error) -> AppError {
     let reason = if e.is_timeout() {
         "Hippius took too long to answer".to_string()
     } else if e.is_connect() {
@@ -1325,7 +1399,7 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
 /// The server's capabilities for something the owner is looking at: a failed
 /// read is an error the owner sees (`unreachable`), never a server without
 /// the feature.
-async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
+pub(super) async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
     fetch_capabilities(state, account_id).await.map_err(|e| {
         debug!(error = %e, "share insights: capabilities unavailable");
         AppError::Validation(unreachable.into())
@@ -1528,17 +1602,23 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
     }
     let api = Api::for_account(&state, &account_id).await?;
     let body = get_insights_body(&state.api_client, &api, &share_token).await?;
-    // A viewer's name is only there when they commented under one, so the
-    // key is only looked for when some row needs it.
-    let key = if body.contains("\"name_ct\":\"") {
+    // A viewer's name is only there when they commented under one, and an
+    // email only on a link that asks for one, so the key is only looked for
+    // when some row needs it.
+    let key = if body.contains("\"name_ct\":\"") || body.contains("\"email_ct\":\"") {
         comment_key_for(&state, &account_id, &share_token).await.ok()
     } else {
         None
     };
-    parse_insights(&body, caps.share_document_views, |nonce, ct| {
-        key.as_ref()
-            .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
-    })
+    parse_insights_with(
+        &body,
+        caps.share_document_views,
+        |nonce, ct| {
+            key.as_ref()
+                .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
+        },
+        |row| key.as_ref().and_then(|k| verified_email(k, &share_token, row)),
+    )
 }
 
 /// A file link's comments, opened with its key.
@@ -1731,7 +1811,7 @@ pub async fn share_set_notification_preferences(state: tauri::State<'_, AppState
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
@@ -1953,6 +2033,95 @@ mod tests {
         assert!(seen.contains(&("a", Some(4), Some(4))));
         assert!(seen.contains(&("b", None, None)));
         assert!(seen.contains(&("c", None, None)));
+    }
+
+    /// The server gives a viewer's pages seen and puts the page count once,
+    /// in the pages block: each row reads against that count, a viewer's own
+    /// count (if one is ever sent) wins, and nothing is read without a block
+    /// or while it is locked.
+    #[test]
+    fn a_viewers_page_count_comes_from_the_links_pages_block() {
+        let body = r#"{"plan":"paid","total_views":3,"unique_viewers":3,
+            "pages":{"page_count":4,"reach":[100,100,67,33],"median_ms":[1,2,3,4]},
+            "viewers":[
+              {"viewer_id":"a","last_viewed_at":"2026-11-03T10:00:00Z","pages_seen":3,"page_time_ms":9000},
+              {"viewer_id":"b","last_viewed_at":"2026-11-02T10:00:00Z","pages_seen":null,"page_time_ms":null},
+              {"viewer_id":"c","last_viewed_at":"2026-11-01T10:00:00Z","pages_seen":9,"page_time_ms":1}],
+            "locked":[]}"#;
+        let Gated::Shown(rows) = parse_insights(body, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        let seen: Vec<_> = rows.iter().map(|r| (r.viewer_id.as_str(), r.pages_seen, r.page_count)).collect();
+        assert_eq!(seen, [("a", Some(3), Some(4)), ("b", None, None), ("c", Some(4), Some(4))]);
+
+        let video = r#"{"plan":"paid","pages":null,"viewers":[{"viewer_id":"v","pages_seen":2}],"locked":[]}"#;
+        let Gated::Shown(rows) = parse_insights(video, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert_eq!((rows[0].pages_seen, rows[0].page_count), (None, None), "no pages block, no pages");
+
+        let locked = body.replace(r#""locked":[]"#, r#""locked":["pages"]"#);
+        let Gated::Shown(rows) = parse_insights(&locked, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.page_count.is_none()), "a locked pages block lends no count");
+        let Gated::Shown(rows) = parse_insights(body, false, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.page_count.is_none()), "nor does a server without document views");
+    }
+
+    /// The emails a viewer proved on a gated link: the latest one that opens
+    /// with the link's key and matches the server's check is shown; a row
+    /// with none, a copy the check does not match, and a row from another
+    /// link show no email.
+    #[test]
+    fn a_viewers_proven_email_is_shown_only_when_it_matches_its_check() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        let token = "q3V9h0kQ2m1xYb7d8Zt4sA";
+        let key = CommentKey::derive(&[9; 32]);
+        let entry = |sealed: &str, proven: &str| {
+            let nonce = [4u8; comment_crypto::NONCE_LEN];
+            let ct = comment_crypto::seal_with_nonce(&key, token, comment_crypto::Purpose::ViewerEmail, &nonce, sealed.as_bytes()).unwrap();
+            serde_json::json!({
+                "email_check": STANDARD.encode(comment_crypto::email_check(token, proven)),
+                "email_ct": STANDARD.encode(ct),
+                "email_nonce": STANDARD.encode(nonce),
+            })
+        };
+        let body = serde_json::json!({
+            "plan": "paid", "total_views": 4, "unique_viewers": 4, "locked": [],
+            "viewers": [
+                { "viewer_id": "a", "last_viewed_at": "2026-11-04T10:00:00Z", "share_token": token,
+                  "emails": [entry("old@acme.com", "old@acme.com"), entry("alice@acme.com", "alice@acme.com")] },
+                { "viewer_id": "b", "last_viewed_at": "2026-11-03T10:00:00Z", "share_token": token,
+                  "emails": [entry("ceo@acme.com", "bob@acme.com")] },
+                { "viewer_id": "c", "last_viewed_at": "2026-11-02T10:00:00Z", "share_token": "another_link_token_12",
+                  "emails": [entry("carol@acme.com", "carol@acme.com")] },
+                { "viewer_id": "d", "last_viewed_at": "2026-11-01T10:00:00Z", "emails": [] },
+                { "viewer_id": "e", "emails": [{ "email_check": "x", "email_ct": null, "email_nonce": null }] }
+            ]
+        })
+        .to_string();
+        let i = parse_insights_with(&body, false, no_names, |row| verified_email(&key, token, row)).unwrap();
+        let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
+        let emails: Vec<_> = rows.iter().map(|r| (r.viewer_id.as_str(), r.email.as_deref())).collect();
+        assert_eq!(
+            emails,
+            [("a", Some("alice@acme.com")), ("b", None), ("c", None), ("d", None), ("e", None)]
+        );
+
+        let json = serde_json::to_value(parse_insights_with(&body, false, no_names, |row| verified_email(&key, token, row)).unwrap()).unwrap();
+        assert_eq!(json["viewers"]["value"][0]["email"], "alice@acme.com");
+        assert!(json["viewers"]["value"][1].get("email").is_none(), "no key at all without a proven email");
+
+        // Without the link's key (a password link, a key on no device) no
+        // email shows, and the rest of the row is unchanged.
+        let Gated::Shown(rows) = parse_insights(&body, false, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.email.is_none()));
     }
 
     fn wire_comment(id: &str, nonce: &str, ct: &str, anonymous: bool) -> WireComment {
@@ -2579,16 +2748,16 @@ mod tests {
     // ─── Against a mock server ─────────────────────────────────────────────
 
     #[derive(Debug, Clone)]
-    struct Seen {
-        method: String,
-        path: String,
-        query: Option<String>,
-        auth: Option<String>,
-        body: String,
+    pub(in crate::shares) struct Seen {
+        pub(in crate::shares) method: String,
+        pub(in crate::shares) path: String,
+        pub(in crate::shares) query: Option<String>,
+        pub(in crate::shares) auth: Option<String>,
+        pub(in crate::shares) body: String,
     }
 
     /// A loopback server that records each request and answers from `reply`.
-    async fn mock(reply: impl Fn(&Seen) -> (u16, String) + Send + Sync + 'static) -> (String, Arc<Mutex<Vec<Seen>>>) {
+    pub(in crate::shares) async fn mock(reply: impl Fn(&Seen) -> (u16, String) + Send + Sync + 'static) -> (String, Arc<Mutex<Vec<Seen>>>) {
         let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
         let reply = Arc::new(reply);
         let log = seen.clone();

@@ -108,6 +108,11 @@ pub struct ServerCapabilities {
     /// off needs a paid plan. Absent on older servers, which refuse the key:
     /// no switch is shown and none is sent.
     pub share_download_switch: bool,
+    /// Email gates on file links (`PUT|GET|DELETE /v1/shares/{token}/gate`,
+    /// hcfs #1178): a link asks for a verified email before it opens. Absent
+    /// on older servers and off in production until the share page is ready:
+    /// no "Ask for email" switch is shown and no gate request is sent.
+    pub share_gates: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -245,7 +250,7 @@ mod tests {
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
-            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true}"#,
+            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -266,6 +271,7 @@ mod tests {
         assert!(caps.share_reaction_moments);
         assert!(caps.share_document_views);
         assert!(caps.share_download_switch);
+        assert!(caps.share_gates);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
 
@@ -289,6 +295,7 @@ mod tests {
                 "share_comments",
                 "share_document_views",
                 "share_download_switch",
+                "share_gates",
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
@@ -320,6 +327,7 @@ mod tests {
         assert!(!old.share_reaction_moments, "a server without reaction moments shows totals only");
         assert!(!old.share_document_views, "a server without document views shows no Pages tab");
         assert!(!old.share_download_switch, "a server without the download switch is never sent one");
+        assert!(!old.share_gates, "a server without email gates offers no Ask for email");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="

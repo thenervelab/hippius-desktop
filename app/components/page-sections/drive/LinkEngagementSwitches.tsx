@@ -60,8 +60,10 @@ export const INSIGHTS_LOCKED_DESCRIPTION = LINK_SWITCHES[0].locked;
  */
 export const DOWNLOAD_SWITCH = {
   label: "Allow download",
-  description: "Viewers can download the file.",
-  locked: "Viewers can download the file. Only paid Drive plans can turn it off.",
+  // The console's words: with downloads off its share page watermarks a PDF
+  // with who is looking, which discourages copying but can't prevent it.
+  description: "Show a download button. When off, PDFs get a watermark, which discourages copying but can't prevent it.",
+  locked: "Show a download button. Only paid Drive plans can turn it off.",
 } as const;
 
 /** The upgrade card's accessible name for Allow download. */

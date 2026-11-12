@@ -13,10 +13,12 @@
 //! - Cipher: AES-256-GCM, 12-byte nonce, the 16-byte tag appended to the
 //!   ciphertext.
 //! - Additional data binds a ciphertext to its link and its purpose:
-//!   `<token>:comment` or `<token>:viewer-name`, so a ciphertext copied onto
-//!   another share, or a comment passed off as a name, fails to open.
+//!   `<token>:comment`, `<token>:viewer-name` or `<token>:viewer-email`, so a
+//!   ciphertext copied onto another share, or a comment passed off as a name,
+//!   fails to open.
 //! - Plaintext: `{"text": ..., "name": ... | null}` for a comment,
-//!   `{"name": ...}` for a viewer name. A lone UTF-16 surrogate escape in
+//!   `{"name": ...}` for a viewer name, and the bare email as UTF-8 for a
+//!   viewer's email on a link that asks for one (see [`open_viewer_email`]). A lone UTF-16 surrogate escape in
 //!   either, which older console builds wrote, reads as U+FFFD.
 //! - A comment may also carry `"mentions"`: the people it @mentions (see
 //!   [`CommentMention`]). Optional, and read leniently: a malformed entry is
@@ -49,6 +51,9 @@ pub const TAG_LEN: usize = 16;
 pub enum Purpose {
     Comment,
     ViewerName,
+    /// The email a viewer proved on a link that asks for one, sealed by the
+    /// share page with its first view.
+    ViewerEmail,
 }
 
 impl Purpose {
@@ -56,6 +61,7 @@ impl Purpose {
         match self {
             Self::Comment => "comment",
             Self::ViewerName => "viewer-name",
+            Self::ViewerEmail => "viewer-email",
         }
     }
 }
@@ -259,6 +265,58 @@ pub fn open_viewer_name(key: &CommentKey, token: &str, nonce_b64: &str, cipherte
     let mut plain = open(key, token, Purpose::ViewerName, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
     let parsed: NamePlaintext = parse_plaintext(&mut plain)?;
     Ok(clean_name(Some(&parsed.name)))
+}
+
+/// The BLAKE3 `derive_key` context of [`email_check`]: hcfs-crypto's
+/// `share_email_check`, which the server stores beside each sealed email.
+pub const EMAIL_CHECK_CONTEXT: &str = "hippius.hcfs.share-gate-email-check.v1";
+
+/// The longest email shown, in bytes: the most an address can be.
+const MAX_EMAIL_LEN: usize = 254;
+
+/// hcfs-crypto's `share_email_check`: BLAKE3 `derive_key` over the link's
+/// token, a zero byte and the canonical email. The pin desktop builds against
+/// predates the helper, so it is written out here and held to hcfs-crypto's
+/// own known answer in the tests.
+#[must_use]
+pub fn email_check(token: &str, email: &str) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new_derive_key(EMAIL_CHECK_CONTEXT);
+    hasher.update(token.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(email.as_bytes());
+    hasher.finalize().into()
+}
+
+/// The email a viewer proved on link `token`, or `None` when it cannot be
+/// shown as theirs.
+///
+/// The share page seals the email (`<token>:viewer-email`), so on its own
+/// the ciphertext only says what that page sent. The server's `check` is the
+/// hash of the email the viewer actually proved with a code: the email is
+/// shown only when it decrypts AND hashes to that check. Anything else (a
+/// missing copy, another key, a page that sealed some other address, a check
+/// that is not 32 bytes) is no email. A decrypted email that would not show
+/// cleanly (control or bidi characters, no `@`, too long) is none either.
+#[must_use]
+pub fn open_viewer_email(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b64: &str, check_b64: &str) -> Option<String> {
+    let check: [u8; 32] = decode_b64(check_b64).ok()?.try_into().ok()?;
+    let plain = open(
+        key,
+        token,
+        Purpose::ViewerEmail,
+        &decode_b64(nonce_b64).ok()?,
+        &decode_b64(ciphertext_b64).ok()?,
+    )
+    .ok()?;
+    let email = std::str::from_utf8(&plain).ok()?;
+    // `blake3::Hash` compares in constant time.
+    if blake3::Hash::from(email_check(token, email)) != blake3::Hash::from(check) {
+        return None;
+    }
+    let shows_cleanly = email.len() <= MAX_EMAIL_LEN
+        && email.contains('@')
+        && !email.chars().any(|c| c.is_whitespace() || is_display_unsafe(c) || is_bidi_control(c));
+    shows_cleanly.then(|| email.to_string())
 }
 
 /// Parse a decrypted plaintext, reading a lone surrogate escape as U+FFFD.
@@ -1013,6 +1071,91 @@ mod tests {
         fn joiners_inside_a_visible_name_are_kept(left in "[a-z]{1,20}", right in "[a-z]{1,20}", joiner in "[\u{200C}\u{200D}]") {
             let name = format!("{left}{joiner}{right}");
             prop_assert_eq!(clean_name(Some(&name)), Some(name));
+        }
+    }
+}
+
+#[cfg(test)]
+mod viewer_email_tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+
+    const TOKEN: &str = "q3V9h0kQ2m1xYb7d8Zt4sA";
+    const NONCE: [u8; NONCE_LEN] = [5; NONCE_LEN];
+
+    fn key() -> CommentKey {
+        CommentKey::derive(&[9; 32])
+    }
+
+    /// What the share page sends for `email` on `token`, and the server's check.
+    fn sealed(key: &CommentKey, token: &str, email: &str, checked: &str) -> (String, String, String) {
+        let ct = seal_with_nonce(key, token, Purpose::ViewerEmail, &NONCE, email.as_bytes()).unwrap();
+        (STANDARD.encode(NONCE), STANDARD.encode(ct), STANDARD.encode(email_check(token, checked)))
+    }
+
+    /// hcfs-crypto's own known answer for `share_email_check`, so this copy
+    /// can never drift from the hash the server stores.
+    #[test]
+    fn the_email_check_matches_hcfs_crypto() {
+        let hex = blake3::Hash::from(email_check("tok123", "alice@acme.com")).to_hex();
+        assert_eq!(hex.as_str(), "444020ccf7f0c971f42f34698376a5bc6ada35a0b20d1fb823a65a5cd5700128");
+        assert_ne!(
+            email_check("tok123", "alice@acme.com"),
+            email_check("tok12", "3alice@acme.com"),
+            "the zero byte separates the token from the email"
+        );
+    }
+
+    #[test]
+    fn a_proven_email_opens_and_is_shown() {
+        let key = key();
+        let (nonce, ct, check) = sealed(&key, TOKEN, "alice@acme.com", "alice@acme.com");
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &check).as_deref(), Some("alice@acme.com"));
+    }
+
+    /// The page seals the email, so a page could seal any address: only the
+    /// one the server's check was made from is shown.
+    #[test]
+    fn an_email_the_check_does_not_match_is_not_shown() {
+        let key = key();
+        let (nonce, ct, check) = sealed(&key, TOKEN, "ceo@acme.com", "alice@acme.com");
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &check), None);
+    }
+
+    #[test]
+    fn an_email_from_another_link_or_purpose_is_not_shown() {
+        let key = key();
+        let (nonce, ct, _) = sealed(&key, "another_link_token_123", "alice@acme.com", "alice@acme.com");
+        let check = STANDARD.encode(email_check(TOKEN, "alice@acme.com"));
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &check), None, "sealed for another link");
+
+        let name = seal_with_nonce(&key, TOKEN, Purpose::ViewerName, &NONCE, b"alice@acme.com").unwrap();
+        assert_eq!(
+            open_viewer_email(&key, TOKEN, &STANDARD.encode(NONCE), &STANDARD.encode(name), &check),
+            None,
+            "a name is never read as an email"
+        );
+
+        let other = CommentKey::derive(&[1; 32]);
+        let (nonce, ct, check) = sealed(&other, TOKEN, "alice@acme.com", "alice@acme.com");
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &check), None, "another key");
+    }
+
+    #[test]
+    fn a_malformed_check_or_an_email_that_would_not_show_cleanly_is_not_shown() {
+        let key = key();
+        let (nonce, ct, _) = sealed(&key, TOKEN, "alice@acme.com", "alice@acme.com");
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &STANDARD.encode([0u8; 16])), None);
+        assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, "not base64!"), None);
+
+        for odd in [
+            "\u{202E}alice@acme.com",
+            "alice\n@acme.com",
+            "no-at-sign",
+            &format!("{}@acme.com", "a".repeat(250)),
+        ] {
+            let (nonce, ct, check) = sealed(&key, TOKEN, odd, odd);
+            assert_eq!(open_viewer_email(&key, TOKEN, &nonce, &ct, &check), None, "{odd:?}");
         }
     }
 }

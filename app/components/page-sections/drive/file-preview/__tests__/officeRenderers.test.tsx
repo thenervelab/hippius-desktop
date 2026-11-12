@@ -96,6 +96,41 @@ describe("PlainTextPreview / JsonPreview", () => {
   });
 });
 
+describe("Office renderers ask Rust to vet the archive", () => {
+  const refusal = {
+    kind: "Validation",
+    message: "This file couldn't be read for a preview. Download it to open it.",
+  };
+
+  it.each([
+    ["presentation", () => <PresentationPreview localPath="/drive/x.pptx" />],
+    ["document", () => <DocumentPreview localPath="/drive/x.docx" />],
+    [
+      "spreadsheet",
+      () => <SpreadsheetPreview localPath="/drive/x.xlsx" filename="x.xlsx" />,
+    ],
+  ])("%s reads with its format and shows Rust's refusal", async (format, view) => {
+    // The read itself is the last line of defence: a file swapped after the
+    // viewer's up-front check is refused here, before any zip reader runs.
+    invoke.mockRejectedValue(refusal);
+    render(view());
+    await waitFor(() => expect(screen.getByText(refusal.message)).toBeInTheDocument(), {
+      timeout: 15000,
+    });
+    expect(invoke).toHaveBeenCalledWith(
+      "read_preview_bytes",
+      expect.objectContaining({ format }),
+    );
+  }, 30000);
+
+  it("reads a plain-text format without asking for the archive check", async () => {
+    serveBytes(encode("plain"));
+    render(<PlainTextPreview localPath="/drive/notes.txt" />);
+    await waitFor(() => expect(screen.getByText("plain")).toBeInTheDocument());
+    expect(invoke.mock.calls[0][1]).not.toHaveProperty("format");
+  });
+});
+
 describe("SvgPreview", () => {
   it("renders an SVG as an inert data: image with the script removed", async () => {
     serveBytes(

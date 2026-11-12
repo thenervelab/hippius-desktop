@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { OfficePreviewFormat } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 
 import PreviewPager from "./PreviewPager";
@@ -48,9 +49,12 @@ export default function RenderedFilePreview({
   bodyClassName,
   pageSelector,
   pageLabel,
+  format,
 }: {
   localPath: string;
   maxBytes: number;
+  /** The Office format, for a renderer that unzips its bytes (see `readPreviewBytes`). */
+  format?: OfficePreviewFormat;
   loadingTitle: string;
   errorTitle: string;
   render: FilePreviewRenderer;
@@ -87,7 +91,7 @@ export default function RenderedFilePreview({
     styles.replaceChildren();
     setState({ status: "loading" });
 
-    void readPreviewBytes(localPath, maxBytes, controller.signal)
+    void readPreviewBytes(localPath, maxBytes, controller.signal, format)
       .then((bytes) => render(bytes, body, styles, controller.signal))
       .then((nextDispose) => {
         if (controller.signal.aborted) {
@@ -111,7 +115,7 @@ export default function RenderedFilePreview({
       body.replaceChildren();
       styles.replaceChildren();
     };
-  }, [localPath, maxBytes, render]);
+  }, [localPath, maxBytes, render, format]);
 
   const revision = state.status === "ready" ? state.revision : -1;
   const pager = usePagedScroll(

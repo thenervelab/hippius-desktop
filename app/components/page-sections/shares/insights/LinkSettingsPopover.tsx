@@ -16,6 +16,7 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
+import EmailGateSettings from "./EmailGateSettings";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
@@ -84,6 +85,7 @@ export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
  */
 export function LinkSettingsPopover({
   id,
+  shareToken,
   switches,
   top,
   opener,
@@ -91,6 +93,8 @@ export function LinkSettingsPopover({
   onLeave,
 }: {
   id: string;
+  /** The link these settings are for. */
+  shareToken: string;
   switches: LinkSwitches;
   /** Pixels from the panel's top: just under its header. */
   top: number;
@@ -186,6 +190,17 @@ export function LinkSettingsPopover({
       ) : (
         <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
       )}
+      {/* Drawn only where Rust says the server has email gates. */}
+      <div className="mt-2.5 empty:hidden">
+        <EmailGateSettings
+          layout="list"
+          shareToken={shareToken}
+          onUpgrade={() => {
+            onLeave();
+            router.push(BILLING_ROUTE);
+          }}
+        />
+      </div>
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />
       </div>

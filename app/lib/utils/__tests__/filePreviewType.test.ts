@@ -19,6 +19,7 @@ import {
   previewByteCap,
   previewExtension,
   previewNeedsBytes,
+  officePreviewFormat,
   type PreviewType,
 } from "@/app/lib/utils/filePreviewType";
 
@@ -280,5 +281,19 @@ describe("per-format byte caps", () => {
     for (const type of buffered) {
       expect(previewByteCap(type)).toBeLessThanOrEqual(RUST_PREVIEW_READ_CEILING_BYTES);
     }
+  });
+});
+
+describe("officePreviewFormat", () => {
+  it("names exactly the renderers that unzip in the webview", () => {
+    // These are the formats Rust vets before a JS zip reader sees them; a
+    // zip-based format missing here would reach its parser unchecked.
+    expect(officePreviewFormat("document")).toBe("document");
+    expect(officePreviewFormat("spreadsheet")).toBe("spreadsheet");
+    expect(officePreviewFormat("presentation")).toBe("presentation");
+    for (const type of ["text", "json", "markdown", "html", "svg", "image", "video", "PDF"] as const) {
+      expect(officePreviewFormat(type)).toBeNull();
+    }
+    expect(officePreviewFormat(null)).toBeNull();
   });
 });

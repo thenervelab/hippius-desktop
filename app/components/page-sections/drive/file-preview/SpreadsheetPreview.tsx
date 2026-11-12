@@ -34,7 +34,10 @@ export default function SpreadsheetPreview({
     () => (bytes, signal) => parseSpreadsheetPreview(bytes, signal, filename),
     [filename],
   );
-  const state = usePreviewResource(localPath, previewByteCap("spreadsheet"), parser);
+  // Rust passes a CSV through and vets an XLSX's zip before returning it.
+  const state = usePreviewResource(localPath, previewByteCap("spreadsheet"), parser, {
+    format: "spreadsheet",
+  });
   const [activeSheetIndex, setActiveSheetIndex] = useState(0);
 
   // Stepping to the next file must not land on sheet 4 of a two-sheet book.

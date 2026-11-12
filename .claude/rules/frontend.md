@@ -159,6 +159,7 @@ A synced file is untrusted input rendered inside the app's own WebView. Each rul
 - **DOCX links are sanitised** after docx-preview renders (its only file-controlled script vector), and `renderAltChunks` stays off (alt chunks embed arbitrary foreign content, HTML included).
 - **PPTX slides are scrubbed** after rendering — pptx-viewer's table path goes through `innerHTML` — and font names are stripped before rendering because they are interpolated into `style="…"` strings.
 - **Nothing is sent to a third-party viewer.** All rendering is local and offline.
+- **Office files are vetted by Rust before their renderer mounts.** `UnifiedFilePreview` asks `check_preview_archive` (`useOfficeArchiveCheck`) for DOCX/XLSX/PPTX and shows `PreviewFallback` with Rust's message on a refusal; the renderers also pass `format` to `read_preview_bytes`, so a file swapped after the check is still refused before a zip reader runs. Never parse an Office file's bytes without one of the two. Pinned by `UnifiedFilePreview.test.tsx` and `officeRenderers.test.tsx`.
 - **Every format has a byte cap and a render cap.** Caps are in `filePreviewType.ts` (bytes, re-enforced in Rust) and `spreadsheetFormat.ts` / `PresentationPreview.tsx` (rendered cells and slides). The spreadsheet grid virtualises rows, so `MAX_TABLE_COLUMNS` is the bound that matters for the DOM.
 
 ### Byte caps: size them by what the renderer does, not by what the format looks like
