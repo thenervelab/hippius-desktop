@@ -49,6 +49,13 @@ pub enum AppError {
     #[error("{0}")]
     Validation(String),
 
+    /// The unlock password did not open the account's sealed recovery
+    /// seed. A kind of its own (`kind: "WrongUnlockPassword"`) so the
+    /// frontend recognises it structurally; matching the wording broke
+    /// every time the sentence was improved.
+    #[error("Wrong password. Try again.")]
+    WrongUnlockPassword,
+
     /// A requested entity (wallet, record) does not exist. Distinct from
     /// `Validation` (bad input) and the catch-all `Other` so the FE can
     /// tell "this wallet was removed" apart from a generic failure.
@@ -244,6 +251,11 @@ pub enum NotReadyKind {
     /// refuses it, since the owner may have deleted the drive and this
     /// device may hold the last copies.
     EmptyRemoteMemberCannotConfirm,
+    /// Setting a new unlock password without the current one needs the
+    /// recovery seed, and this device does not hold it. Raised by
+    /// `recovery::reset_unlock_password`; the frontend switches to the form
+    /// that asks for the seed.
+    RecoverySeedRequired,
 }
 
 impl NotReadyKind {
@@ -287,6 +299,7 @@ impl NotReadyKind {
             Self::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
             Self::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
             Self::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
+            Self::RecoverySeedRequired => "RECOVERY_SEED_REQUIRED",
         }
     }
 }
@@ -307,10 +320,7 @@ impl std::fmt::Display for NotReadyKind {
                 write!(f, "HCFS config not found. Please set up sync first.")
             }
             Self::MasterMnemonicUnrecoverable => {
-                write!(
-                    f,
-                    "Master mnemonic could not be recovered. Please log out and log back in with your seed phrase."
-                )
+                write!(f, "This computer can't open your files. Log out and sign in again to continue.")
             }
             Self::NotEnoughDiskSpace => {
                 write!(f, "Not enough disk space to complete this operation.")
@@ -318,7 +328,7 @@ impl std::fmt::Display for NotReadyKind {
             Self::SigningKeyUnavailable => {
                 write!(
                     f,
-                    "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue."
+                    "This action needs your access key. Log out and sign in again with your access key to continue."
                 )
             }
             Self::InsufficientCredits => {
@@ -390,6 +400,7 @@ impl std::fmt::Display for NotReadyKind {
                 f,
                 "Only the owner of this shared drive can confirm it is empty. Your files are kept; remove the drive to stop syncing it."
             ),
+            Self::RecoverySeedRequired => write!(f, "Enter your recovery seed to set a new unlock password."),
         }
     }
 }
@@ -429,7 +440,7 @@ impl AppError {
     /// forces a decision about its logging tier.
     fn is_expected_precondition(&self) -> bool {
         match self {
-            Self::NotReady(_) | Self::Validation(_) | Self::NotFound(_) => true,
+            Self::NotReady(_) | Self::Validation(_) | Self::WrongUnlockPassword | Self::NotFound(_) => true,
             // `Auth` splits. The boot-gap rejection fires several times on
             // every launch before `restore_session` hydrates, and the
             // frontend documents it as such (`isExpectedNoSessionError`) —
@@ -568,6 +579,7 @@ impl Serialize for AppError {
             Self::Crypto(_) => "Crypto",
             Self::Api { .. } => "Api",
             Self::Validation(_) => "Validation",
+            Self::WrongUnlockPassword => "WrongUnlockPassword",
             Self::NotFound(_) => "NotFound",
             Self::Auth(_) => "Auth",
             Self::NotReady(_) => "NotReady",
@@ -888,6 +900,7 @@ mod tests {
                 NotReadyKind::MassDeleteMemberCannotRestore => "MASS_DELETE_MEMBER_CANNOT_RESTORE",
                 NotReadyKind::EmptyRemoteNothingHeld => "EMPTY_REMOTE_NOTHING_HELD",
                 NotReadyKind::EmptyRemoteMemberCannotConfirm => "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM",
+                NotReadyKind::RecoverySeedRequired => "RECOVERY_SEED_REQUIRED",
             }
         }
         for kind in [
@@ -926,6 +939,7 @@ mod tests {
             NotReadyKind::MassDeleteMemberCannotRestore,
             NotReadyKind::EmptyRemoteNothingHeld,
             NotReadyKind::EmptyRemoteMemberCannotConfirm,
+            NotReadyKind::RecoverySeedRequired,
         ] {
             let expected = expected_wire_name(&kind);
             let json = serde_json::to_value(AppError::NotReady(kind.clone())).expect("serialize");
@@ -1032,6 +1046,7 @@ mod tests {
                 body: "forbidden".into(),
             },
             AppError::Validation("invalid".into()),
+            AppError::WrongUnlockPassword,
             AppError::NotFound("wallet 1 not found".into()),
             AppError::Auth("unauth".into()),
             AppError::NotReady(NotReadyKind::ConfigMissing),
@@ -1050,6 +1065,7 @@ mod tests {
             "Crypto",
             "Api",
             "Validation",
+            "WrongUnlockPassword",
             "NotFound",
             "Auth",
             "NotReady",
@@ -1081,12 +1097,12 @@ mod tests {
             (NotReadyKind::ConfigMissing, "HCFS config not found. Please set up sync first."),
             (
                 NotReadyKind::MasterMnemonicUnrecoverable,
-                "Master mnemonic could not be recovered. Please log out and log back in with your seed phrase.",
+                "This computer can't open your files. Log out and sign in again to continue.",
             ),
             (NotReadyKind::NotEnoughDiskSpace, "Not enough disk space to complete this operation."),
             (
                 NotReadyKind::SigningKeyUnavailable,
-                "This action requires re-entering your seed phrase. Please log out and log in again with your seed phrase to continue.",
+                "This action needs your access key. Log out and sign in again with your access key to continue.",
             ),
             (NotReadyKind::InsufficientCredits, "Insufficient credits to perform this action."),
             (NotReadyKind::StorageLimitReached, "This would go past the storage your plan includes."),

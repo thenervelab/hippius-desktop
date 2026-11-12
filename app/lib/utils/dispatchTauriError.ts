@@ -40,7 +40,8 @@ export type NotReadyKind =
   | "MASS_DELETE_RESTORE_IN_PROGRESS"
   | "MASS_DELETE_MEMBER_CANNOT_RESTORE"
   | "EMPTY_REMOTE_NOTHING_HELD"
-  | "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM";
+  | "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM"
+  | "RECOVERY_SEED_REQUIRED";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field
@@ -160,7 +161,7 @@ export function dispatchSigningError(
   if (e?.kind === "NotReady" && e.subkind === "SIGNING_KEY_UNAVAILABLE") {
     toast.error("Re-authentication required", {
       description:
-        "This action needs your seed phrase. Log out and log back in to continue.",
+        "This action needs your access key. Log out and sign in again to continue.",
       action: {
         label: "Re-authenticate",
         onClick: onReAuth,

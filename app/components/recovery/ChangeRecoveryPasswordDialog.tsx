@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { HelpCircle, OctagonAlert } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -18,6 +18,8 @@ import {
   MnemonicField,
   StrengthMeter,
   errMessage,
+  seedWordsFor,
+  type SeedWords,
   useLiveStrength,
   UNLOCK_PASSWORD_DOCS_URL,
 } from "./_shared";
@@ -34,6 +36,8 @@ import {
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** What this account calls its 12 words; recovery seed unless given. */
+  seedWords?: SeedWords;
 }
 
 /**
@@ -49,6 +53,7 @@ type ChangeMode = "rotate" | "reset" | "phrase";
 const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
   open,
   onOpenChange,
+  seedWords = seedWordsFor("oauth"),
 }) => {
   const [mode, setMode] = useState<ChangeMode>("rotate");
   const [current, setCurrent] = useState("");
@@ -59,7 +64,16 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
   const [currentError, setCurrentError] = useState<string | null>(null);
   const [phraseError, setPhraseError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const currentRef = useRef<HTMLInputElement>(null);
   useLiveStrength(next, setStrength);
+
+  // A wrong current password keeps what was typed, selected, so it can be
+  // typed straight over.
+  useEffect(() => {
+    if (!currentError || submitting) return;
+    currentRef.current?.focus();
+    currentRef.current?.select();
+  }, [currentError, submitting]);
 
   const reset = () => {
     setMode("rotate");
@@ -80,7 +94,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
   const reportAlign = (alignPending: boolean) => {
     if (alignPending) {
       toast.warning(
-        "Password updated. Finishing applying it to your synced folders — this completes automatically the next time you open the app.",
+        "Password updated. It finishes applying to your synced folders the next time you open the app.",
       );
     } else {
       toast.success("Password updated.");
@@ -130,8 +144,7 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
           const { alignPending } = await resetUnlockPassword(next);
           reportAlign(alignPending);
         } catch (err) {
-          const msg = errMessage(err);
-          if (classifyRotationError(msg) === "mnemonic_missing") {
+          if (classifyRotationError(err) === "mnemonic_missing") {
             setMode("phrase");
             return;
           }
@@ -143,9 +156,8 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
       reportAlign(alignPending);
     } catch (err) {
       const msg = errMessage(err);
-      if (mode === "rotate" && classifyRotationError(msg) === "wrong_password") {
-        setCurrentError("Incorrect current password.");
-        setCurrent("");
+      if (mode === "rotate" && classifyRotationError(err) === "wrong_password") {
+        setCurrentError(msg);
       } else if (mode === "phrase") {
         setPhraseError(msg);
       } else {
@@ -166,10 +178,10 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
     >
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
         {mode === "rotate"
-          ? "Enter your current password, then choose a new one for accessing your files on other devices and Hippius Console."
+          ? "Enter your current unlock password, then choose a new one."
           : mode === "reset"
-            ? "Choose a new unlock password. This device already has your mnemonic seed, so the current password is not required."
-            : "Enter your mnemonic seed and choose a new unlock password. Your files are encrypted with the seed, not the password."}
+            ? "Choose a new unlock password. You don't need the current one on this computer."
+            : `Enter your ${seedWords.name} and choose a new unlock password.`}
       </p>
 
       <div className="flex flex-col gap-4">
@@ -182,21 +194,22 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
               setCurrentError(null);
             }}
             errorMessage={currentError ?? undefined}
-            placeholder="Enter current password"
+            placeholder="Enter your current password"
             autoComplete="current-password"
+            inputRef={currentRef}
           />
         )}
 
         {mode === "phrase" && (
           <MnemonicField
-            label="Mnemonic seed"
+            label={seedWords.title}
             value={mnemonic}
             onChange={(v) => {
               setMnemonic(v);
               setPhraseError(null);
             }}
             errorMessage={phraseError ?? undefined}
-            placeholder="Enter or paste your 12-word seed phrase"
+            placeholder={seedWords.placeholder}
             disabled={submitting}
           />
         )}
@@ -241,8 +254,8 @@ const ChangeRecoveryPasswordDialog: React.FC<Props> = ({
             </p>
           </div>
           <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
-            Changing your unlock password re-encrypts the sealed backup on the
-            server. Your files on the desktop app are not affected.
+            Your files stay as they are. Use the new password the next time you
+            unlock on another computer or in Hippius Console.
           </p>
           <button
             type="button"
