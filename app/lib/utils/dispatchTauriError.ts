@@ -40,7 +40,8 @@ export type NotReadyKind =
   | "MASS_DELETE_RESTORE_IN_PROGRESS"
   | "MASS_DELETE_MEMBER_CANNOT_RESTORE"
   | "EMPTY_REMOTE_NOTHING_HELD"
-  | "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM";
+  | "EMPTY_REMOTE_MEMBER_CANNOT_CONFIRM"
+  | "RECOVERY_SEED_REQUIRED";
 
 /**
  * Shape of an `AppError` returned by Tauri commands. The `kind` field
@@ -131,6 +132,15 @@ export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
 }
 
 /**
+ * `AppError::Validation`: a refusal Rust has already put into words for the
+ * user (a shared drive that is full or frozen, say), so its `message` can be
+ * shown as is. Matched on the `kind` discriminant, never on the text.
+ */
+export function isValidationError(error: unknown): boolean {
+  return (error as TauriError | null)?.kind === "Validation";
+}
+
+/**
  * `AppError::Io` — typically `canonicalize` of a missing path. Match the
  * `kind` discriminant, never a substring of `message` (`xdg-open was not
  * found` would otherwise look like a missing file).
@@ -160,7 +170,7 @@ export function dispatchSigningError(
   if (e?.kind === "NotReady" && e.subkind === "SIGNING_KEY_UNAVAILABLE") {
     toast.error("Re-authentication required", {
       description:
-        "This action needs your seed phrase. Log out and log back in to continue.",
+        "This action needs your access key. Log out and sign in again to continue.",
       action: {
         label: "Re-authenticate",
         onClick: onReAuth,

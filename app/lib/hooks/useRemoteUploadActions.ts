@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useCreditCheck } from "@/lib/hooks/useCreditCheck";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
   uploadFilesToRemoteFolder,
@@ -98,7 +99,9 @@ export async function uploadPathsToRemoteFolder({
     if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
       onStorageFull();
     } else {
-      toast.error(err instanceof Error ? err.message : "Upload failed", {
+      // An IPC rejection is a plain `{ kind, message }`, not an Error, and
+      // its message is Rust's sentence (a shared drive's refusal included).
+      toast.error(errorMessage(err) || "Upload failed", {
         id: REMOTE_UPLOAD_TOAST_ID,
       });
     }
@@ -134,7 +137,7 @@ export async function uploadFolderPathToRemoteFolder({
     if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
       onStorageFull();
     } else {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      toast.error(errorMessage(err) || "Upload failed");
     }
   }
 }
@@ -154,7 +157,7 @@ export function useRemoteFileUpload({
     if (!polkadotAddress || !label || busy) return;
     // Overview no-plan / full first — /can_upload fail-opens and must not
     // open the OS picker for an account that cannot upload.
-    if (!(await requireUploadRoom("file-upload"))) return;
+    if (!(await requireUploadRoom("file-upload", false, label))) return;
 
     const picked = await openSelection({ multiple: true, directory: false });
     const paths = Array.isArray(picked) ? picked : picked ? [picked] : [];
@@ -199,7 +202,7 @@ export function useRemoteFolderUpload({
 
   const run = useCallback(async () => {
     if (!polkadotAddress || !label || busy) return;
-    if (!(await requireUploadRoom("folder-upload"))) return;
+    if (!(await requireUploadRoom("folder-upload", false, label))) return;
 
     const picked = await openSelection({ multiple: false, directory: true });
     const folderPath = Array.isArray(picked) ? picked[0] : picked;

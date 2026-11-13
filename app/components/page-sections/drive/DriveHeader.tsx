@@ -269,7 +269,9 @@ const DriveHeader: FC<DriveHeaderProps> = ({
               // Disabled when blocked: do not open dialog from the button.
               // Drag-and-drop still opens the dialog via DriveContent.
               if (isStorageFull) return;
-              if (!(await requireUploadRoom("folder-upload", false))) {
+              if (
+                !(await requireUploadRoom("folder-upload", false, openDriveLabel))
+              ) {
                 return;
               }
               if (!hasConfiguredDrives) {
@@ -373,6 +375,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
         <AddButton
             ref={addButtonRef}
             defaultFolderLabel={defaultFolderLabel}
+            driveLabel={openDriveLabel}
             storageBlocked={isStorageFull}
             nestedUpload={
               isNested && nestedFolderName
@@ -381,6 +384,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
                     subfolder: nestedSubfolderPath ?? undefined,
                     syncBasePath: nestedSyncBasePath ?? undefined,
                     onSuccess: onNestedUploadSuccess,
+                    driveLabel: openDriveLabel,
                   }
                 : undefined
             }
@@ -635,6 +639,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
           subFolderPath={nestedSubfolderPath ?? undefined}
           syncBasePath={nestedSyncBasePath ?? undefined}
           initialFolderPath={folderUploadInitialPath}
+          driveLabel={openDriveLabel}
         />
       ) : (
         <FolderUploadDialog

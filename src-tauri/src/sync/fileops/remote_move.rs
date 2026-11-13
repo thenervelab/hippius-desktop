@@ -27,7 +27,7 @@ use crate::sync::files::move_entries::{
 };
 use crate::sync::identity::{DriveIdentity, rooted_path};
 
-use super::remote_rename::{browse_directory, move_folder_by_batches};
+use super::remote_rename::{browse_directory, move_folder_by_batches, refused_renames};
 
 /// State rows per page while reading the files' current revisions.
 const STATE_PAGE: u32 = 500;
@@ -200,7 +200,7 @@ pub async fn move_in_remote_drive(
         let new_view_path = join_path(&destination, &final_name);
 
         if item.is_folder {
-            let outcome = move_folder(&client, account_id, &identity, &encryption_key, &signing_key, &old_wire, &new_wire).await;
+            let outcome = move_folder(&client, &identity, &encryption_key, &signing_key, &old_wire, &new_wire).await;
             results[index] = Some(match outcome {
                 Ok(()) => MoveItemResult::moved(item, new_view_path, false),
                 Err(message) => MoveItemResult::failed(item, message),
@@ -226,7 +226,7 @@ pub async fn move_in_remote_drive(
     }
 
     if !files.is_empty() {
-        let outcomes = move_files(&client, account_id, &identity, &encryption_key, &signing_key, &files).await;
+        let outcomes = move_files(&client, &identity, &encryption_key, &signing_key, &files).await;
         for (planned, outcome) in files.iter().zip(outcomes) {
             let item = &items[planned.index];
             results[planned.index] = Some(match outcome {
@@ -267,7 +267,6 @@ async fn list_destination(client: &hcfs_client::client::HcfsClient, identity: &D
 /// atomic request. The error is already in words for the user.
 async fn move_folder(
     client: &hcfs_client::client::HcfsClient,
-    account_id: &str,
     identity: &DriveIdentity,
     encryption_key: &hcfs_crypto::FileKey,
     signing_key: &ed25519_dalek::SigningKey,
@@ -276,7 +275,7 @@ async fn move_folder(
 ) -> std::result::Result<(), String> {
     match rename_folder_atomically(client, identity, encryption_key, signing_key, old_wire, new_wire).await {
         Ok(()) => Ok(()),
-        Err(e) if e.needs_batches() => move_folder_by_batches(client, account_id, identity, encryption_key, signing_key, old_wire, new_wire)
+        Err(e) if e.needs_batches() => move_folder_by_batches(client, identity, encryption_key, signing_key, old_wire, new_wire)
             .await
             .map(|_| ())
             .map_err(|e| e.to_string()),
@@ -337,7 +336,6 @@ async fn rename_folder_atomically(
 /// One outcome per planned file, in order.
 async fn move_files(
     client: &hcfs_client::client::HcfsClient,
-    account_id: &str,
     identity: &DriveIdentity,
     encryption_key: &hcfs_crypto::FileKey,
     signing_key: &ed25519_dalek::SigningKey,
@@ -400,16 +398,30 @@ async fn move_files(
         // uses to verify; deriving our own would be a second definition.
         let signature = signing_key.sign(BatchRenameRequest::generate_signing_text(&renames).as_bytes());
         let request = BatchRenameRequest {
-            ss58_address: account_id.to_string(),
+            // The drive's OWNER, not the caller: the server looks the files
+            // up under this account, so a member's own address found none of
+            // them and every entry came back refused.
+            ss58_address: identity.wire_ss58.clone(),
             folder_hash: identity.wire_folder_hash.clone(),
             renames,
             signature: signature.to_bytes(),
             signing_key: signing_key.verifying_key().to_bytes(),
         };
-        if let Err(e) = client.rename_files(&request).await {
-            let message = format!("Move failed: {e}");
-            for (i, _) in batch {
-                outcomes[*i] = Err(message.clone());
+        match client.rename_files(&request).await {
+            // `200` lists refused entries in `failures`; each is a failed move.
+            Ok(result) => {
+                let refused = refused_renames(&result);
+                for (i, rename) in batch {
+                    if let Some(reason) = refused.get(&rename.old_path_hash) {
+                        outcomes[*i] = Err(reason.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                let message = format!("Move failed: {e}");
+                for (i, _) in batch {
+                    outcomes[*i] = Err(message.clone());
+                }
             }
         }
     }

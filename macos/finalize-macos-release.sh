@@ -56,6 +56,15 @@ APPEX="$("${script_dir}/build-finder-appex.sh")"
 echo "==> [2/6] Build, embed + sign the universal screen-recording helper"
 HELPER="$("${script_dir}/build-capture-helper.sh" --universal)"
 "${script_dir}/embed-capture-helper.sh" "${APP_PATH}" "${HELPER}"
+# The video preview engine Tauri put in Contents/MacOS (externalBin) is
+# re-signed here like the helper (hardened runtime, secure timestamp, our
+# identity) whatever Tauri's own signing did, and sealed in with the app below.
+ENGINE="${APP_PATH}/Contents/MacOS/hippius-ffmpeg"
+if [[ -f "${ENGINE}" ]]; then
+  codesign --force --options runtime --timestamp --identifier "hippius.com.hippius-ffmpeg" \
+    --sign "${APPLE_SIGNING_IDENTITY}" "${ENGINE}"
+  codesign --verify --strict --verbose=2 "${ENGINE}"
+fi
 
 echo "==> [3/6] Embed + inside-out re-sign into ${APP_PATH}"
 "${script_dir}/embed-finder-extension.sh" "${APP_PATH}" "${APPEX}"

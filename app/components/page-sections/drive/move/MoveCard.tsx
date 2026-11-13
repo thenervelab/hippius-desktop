@@ -3,9 +3,9 @@
 import React from "react";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { cn } from "@/lib/utils";
-import { dropStateClass, useMoveRow } from "./useMoveDnd";
+import { rowDropClass, useMoveRow } from "./useMoveDnd";
 
-/** A card wrapper that can be dragged and, for a folder, dropped on. */
+/** A card wrapper that can be dragged and dropped on, like a table row. */
 export default function MoveCard({
   file,
   currentFolder,
@@ -26,7 +26,7 @@ export default function MoveCard({
         className,
         "rounded-lg",
         move.isDragging && "opacity-50",
-        dropStateClass(move.dropState),
+        rowDropClass(move.dropState, move.groupRole),
       )}
     >
       {children}

@@ -90,6 +90,9 @@ pub struct AppState {
     /// The file viewer's loopback video stream on Linux (`video_stream.rs`):
     /// its tokens and, once a video was opened, the server.
     pub video_stream: crate::video_stream::VideoStreams,
+    /// Previews for videos the webview cannot play (`video_engine/`): the
+    /// bundled engine and every open preview.
+    pub video_engine: crate::video_engine::VideoEngineState,
     pub migration: MigrationState,
     /// Tracks the disk-copy + encryption window for user-initiated
     /// uploads. Drives the top-of-page processing banner. See
@@ -415,6 +418,7 @@ impl AppState {
             chat: crate::chat::ChatState::new(),
             capture: crate::capture::commands::CaptureState::default(),
             video_stream: crate::video_stream::VideoStreams::default(),
+            video_engine: crate::video_engine::VideoEngineState::default(),
             migration: MigrationState::new(),
             upload_processing: std::sync::Arc::new(crate::sync::upload_processing::UploadProcessingState::new()),
             preparing: std::sync::Arc::new(crate::sync::preparing::PreparingState::new()),
