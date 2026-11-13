@@ -46,6 +46,12 @@ type AddButtonProps = {
    */
   storageBlocked?: boolean;
   defaultFolderLabel?: string | null;
+  /**
+   * The drive an upload from this button lands in, when it sits inside an
+   * open drive. A drive shared with this account is paid for by its owner,
+   * so the upload gate asks about that drive, not this account's plan.
+   */
+  driveLabel?: string | null;
   // When set, the dialog opens UploadFilesFlow in `mode="folder"` so files
   // are uploaded into a specific nested subfolder instead of the root of
   // the active sync folder. Used by the nested drive view (breadcrumb-based
@@ -74,6 +80,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       disabled: externalDisabled,
       storageBlocked = false,
       defaultFolderLabel,
+      driveLabel = null,
       nestedUpload,
     },
     ref,
@@ -102,7 +109,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         // must not open the subscribe dialog. Drop paths use openWith*.
         open: async () => {
           if (storageBlocked) return;
-          if (!(await requireUploadRoom("file-upload", false))) return;
+          if (!(await requireUploadRoom("file-upload", false, driveLabel))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -115,7 +122,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         // Drag-and-drop: still explain via the dialog when blocked.
         openWithFiles: async (files: FileList) => {
-          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked, driveLabel))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -127,7 +134,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           setIsOpen(true);
         },
         openWithPaths: async (paths: string[]) => {
-          if (!(await requireUploadRoom("file-upload", storageBlocked))) return;
+          if (!(await requireUploadRoom("file-upload", storageBlocked, driveLabel))) return;
           if (!hasConfiguredDrives) {
             toast.warning(
               "Set up a sync folder in Settings \u2192 Sync & Storage before uploading.",
@@ -140,7 +147,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         },
         isDialogOpen: () => isOpen,
       }),
-      [isOpen, hasConfiguredDrives, requireUploadRoom, storageBlocked],
+      [isOpen, hasConfiguredDrives, requireUploadRoom, storageBlocked, driveLabel],
     );
 
     // Close and reset everything - use useCallback to prevent re-renders
@@ -158,7 +165,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         const customEvent = event as CustomEvent;
         if (customEvent.detail?.files && !isOpen) {
           void (async () => {
-            if (!(await requireUploadRoom("file-upload", storageBlocked))) {
+            if (!(await requireUploadRoom("file-upload", storageBlocked, driveLabel))) {
               return;
             }
             setDroppedFiles(customEvent.detail.files);
@@ -172,7 +179,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
       const handleOpenModal = () => {
         if (isOpen || storageBlocked) return;
         void (async () => {
-          if (!(await requireUploadRoom("file-upload", false))) {
+          if (!(await requireUploadRoom("file-upload", false, driveLabel))) {
             return;
           }
           setDroppedFiles(null);
@@ -187,7 +194,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
         window.removeEventListener(HIPPIUS_DROP_EVENT, handleDroppedFiles);
         window.removeEventListener(HIPPIUS_OPEN_MODAL_EVENT, handleOpenModal);
       };
-    }, [isOpen, requireUploadRoom, storageBlocked]);
+    }, [isOpen, requireUploadRoom, storageBlocked, driveLabel]);
 
     return (
       <>
@@ -203,7 +210,7 @@ const AddButton = forwardRef<AddButtonRef, AddButtonProps>(
           onClick={async () => {
             // Toolbar: disabled when blocked. Do not open the dialog here.
             if (storageBlocked) return;
-            if (!(await requireUploadRoom("file-upload", false))) return;
+            if (!(await requireUploadRoom("file-upload", false, driveLabel))) return;
             if (!hasConfiguredDrives) {
               toast.warning(
                 "Set up a sync folder in Settings → Sync & Storage before uploading.",

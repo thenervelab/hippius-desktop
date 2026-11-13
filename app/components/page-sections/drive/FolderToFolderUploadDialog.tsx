@@ -40,6 +40,8 @@ type Props = {
     syncBasePath?: string;
     /** A folder dropped on the window, filled in when the dialog opens. */
     initialFolderPath?: string;
+    /** The open drive's label, so a shared drive is gated on its owner's room. */
+    driveLabel?: string | null;
 };
 
 export default function FolderToFolderUploadDialog({
@@ -51,6 +53,7 @@ export default function FolderToFolderUploadDialog({
     subFolderPath,
     syncBasePath,
     initialFolderPath,
+    driveLabel,
 }: Props) {
     const { polkadotAddress } = useWalletAuth();
     const queryClient = useAtomValue(queryClientAtom);
@@ -100,7 +103,7 @@ export default function FolderToFolderUploadDialog({
             return;
         }
 
-        if (!(await checkEligibility("folder-upload"))) {
+        if (!(await checkEligibility("folder-upload", driveLabel))) {
             handleClose();
             return;
         }
