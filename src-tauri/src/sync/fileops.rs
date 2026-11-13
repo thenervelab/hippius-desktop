@@ -4,6 +4,7 @@
 //! so this grouping is an organizational layer over the file tree, not a path change.
 
 pub mod cloud_drive;
+pub mod drive_move;
 pub mod drive_summaries;
 pub mod files;
 pub mod folders;

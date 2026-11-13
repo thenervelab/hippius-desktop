@@ -126,6 +126,10 @@ pub struct ServerCapabilities {
     /// (`HCFS_FEATURE_INVITE_LINK_ENVELOPES`), so until then every invite
     /// mint stays on `#k=`.
     pub drive_invite_link_envelopes: bool,
+    /// Moves between drives (`/v1/drive_moves`, `HCFS_FEATURE_DRIVE_MOVES`).
+    /// Absent on older servers and off in production until it is turned
+    /// on: Move to… shows no drive picker, and no move is sent.
+    pub drive_moves: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -250,7 +254,8 @@ mod tests {
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
-            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true}"#,
+            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"#,
+            r#""drive_moves":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -274,6 +279,7 @@ mod tests {
         assert!(caps.share_gates);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
+        assert!(caps.drive_moves);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -284,6 +290,7 @@ mod tests {
             keys,
             [
                 "drive_invite_link_envelopes",
+                "drive_moves",
                 "folder_grant_writes",
                 "folder_grants",
                 "folder_share_link_envelopes",
@@ -332,6 +339,7 @@ mod tests {
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="
         );
+        assert!(!old.drive_moves, "a server without drive moves shows no drive picker");
         assert!(
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="

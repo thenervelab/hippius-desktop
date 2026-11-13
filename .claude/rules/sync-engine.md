@@ -167,6 +167,10 @@ FE: `renameModalFileAtom` (`app/lib/global-atoms/renameAtoms.ts`) + one `RenameD
 
 FE: `DriveMoveProvider` wraps the drive header and rows (so breadcrumb ancestors are drop targets), owns the `@dnd-kit/core` context (pointer past 6px, keyboard; never HTML5 drag, which `dragDropEnabled` breaks on Windows), the picker, the clash prompt and the toast with Undo. An in-app drag sets `inAppDrag` so DriveContent's Finder-drop listener stands down. Move to… shows under the Rename gates.
 
+## Move between drives
+
+`sync/fileops/drive_move/` (design: `docs/plans/2026-11-13-move-between-drives.md`). Each file is re-encrypted under the destination's key and staged on a server move, then one commit swaps all or nothing; cancel and every failure before the commit abort it, and a commit with no answer is asked again and never aborted. Gated on the `drive_moves` capability. **Nothing local is touched before the commit.** After it, holding the synced drives' `DriveManager` locks, `local::place_after_commit` does only what the engines' next cycles would end in: the copy's plaintext placed at its new path (planner: "both created, same content", no transfer) and the unchanged source removed ("both deleted", no remote delete, no mass-delete hold). A source changed since it was read, or a taken destination path, is left to the engines. The copy's salted hash is salted with the destination's wire owner, or the destination engine would re-download. A copy declares no `capture`, so a recording keeps the source's kind (hcfs#1313). Pinned against the engine by `tests/drive_move_local_sync.rs`; the flow by `tests/drive_move_server_mock.rs`.
+
 ## Keep-awake during active sync
 
 While any sync session still has non-terminal files, the Rust backend holds an OS "prevent idle **system** sleep" assertion so macOS/Windows can't sleep mid-transfer — exactly what Finder does during a copy. Display sleep is deliberately never blocked. No frontend surface, no toggle.

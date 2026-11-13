@@ -11,7 +11,8 @@ export interface RemoteUploadProgress {
   label: string;
   bytesTransferred: number;
   totalBytes: number;
-  status: "pending" | "encrypting" | "inProgress" | "completed" | "error";
+  /** `cancelled` removes the row: a cancelled move between drives moved nothing. */
+  status: "pending" | "encrypting" | "inProgress" | "completed" | "error" | "cancelled";
   error?: string | null;
 }
 
@@ -46,6 +47,12 @@ export function applyRemoteUpload(
   const startsNewBatch = Object.values(current).some(
     (r) => r.batchId !== event.batchId,
   );
+  if (event.status === "cancelled") {
+    if (startsNewBatch) return current;
+    const rest = { ...current };
+    delete rest[event.path];
+    return rest;
+  }
   return { ...(startsNewBatch ? {} : current), [event.path]: event };
 }
 
@@ -106,7 +113,8 @@ function toFileProgress(row: RemoteUploadProgress): FileProgress {
     fileName: row.fileName,
     label: row.label,
     action: "upload",
-    status: row.status,
+    // A cancelled row is removed before it gets here (`applyRemoteUpload`).
+    status: row.status === "cancelled" ? "error" : row.status,
     // Clamped: hcfs reports ciphertext bytes, which can exceed the
     // plaintext total, and a bar past 100% reads as a bug.
     progressPercent: total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0,

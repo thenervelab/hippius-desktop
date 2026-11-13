@@ -208,3 +208,28 @@ describe("capWidgetFiles", () => {
     expect(capped.map((f) => f.fileName)).toEqual(["broken", "moving", "waiting", "done"]);
   });
 });
+
+describe("applyRemoteUpload: a cancelled move between drives", () => {
+  const row = (path: string, status: RemoteUploadProgress["status"], batchId = 7): RemoteUploadProgress => ({
+    batchId,
+    path,
+    fileName: path,
+    label: "Team",
+    bytesTransferred: 0,
+    totalBytes: 10,
+    status,
+  });
+
+  it("removes the cancelled rows, since nothing was moved", () => {
+    let feed = applyRemoteUpload({}, row("a.txt", "inProgress"));
+    feed = applyRemoteUpload(feed, row("b.txt", "pending"));
+    feed = applyRemoteUpload(feed, row("a.txt", "cancelled"));
+    feed = applyRemoteUpload(feed, row("b.txt", "cancelled"));
+    expect(feed).toEqual({});
+  });
+
+  it("never lets a late cancel of an old batch clear a newer one", () => {
+    const feed = applyRemoteUpload({}, row("c.txt", "inProgress", 8));
+    expect(applyRemoteUpload(feed, row("a.txt", "cancelled", 7))).toEqual(feed);
+  });
+});
