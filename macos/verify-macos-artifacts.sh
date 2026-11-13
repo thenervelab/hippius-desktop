@@ -168,6 +168,29 @@ check_capture_helper() {
   fi
 }
 
+# The video preview engine (Contents/MacOS/hippius-ffmpeg, Tauri externalBin).
+# Without it the viewer quietly previews only what the webview plays.
+check_video_engine() {
+  local app="$1" label="$2"
+  local engine="${app}/Contents/MacOS/hippius-ffmpeg"
+
+  if [[ ! -x "${engine}" ]]; then
+    fail "${label}: no Contents/MacOS/hippius-ffmpeg, so this build previews no WMV, AVI or MKV"
+    return
+  fi
+  ok "${label}: video preview engine embedded"
+
+  check_universal "${engine}" "the video engine" "${label}"
+
+  local details
+  details="$(codesign -dvv "${engine}" 2>&1 || true)"
+  if [[ "${details}" != *"(runtime)"* || "${details}" != *"Timestamp="* ]]; then
+    fail "${label}: the video engine is not signed with the hardened runtime and a timestamp; notarization rejects it"
+  else
+    ok "${label}: video engine signed, hardened runtime, timestamped"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # The checks that apply to any .app, wherever it came from — the updater's
 # tarball and the DMG's copy must both pass, because users get one of each and
@@ -182,6 +205,7 @@ check_app_bundle() {
   # one in front of us.
   check_finder_extension "${app}" "${label}"
   check_capture_helper "${app}" "${label}"
+  check_video_engine "${app}" "${label}"
 
   # The host binary, not only the extension. Tauri is told to build
   # `--target universal-apple-darwin`, but nothing downstream re-checks it, and
