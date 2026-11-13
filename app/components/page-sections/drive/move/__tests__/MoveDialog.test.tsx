@@ -65,6 +65,36 @@ describe("MoveDialog new folder", () => {
     expect(screen.getByRole("button", { name: "Move to My Drive" })).toBeEnabled();
   });
 
+  it("closes on Cancel without moving", () => {
+    const { onClose, onMove } = renderDialog();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(onMove).not.toHaveBeenCalled();
+  });
+
+  it("goes back up one folder, and offers no Back at the top of the drive", () => {
+    mocks.listings = { "": ["Photos"], Photos: ["2024"], "Photos/2024": [] };
+    renderDialog();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Photos" }));
+    fireEvent.click(screen.getByRole("button", { name: "2024" }));
+    expect(screen.getByRole("button", { name: "Move to 2024" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("button", { name: "Move to Photos" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("button", { name: "Move to My Drive" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+  });
+
+  it("gives New folder its own colours in both themes", () => {
+    // A transparent ghost button took its colour from the card, which in
+    // dark mode left New folder near-invisible.
+    renderDialog();
+    const newFolder = screen.getByRole("button", { name: "New folder" });
+    expect(newFolder.className).toMatch(/(^|\s)text-primary-50(\s|$)/);
+    expect(newFolder.className).toMatch(/dark:text-primary-brand-dark/);
+  });
+
   it("switches the footer to Cancel and Create folder while naming", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("button", { name: "New folder" }));

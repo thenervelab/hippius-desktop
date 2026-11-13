@@ -3,7 +3,7 @@
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, FolderInput, FolderPlus } from "lucide-react";
+import { ArrowLeft, ChevronRight, FolderPlus } from "lucide-react";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,11 +24,20 @@ import {
 import { cn } from "@/lib/utils";
 import type { MoveTarget } from "./DriveMoveProvider";
 
-const rowClassName =
-  "flex h-9 w-full items-center gap-2 rounded px-2 text-left text-sm text-grey-10 outline-none hover:bg-grey-90 focus-visible:ring-2 focus-visible:ring-primary-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent dark:text-grey-light-100 dark:hover:bg-black-500";
+// Rows, footer and toolbar follow the drive picker (ShareDrivePicker), the
+// other "choose a place" dialog, so the two read as one family in both themes.
+const rowClassName = cn(
+  "flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[8px] border px-3 py-2 text-left text-sm transition-colors",
+  "border-grey-dark-100 bg-white text-grey-10 hover:bg-grey-light-700",
+  "dark:border-black-300 dark:bg-transparent dark:text-white dark:hover:bg-white/5",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40",
+  "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white dark:disabled:hover:bg-transparent",
+);
 
 const crumbClassName =
-  "max-w-[10rem] truncate text-sm font-medium text-grey-50 hover:underline underline-offset-2 dark:text-grey-dark-600";
+  "max-w-[12rem] truncate rounded text-sm text-grey-50 hover:text-grey-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-grey-dark-600 dark:hover:text-white";
+
+const FOOTER_BUTTON = "h-[38px] w-full rounded-[8px] px-5 text-sm font-medium sm:w-auto sm:min-w-[96px]";
 
 /**
  * The Move to… picker: the current drive, opened at the folder on screen,
@@ -138,13 +147,16 @@ export default function MoveDialog({
     }
   };
 
+  const title = items ? moveTitle(items) : "Move";
+
   return (
     <FramedDialog
       open={open}
       onClose={onClose}
-      title={items ? <span className="block truncate">{moveTitle(items)}</span> : "Move"}
-      icon={<FolderInput className="size-4 text-white" aria-hidden />}
-      maxWidth="max-w-[480px]"
+      headerLayout="leading"
+      title={<span title={title}>{title}</span>}
+      maxWidth="max-w-[640px]"
+      contentClassName="min-w-0"
       onEscapeKeyDown={(event) => {
         // Escape while naming leaves naming, never the dialog.
         if (!naming && !creatingRef.current) return;
@@ -152,57 +164,97 @@ export default function MoveDialog({
         stopNaming();
       }}
     >
-      <div className="flex min-w-0 flex-col gap-4">
-        <nav aria-label="Folder" className="flex min-w-0 flex-wrap items-center gap-1">
-          <button type="button" className={crumbClassName} onClick={() => setPath("")} title={target.driveName}>
-            {target.driveName}
-          </button>
-          {segments.map((segment, index) => (
-            <Fragment key={`${index}-${segment}`}>
-              <ChevronRight aria-hidden className="size-3.5 shrink-0 text-grey-60 dark:text-grey-dark-700" />
-              <button
-                type="button"
-                className={cn(crumbClassName, index === segments.length - 1 && "text-grey-10 dark:text-grey-light-100")}
-                onClick={() => setPath(segments.slice(0, index + 1).join("/"))}
-                title={segment}
-              >
-                {segment}
-              </button>
-            </Fragment>
-          ))}
-        </nav>
+      <div className="flex min-w-0 flex-col gap-4 font-geist">
+        {/* Where the picker is, a way back up, and New folder: one row above
+            the list, the way a file browser's toolbar sits over its folder. */}
+        <div className="flex min-w-0 items-center gap-2">
+          {segments.length > 0 && (
+            <button
+              type="button"
+              aria-label="Back"
+              title="Back"
+              onClick={() => setPath(segments.slice(0, -1).join("/"))}
+              className="flex size-8 shrink-0 items-center justify-center rounded-[8px] text-grey-50 hover:bg-grey-light-700 hover:text-grey-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 dark:text-grey-dark-600 dark:hover:bg-white/5 dark:hover:text-white"
+            >
+              <ArrowLeft className="size-4" aria-hidden />
+            </button>
+          )}
+          <nav aria-label="Folder" className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+            <button
+              type="button"
+              className={cn(crumbClassName, segments.length === 0 && "font-medium text-grey-10 dark:text-white")}
+              onClick={() => setPath("")}
+              title={target.driveName}
+            >
+              {target.driveName}
+            </button>
+            {segments.map((segment, index) => (
+              <Fragment key={`${index}-${segment}`}>
+                <ChevronRight aria-hidden className="size-3.5 shrink-0 text-grey-60 dark:text-grey-dark-700" />
+                <button
+                  type="button"
+                  className={cn(
+                    crumbClassName,
+                    index === segments.length - 1 && "font-medium text-grey-10 dark:text-white",
+                  )}
+                  onClick={() => setPath(segments.slice(0, index + 1).join("/"))}
+                  title={segment}
+                >
+                  {segment}
+                </button>
+              </Fragment>
+            ))}
+          </nav>
+          {!naming && (
+            <Button
+              type="button"
+              variant="primaryOutline"
+              size="auto"
+              onClick={() => setNewName("")}
+              disabled={Boolean(target.readOnlyReason)}
+              className="h-8 shrink-0 gap-1.5 px-3 text-sm font-medium"
+            >
+              <FolderPlus className="size-4" aria-hidden />
+              New folder
+            </Button>
+          )}
+        </div>
 
         <ul
           aria-label="Folders"
-          className="flex h-60 flex-col gap-0.5 overflow-y-auto rounded-lg border border-grey-80 p-1 dark:border-black-300"
+          // A fixed height, so the footer stays put while moving between a
+          // full folder and an empty one; 38vh keeps it on screen in the
+          // smallest window the app allows.
+          className="scroll-gutter -ml-0.5 -mr-3.5 flex h-[min(320px,38vh)] min-w-0 flex-col gap-1.5 overflow-y-auto py-0.5 pl-0.5 pr-1.5"
         >
           {naming && (
-            <li className="flex flex-col gap-1 px-2 py-1">
-              <div className="flex items-center gap-2">
-                <FolderPlus className="size-4 shrink-0 text-grey-60 dark:text-grey-dark-700" aria-hidden />
-                <Input
-                  autoFocus
-                  value={newName}
-                  placeholder="Untitled folder"
-                  aria-label="New folder name"
-                  aria-invalid={Boolean(nameError)}
-                  aria-describedby={nameError ? "move-new-folder-error" : undefined}
-                  disabled={creating}
-                  onChange={(e) => {
-                    setNewName(e.target.value);
-                    setCreateError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      void createFolder();
-                    }
-                  }}
-                  className="h-8"
-                />
-              </div>
+            <li className="flex flex-col gap-1">
+              {/* The field is the row: the same height and corners as a
+                  folder row, with the field's own focus and error rings. */}
+              <Input
+                autoFocus
+                value={newName}
+                placeholder="Untitled folder"
+                aria-label="New folder name"
+                aria-invalid={Boolean(nameError)}
+                aria-describedby={nameError ? "move-new-folder-error" : undefined}
+                disabled={creating}
+                startAdornment={<FolderPlus className="size-4 text-primary-50 dark:text-primary-brand-dark" aria-hidden />}
+                onChange={(e) => {
+                  setNewName(e.target.value);
+                  setCreateError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void createFolder();
+                  }
+                }}
+                wrapperClassName="min-h-11 gap-2.5 px-3 py-2 sm:min-h-11 items-center"
+                className="text-sm font-normal tracking-normal sm:tracking-normal"
+              />
               {nameError && (
-                <p id="move-new-folder-error" role="alert" className="pl-6 text-xs text-error-50">
+                <p id="move-new-folder-error" role="alert" className="px-1 text-xs leading-[18px] text-error-60">
                   {nameError}
                 </p>
               )}
@@ -219,7 +271,7 @@ export default function MoveDialog({
                   disabled={moving}
                   onClick={() => setPath(folder.path)}
                 >
-                  <Folder className="size-4 shrink-0" />
+                  <Folder aria-hidden className="size-4 shrink-0 text-[#1F50BD] dark:text-primary-brand-dark" />
                   <span className="min-w-0 flex-1 truncate" title={folder.name}>
                     {folder.name}
                   </span>
@@ -230,69 +282,73 @@ export default function MoveDialog({
           })}
           {listing.hasMore && (
             <li>
-              <button type="button" className={cn(rowClassName, "justify-center text-grey-50")} onClick={listing.loadMore}>
+              <button
+                type="button"
+                className={cn(rowClassName, "justify-center text-grey-50 dark:text-grey-dark-600")}
+                onClick={listing.loadMore}
+              >
                 {listing.isLoadingMore ? "Loading…" : "Show more"}
               </button>
             </li>
           )}
           {!listing.isLoading && folders.length === 0 && !naming && (
-            <li className="flex flex-1 items-center justify-center text-sm text-grey-60 dark:text-grey-dark-700">
-              No folders
+            <li className="flex flex-1 items-center justify-center text-sm text-grey-50 dark:text-grey-dark-600">
+              No folders here
             </li>
           )}
         </ul>
 
-        {naming ? (
-          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={stopNaming}
-              disabled={creating}
-              className="h-[44px] px-4 text-sm font-medium"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              size="auto"
-              disabled={!canCreate}
-              loading={creating}
-              onClick={() => void createFolder()}
-              className="h-[44px] rounded-[6px] px-5 text-sm font-medium"
-            >
-              Create folder
-            </Button>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-col-reverse gap-3 sm:flex-row sm:items-center">
-            <Button
-              variant="ghost"
-              size="auto"
-              onClick={() => setNewName("")}
-              disabled={Boolean(target.readOnlyReason)}
-              className="h-[44px] shrink-0 justify-start gap-2 px-2 text-sm font-medium sm:mr-auto"
-            >
-              <FolderPlus className="size-4" aria-hidden />
-              New folder
-            </Button>
-            {problem && (
-              <span className="min-w-0 text-xs text-grey-60 dark:text-grey-dark-700" role="status">
-                {problem}
-              </span>
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-center">
+          {/* Why the current folder cannot take the move, in the footer's
+              free space so the buttons never shift. */}
+          <p role="status" className="min-w-0 flex-1 text-xs leading-[18px] text-grey-50 dark:text-grey-dark-600">
+            {naming ? null : problem}
+          </p>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+            {naming ? (
+              <>
+                <Button
+                  type="button"
+                  variant="defaultStable"
+                  size="auto"
+                  onClick={stopNaming}
+                  disabled={creating}
+                  className={FOOTER_BUTTON}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="auto"
+                  disabled={!canCreate}
+                  loading={creating}
+                  onClick={() => void createFolder()}
+                  className={FOOTER_BUTTON}
+                >
+                  Create folder
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button type="button" variant="defaultStable" size="auto" onClick={onClose} className={FOOTER_BUTTON}>
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="auto"
+                  disabled={Boolean(problem)}
+                  onClick={() => onMove(path, destinationName)}
+                  className={cn(FOOTER_BUTTON, "min-w-0 max-w-full sm:max-w-[18rem]")}
+                  title={`Move to ${destinationName}`}
+                >
+                  <span className="min-w-0 truncate">Move to {destinationName}</span>
+                </Button>
+              </>
             )}
-            <Button
-              variant="primary"
-              size="auto"
-              disabled={Boolean(problem)}
-              onClick={() => onMove(path, destinationName)}
-              className="h-[44px] min-w-0 max-w-full rounded-[6px] px-5 text-sm font-medium sm:max-w-[60%]"
-              title={`Move to ${destinationName}`}
-            >
-              <span className="min-w-0 truncate">Move to {destinationName}</span>
-            </Button>
           </div>
-        )}
+        </div>
       </div>
     </FramedDialog>
   );
