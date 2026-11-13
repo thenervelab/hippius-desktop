@@ -7,13 +7,12 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). `DRIVE_MOVE_ENABLED` uses it.
+// staging, never production). No flag uses it today.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
 // per-branch value either conflicts on every promotion or rides into
 // production through a hunk nobody read.
-import { enabledFrom } from "./buildChannel";
 
 /**
  * Switch the home-page Credit Usage chart and the Total Credit Used
@@ -220,13 +219,12 @@ export const REFERRALS_COMING_SOON = true;
 export const SCREEN_CAPTURE_ENABLED = true;
 
 /**
- * Move to… and drag-and-drop moves within a drive: internal (staging) builds
- * only, while the drag targets are being reworked. Off in beta and
- * production, where every Move entry point disappears: `DriveContainer`
- * passes no move target, and the menus, selection bar, drag rows and hint
- * all render nothing without one (the same path as Recent Files, which
- * never had Move). No Move code is removed; widen the gate to `"beta"`,
- * then to `true`, as it is ready for each lane.
+ * Move to… and drag-and-drop moves within a drive, on every lane. Set it to
+ * `false` (or `enabledFrom("staging")` for internal builds only) to take
+ * every Move entry point away at once: `DriveContainer` then passes no move
+ * target, and the menus, selection bar, drag rows and hint all render nothing
+ * without one (the same path as Recent Files, which never had Move). No Move
+ * code needs removing either way.
  */
-export const DRIVE_MOVE_ENABLED = enabledFrom("staging");
+export const DRIVE_MOVE_ENABLED = true;
 
