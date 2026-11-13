@@ -3,7 +3,6 @@
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import { ChevronRight, FolderInput, FolderPlus } from "lucide-react";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
@@ -34,8 +33,13 @@ const crumbClassName =
 /**
  * The Move to… picker: the current drive, opened at the folder on screen,
  * with a breadcrumb, its subfolders (click to enter), New folder, and
- * "Move here". Phase one moves within this drive only; a drive switcher
- * belongs at the top of this dialog when moves between drives arrive.
+ * "Move to <folder>". Phase one moves within this drive only; a drive
+ * switcher belongs at the top of this dialog when moves between drives
+ * arrive.
+ *
+ * New folder is a state of its own: while a name is typed the footer is
+ * Cancel / Create folder (Escape is Cancel and leaves the dialog open),
+ * and once made the picker opens the new folder, ready to move into it.
  */
 export default function MoveDialog({
   items,
@@ -55,13 +59,22 @@ export default function MoveDialog({
   const [refreshKey, setRefreshKey] = useState(0);
   const [newName, setNewName] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
   const creatingRef = useRef(false);
+  const naming = newName !== null;
 
   useEffect(() => {
     if (!open) return;
     setPath(normalizePath(target.parentPath));
     setNewName(null);
+    setCreateError(null);
   }, [open, target.parentPath]);
+
+  const stopNaming = () => {
+    if (creatingRef.current) return;
+    setNewName(null);
+    setCreateError(null);
+  };
 
   const listing = useNestedFolderListing({
     accountId: polkadotAddress,
@@ -89,11 +102,19 @@ export default function MoveDialog({
   const problem = items ? moveProblem(items, path, target.readOnlyReason) : null;
   const destinationName = segments.length ? segments[segments.length - 1] : target.driveName;
 
+  const trimmedName = (newName ?? "").trim();
+  // Only the folders already on screen: Rust refuses any other clash, and
+  // every naming rule, in its own words (shown in the same place).
+  const nameTaken = Boolean(trimmedName) && folders.some((folder) => folder.name === trimmedName);
+  const nameError = nameTaken ? `"${trimmedName}" already exists here.` : createError;
+  const canCreate = Boolean(trimmedName) && !nameTaken && !creating;
+
   const createFolder = async () => {
-    const name = (newName ?? "").trim();
-    if (!name || !polkadotAddress || creatingRef.current) return;
+    const name = trimmedName;
+    if (!canCreate || !polkadotAddress || creatingRef.current) return;
     creatingRef.current = true;
     setCreating(true);
+    setCreateError(null);
     try {
       // The New Folder dialog's own commands: a synced drive gets a real
       // directory, a browsed one a registered folder.
@@ -109,7 +130,8 @@ export default function MoveDialog({
       setRefreshKey((k) => k + 1);
       await notifyFilesMutated(queryClient, polkadotAddress);
     } catch (error) {
-      toast.error(errorMessage(error));
+      // Rust validates the name and owns the sentence.
+      setCreateError(errorMessage(error));
     } finally {
       creatingRef.current = false;
       setCreating(false);
@@ -123,6 +145,12 @@ export default function MoveDialog({
       title={items ? <span className="block truncate">{moveTitle(items)}</span> : "Move"}
       icon={<FolderInput className="size-4 text-white" aria-hidden />}
       maxWidth="max-w-[480px]"
+      onEscapeKeyDown={(event) => {
+        // Escape while naming leaves naming, never the dialog.
+        if (!naming && !creatingRef.current) return;
+        event.preventDefault();
+        stopNaming();
+      }}
     >
       <div className="flex min-w-0 flex-col gap-4">
         <nav aria-label="Folder" className="flex min-w-0 flex-wrap items-center gap-1">
@@ -148,28 +176,36 @@ export default function MoveDialog({
           aria-label="Folders"
           className="flex h-60 flex-col gap-0.5 overflow-y-auto rounded-lg border border-grey-80 p-1 dark:border-black-300"
         >
-          {newName !== null && (
-            <li className="flex items-center gap-2 px-2 py-1">
-              <FolderPlus className="size-4 shrink-0 text-grey-60 dark:text-grey-dark-700" aria-hidden />
-              <Input
-                autoFocus
-                value={newName}
-                placeholder="Untitled folder"
-                aria-label="New folder name"
-                disabled={creating}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void createFolder();
-                  if (e.key === "Escape") {
-                    e.stopPropagation();
-                    setNewName(null);
-                  }
-                }}
-                onBlur={() => {
-                  if (!creatingRef.current && !(newName ?? "").trim()) setNewName(null);
-                }}
-                className="h-8"
-              />
+          {naming && (
+            <li className="flex flex-col gap-1 px-2 py-1">
+              <div className="flex items-center gap-2">
+                <FolderPlus className="size-4 shrink-0 text-grey-60 dark:text-grey-dark-700" aria-hidden />
+                <Input
+                  autoFocus
+                  value={newName}
+                  placeholder="Untitled folder"
+                  aria-label="New folder name"
+                  aria-invalid={Boolean(nameError)}
+                  aria-describedby={nameError ? "move-new-folder-error" : undefined}
+                  disabled={creating}
+                  onChange={(e) => {
+                    setNewName(e.target.value);
+                    setCreateError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void createFolder();
+                    }
+                  }}
+                  className="h-8"
+                />
+              </div>
+              {nameError && (
+                <p id="move-new-folder-error" role="alert" className="pl-6 text-xs text-error-50">
+                  {nameError}
+                </p>
+              )}
             </li>
           )}
           {folders.map((folder) => {
@@ -199,39 +235,64 @@ export default function MoveDialog({
               </button>
             </li>
           )}
-          {!listing.isLoading && folders.length === 0 && newName === null && (
+          {!listing.isLoading && folders.length === 0 && !naming && (
             <li className="flex flex-1 items-center justify-center text-sm text-grey-60 dark:text-grey-dark-700">
               No folders
             </li>
           )}
         </ul>
 
-        <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
-          <Button
-            variant="ghost"
-            size="auto"
-            onClick={() => setNewName("")}
-            disabled={newName !== null || Boolean(target.readOnlyReason)}
-            className="h-[44px] justify-start gap-2 px-2 text-sm font-medium sm:mr-auto"
-          >
-            <FolderPlus className="size-4" aria-hidden />
-            New folder
-          </Button>
-          {problem && (
-            <span className="text-xs text-grey-60 dark:text-grey-dark-700" role="status">
-              {problem}
-            </span>
-          )}
-          <Button
-            variant="primary"
-            size="auto"
-            disabled={Boolean(problem)}
-            onClick={() => onMove(path, destinationName)}
-            className="h-[44px] rounded-[6px] px-5 text-sm font-medium"
-          >
-            Move here
-          </Button>
-        </div>
+        {naming ? (
+          <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-end">
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={stopNaming}
+              disabled={creating}
+              className="h-[44px] px-4 text-sm font-medium"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              size="auto"
+              disabled={!canCreate}
+              loading={creating}
+              onClick={() => void createFolder()}
+              className="h-[44px] rounded-[6px] px-5 text-sm font-medium"
+            >
+              Create folder
+            </Button>
+          </div>
+        ) : (
+          <div className="flex min-w-0 flex-col-reverse gap-3 sm:flex-row sm:items-center">
+            <Button
+              variant="ghost"
+              size="auto"
+              onClick={() => setNewName("")}
+              disabled={Boolean(target.readOnlyReason)}
+              className="h-[44px] shrink-0 justify-start gap-2 px-2 text-sm font-medium sm:mr-auto"
+            >
+              <FolderPlus className="size-4" aria-hidden />
+              New folder
+            </Button>
+            {problem && (
+              <span className="min-w-0 text-xs text-grey-60 dark:text-grey-dark-700" role="status">
+                {problem}
+              </span>
+            )}
+            <Button
+              variant="primary"
+              size="auto"
+              disabled={Boolean(problem)}
+              onClick={() => onMove(path, destinationName)}
+              className="h-[44px] min-w-0 max-w-full rounded-[6px] px-5 text-sm font-medium sm:max-w-[60%]"
+              title={`Move to ${destinationName}`}
+            >
+              <span className="min-w-0 truncate">Move to {destinationName}</span>
+            </Button>
+          </div>
+        )}
       </div>
     </FramedDialog>
   );

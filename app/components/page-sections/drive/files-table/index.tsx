@@ -101,7 +101,7 @@ import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection, selectionKey } from "@/app/contexts/FileSelectionContext";
 import { useDriveMove } from "../move/DriveMoveProvider";
-import { dropStateClass, useHoverExpand, useMoveRow } from "../move/useMoveDnd";
+import { rowDropClass, useHoverExpand, useMoveRow } from "../move/useMoveDnd";
 import { rangeBetween } from "@/app/lib/drive-move/moveLogic";
 import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { FolderSymlink } from "lucide-react";
@@ -468,7 +468,7 @@ const DriveFileRow = memo(function DriveFileRow({
             "hover:bg-primary-60/8",
           isSelectionMode && !canSelectRow && "opacity-50 cursor-not-allowed",
           move.isDragging && "opacity-50",
-          dropStateClass(move.dropState),
+          rowDropClass(move.dropState, move.groupRole),
         )}
         onContextMenu={(e) => {
           if (isDeleting) return;
