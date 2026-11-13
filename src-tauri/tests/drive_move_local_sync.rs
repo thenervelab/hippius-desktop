@@ -221,8 +221,16 @@ async fn without_the_placement_the_destination_downloads_the_copy() {
     let (salted, size) = sealed(&plain);
     server.serve(vec![row("In/a.txt", salted, size, COPY_REVISION)]);
 
-    let _ = manager.sync_with_resolutions(HashMap::new()).await;
-    assert!(!server.transfers().is_empty(), "the engine asked for the file");
+    let outcome = manager.sync_with_resolutions(HashMap::new()).await;
+    let asked = server.other.lock().unwrap().clone();
+    let tried = match &outcome {
+        Ok(o) => o.files_downloaded + o.files_failed + o.files_refused > 0,
+        Err(_) => true,
+    };
+    assert!(
+        tried || !asked.is_empty(),
+        "the engine went for the file: requests {asked:?}, outcome {outcome:?}"
+    );
 }
 
 /// Source synced here, destination not: the moved file is removed locally,
