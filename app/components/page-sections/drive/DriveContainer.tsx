@@ -78,6 +78,7 @@ import {
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
 import DriveMoveProvider, { type MoveTarget } from "./move/DriveMoveProvider";
+import { DRIVE_MOVE_ENABLED } from "@/app/lib/featureFlags";
 import {
   FROZEN_REASON,
   READ_ONLY_REASON,
@@ -1896,8 +1897,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // Where a move starts from: the drive and folder on screen. Only inside a
   // drive; Recent Files and the drive list move nothing. The reason is the
   // short form for the drag label, not the full refusal sentence.
+  // No target is how a lane without Move hides every Move entry point.
   const moveTarget = useMemo<MoveTarget | null>(() => {
-    if (!newFolderTarget?.label) return null;
+    if (!DRIVE_MOVE_ENABLED || !newFolderTarget?.label) return null;
     return {
       label: newFolderTarget.label,
       remote: newFolderTarget.kind === "remote",
