@@ -332,7 +332,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `/can_upload` fail-opens and is polled with 0 bytes, so it alone
   // left Folder/File/Sync looking live on a no-plan account.
   const { data: storageOverview } = useStorageOverview();
-  const isStorageFull = isUploadBlocked(
+  // This account's OWN plan has no room. Says nothing about a drive shared
+  // with it, which its owner pays for: see `isStorageFull` below.
+  const ownStorageFull = isUploadBlocked(
     storageOverview,
     fileUploadEligibility?.eligible === false,
   );
@@ -640,6 +642,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     isRecentFiles || isOnLocalView
       ? null
       : (remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null);
+  // Uploads into a drive shared with this account are paid for by its
+  // owner, so this account's own plan never dims or blocks them; the click
+  // asks Rust about the drive instead (`requireUploadRoom`'s `driveLabel`).
+  const uploadsGoToSharedDrive = isMemberDriveLabel(
+    filterDriveLabel,
+    memberDriveLabels,
+  );
+  const isStorageFull = !uploadsGoToSharedDrive && ownStorageFull;
   const filterDriveSharing = useDriveSharing(
     browsedSharedDrive ? null : filterDriveLabel,
   );
@@ -1530,10 +1540,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const handleContextAddFolder = useCallback(async () => {
     if (isStorageFull) return;
-    if (!(await requireUploadRoom("folder-upload", false))) return;
+    if (!(await requireUploadRoom("folder-upload", false, filterDriveLabel))) {
+      return;
+    }
     setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
-  }, [requireUploadRoom, isStorageFull]);
+  }, [requireUploadRoom, isStorageFull, filterDriveLabel]);
 
   // Open the picker here rather than sending the user to Settings.
   //

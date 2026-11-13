@@ -232,6 +232,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Upload to a drive shared with you without a plan of your own.** The drive's owner pays for its storage, so uploading files and folders into it no longer asks you to subscribe or upgrade. If the drive is out of space or frozen, Hippius now says the owner needs to sort it out.
 - **Pages seen per viewer.** Insights for a PDF, Word or PowerPoint link now says how many pages each viewer saw ("3 of 12 pages"); the count was missing for every viewer.
 - **Dropping files onto the app uploads them again.** Drag files or a folder from Finder, Explorer or your file manager onto Overview, the Drive page, Shared Drives, or any drive or folder, including drives that are not synced to this computer. Inside a drive or folder they go straight there; elsewhere the app asks which drive to put them in. When a drop cannot be uploaded, the app now says why instead of doing nothing.
 - **No empty Pages tab in Insights.** Insights for a PDF, Word or PowerPoint link shows its Pages tab only once Hippius reports page by page numbers for it, so you no longer see an empty tab, or a locked one on the free plan, for numbers that aren't there yet.
