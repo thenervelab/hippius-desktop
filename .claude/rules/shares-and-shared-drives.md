@@ -187,7 +187,25 @@ from the app when they are wrong:
   asked about the caller's plan, so a member whose own plan was full could not upload to
   a drive with room. The refusal reads as "my plan is full" whoever's plan it was, which
   is why nobody reports it. The upload commands therefore resolve their drive BEFORE the
-  gate; that is the only order in which the gate can name it.
+  gate; that is the only order in which the gate can name it. That covers the LOCAL ones
+  too: `add_file` / `add_files` / `add_folder` get the drive from their sync root
+  (`eligibility::member_drive_for_sync_path`, pinned by
+  `a_local_upload_names_its_drive_before_the_storage_gate`) and `setup_and_init_sync`
+  from its label.
+- **A member's click is never judged on the member's own plan.** `useCreditCheck`'s
+  Overview gate (no plan, over capacity) is this account's own plan, so an upload click
+  that names its drive (`requireUploadRoom(action, full, driveLabel)`) asks
+  `check_action_eligibility` with `driveLabel` first; Rust resolves it
+  (`member_drive_for_label`) and answers `ownerPays`, and the FE then decides on that
+  answer alone. DriveContainer's `isStorageFull` (dimmed buttons, empty state) is off
+  inside a member drive (`isMemberDriveLabel`). A refused member write is a
+  `Validation` sentence about the drive (`SHARED_DRIVE_FULL`, `SHARED_DRIVE_FROZEN`,
+  `SHARED_DRIVE_VIEW_ONLY`), never `StorageLimitReached` and its plan dialog: the
+  member's plan neither pays for the drive nor unfreezes it. The pre-flight reads the
+  server's member `403`s (`account_read_only` / `account_suspended`: the owner is
+  limited, `forbidden`: not a writer) as verdicts for a member drive only; on an own
+  drive they still fall open. Pinned by `shared_drives_are_asked_about_their_owner`
+  (`drive_quota_enforcement.rs`) and `useCreditCheck.test.tsx`.
 - `add_shared_drive` still has no member-side credit gate at all (the init funnel's member
   skip and the server 402 are the authorities).
 

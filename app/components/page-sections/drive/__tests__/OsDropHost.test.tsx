@@ -159,7 +159,7 @@ describe("where no drive is on screen (Recent Files, the drive list, Shared Driv
     expect(dialog).toHaveAttribute("data-paths", "/Users/me/a.png,/Users/me/b.pdf");
     // No drive preselected: the dialog's drive picker asks.
     expect(dialog).toHaveAttribute("data-drive", "");
-    expect(room.calls).toEqual([["file-upload", false]]);
+    expect(room.calls).toEqual([["file-upload", false, null]]);
   });
 
   it("opens the Upload Folder dialog for a dropped folder, still asking which drive", async () => {
@@ -170,7 +170,7 @@ describe("where no drive is on screen (Recent Files, the drive list, Shared Driv
     const dialog = screen.getByRole("dialog", { name: "Upload Folder" });
     expect(dialog).toHaveAttribute("data-path", "/Users/me/Trip");
     expect(dialog).toHaveAttribute("data-drive", "");
-    expect(room.calls).toEqual([["folder-upload", false]]);
+    expect(room.calls).toEqual([["folder-upload", false, null]]);
   });
 });
 
@@ -254,7 +254,9 @@ describe("inside a drive that is not synced here", () => {
     expect(remote.folder).toHaveBeenCalledWith(
       expect.objectContaining({ label: "shared:5Abc~f00", folderPath: "/Users/me/Trip" }),
     );
-    expect(room.calls).toEqual([["folder-upload", false]]);
+    // The drive is named, so a drive shared with this account is judged on
+    // its owner's room, not this account's plan.
+    expect(room.calls).toEqual([["folder-upload", false, "shared:5Abc~f00"]]);
   });
 });
 
@@ -283,7 +285,7 @@ describe("a drop that cannot upload says why", () => {
     onView({ destination: { kind: "choose" }, name: "Drive", storageBlocked: true });
     await mount();
     await drop(["/Users/me/a.png"]);
-    expect(room.calls).toEqual([["file-upload", true]]);
+    expect(room.calls).toEqual([["file-upload", true, null]]);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 

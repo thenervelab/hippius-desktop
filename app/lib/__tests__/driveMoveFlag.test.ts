@@ -14,27 +14,24 @@ async function flagOn(channel: string | undefined): Promise<boolean> {
 }
 
 /**
- * Move to... and drag-and-drop moves are held back to internal builds while
- * the drag targets are reworked. A beta or production build must not offer
- * them at all.
+ * Move to... and drag-and-drop moves ship in every build. The flag stays so
+ * Move can be taken away in one line, so this pins both halves: it is on in
+ * each lane, and turning it off is still what hides every entry point.
  */
-describe("Move within a drive is internal only", () => {
+describe("Move within a drive", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.resetModules();
   });
 
-  it("is on in a staging build", async () => {
+  it("is on in staging, beta and production builds, and with no channel set", async () => {
     expect(await flagOn("staging")).toBe(true);
+    expect(await flagOn("beta")).toBe(true);
+    expect(await flagOn("production")).toBe(true);
+    expect(await flagOn(undefined)).toBe(true);
   });
 
-  it("is off in beta and production builds, and when the channel is unset", async () => {
-    expect(await flagOn("beta")).toBe(false);
-    expect(await flagOn("production")).toBe(false);
-    expect(await flagOn(undefined)).toBe(false);
-  });
-
-  it("removes every entry point by giving the drive no move target", () => {
+  it("can still be taken away in one place: the drive's move target", () => {
     // Menus, the selection bar, drag rows and the hint all render nothing
     // without a move target, so this one gate is what hides Move.
     const container = readFileSync(

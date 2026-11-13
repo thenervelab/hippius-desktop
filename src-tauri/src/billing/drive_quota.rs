@@ -52,14 +52,35 @@ fn is_billing_outage(error: &str) -> bool {
     error.to_ascii_lowercase().contains(BILLING_OUTAGE_MARKER)
 }
 
+/// Why the server would refuse the write, when it would.
+///
+/// Only [`Refusal::NoRoom`] can come back for an own drive. The other two are
+/// read from a `403` the server answers a MEMBER of a shared drive with, and
+/// the user's next step differs for each, so they are kept apart: the person
+/// who can fix a full or frozen shared drive is its owner, never the member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// The account that pays (the caller on an own drive, the owner on a
+    /// shared one) has no room for the write.
+    NoRoom,
+    /// The paying account is limited by billing (`account_read_only` or
+    /// `account_suspended`). On a shared drive this is what "frozen" means:
+    /// nobody can upload until the owner resolves it.
+    PayerLimited,
+    /// The caller may not write to this drive at all (`forbidden`): a Viewer,
+    /// or a member whose access was taken away.
+    NotAWriter,
+}
+
 /// What a quota check concluded.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaVerdict {
     pub allowed: bool,
     /// hcfs-server's denial slug (`drive_quota_exceeded`, `zero_balance`, …),
-    /// kept for logs and support bundles. Never shown to the user: every
-    /// refusal is answered by a bigger plan, so the UI needs one message.
+    /// kept for logs and support bundles. Never shown to the user.
     pub server_reason: Option<String>,
+    /// Why the write would be refused; `None` whenever `allowed`.
+    pub refusal: Option<Refusal>,
 }
 
 impl QuotaVerdict {
@@ -73,10 +94,41 @@ impl QuotaVerdict {
         match resp.error.as_deref() {
             None => Self::unknown(),
             Some(reason) if is_billing_outage(reason) => Self::unknown(),
-            Some(reason) => Self {
-                allowed: false,
-                server_reason: Some(reason.to_owned()),
-            },
+            Some(reason) => Self::refused(Refusal::NoRoom, reason),
+        }
+    }
+
+    /// The server answered a member's pre-flight with an error status
+    /// instead of a verdict body. Only a `403` naming one of the two refusals
+    /// below is a verdict; anything else (a `5xx`, a body that does not
+    /// parse, a slug this client does not know) is not, and falls open.
+    ///
+    /// Read for a shared drive only. On an own drive the same `403`s keep
+    /// falling open, which is what they have always done there: the write's
+    /// own gate answers them.
+    fn from_member_refusal(status: u16, body: &str) -> Self {
+        #[derive(serde::Deserialize)]
+        struct ErrorBody {
+            error: String,
+        }
+        if status != 403 {
+            return Self::unknown();
+        }
+        let Ok(parsed) = serde_json::from_str::<ErrorBody>(body) else {
+            return Self::unknown();
+        };
+        match parsed.error.as_str() {
+            "account_read_only" | "account_suspended" => Self::refused(Refusal::PayerLimited, &parsed.error),
+            "forbidden" => Self::refused(Refusal::NotAWriter, &parsed.error),
+            _ => Self::unknown(),
+        }
+    }
+
+    fn refused(refusal: Refusal, reason: &str) -> Self {
+        Self {
+            allowed: false,
+            server_reason: Some(reason.to_owned()),
+            refusal: Some(refusal),
         }
     }
 
@@ -84,6 +136,7 @@ impl QuotaVerdict {
         Self {
             allowed: true,
             server_reason: None,
+            refusal: None,
         }
     }
 
@@ -133,8 +186,7 @@ pub async fn check_drive_quota_for(
         .timeout(PREFLIGHT_TIMEOUT)
         .json(&request)
         .send()
-        .await
-        .and_then(reqwest::Response::error_for_status);
+        .await;
 
     let response = match response {
         Ok(r) => r,
@@ -143,6 +195,28 @@ pub async fn check_drive_quota_for(
             return QuotaVerdict::unknown();
         }
     };
+    let status = response.status();
+    if !status.is_success() {
+        // A member of a shared drive is answered `403` when the drive cannot
+        // take their writes at all (the owner's account is limited, or they
+        // are not a writer). That is a verdict about the DRIVE, and the only
+        // error status that is one; everything else falls open.
+        let is_member = drive.is_some_and(|d| d.is_member);
+        let verdict = if is_member {
+            QuotaVerdict::from_member_refusal(status.as_u16(), &response.text().await.unwrap_or_default())
+        } else {
+            QuotaVerdict::unknown()
+        };
+        if verdict.allowed {
+            tracing::warn!(%status, "can_upload pre-flight produced no verdict; letting the write through to the server's own gate");
+        } else {
+            tracing::info!(
+                reason = verdict.server_reason.as_deref().unwrap_or(""),
+                "hcfs-server refused a shared drive write pre-flight"
+            );
+        }
+        return verdict;
+    }
     let verdict = match response.json::<CanUploadResponse>().await {
         Ok(body) => QuotaVerdict::from_preflight(&body),
         Err(err) => {
@@ -386,5 +460,50 @@ mod tests {
     #[test]
     fn a_reasonless_denial_falls_open() {
         assert!(QuotaVerdict::from_preflight(&preflight(false, None)).allowed);
+    }
+
+    /// A refusal the server gives as a verdict body is about room, whoever
+    /// pays.
+    #[test]
+    fn a_verdict_body_refusal_is_no_room() {
+        let verdict = QuotaVerdict::from_preflight(&preflight(false, Some("drive_quota_exceeded")));
+        assert_eq!(verdict.refusal, Some(Refusal::NoRoom));
+    }
+
+    /// hcfs-server answers a member's pre-flight with a flat `403` when the
+    /// drive cannot take their writes at all. Those are verdicts about the
+    /// drive and are kept apart, because the way out is the owner's (a
+    /// frozen drive) or a role change (a Viewer), never a plan of the
+    /// member's own.
+    #[test]
+    fn a_members_403_names_why_the_drive_takes_no_writes() {
+        for (slug, refusal) in [
+            ("account_read_only", Refusal::PayerLimited),
+            ("account_suspended", Refusal::PayerLimited),
+            ("forbidden", Refusal::NotAWriter),
+        ] {
+            let body = format!(r#"{{"error":"{slug}","message":"whatever the server says"}}"#);
+            let verdict = QuotaVerdict::from_member_refusal(403, &body);
+            assert!(!verdict.allowed, "{slug} must refuse");
+            assert_eq!(verdict.refusal, Some(refusal), "{slug}");
+            assert_eq!(verdict.server_reason.as_deref(), Some(slug));
+        }
+    }
+
+    /// Anything short of a known `403` is not a verdict and falls open, as
+    /// every other failed pre-flight does.
+    #[test]
+    fn any_other_error_status_falls_open() {
+        for (status, body) in [
+            (403, r#"{"error":"something_new"}"#),
+            (403, "not json"),
+            (401, r#"{"error":"forbidden"}"#),
+            (500, r#"{"error":"account_read_only"}"#),
+            (503, ""),
+        ] {
+            let verdict = QuotaVerdict::from_member_refusal(status, body);
+            assert!(verdict.allowed, "{status} {body:?} must fall open");
+            assert_eq!(verdict.refusal, None);
+        }
     }
 }

@@ -103,11 +103,15 @@ pub async fn setup_and_init_sync(
         Ok(p) if !p.is_empty() => crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&p)).await,
         _ => 0,
     };
-    crate::billing::eligibility::require_eligible(
+    // A drive shared WITH this account is paid for by its owner, so its
+    // owner's allowance is what the gate asks about.
+    let drive = crate::billing::eligibility::member_drive_for_label(&state, &account_id, &label).await;
+    crate::billing::eligibility::require_eligible_for_drive(
         &state,
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
         bytes,
+        drive.as_ref(),
     )
     .await?;
 

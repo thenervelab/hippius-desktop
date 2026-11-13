@@ -196,11 +196,15 @@ pub async fn add_file(
             0
         }
     };
-    crate::billing::eligibility::require_eligible(
+    // A drive shared WITH this account is paid for by its owner, so the gate
+    // names it; see `member_drive_for_sync_path`.
+    let drive = crate::billing::eligibility::member_drive_for_sync_path(&state, &account_id, &sync_path).await;
+    crate::billing::eligibility::require_eligible_for_drive(
         &state,
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
         bytes,
+        drive.as_ref(),
     )
     .await?;
 
@@ -291,11 +295,13 @@ pub async fn add_folder(
     let walk = walk_regular_files_stats(Path::new(&folder_path)).await;
     let bytes = walk.bytes;
     let count = walk.count;
-    crate::billing::eligibility::require_eligible(
+    let drive = crate::billing::eligibility::member_drive_for_sync_path(&state, &account_id, &sync_path).await;
+    crate::billing::eligibility::require_eligible_for_drive(
         &state,
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FolderUpload,
         bytes,
+        drive.as_ref(),
     )
     .await?;
 
@@ -758,7 +764,8 @@ pub async fn add_files(
         crate::billing::eligibility::InsufficientCreditsAction::FileUpload
     };
     let (total_bytes, total_count) = sum_and_count_batch(&file_paths).await;
-    crate::billing::eligibility::require_eligible(&state, &account_id, action, total_bytes).await?;
+    let drive = crate::billing::eligibility::member_drive_for_sync_path(&state, &account_id, &sync_path).await;
+    crate::billing::eligibility::require_eligible_for_drive(&state, &account_id, action, total_bytes, drive.as_ref()).await?;
 
     // Resolve `sync_path` → drive label once before any banner write
     // so the per-label state (Task 4.1) can route every `begin`/`reset`
