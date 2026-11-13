@@ -43,11 +43,11 @@ import {
   dragLabel,
   failedMessage,
   moveItemFor,
-  moveProblem,
   movedMessage,
   undoRequests,
   type MoveItem,
 } from "@/app/lib/drive-move/moveLogic";
+import { dropVerdict, type DropVerdict } from "@/app/lib/drive-move/dropTarget";
 import { moveEntries, runMove, type Clash, type ClashAnswers } from "@/app/lib/drive-move/runMove";
 import { setInAppDragActive, suppressNextClick } from "@/app/lib/drive-move/inAppDrag";
 import { cn } from "@/lib/utils";
@@ -68,10 +68,10 @@ export interface MoveTarget {
   readOnlyReason: string | null;
 }
 
-/** What is being dragged, and what it is over. */
+/** What is being dragged, the folder it is over, and what a drop would do. */
 interface DragState {
   items: MoveItem[];
-  over: { path: string; name: string } | null;
+  over: { path: string; name: string; verdict: DropVerdict } | null;
 }
 
 interface DriveMoveContextValue {
@@ -104,11 +104,26 @@ export interface MoveDragData {
   currentFolder: string;
 }
 
-/** Drop data a folder target carries. */
+/**
+ * Drop data a target carries: the folder a drop there lands in, and for a
+ * row its own path (a file row stands for the folder it is listed in).
+ */
 export interface MoveDropData {
   kind: "move-folder";
   path: string;
   name: string;
+  rowPath?: string | null;
+}
+
+/** The folder a drop on `data` lands in, and what it would do. */
+function overFor(
+  items: readonly MoveItem[],
+  data: MoveDropData | undefined,
+  readOnlyReason: string | null,
+): DragState["over"] {
+  if (data?.kind !== "move-folder") return null;
+  const folder = { path: data.path, name: data.name };
+  return { ...folder, verdict: dropVerdict(items, folder, data.rowPath ?? null, readOnlyReason) };
 }
 
 /**
@@ -311,12 +326,14 @@ export default function DriveMoveProvider({
     [selectedFiles],
   );
 
-  const onDragOver = useCallback((event: DragOverEvent) => {
-    const data = event.over?.data.current as MoveDropData | undefined;
-    setDrag((prev) =>
-      prev ? { ...prev, over: data?.kind === "move-folder" ? { path: data.path, name: data.name } : null } : prev,
-    );
-  }, []);
+  const readOnlyReason = target?.readOnlyReason ?? null;
+  const onDragOver = useCallback(
+    (event: DragOverEvent) => {
+      const data = event.over?.data.current as MoveDropData | undefined;
+      setDrag((prev) => (prev ? { ...prev, over: overFor(prev.items, data, readOnlyReason) } : prev));
+    },
+    [readOnlyReason],
+  );
 
   const endDrag = useCallback(() => {
     setInAppDragActive(false);
@@ -328,10 +345,12 @@ export default function DriveMoveProvider({
       const current = drag;
       endDrag();
       suppressNextClick();
-      const data = event.over?.data.current as MoveDropData | undefined;
-      if (!current || !target || data?.kind !== "move-folder") return;
-      if (moveProblem(current.items, data.path, target.readOnlyReason)) return;
-      void moveTo(current.items, data.path, data.name);
+      if (!current || !target) return;
+      const over = overFor(current.items, event.over?.data.current as MoveDropData | undefined, target.readOnlyReason);
+      // Only a drop that moves something: a folder's own siblings, the
+      // dragged row itself and a folder into itself all do nothing.
+      if (!over || over.verdict.kind !== "valid") return;
+      void moveTo(current.items, over.path, over.name);
     },
     [drag, endDrag, target, moveTo],
   );
@@ -350,7 +369,9 @@ export default function DriveMoveProvider({
 
   if (!target || !value) return <>{children}</>;
 
-  const problem = drag?.over ? moveProblem(drag.items, drag.over.path, target.readOnlyReason) : null;
+  const verdict = drag?.over?.verdict;
+  const problem = verdict?.kind === "invalid" ? verdict.reason : null;
+  const overName = verdict && verdict.kind !== "none" ? (drag?.over?.name ?? null) : null;
 
   return (
     <DriveMoveContext.Provider value={value}>
@@ -378,7 +399,7 @@ export default function DriveMoveProvider({
                   : "bg-primary-50 text-white",
               )}
             >
-              <span className="truncate">{dragLabel(drag.items.length, drag.over?.name ?? null, problem)}</span>
+              <span className="truncate">{dragLabel(drag.items.length, overName, problem)}</span>
             </div>
           ) : null}
         </DragOverlay>
