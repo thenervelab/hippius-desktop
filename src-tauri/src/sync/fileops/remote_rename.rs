@@ -11,8 +11,10 @@
 //! rename issued from a stale listing from silently clobbering a newer
 //! change made elsewhere.
 
+use std::collections::HashMap;
+
 use ed25519_dalek::Signer;
-use hcfs_shared::network::{BatchRenameRequest, SingleRename};
+use hcfs_shared::network::{BatchRenameRequest, BatchRenameResult, SingleRename};
 use sqlx::sqlite::SqlitePool;
 
 use crate::app_state::AppState;
@@ -138,18 +140,49 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     let signature = signing_key.sign(BatchRenameRequest::generate_signing_text(&renames).as_bytes());
 
     let request = BatchRenameRequest {
-        ss58_address: account_id.to_string(),
+        // The drive's OWNER: `/rename_files` looks the files up under this
+        // account, and a member's own account holds none of them.
+        ss58_address: identity.wire_ss58.clone(),
         folder_hash,
         renames,
         signature: signature.to_bytes(),
         signing_key: signing_key.verifying_key().to_bytes(),
     };
 
-    client
+    let result = client
         .rename_files(&request)
         .await
         .map_err(|e| AppError::Hcfs(format!("Rename failed: {e}")))?;
+    if let Some(reason) = refused_renames(&result).into_values().next() {
+        return Err(AppError::Validation(format!("Rename failed: {reason}")));
+    }
     Ok(())
+}
+
+/// What the user reads for one entry `/rename_files` refused.
+///
+/// The route answers `200` even when an entry was not renamed and lists it in
+/// `failures` with a reason code, so a caller that reads only the status
+/// reports a refused rename or move as done.
+pub(crate) fn rename_failure_sentence(reason: &str) -> String {
+    match reason {
+        "not_found" => "It's no longer there. Refresh and try again".to_string(),
+        "target_exists" => "Something with that name is already there".to_string(),
+        r if r == "revision_mismatch" || r.starts_with("revision mismatch") => {
+            "It changed while it was being moved. Refresh and try again".to_string()
+        }
+        other => format!("The server refused it ({other})"),
+    }
+}
+
+/// The entries of a batch the server refused, by their old path hash, with
+/// the sentence to show for each.
+pub(crate) fn refused_renames(result: &BatchRenameResult) -> HashMap<[u8; 32], String> {
+    result
+        .failures
+        .iter()
+        .map(|f| (f.old_path_hash, rename_failure_sentence(&f.reason)))
+        .collect()
 }
 
 /// One file under the folder being renamed, with its path in plaintext.
@@ -451,7 +484,7 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     let sibling_file_paths: Vec<String> = sibling_files.iter().filter_map(|f| f.relative_path.clone()).collect();
     assert_destination_available(&sibling_folder_paths, &sibling_file_paths, &old_prefix, &new_prefix)?;
 
-    move_folder_by_batches(&client, account_id, identity, &encryption_key, &signing_key, &old_prefix, &new_prefix).await
+    move_folder_by_batches(&client, identity, &encryption_key, &signing_key, &old_prefix, &new_prefix).await
 }
 
 /// Move every file and directory row under `old_prefix` to `new_prefix`,
@@ -463,7 +496,6 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
 /// caller checks the destination is free first.
 pub(super) async fn move_folder_by_batches(
     client: &hcfs_client::client::HcfsClient,
-    account_id: &str,
     identity: &DriveIdentity,
     encryption_key: &hcfs_crypto::FileKey,
     signing_key: &ed25519_dalek::SigningKey,
@@ -494,17 +526,22 @@ pub(super) async fn move_folder_by_batches(
         // uses to verify — deriving our own would be a second definition.
         let signature = signing_key.sign(BatchRenameRequest::generate_signing_text(&renames).as_bytes());
         let request = BatchRenameRequest {
-            ss58_address: account_id.to_string(),
+            // The drive's owner, as in `rename_remote_file`.
+            ss58_address: identity.wire_ss58.clone(),
             folder_hash: folder_hash.clone(),
             renames,
             signature: signature.to_bytes(),
             signing_key: signing_key.verifying_key().to_bytes(),
         };
-        client
+        let result = client
             .rename_files(&request)
             .await
             .map_err(|e| AppError::Hcfs(format!("Rename failed after moving {moved} item(s): {e}")))?;
-        moved += batch.len();
+        let refused = refused_renames(&result);
+        moved += batch.len() - refused.len();
+        if let Some(reason) = refused.into_values().next() {
+            return Err(AppError::Hcfs(format!("Rename failed after moving {moved} item(s): {reason}")));
+        }
     }
 
     // The half `/rename_files` cannot do. Without it the original folder
@@ -651,6 +688,44 @@ pub async fn rename_remote_folder(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `/rename_files` answers `200` with refused entries in `failures`. A
+    /// member's move once sent its own address, the server found none of
+    /// the files, and the move read as done because only the status was
+    /// checked. The body below is the server's documented shape.
+    #[test]
+    fn a_refused_entry_in_a_200_is_read_as_refused() {
+        let moved = [1u8; 32];
+        let missing = [2u8; 32];
+        let new_hash = [3u8; 32];
+        let revision = [4u8; 32];
+        let body = serde_json::json!({
+            "status": "ok",
+            "renamed_count": 1,
+            "successes": [{
+                "old_path_hash": moved,
+                "new_path_hash": new_hash,
+                "new_revision_id": revision,
+                "new_revision_seq": 5
+            }],
+            "failures": [{ "old_path_hash": missing, "reason": "not_found" }]
+        });
+        let result: BatchRenameResult = serde_json::from_value(body).unwrap();
+        let refused = refused_renames(&result);
+        assert_eq!(refused.len(), 1);
+        assert!(!refused.contains_key(&moved), "a renamed entry is not refused");
+        assert_eq!(refused[&missing], "It's no longer there. Refresh and try again");
+    }
+
+    #[test]
+    fn every_refusal_reason_reads_as_a_sentence() {
+        assert_eq!(rename_failure_sentence("target_exists"), "Something with that name is already there");
+        let changed = "It changed while it was being moved. Refresh and try again";
+        assert_eq!(rename_failure_sentence("revision_mismatch"), changed);
+        // Servers before the fixed codes sent this one message for all three.
+        assert_eq!(rename_failure_sentence("revision mismatch or target path already exists"), changed);
+        assert!(rename_failure_sentence("invalid_relative_path: too deep").contains("invalid_relative_path"));
+    }
 
     /// The walk advances by rows RETURNED, so its reach is pages times the
     /// server's page size, not pages times whatever we ask for. Pin both
