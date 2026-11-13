@@ -97,8 +97,8 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({
       maxWidth="max-w-[680px]"
     >
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-        Set an unlock password to open your mnemonic seed on other devices
-        and Hippius Console.
+        Set an unlock password to open your files on other computers and in
+        Hippius Console.
       </p>
 
       <div className="flex flex-col gap-4">
@@ -126,9 +126,9 @@ const SetRecoveryPasswordDialog: React.FC<Props> = ({
             </p>
           </div>
           <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
-            Your files are encrypted with your mnemonic seed, not this password.
-            The password unlocks a sealed copy of that seed on new devices and
-            on Hippius Console.
+            This password doesn&apos;t encrypt your files, so changing it later
+            never touches them. It opens your account on a new computer and in
+            Hippius Console.
           </p>
         </div>
 

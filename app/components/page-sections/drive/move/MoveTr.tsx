@@ -3,12 +3,13 @@
 import React from "react";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { cn } from "@/lib/utils";
-import { dropStateClass, useHoverExpand, useMoveRow } from "./useMoveDnd";
+import { rowDropClass, useHoverExpand, useMoveRow } from "./useMoveDnd";
 
 /**
- * A `<tr>` that can be dragged and, for a folder, dropped on. For rows
- * rendered in a loop (an expanded folder's children), where the hooks
- * need a component of their own.
+ * A `<tr>` that can be dragged and dropped on (a folder row is that
+ * folder, a file row the folder it is listed in). For rows rendered in a
+ * loop (an expanded folder's children), where the hooks need a component
+ * of their own.
  */
 export default function MoveTr({
   file,
@@ -33,7 +34,7 @@ export default function MoveTr({
       ref={move.setRef}
       {...rest}
       {...move.dragProps}
-      className={cn(className, move.isDragging && "opacity-50", dropStateClass(move.dropState))}
+      className={cn(className, move.isDragging && "opacity-50", rowDropClass(move.dropState, move.groupRole))}
     >
       {children}
     </tr>

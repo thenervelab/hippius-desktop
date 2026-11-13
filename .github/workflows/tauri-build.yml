@@ -63,11 +63,11 @@ jobs:
             # App-only: the DMG + updater tarball are (re)built by the finalize
             # step AFTER the Finder extension is embedded, since embedding
             # re-signs the app and would invalidate a Tauri-built DMG/notarization.
-            args: "--target universal-apple-darwin --bundles app"
+            args: "--target universal-apple-darwin --bundles app --config src-tauri/tauri.video-engine.conf.json"
           - platform: ubuntu-22.04
-            args: "--bundles deb"
+            args: "--bundles deb --config src-tauri/tauri.video-engine.conf.json"
           - platform: windows-latest
-            args: ""
+            args: "--config src-tauri/tauri.video-engine.conf.json"
 
     runs-on: ${{ matrix.platform }}
 
@@ -203,6 +203,16 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: bash scripts/install-linux-release-deps.sh
 
+      # The video preview engine (see the macOS job). Linux has no OS
+      # encoder, so this one only copies streams.
+      - name: Build the video preview engine
+        if: matrix.platform == 'ubuntu-22.04'
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/apt-get-retry.sh" install -y --no-install-recommends nasm zlib1g-dev
+          bash scripts/video-engine/build-ffmpeg.sh
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
@@ -293,6 +303,19 @@ jobs:
         if: matrix.platform == 'macos-latest'
         run: bash macos/build-capture-helper.sh --universal
 
+      # The video preview engine: a small LGPL ffmpeg that copies and, with
+      # the OS's own encoders, converts videos the webview cannot play (WMV,
+      # AVI, MKV, ...). Built universal here and shipped beside the app by
+      # Tauri's externalBin (src-tauri/tauri.video-engine.conf.json, passed
+      # to the build below); finalize-macos-release.sh re-signs it.
+      - name: Build the video preview engine
+        if: matrix.platform == 'macos-latest'
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
+        run: |
+          brew install nasm
+          bash scripts/video-engine/build-ffmpeg.sh --universal
+
       # Apple code signing (macOS only). The CERT goes to GITHUB_ENV so
       # tauri-action imports the .p12 and SIGNS the app. Notarization is
       # DELIBERATELY withheld from tauri-action: embedding the Finder extension
@@ -338,6 +361,25 @@ jobs:
             echo "App Store Connect API key secrets not set — skipping notarization."
           fi
 
+      # The video preview engine (see the macOS job), built with MinGW so it
+      # links statically; its encoders are Media Foundation's.
+      - name: Set up MSYS2 for the video preview engine
+        if: matrix.platform == 'windows-latest'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: >-
+            make diffutils xz
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-nasm mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+
+      - name: Build the video preview engine
+        if: matrix.platform == 'windows-latest'
+        shell: msys2 {0}
+        env:
+          FFMPEG_BUILD_DIR: video-engine-build
+        run: bash scripts/video-engine/build-ffmpeg.sh
+
       - name: Build & publish
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
@@ -356,6 +398,14 @@ jobs:
           prerelease: false
           overwrite: true
           args: ${{ matrix.args }}
+
+      # The LGPL's corresponding source: the exact ffmpeg tarball, build
+      # script and configuration this release's engine was built from.
+      - name: Attach the video engine's source to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/video-engine/attach-source.sh "v$(jq -r .version src-tauri/tauri.conf.json)" video-engine-build
 
       # macOS only, and only when notarization creds are present. Tauri built the
       # app app-only above (no DMG); here we embed the universal Finder extension,
