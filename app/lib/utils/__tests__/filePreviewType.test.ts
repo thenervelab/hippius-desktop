@@ -60,6 +60,16 @@ describe("derivePreviewType: every required format", () => {
       expect(derivePreviewType(name)).toBe("video");
     }
   });
+
+  it("opens the videos Rust converts for the preview", () => {
+    for (const name of ["a.wmv", "A.WMV", "a.asf", "a.avi", "a.mkv", "a.flv", "a.mpg", "a.mpeg", "a.m2ts", "a.mts", "a.3gp", "a.m4v", "a.ogv", "a.vob"]) {
+      expect(derivePreviewType(name)).toBe("video");
+    }
+  });
+
+  it("keeps a .ts file TypeScript, not an MPEG transport stream", () => {
+    expect(derivePreviewType("index.ts")).not.toBe("video");
+  });
 });
 
 describe("derivePreviewType: casing", () => {

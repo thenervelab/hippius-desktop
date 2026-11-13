@@ -105,7 +105,9 @@
       "icons/SyncCompletedTrayIcon.png",
       "icons/*.png",
       "icons/generic-image.png",
-      ".env"
+      ".env",
+      "THIRD_PARTY_NOTICES.md",
+      "licenses/*"
     ],
     "macOS": {
       "entitlements": "entitlements.plist",
