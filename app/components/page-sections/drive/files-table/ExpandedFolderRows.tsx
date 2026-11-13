@@ -38,6 +38,7 @@ import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
 import MoveTr from "../move/MoveTr";
+import MoveDropTr from "../move/MoveDropTr";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const MAX_INLINE_DEPTH = 8;
@@ -393,8 +394,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
       columnCount - (hasSelectionColumn ? 1 : 0) - 1,
       0,
     );
+    // A drop target for this folder, like every other row under it.
     return (
-      <tr
+      <MoveDropTr
+        folderPath={folderRelativePath}
+        label={label}
         className={cn(
           // Same zebra striping (and border) a data row uses, so the
           // placeholder keeps the odd/even alternation instead of painting
@@ -417,7 +421,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         {Array.from({ length: trailingCellCount }).map((_, i) => (
           <td key={`${key}-fill-${i}`} className={BASE_CELL_CLASS} />
         ))}
-      </tr>
+      </MoveDropTr>
     );
   };
 
@@ -430,6 +434,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
       <FolderRowsSkeleton
         orderedColumnIds={orderedColumnIds}
         nameIndentPx={BASE_CHILD_INDENT_PX + (depth + 1) * DEPTH_INDENT_PX}
+        renderRow={({ key, className, children }) => (
+          <MoveDropTr key={key} folderPath={folderRelativePath} label={label} className={className}>
+            {children}
+          </MoveDropTr>
+        )}
       />
     );
   }
