@@ -89,6 +89,7 @@ on:
           - folder_shares
           - folder_entries
           - remote_write
+          - drive_moves
 
 # Least privilege: this workflow only reads the checkout.
 permissions:
@@ -133,7 +134,7 @@ jobs:
             want+=(HCFS_DESKTOP_E2E_BEARER_OWNER HCFS_DESKTOP_E2E_BEARER_MEMBER)
             want+=(HCFS_DESKTOP_E2E_OWNER_SS58 HCFS_DESKTOP_E2E_MEMBER_SS58)
           fi
-          if [ "$SUITE" = folder_shares ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
+          if [ "$SUITE" = folder_shares ] || [ "$SUITE" = drive_moves ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
             want+=(HCFS_DESKTOP_E2E_BEARER HCFS_DESKTOP_E2E_SS58)
           fi
           if [ "$SUITE" = folder_entries ] || [ "$SUITE" = both ] || [ "$SUITE" = all ]; then
@@ -267,6 +268,33 @@ jobs:
             exit 1
           fi
           echo "remote_write: $passed live tests executed"
+
+      # Moves between drives: a folder and a file copied under the destination
+      # drive's key, committed, and read back from their new drive. USER
+      # bearer, as remote writes. A server without `drive_moves` is skipped
+      # with a warning (the feature is the server's to turn on).
+      - name: Drive moves (move a folder and a file to another drive)
+        if: >-
+          !cancelled() && steps.setup.conclusion == 'success' &&
+          (inputs.suite == 'drive_moves' || inputs.suite == 'both' || inputs.suite == 'all')
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+          HCFS_DESKTOP_E2E_REQUIRE: "1"
+          HCFS_DESKTOP_E2E_SERVER_URL: ${{ secrets.HCFS_DESKTOP_E2E_SERVER_URL }}
+          HCFS_DESKTOP_E2E_BEARER: ${{ secrets.HCFS_DESKTOP_E2E_BEARER }}
+          HCFS_DESKTOP_E2E_SS58: ${{ secrets.HCFS_DESKTOP_E2E_SS58 }}
+        run: |
+          set -euo pipefail
+          out=$(mktemp)
+          cargo test --test drive_moves_real_backend -- --ignored | tee "$out"
+          passed=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' "$out" | tail -1)
+          if [ "${passed:-0}" -lt 1 ]; then
+            echo "drive_moves: no live test executed, refusing to report success" >&2
+            exit 1
+          fi
+          echo "drive_moves: $passed live tests executed"
 
       # Same independence rule as folder-shares vs shared-drives: a red sibling
       # must not hide this suite's result. ADMIN bearer, not the user bearer.

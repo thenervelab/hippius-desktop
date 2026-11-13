@@ -38,7 +38,7 @@ use crate::sync::projection::events::REMOTE_UPLOAD_PROGRESS;
 /// larger. Sending a multi-chunk body single-shot is refused by the
 /// server — which is exactly what made a large file fail here while the
 /// same file uploaded fine through a synced drive.
-const UPLOAD_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
+pub(crate) const UPLOAD_CHUNK_SIZE: u64 = 8 * 1024 * 1024;
 
 /// Smallest gap between two transfer-progress frames for one file.
 ///
@@ -95,8 +95,13 @@ impl UploadBatch {
         }
     }
 
-    fn emit(&self, row: RemoteUploadProgress) {
+    pub(crate) fn emit(&self, row: RemoteUploadProgress) {
         let _ = self.app.emit(REMOTE_UPLOAD_PROGRESS, row);
+    }
+
+    /// The id every row of this upload carries.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
     }
 }
 
@@ -236,9 +241,43 @@ struct SealRequest<'a> {
 /// uploaded is a file that lands and cannot be read back.
 fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     let ciphertext_hash = encrypt_to_temp(req.source, req.ciphertext_path, req.encryption_key)?;
+    Ok(signed_manifest(ManifestFields {
+        signing_key: req.signing_key,
+        identity: req.identity,
+        ciphertext_hash,
+        size_bytes: req.size_bytes,
+        path_hash: req.path_hash,
+        salted_hash: req.salted_hash,
+        encrypted_path: req.encrypted_path,
+        file_name: req.file_name,
+        relative_path: req.relative_path,
+    }))
+}
+
+/// What a new file's manifest says, once its ciphertext exists.
+pub(crate) struct ManifestFields<'a> {
+    pub signing_key: &'a SigningKey,
+    /// The drive the file is written INTO.
+    pub identity: &'a DriveIdentity,
+    /// BLAKE3 of the ciphertext, hex: what the signature covers.
+    pub ciphertext_hash: String,
+    pub size_bytes: u64,
+    pub path_hash: [u8; 32],
+    pub salted_hash: SaltedHash,
+    pub encrypted_path: Vec<u8>,
+    pub file_name: &'a str,
+    pub relative_path: &'a str,
+}
+
+/// The signed manifest for a NEW file (no base revision) in
+/// `fields.identity`'s drive. Shared with the move between drives, whose
+/// copies are new files of the destination, so the two cannot describe a
+/// file differently.
+pub(crate) fn signed_manifest(req: ManifestFields<'_>) -> Manifest {
+    let ciphertext_hash = req.ciphertext_hash;
     let signature = req.signing_key.sign(Manifest::generate_text(&ciphertext_hash).as_bytes());
 
-    Ok(Manifest {
+    Manifest {
         // The WIRE identity, never the caller's account or the local label.
         // Both were wrong for a member drive in the same way: a file uploaded
         // into a drive somebody shared landed in the uploader's OWN namespace
@@ -263,14 +302,14 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
         file_name: Some(req.file_name.to_string()),
         relative_path: Some(req.relative_path.to_string()),
         ..Default::default()
-    })
+    }
 }
 
 /// How many transport chunks a ciphertext of this size takes.
 ///
 /// A zero-length ciphertext still takes one: `div_ceil` gives 0, and a
 /// session that declares no chunks has nothing to finalize.
-fn transport_chunk_count(ciphertext_size: u64) -> Result<u32> {
+pub(crate) fn transport_chunk_count(ciphertext_size: u64) -> Result<u32> {
     ciphertext_size
         .div_ceil(UPLOAD_CHUNK_SIZE)
         .max(1)
@@ -400,7 +439,7 @@ fn upload_failure(step: &str, error: &hcfs_client::sync::SyncError) -> AppError 
 
 /// Read chunk `index` of the ciphertext at `path`, on the blocking pool so
 /// an 8 MiB read does not stall the async runtime.
-async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<bytes::Bytes> {
+pub(crate) async fn read_chunk(path: &Path, index: u32, ciphertext_size: u64) -> Result<bytes::Bytes> {
     use std::io::{Read, Seek, SeekFrom};
 
     let offset = u64::from(index) * UPLOAD_CHUNK_SIZE;

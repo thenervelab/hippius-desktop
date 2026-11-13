@@ -192,6 +192,11 @@ pub struct RemoteEntry {
     pub path: String,
     pub path_hash: [u8; 32],
     pub revision_id: [u8; 32],
+    /// `BLAKE3(owner ss58 || plaintext)` as the server lists it. A move
+    /// between drives checks the bytes it read against it.
+    pub salted_hash: [u8; 32],
+    /// Plaintext size as the server lists it.
+    pub size_bytes: u64,
 }
 
 /// A folder subtree as the server holds it: the FILES beneath it, and the
@@ -307,7 +312,7 @@ fn assert_destination_available(folders: &[String], files: &[String], old_path: 
 }
 
 /// Every page of one directory level.
-pub(super) async fn browse_directory(
+pub(crate) async fn browse_directory(
     client: &hcfs_client::client::HcfsClient,
     ss58: &str,
     folder_hash: &str,
@@ -343,7 +348,7 @@ pub(super) async fn browse_directory(
 /// Iterative rather than recursive: an async recursion needs boxing at
 /// every level, and a drive is untrusted input — an explicit stack cannot
 /// blow the real one.
-async fn collect_folder_tree(
+pub(crate) async fn collect_folder_tree(
     client: &hcfs_client::client::HcfsClient,
     ss58: &str,
     folder_hash: &str,
@@ -385,6 +390,8 @@ async fn collect_folder_tree(
                 path: resolved.replace('\\', "/").trim_matches('/').to_string(),
                 path_hash: file.path_hash,
                 revision_id: file.revision_id,
+                salted_hash: *file.salted_hash.as_bytes(),
+                size_bytes: file.size_bytes,
             });
         }
 
@@ -741,6 +748,8 @@ mod tests {
             path: path.to_string(),
             path_hash: [seed; 32],
             revision_id: [seed.wrapping_add(100); 32],
+            salted_hash: [seed.wrapping_add(50); 32],
+            size_bytes: u64::from(seed),
         }
     }
 

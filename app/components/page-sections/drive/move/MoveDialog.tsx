@@ -3,11 +3,18 @@
 import React, { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, FolderPlus } from "lucide-react";
+import { ArrowLeft, Check, ChevronDown, ChevronRight, FolderPlus, HardDrive } from "lucide-react";
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Folder } from "@/components/ui/icons";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import type { MoveDestination } from "@/app/lib/drive-move/driveMoves";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
 import { parseSharedDriveLabel, sharedDriveTargetArgs } from "@/app/lib/shared-drives/sharedDriveLabel";
@@ -42,9 +49,9 @@ const FOOTER_BUTTON = "h-[38px] w-full rounded-[8px] px-5 text-sm font-medium sm
 /**
  * The Move to… picker: the current drive, opened at the folder on screen,
  * with a breadcrumb, its subfolders (click to enter), New folder, and
- * "Move to <folder>". Phase one moves within this drive only; a drive
- * switcher belongs at the top of this dialog when moves between drives
- * arrive.
+ * "Move to <folder>". When the server moves between drives, a drive picker
+ * sits at the top (`destinations`): picking another drive opens its top
+ * level and everything below works the same there.
  *
  * New folder is a state of its own: while a name is typed the footer is
  * Cancel / Create folder (Escape is Cancel and leaves the dialog open),
@@ -55,11 +62,15 @@ export default function MoveDialog({
   target,
   onClose,
   onMove,
+  destinations = null,
 }: {
   items: MoveItem[] | null;
   target: MoveTarget;
   onClose: () => void;
-  onMove: (destination: string, destinationName: string) => void;
+  /** `drive` is null for the drive on screen. */
+  onMove: (destination: string, destinationName: string, drive: MoveDestination | null) => void;
+  /** Drives a move can go to; null hides the drive picker (moves stay in this drive). */
+  destinations?: MoveDestination[] | null;
 }) {
   const open = items !== null && items.length > 0;
   const { polkadotAddress } = useWalletAuth();
@@ -71,13 +82,39 @@ export default function MoveDialog({
   const [createError, setCreateError] = useState<string | null>(null);
   const creatingRef = useRef(false);
   const naming = newName !== null;
+  // Another drive picked in the drive picker; null is the drive on screen.
+  const [otherDrive, setOtherDrive] = useState<MoveDestination | null>(null);
+  const here = useMemo(
+    () =>
+      otherDrive ?? {
+        label: target.label,
+        name: target.driveName,
+        remote: target.remote,
+        syncPath: target.syncPath,
+        shared: false,
+      },
+    [otherDrive, target.label, target.driveName, target.remote, target.syncPath],
+  );
+  const pickable = useMemo(
+    () => (destinations ?? []).filter((d) => d.label !== target.label),
+    [destinations, target.label],
+  );
 
   useEffect(() => {
     if (!open) return;
     setPath(normalizePath(target.parentPath));
     setNewName(null);
     setCreateError(null);
+    setOtherDrive(null);
   }, [open, target.parentPath]);
+
+  const pickDrive = (drive: MoveDestination | null) => {
+    if (creatingRef.current) return;
+    setOtherDrive(drive);
+    setPath(drive ? "" : normalizePath(target.parentPath));
+    setNewName(null);
+    setCreateError(null);
+  };
 
   const stopNaming = () => {
     if (creatingRef.current) return;
@@ -87,13 +124,13 @@ export default function MoveDialog({
 
   const listing = useNestedFolderListing({
     accountId: polkadotAddress,
-    syncPath: target.remote ? null : target.syncPath,
+    syncPath: here.remote ? null : here.syncPath,
     subfolder: path || null,
-    label: target.label,
+    label: here.label,
     refreshKey,
     enabled: open,
-    remote: target.remote,
-    sharedDrive: target.remote ? parseSharedDriveLabel(target.label) : null,
+    remote: here.remote,
+    sharedDrive: here.remote ? parseSharedDriveLabel(here.label) : null,
   });
 
   const folders = useMemo(
@@ -108,8 +145,10 @@ export default function MoveDialog({
   );
 
   const segments = path ? path.split("/") : [];
-  const problem = items ? moveProblem(items, path, target.readOnlyReason) : null;
-  const destinationName = segments.length ? segments[segments.length - 1] : target.driveName;
+  // Another drive is one the person can write to (Rust lists only those),
+  // and nothing there is "already here" or "inside itself".
+  const problem = items && !otherDrive ? moveProblem(items, path, target.readOnlyReason) : null;
+  const destinationName = segments.length ? segments[segments.length - 1] : here.name;
 
   const trimmedName = (newName ?? "").trim();
   // Only the folders already on screen: Rust refuses any other clash, and
@@ -127,12 +166,12 @@ export default function MoveDialog({
     try {
       // The New Folder dialog's own commands: a synced drive gets a real
       // directory, a browsed one a registered folder.
-      await invoke(target.remote ? "create_remote_folder" : "create_sync_folder", {
+      await invoke(here.remote ? "create_remote_folder" : "create_sync_folder", {
         accountId: polkadotAddress,
-        label: target.label,
+        label: here.label,
         parentPath: path || null,
         name,
-        ...sharedDriveTargetArgs(target.label),
+        ...sharedDriveTargetArgs(here.label),
       });
       setNewName(null);
       setPath(path ? `${path}/${name}` : name);
@@ -165,6 +204,50 @@ export default function MoveDialog({
       }}
     >
       <div className="flex min-w-0 flex-col gap-4 font-geist">
+        {destinations !== null && pickable.length > 0 && (
+          <DropdownMenu modal={false}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Drive: ${here.name}`}
+                disabled={naming}
+                className={cn(rowClassName, "min-h-10 justify-between")}
+              >
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <HardDrive aria-hidden className="size-4 shrink-0 text-grey-50 dark:text-grey-dark-600" />
+                  <span className="min-w-0 truncate" title={here.name}>
+                    {here.name}
+                  </span>
+                </span>
+                <ChevronDown aria-hidden className="size-4 shrink-0 text-grey-60 dark:text-grey-dark-700" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="z-[70] max-h-[min(320px,50vh)] w-[var(--radix-dropdown-menu-trigger-width)] overflow-y-auto rounded-lg border border-grey-80 bg-white p-1.5 shadow-[0px_12px_32px_8px_rgba(51,51,51,0.1)] dark:border-black-300 dark:bg-black-500 dark:shadow-[0px_12px_32px_8px_rgba(0,0,0,0.3)]"
+            >
+              {[null, ...pickable].map((drive) => {
+                const name = drive ? drive.name : target.driveName;
+                const selected = (drive?.label ?? null) === (otherDrive?.label ?? null);
+                return (
+                  <DropdownMenuItem
+                    key={drive?.label ?? "here"}
+                    onSelect={() => pickDrive(drive)}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm text-grey-10 outline-none hover:bg-grey-90 focus:bg-grey-90 dark:text-white dark:hover:bg-white/5 dark:focus:bg-white/5"
+                  >
+                    <span className="min-w-0 flex-1 truncate" title={name}>
+                      {name}
+                    </span>
+                    {drive?.shared && (
+                      <span className="shrink-0 text-xs text-grey-50 dark:text-grey-dark-600">Shared</span>
+                    )}
+                    <Check aria-hidden className={cn("size-4 shrink-0 text-primary-50", !selected && "invisible")} />
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
         {/* Where the picker is, a way back up, and New folder: one row above
             the list, the way a file browser's toolbar sits over its folder. */}
         <div className="flex min-w-0 items-center gap-2">
@@ -184,9 +267,9 @@ export default function MoveDialog({
               type="button"
               className={cn(crumbClassName, segments.length === 0 && "font-medium text-grey-10 dark:text-white")}
               onClick={() => setPath("")}
-              title={target.driveName}
+              title={here.name}
             >
-              {target.driveName}
+              {here.name}
             </button>
             {segments.map((segment, index) => (
               <Fragment key={`${index}-${segment}`}>
@@ -211,7 +294,7 @@ export default function MoveDialog({
               variant="primaryOutline"
               size="auto"
               onClick={() => setNewName("")}
-              disabled={Boolean(target.readOnlyReason)}
+              disabled={Boolean(target.readOnlyReason) && !otherDrive}
               className="h-8 shrink-0 gap-1.5 px-3 text-sm font-medium"
             >
               <FolderPlus className="size-4" aria-hidden />
@@ -262,7 +345,8 @@ export default function MoveDialog({
           )}
           {folders.map((folder) => {
             // A folder being moved cannot be opened as a destination.
-            const moving = items?.some((i) => i.isFolder && isSameOrInside(folder.path, i.path)) ?? false;
+            const moving =
+              !otherDrive && (items?.some((i) => i.isFolder && isSameOrInside(folder.path, i.path)) ?? false);
             return (
               <li key={folder.path}>
                 <button
@@ -339,7 +423,7 @@ export default function MoveDialog({
                   variant="primary"
                   size="auto"
                   disabled={Boolean(problem)}
-                  onClick={() => onMove(path, destinationName)}
+                  onClick={() => onMove(path, destinationName, otherDrive)}
                   className={cn(FOOTER_BUTTON, "min-w-0 max-w-full sm:max-w-[18rem]")}
                   title={`Move to ${destinationName}`}
                 >

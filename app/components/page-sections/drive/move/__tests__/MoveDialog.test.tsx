@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   notifyFilesMutated: vi.fn(),
   // Folder listings by drive-relative path.
   listings: {} as Record<string, string[]>,
+  // What the last listing was asked for.
+  lastListing: null as null | { label: string; remote: boolean; subfolder: string | null },
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
@@ -21,7 +23,8 @@ vi.mock("@/app/lib/utils/fileMutationEvents", () => ({
   notifyFilesMutated: mocks.notifyFilesMutated,
 }));
 vi.mock("@/app/lib/hooks/use-nested-folder-listing", () => ({
-  useNestedFolderListing: ({ subfolder }: { subfolder: string | null }) => ({
+  useNestedFolderListing: ({ subfolder, label, remote }: { subfolder: string | null; label: string; remote: boolean }) => (
+    (mocks.lastListing = { label, remote, subfolder }), {
     data: (mocks.listings[subfolder ?? ""] ?? []).map(
       (name) => ({ name, actualFileName: name, isFolder: true }) as FormattedUserFile,
     ),
@@ -160,7 +163,7 @@ describe("MoveDialog new folder", () => {
     expect(screen.getByRole("navigation", { name: "Folder" })).toHaveTextContent("My DriveInvoices");
     expect(mocks.notifyFilesMutated).toHaveBeenCalled();
     fireEvent.click(moveHere);
-    expect(onMove).toHaveBeenCalledWith("Invoices", "Invoices");
+    expect(onMove).toHaveBeenCalledWith("Invoices", "Invoices", null);
   });
 
   it("Enter creates, the same as the button", async () => {
@@ -214,5 +217,54 @@ describe("MoveDialog new folder", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
     expect(mocks.invoke).toHaveBeenCalledWith("create_remote_folder", expect.objectContaining({ name: "Invoices" }));
     expect(await screen.findByRole("button", { name: "Move to Invoices" })).toBeInTheDocument();
+  });
+});
+
+describe("MoveDialog drive picker", () => {
+  const team = { label: "shared:5Owner~abc", name: "Team", remote: true, syncPath: null, shared: true };
+  const photos = { label: "Photos", name: "Photos drive", remote: false, syncPath: "/Users/me/Photos", shared: false };
+
+  beforeEach(() => {
+    mocks.invoke.mockReset();
+    mocks.listings = { "": ["Docs"], Docs: [] };
+  });
+
+  it("is hidden while the server does not move between drives", () => {
+    renderDialog({ destinations: null });
+    expect(screen.queryByRole("button", { name: /^Drive:/ })).toBeNull();
+  });
+
+  it("is hidden when no other drive can take the move", () => {
+    renderDialog({ destinations: [{ ...photos, label: "Main" }] });
+    expect(screen.queryByRole("button", { name: /^Drive:/ })).toBeNull();
+  });
+
+  it("opens another drive at its top level and moves there with that drive", async () => {
+    const { onMove } = renderDialog({ destinations: [team, photos], target: { ...target, parentPath: "Docs" } });
+    expect(mocks.lastListing).toEqual({ label: "Main", remote: false, subfolder: "Docs" });
+
+    const picker = screen.getByRole("button", { name: "Drive: My Drive" });
+    fireEvent.keyDown(picker, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Team/ }));
+
+    expect(mocks.lastListing).toEqual({ label: team.label, remote: true, subfolder: null });
+    expect(screen.getByRole("button", { name: "Drive: Team" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Folder" })).toHaveTextContent("Team");
+    fireEvent.click(screen.getByRole("button", { name: "Move to Team" }));
+    expect(onMove).toHaveBeenCalledWith("", "Team", team);
+  });
+
+  it("makes a new folder in the picked drive", async () => {
+    mocks.invoke.mockResolvedValue("Inbox");
+    renderDialog({ destinations: [team] });
+    fireEvent.keyDown(screen.getByRole("button", { name: "Drive: My Drive" }), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Team/ }));
+    fireEvent.click(screen.getByRole("button", { name: "New folder" }));
+    fireEvent.change(nameField(), { target: { value: "Inbox" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "create_remote_folder",
+      expect.objectContaining({ label: team.label, ownerSs58: "5Owner", folderHash: "abc", name: "Inbox" }),
+    );
   });
 });
