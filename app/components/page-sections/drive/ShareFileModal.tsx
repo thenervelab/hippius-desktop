@@ -56,6 +56,8 @@ import {
   createRemoteShare,
   createShare,
   revokeShare,
+  updateFolderShareExpiry,
+  updateShareExpiry,
   type ShareChoice,
   type ShareLink,
   type ShareProgress,
@@ -76,6 +78,9 @@ import {
   type OfferedSwitches,
 } from "@/app/lib/tauri/shareInsights";
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
+import EmailGateSettings from "@/components/page-sections/shares/insights/EmailGateSettings";
+import { isDownloadNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
+import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
@@ -116,7 +121,15 @@ type ModalState =
   // view offers to turn it off again.
   // `engagement`: the Insights / Comments / Reactions switches the link was
   // made with, and which this server takes, so the done view can change them.
-  | { kind: "done"; link: ShareLink; chatPreview: boolean; engagement: Engagement | null }
+  // `expiry`: the expiry the link was made with, and which command changes
+  // it, so the done view's Secure link section can change it in place.
+  | {
+      kind: "done";
+      link: ShareLink;
+      chatPreview: boolean;
+      engagement: Engagement | null;
+      expiry: ExpiryEdit;
+    }
   | { kind: "error"; message: string };
 
 /**
@@ -124,6 +137,15 @@ type ModalState =
  * the plan includes them (Rust's `switchesInPlan`).
  */
 type Engagement = { offered: OfferedSwitches; value: LinkSettings; switchesInPlan: boolean | null };
+
+/**
+ * The finished link's expiry and the existing command that changes it: a file
+ * link's (`hcfs_update_share_expiry`) or a live folder link's
+ * (`hcfs_update_folder_share_expiry`). `by: null` for a folder uploaded as a
+ * copy, or one whose kind is unknown: the expiry is then only stated, and
+ * Shared Links changes it.
+ */
+type ExpiryEdit = { ttl: ShareTtl; by: "file" | "folder" | null };
 
 /**
  * A password link's comments are sealed with a key the app never keeps (the
@@ -305,6 +327,7 @@ export default function ShareFileModal() {
         link,
         chatPreview: choice.chatPreview === true,
         engagement: target.file.isFolder ? null : engagementOf(choice, offered),
+        expiry: { ttl: choice.ttl, by: target.file.isFolder ? "folder" : "file" },
       });
     } catch (err) {
       if (isNotReady(err, "STORAGE_LIMIT_REACHED")) {
@@ -325,6 +348,11 @@ export default function ShareFileModal() {
     async (choice: ShareChoice, offered: SwitchSource | null) => {
       if (finderShare?.kind !== "choosing") return;
       const { id, name } = finderShare;
+      const expiryBy: ExpiryEdit["by"] = !finderShare.isFolder
+        ? "file"
+        : finderShare.isFolderCopy === false
+          ? "folder"
+          : null;
       lastChoiceRef.current = choice;
       runningFinderRef.current = { id, name };
       setState({ kind: "running" });
@@ -345,6 +373,7 @@ export default function ShareFileModal() {
           link: created,
           chatPreview: choice.chatPreview === true,
           engagement: engagementOf(choice, offered),
+          expiry: { ttl: choice.ttl, by: expiryBy },
         });
       } catch (err) {
         if (superseded()) return;
@@ -549,6 +578,7 @@ export default function ShareFileModal() {
           password={state.link.password}
           chatPreview={state.chatPreview}
           engagement={state.engagement}
+          expiry={state.expiry}
           onCopy={onCopy}
           onOpen={onOpenInBrowser}
           onClose={close}
@@ -763,64 +793,72 @@ function ChoosingBody({
   return (
     <div className="font-geist">
       <div className="mb-6 flex flex-col gap-1.5">
-        <p className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-          General access
-        </p>
-        <SegmentedControl<ShareVisibility>
-          ariaLabel="Share access"
-          fullWidth
-          showActiveIndicator={false}
-          value={visibility}
-          onChange={onVisibilityChange}
-          options={[
-            { label: "Anyone with the link", value: "public" },
-            { label: "Password protected", value: "private" },
-          ]}
-        />
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          {visibility === "public"
-            ? `Anyone with the link can view and download this ${folderKind !== null ? "folder" : "file"}.`
-            : "The link can't be opened without this password. Send it separately. It can't be recovered or changed later."}
-        </p>
-
-        {visibility === "private" && (
-          <div className="mt-2 flex flex-col gap-1">
-            <label
-              htmlFor="share-password"
-              className="text-xs font-medium text-grey-30 dark:text-grey-dark-700"
-            >
-              Password
-            </label>
-            <Input
-              id="share-password"
-              type="text"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              className="font-mono text-sm"
-            />
-            {passwordTooShort && (
-              <p className="text-xs text-red-500">
-                Use at least {PASSWORD_MIN_LEN} characters.
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="mt-3 flex flex-col gap-1">
-          {/* The Radix trigger is named via `ariaLabel` (no labelable element
-              to point `htmlFor` at), so this is a purely visual caption. */}
-          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-            Link expires
-          </span>
-          <Select
-            ariaLabel="Link expires"
-            value={ttl}
-            onValueChange={(value) => setTtl(value as ShareTtl)}
-            options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
+        <SecureLinkSection>
+          <SegmentedControl<ShareVisibility>
+            ariaLabel="Share access"
+            fullWidth
+            showActiveIndicator={false}
+            value={visibility}
+            onChange={onVisibilityChange}
+            options={[
+              { label: "Anyone with the link", value: "public" },
+              { label: "Password protected", value: "private" },
+            ]}
           />
-        </div>
+          <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+            {visibility === "public"
+              ? `Anyone with the link can view and download this ${folderKind !== null ? "folder" : "file"}.`
+              : "The link can't be opened without this password. Send it separately. It can't be recovered or changed later."}
+          </p>
+
+          {visibility === "private" && (
+            <div className="mt-2 flex flex-col gap-1">
+              <label
+                htmlFor="share-password"
+                className="text-xs font-medium text-grey-30 dark:text-grey-dark-700"
+              >
+                Password
+              </label>
+              <Input
+                id="share-password"
+                type="text"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                spellCheck={false}
+                autoComplete="off"
+                className="font-mono text-sm"
+              />
+              {passwordTooShort && (
+                <p className="text-xs text-red-500">
+                  Use at least {PASSWORD_MIN_LEN} characters.
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-col gap-1">
+            {/* The Radix trigger is named via `ariaLabel` (no labelable element
+                to point `htmlFor` at), so this is a purely visual caption. */}
+            <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+              Link expires
+            </span>
+            <Select
+              ariaLabel="Link expires"
+              value={ttl}
+              onValueChange={(value) => setTtl(value as ShareTtl)}
+              options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
+            />
+          </div>
+
+          {/* No first-view email without counted views: shown only while
+              Insights is on for this link. */}
+          <FirstViewEmailSwitch viewsCounted={switchesShown && offered.insights && engagement.insights} />
+        </SecureLinkSection>
+
+        {/* A hairline keeps the switches below out of the section above. */}
+        {(previewShown || switchesShown) && (
+          <div aria-hidden className="mt-4 h-px bg-grey-80 dark:bg-[#333]" />
+        )}
 
         {previewShown && (
           <ChatPreviewSwitch checked={chatPreview} onChange={setChatPreview} />
@@ -1171,6 +1209,7 @@ function DoneBody({
   password,
   chatPreview,
   engagement,
+  expiry,
   onCopy,
   onOpen,
   onClose,
@@ -1179,6 +1218,8 @@ function DoneBody({
 }: {
   link: ShareLink;
   password?: string;
+  /** How long the link was made to last, and how to change it. */
+  expiry: ExpiryEdit;
   /** A chat preview was asked for with this link: offer to turn it off. */
   chatPreview: boolean;
   /** The link's switches, when the dialog showed them: they can be changed here. */
@@ -1197,18 +1238,50 @@ function DoneBody({
   const [switchesSaving, setSwitchesSaving] = useState(false);
   const [switchesNote, setSwitchesNote] = useState<string | null>(null);
   const switchesTouched = useRef(false);
+  // Allow download, as the link has it: `null` until read, and for good on a
+  // server without the switch (Rust sends none), which draws no row.
+  const [download, setDownload] = useState<boolean | null>(null);
+  const [downloadRefused, setDownloadRefused] = useState(false);
+  // The expiry as chosen and as the server has it. A change is shown at once
+  // and put back if the server refuses, like the switches.
+  const [ttl, setTtl] = useState<ShareTtl>(expiry.ttl);
+  const [expiresAt, setExpiresAt] = useState<string | null>(link.expiresAt);
+  const [expirySaving, setExpirySaving] = useState(false);
+  const changeExpiry = async (next: ShareTtl) => {
+    if (!expiry.by || next === ttl) return;
+    const before = ttl;
+    setTtl(next);
+    setExpirySaving(true);
+    try {
+      setExpiresAt(
+        expiry.by === "folder"
+          ? await updateFolderShareExpiry(link.shareToken, next)
+          : await updateShareExpiry(link.shareToken, next),
+      );
+    } catch (err) {
+      setTtl(before);
+      toast.error(`Could not update expiry: ${errorMessage(err)}`);
+    } finally {
+      setExpirySaving(false);
+    }
+  };
 
   // The switches asked for are sent just after the link is made, in the
   // background. Read them back (Rust answers once that send is done), so the
   // switches show what the link has, and say so when one did not turn on. A
   // change the user already made wins over this read.
+  // The same read gives Allow download, so it is read for every file link
+  // whose switches are shown, not only when one was asked for.
   useEffect(() => {
     const asked = engagement?.value;
-    if (!asked || !(asked.insights || asked.comments || asked.reactions)) return;
+    if (!asked) return;
+    const askedAny = asked.insights || asked.comments || asked.reactions;
     let alive = true;
     getLinkSettings(link.shareToken)
       .then((real) => {
-        if (!alive || switchesTouched.current) return;
+        if (!alive) return;
+        setDownload(real.download ?? null);
+        if (!askedAny || switchesTouched.current) return;
         setSwitches(real.on);
         const missed = (["insights", "comments", "reactions"] as const).some(
           (key) => asked[key] && real.offered[key] && !real.on[key],
@@ -1241,6 +1314,24 @@ function DoneBody({
     }
   };
 
+  // Shown as changed at once, put back if Rust refuses; a refusal for the
+  // plan shows the upgrade card instead of a toast.
+  const changeDownload = async (next: boolean) => {
+    const before = download;
+    setDownload(next);
+    setDownloadRefused(false);
+    setSwitchesSaving(true);
+    try {
+      await setLinkSettings(link.shareToken, { download: next });
+    } catch (err) {
+      setDownload(before);
+      if (isDownloadNotInPlan(err)) setDownloadRefused(true);
+      else toast.error(errorMessage(err));
+    } finally {
+      setSwitchesSaving(false);
+    }
+  };
+
   // Off removes the preview from the server; on makes it again from the
   // file. Shown as changed at once, put back if Rust refuses.
   const changePreview = async (next: boolean) => {
@@ -1266,7 +1357,7 @@ function DoneBody({
       toast.error(`Could not copy password: ${errorMessage(err)}`);
     }
   };
-  const expiresAtPretty = formatExpiresAt(link.expiresAt);
+  const expiresAtPretty = formatExpiresAt(expiresAt);
   const urlRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = urlRef.current;
@@ -1288,16 +1379,6 @@ function DoneBody({
   //       where the inline copy button isn't reachable.
   return (
     <div className="font-geist">
-      {/* State the lifetime either way: silently omitting the line for a
-          never-expiring link reads as "we forgot to say", not as "no expiry". */}
-      <p className="mb-3 text-center text-xs text-grey-50 dark:text-grey-dark-600">
-        {link.expiresAt === null
-          ? "This link stays active until you revoke it."
-          : expiresAtPretty
-            ? `Expires ${expiresAtPretty}.`
-            : null}
-      </p>
-
       <div
         className={cn(
           "mb-6 flex items-start gap-2 rounded-[8px] border p-3",
@@ -1358,6 +1439,9 @@ function DoneBody({
             switchesInPlan={engagement.switchesInPlan}
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
+            download={download}
+            onDownloadChange={(next) => void changeDownload(next)}
+            downloadRefused={downloadRefused}
           />
           {switchesNote && (
             <p role="status" className="mt-2 text-xs leading-[1.45] text-error-50 dark:text-error-70">
@@ -1367,55 +1451,78 @@ function DoneBody({
         </div>
       )}
 
-      {password && (
-        <div className="mb-6">
-          <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">
-            Password
-          </p>
-          <div
-            className={cn(
-              "flex items-center gap-2 rounded-[8px] border p-3",
-              "border-grey-80 bg-white",
-              "dark:border-[#494949] dark:bg-[#1f1f1f]",
-            )}
-          >
-            <input
-              readOnly
-              value={password}
-              onFocus={(e) => e.currentTarget.select()}
+      <SecureLinkSection className="mb-6">
+        {expiry.by && (
+          <Select
+            ariaLabel="Link expires"
+            value={ttl}
+            disabled={expirySaving}
+            onValueChange={(value) => void changeExpiry(value as ShareTtl)}
+            options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
+          />
+        )}
+        {/* State the lifetime either way: silently omitting the line for a
+            never-expiring link reads as "we forgot to say", not as "no expiry". */}
+        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+          {expiresAt === null
+            ? "This link stays active until you revoke it."
+            : expiresAtPretty
+              ? `Expires ${expiresAtPretty}.`
+              : null}
+        </p>
+        {password && (
+          <div className="mt-3">
+            <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">
+              Password
+            </p>
+            <div
               className={cn(
-                "flex-1 bg-transparent font-mono text-xs outline-none",
-                "text-grey-10 dark:text-grey-dark-800",
-              )}
-            />
-            <button
-              type="button"
-              onClick={handleCopyPassword}
-              title={copiedPw ? "Copied!" : "Copy password"}
-              aria-label="Copy password"
-              className={cn(
-                "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
-                copiedPw
-                  ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
-                  : cn(
-                      "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
-                      "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
-                    ),
+                "flex items-center gap-2 rounded-[8px] border p-3",
+                "border-grey-80 bg-white",
+                "dark:border-[#494949] dark:bg-[#1f1f1f]",
               )}
             >
-              {copiedPw ? (
-                <Check className="size-4" />
-              ) : (
-                <Icons.Copy className="size-4" />
-              )}
-            </button>
+              <input
+                readOnly
+                value={password}
+                onFocus={(e) => e.currentTarget.select()}
+                className={cn(
+                  "flex-1 bg-transparent font-mono text-xs outline-none",
+                  "text-grey-10 dark:text-grey-dark-800",
+                )}
+              />
+              <button
+                type="button"
+                onClick={handleCopyPassword}
+                title={copiedPw ? "Copied!" : "Copy password"}
+                aria-label="Copy password"
+                className={cn(
+                  "shrink-0 rounded-md border px-1.5 py-1 transition-colors",
+                  copiedPw
+                    ? "border-success-90 bg-success-100 text-success-50 dark:border-success-50/60 dark:bg-success-50/10 dark:text-success-50"
+                    : cn(
+                        "border-grey-80 bg-grey-90 text-grey-10 hover:bg-grey-80",
+                        "dark:border-[#494949] dark:bg-[#2c2c2c] dark:text-white dark:hover:bg-[#363636]",
+                      ),
+                )}
+              >
+                {copiedPw ? (
+                  <Check className="size-4" />
+                ) : (
+                  <Icons.Copy className="size-4" />
+                )}
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
+              Send this password separately. The link can&apos;t be opened
+              without it.
+            </p>
           </div>
-          <p className="mt-1.5 text-xs text-grey-50 dark:text-grey-dark-600">
-            Send this password separately. The link can&apos;t be opened
-            without it.
-          </p>
-        </div>
-      )}
+        )}
+        {/* File links only: a folder link has no email gate. */}
+        {engagement && <EmailGateSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
+        <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
+      </SecureLinkSection>
 
       <div className="flex flex-col gap-3">
         <Button

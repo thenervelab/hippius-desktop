@@ -29,6 +29,7 @@ mod ipc_guard;
 pub mod media_preview;
 pub mod notifications;
 pub mod power;
+pub mod preview_archive;
 pub mod recovery;
 pub mod recovery_binding;
 mod recovery_proof;
@@ -42,6 +43,7 @@ mod test_helpers;
 pub mod tray;
 pub mod updates;
 mod utils;
+pub mod video_engine;
 pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
@@ -88,7 +90,7 @@ use crate::console_access::validate_recovery_password;
 use crate::infra::vm::{
     create_vm, get_vm_instance, list_vm_applications, list_vm_flavors, list_vm_images, list_vm_instances, reboot_vm, start_vm, stop_vm, terminate_vm,
 };
-use crate::media_preview::{open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
+use crate::media_preview::{check_preview_archive, open_in_default_app, prepare_motion_photo_preview, read_preview_bytes, resolve_drive_file_source};
 use crate::notifications::credits::{
     check_low_credit_notification, check_low_credit_notification_live, create_credit_notifications, create_sync_notification,
     get_is_above_half_credit, is_first_time, mark_first_time_seen, process_credit_events, update_is_above_half_credit,
@@ -112,7 +114,7 @@ use crate::sync::device::{get_device_name, set_device_name};
 use crate::sync::drive_summaries::{get_file_type_summary, get_source_summary};
 use crate::sync::files::{
     add_file, add_files, add_folder, allow_asset_scope, create_sync_folder, delete_files, export_file, export_folder_zip, filter_file_entries,
-    get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, rename_entry, resolve_file_info, resolve_file_path,
+    get_recent_files, get_user_files, list_sync_folder, list_sync_folder_grouped, move_entries, rename_entry, resolve_file_info, resolve_file_path,
     search_user_files_recursive,
 };
 use crate::sync::folders::{delete_remote_folder, get_sync_folders_with_stats, list_remote_folders, restore_remote_folders};
@@ -444,6 +446,7 @@ fn main() {
             add_folder,
             delete_files,
             rename_entry,
+            move_entries,
             create_sync_folder,
             list_sync_folder,
             list_sync_folder_grouped,
@@ -525,17 +528,24 @@ fn main() {
             get_thumbnail,
             prepare_motion_photo_preview,
             read_preview_bytes,
+            check_preview_archive,
             resolve_drive_file_source,
             open_in_default_app,
             // The viewer's video source: the asset URL, or on Linux the
             // loopback stream (WebKitGTK cannot play media from `asset://`).
             crate::video_stream::video_playback_source,
             crate::video_stream::video_stream_release,
+            // Previews for videos the webview cannot play (WMV, AVI, MKV, ...):
+            // a remuxed copy or a stream converted by the bundled engine.
+            crate::video_engine::video_preview_open,
+            crate::video_engine::video_preview_close,
+            crate::video_engine::video_preview_segment,
             // File sharing (link-based public shares)
             crate::shares::commands::hcfs_create_share,
             crate::shares::commands::hcfs_create_remote_share,
             crate::shares::quick_link::copy_file_share_link,
             crate::shares::quick_link::create_capture_link,
+            crate::shares::quick_link::insights_panel_link_default,
             crate::shares::commands::hcfs_create_folder_share,
             crate::shares::commands::hcfs_list_shares,
             crate::shares::commands::hcfs_revoke_share,
@@ -550,6 +560,9 @@ fn main() {
             crate::shares::insights::share_get_reactions,
             crate::shares::insights::share_get_link_settings,
             crate::shares::insights::share_set_link_settings,
+            crate::shares::gate::share_get_gate,
+            crate::shares::gate::share_set_gate,
+            crate::shares::gate::share_remove_gate,
             crate::shares::insights::share_link_settings_default,
             crate::shares::insights::share_switches_in_plan,
             crate::shares::insights::share_get_notification_preferences,
@@ -987,6 +1000,10 @@ fn main() {
             #[cfg(any(unix, windows))]
             tauri::RunEvent::Exit => {
                 let state = app_handle.state::<crate::app_state::AppState>();
+                // Stop every video preview's engine and delete converted
+                // copies. Best effort: an engine missed here exits on its
+                // own when its pipe closes with this process.
+                state.video_engine.close_all();
                 if state.on_final_exit() {
                     info!("waiting briefly for cancelled Finder shares before exit");
                     // Blocking the main thread is the point: the process ends
@@ -1157,6 +1174,8 @@ async fn open_db_pool(db_path: &std::path::Path) -> Result<SqlitePool, sqlx::Err
 pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
     builder.setup(|app| {
         debug!(".setup() closure called in setup.rs");
+        // Converted video previews a crash left in the private cache.
+        tauri::async_runtime::spawn_blocking(crate::video_engine::sweep_converted_at_launch);
 
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before

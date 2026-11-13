@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.20"
+version = "0.6.21"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -84,7 +84,6 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 tokio-util = "0.7"
 dirs = "6.0.0"
 flate2 = "1.1.2"
-tar = { version = "0.4.44", default-features = false }
 reqwest = { version = "0.13.1", default-features = false, features = [
     "multipart",
     "json",
@@ -99,9 +98,11 @@ ed25519-dalek = "2.2"
 # some still unpublished, and unyanked the last of each major only for a
 # while (zip-rs/zip2#1075). The app writes archives and parses one
 # user-supplied archive (wallet backup import: central directory plus one
-# size-capped entry). It never calls `extract`, which the advisories published
-# so far are about.
-zip = { version = "9.0.4", default-features = false, features = ["deflate", "aes-crypto"] }
+# size-capped entry, never `extract`). Advisories are not only about `extract`:
+# GHSA-m665-v7pm-7grj (9.0.4 and older) is about readers disagreeing on an
+# entry's name, so the floor stays at a release that carries every fix. RustSec
+# does not track every zip advisory, so cargo-deny alone will not flag one.
+zip = { version = "9.5.1", default-features = false, features = ["deflate", "aes-crypto"] }
 dotenvy = "0.15"
 base64 = "0.22"
 bs58 = "0.5"
@@ -297,23 +298,21 @@ sha3 = "0.10"
 # `DriveSlot::new`, every clone of an `HcfsClient` shares its bearer tokens,
 # and `set_bearer_token` is `set_fallback_token` (#1156).
 #
+# Now at hcfs main 778f886e, the merge commit of #1170: hcfs-client declares
+# base64's `std` feature itself (#1165), so the desktop no longer turns it on.
+# `Manifest` gains `capture` (#1148), which the desktop leaves `None`.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
 # The file cipher, path hash and `FileKey`, which hcfs-client uses but does
 # not re-export. Same rev as hcfs-client so a `FileKey` is the type its API takes.
-hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "3a636ea344bb736c354e3fa7a1350414e07b6005" }
-# Never imported. hcfs-client at this rev uses base64 0.23's `DecodeError` as a
-# `std::error::Error` but enables only `alloc`. That compiles inside the hcfs
-# workspace, where another crate turns `std` on, and fails here. This entry
-# turns `std` on through feature unification.
-# TODO(GeorgiosDelkos, thenervelab/hcfs#1165): drop once hcfs-client asks for `std`.
-base64-std-for-hcfs = { package = "base64", version = "0.23.1", default-features = false, features = ["std"] }
+hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
@@ -496,6 +495,8 @@ print_stdout = "deny"
 print_stderr = "deny"
 await_holding_lock = "deny"
 large_futures = "deny"
+# An unsafe block states why it is sound in a `// SAFETY:` comment.
+undocumented_unsafe_blocks = "deny"
 module_name_repetitions = "allow"
 similar_names = "allow"
 missing_errors_doc = "allow"

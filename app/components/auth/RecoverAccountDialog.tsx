@@ -100,7 +100,7 @@ export function RecoverAccountDialog({
   const handleFindAccounts = async () => {
     const phrase = mnemonic.trim();
     if (!phrase) {
-      setError("Enter your mnemonic seed phrase.");
+      setError("Enter your recovery seed or access key.");
       return;
     }
     setBusy(true);
@@ -181,12 +181,12 @@ export function RecoverAccountDialog({
       {step === "input" && (
         <div className="flex flex-col gap-4">
           <p className="text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-            Paste your backed-up mnemonic seed phrase. We&apos;ll find which account it can restore and download your files to a folder you choose.
+            Paste the 12 words you backed up: your recovery seed or access key. We&apos;ll find the account they restore and download your files to a folder you choose.
           </p>
           <textarea
             value={mnemonic}
             onChange={(e) => setMnemonic(e.target.value)}
-            placeholder="Enter or paste your 12-word seed phrase"
+            placeholder="Enter or paste your 12 words"
             rows={3}
             className="w-full rounded-md border border-grey-80 bg-white p-3 font-mono text-sm text-grey-10 dark:border-[#3a3a3a] dark:bg-[#1a1a1a] dark:text-white"
           />

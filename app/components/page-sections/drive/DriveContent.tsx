@@ -35,6 +35,8 @@ import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import { useDriveRoute } from "./driveRoute";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
+import { useDriveMove } from "./move/DriveMoveProvider";
+import MoveHint from "./move/MoveHint";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -130,6 +132,8 @@ const DriveContent: FC<DriveContentProps> = ({
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+  // Moving within the drive on screen; null outside a drive folder view.
+  const driveMove = useDriveMove();
 
   // Use shared functionality between FilesTable and CardView
   const sharedState = useFileViewShared();
@@ -384,6 +388,7 @@ const DriveContent: FC<DriveContentProps> = ({
           isRecentFiles && "-mt-3",
         )}
       >
+        {!isRecentFiles && !isLoading && <MoveHint rows={filteredData} />}
         {renderContent()}
       </div>
 
@@ -480,6 +485,14 @@ const DriveContent: FC<DriveContentProps> = ({
             setRenameModalFile(file);
             setContextMenu(null);
           }}
+          onMove={
+            driveMove
+              ? (file) => {
+                  driveMove.openMoveDialog([file], currentSubfolderPath);
+                  setContextMenu(null);
+                }
+              : undefined
+          }
           basePath={currentSubfolderPath}
         />
       )}

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "Hippius"
-version = "0.6.20"
+version = "0.6.21"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -12,7 +12,6 @@ dependencies = [
  "ashpd",
  "axum",
  "base64 0.22.1",
- "base64 0.23.1",
  "bip39 3.0.0",
  "blake3",
  "bs58",
@@ -64,7 +63,6 @@ dependencies = [
  "sqlx",
  "subxt",
  "subxt-signer",
- "tar",
  "tauri",
  "tauri-build",
  "tauri-plugin-clipboard-manager",
@@ -147,6 +145,7 @@ dependencies = [
  "cipher 0.5.2",
  "cpubits",
  "cpufeatures 0.3.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -238,7 +237,7 @@ dependencies = [
  "objc2-foundation",
  "parking_lot",
  "percent-encoding",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "wl-clipboard-rs",
  "x11rb",
 ]
@@ -2427,7 +2426,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3056,7 +3055,7 @@ dependencies = [
  "gobject-sys 0.21.5",
  "libc",
  "system-deps 7.0.8",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3069,7 +3068,7 @@ dependencies = [
  "gobject-sys 0.22.9",
  "libc",
  "system-deps 9.0.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3528,7 +3527,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.10"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=3a636ea344bb736c354e3fa7a1350414e07b6005#3a636ea344bb736c354e3fa7a1350414e07b6005"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=778f886e5ee3febaf010f43c5980cf5ef821a4e2#778f886e5ee3febaf010f43c5980cf5ef821a4e2"
 dependencies = [
  "argon2 0.6.0",
  "async-stream",
@@ -3569,7 +3568,7 @@ dependencies = [
 [[package]]
 name = "hcfs-crypto"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=3a636ea344bb736c354e3fa7a1350414e07b6005#3a636ea344bb736c354e3fa7a1350414e07b6005"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=778f886e5ee3febaf010f43c5980cf5ef821a4e2#778f886e5ee3febaf010f43c5980cf5ef821a4e2"
 dependencies = [
  "blake3",
  "chacha20poly1305 0.11.0",
@@ -3580,7 +3579,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=3a636ea344bb736c354e3fa7a1350414e07b6005#3a636ea344bb736c354e3fa7a1350414e07b6005"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=778f886e5ee3febaf010f43c5980cf5ef821a4e2#778f886e5ee3febaf010f43c5980cf5ef821a4e2"
 dependencies = [
  "blake3",
  "ed25519-dalek 3.0.0",
@@ -6490,7 +6489,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6894,7 +6893,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6907,7 +6906,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6966,7 +6965,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 0.26.11",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6987,7 +6986,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs 1.0.10",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7912,7 +7911,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -8553,9 +8552,9 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tar"
-version = "0.4.45"
+version = "0.4.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22692a6476a21fa75fdfc11d452fda482af402c008cdbaf3476414e122040973"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
 dependencies = [
  "filetime",
  "libc",
@@ -9050,10 +9049,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9577,9 +9576,9 @@ dependencies = [
 
 [[package]]
 name = "typed-path"
-version = "0.12.3"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
 
 [[package]]
 name = "typeid"
@@ -9601,7 +9600,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -10306,7 +10305,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11427,18 +11426,18 @@ dependencies = [
 
 [[package]]
 name = "zeroize"
-version = "1.8.2"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b97154e67e32c85465826e8bcc1c59429aaaf107c1e4a9e53c8d8ccd5eff88d0"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
  "zeroize_derive",
 ]
 
 [[package]]
 name = "zeroize_derive"
-version = "1.4.3"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85a5b4158499876c763cb03bc4e49185d3cccbabb15b33c627f7884f43db852e"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -11480,9 +11479,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.0.4"
+version = "9.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
+checksum = "e3476fd497ac8af5b1ec7b51acab7bef380f7e8dd8e0487595bafd839417a302"
 dependencies = [
  "aes 0.9.3",
  "constant_time_eq 0.6.1",
@@ -11491,11 +11490,13 @@ dependencies = [
  "getrandom 0.4.2",
  "hmac 0.13.0",
  "indexmap 2.13.1",
+ "libc",
  "memchr",
  "nix 0.31.3",
  "pbkdf2 0.13.0",
  "sha1 0.11.0",
  "typed-path",
+ "windows-sys 0.61.2",
  "zeroize",
  "zopfli",
 ]

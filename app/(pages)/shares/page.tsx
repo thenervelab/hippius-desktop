@@ -8,7 +8,7 @@ import {
   getCoreRowModel,
   getPaginationRowModel,
   getSortedRowModel,
-  type PaginationState,
+  type OnChangeFn,
   type SortingState,
   useReactTable,
 } from "@tanstack/react-table";
@@ -97,12 +97,70 @@ import {
 } from "./shareRowDisplay";
 import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
 import { VIEW_INSIGHTS_LABEL } from "@/components/page-sections/drive/useCaptureInsightsItem";
+import {
+  DRIVE_LIST_PAGE_SIZE,
+  resolveFolderListPage,
+} from "@/components/page-sections/drive/folder-list/folderListPaging";
 
 const SHARES_QUERY_KEY = "shares-list";
 const HISTORY_QUERY_KEY = "shares-history-list";
 
-/** History only ever holds ended shares, so a short page is plenty. */
-const HISTORY_PAGE_SIZE = 10;
+/**
+ * Rows per page on both lists, the page size of Shared Drives and the Drive
+ * page's drive list. With this many or fewer there is no pager.
+ */
+const SHARES_PAGE_SIZE = DRIVE_LIST_PAGE_SIZE;
+
+/**
+ * One list's page: paged in the client (the listings arrive whole) over the
+ * sorted rows, clamped so a revoke or remove that empties the last page steps
+ * back to the one before, and back to page 1 whenever the sort changes.
+ */
+function useListPage(total: number) {
+  const [page, setPage] = React.useState(1);
+  const view = resolveFolderListPage({ total, page, pageSize: SHARES_PAGE_SIZE });
+  // The view is already clamped; this keeps the state with it, so a row
+  // coming back later does not jump the list to a page nobody asked for.
+  const shownPage = view.page;
+  React.useEffect(() => {
+    if (shownPage !== page) setPage(shownPage);
+  }, [shownPage, page]);
+  return { view, setPage };
+}
+
+/** A sort change that also takes the list back to its first page. */
+function sortingResetsPage(
+  setSorting: React.Dispatch<React.SetStateAction<SortingState>>,
+  setPage: (page: number) => void,
+): OnChangeFn<SortingState> {
+  return (updater) => {
+    setSorting(updater);
+    setPage(1);
+  };
+}
+
+/** The pager under a list, drawn only once the list outgrows a page. */
+function ListPager({
+  view,
+  total,
+  setPage,
+}: {
+  view: ReturnType<typeof resolveFolderListPage>;
+  total: number;
+  setPage: (page: number) => void;
+}) {
+  if (!view.showPager) return null;
+  return (
+    <Pagination
+      className="px-4 py-3 border-t border-[#E3E3E3] dark:border-[#313131]"
+      currentPage={view.page}
+      totalPages={view.totalPages}
+      setPage={setPage}
+      totalCount={total}
+      pageSize={SHARES_PAGE_SIZE}
+    />
+  );
+}
 
 // Destructive accent — matches drive/DeleteConfirmationDialog so the
 // "revoke this link" and "clear history" framed dialogs read as
@@ -571,22 +629,8 @@ function ActiveSharesTable({
   highlightedRowIds,
 }: ActiveSharesTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
+  const { view, setPage } = useListPage(rows.length);
   const scrollerRef = React.useRef<HTMLDivElement>(null);
-  const hasHighlightedRow = rows.some((row) =>
-    highlightedRowIds.has(activeShareRowId(row)),
-  );
-
-  // Point the row out the way Drive's "Show in folder" does (scroll to it,
-  // a highlight that fades) once it has rendered. Keyed on the boolean, not
-  // the rows: the listing refetches every few seconds and must not pull the
-  // page back after the user has scrolled away.
-  React.useEffect(() => {
-    if (!hasHighlightedRow) return;
-    const row = scrollerRef.current?.querySelector<HTMLElement>(
-      "[data-share-highlight-target]",
-    );
-    return row ? pointOut(row) : undefined;
-  }, [hasHighlightedRow]);
 
   // A server can carry folder shares without the by-hash pair, so this is a
   // separate flag. Unfetched capabilities read as false, which keeps the
@@ -746,12 +790,43 @@ function ActiveSharesTable({
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
+    state: { sorting, pagination: { pageIndex: view.page - 1, pageSize: SHARES_PAGE_SIZE } },
+    onSortingChange: sortingResetsPage(setSorting, setPage),
+    // The page is ours (`useListPage`); the listing polls, and a reset on
+    // every new data array would bounce the reader back to page 1.
+    autoResetPageIndex: false,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     getRowId: activeShareRowId,
   });
+
+  // The row the drive's link badge pointed at may sit on a later page: open
+  // that page once, then point the row out there.
+  const highlightIndex = table
+    .getSortedRowModel()
+    .rows.findIndex((row) => highlightedRowIds.has(row.id));
+  const openedHighlightPage = React.useRef(false);
+  React.useEffect(() => {
+    if (highlightIndex < 0 || openedHighlightPage.current) return;
+    openedHighlightPage.current = true;
+    setPage(Math.floor(highlightIndex / SHARES_PAGE_SIZE) + 1);
+  }, [highlightIndex, setPage]);
+
+  // Point the row out the way Drive's "Show in folder" does (scroll to it,
+  // a highlight that fades) once it has rendered. Keyed on the boolean, not
+  // the rows: the listing refetches every few seconds and must not pull the
+  // page back after the user has scrolled away.
+  const highlightOnPage = table
+    .getRowModel()
+    .rows.some((row) => highlightedRowIds.has(row.id));
+  React.useEffect(() => {
+    if (!highlightOnPage) return;
+    const row = scrollerRef.current?.querySelector<HTMLElement>(
+      "[data-share-highlight-target]",
+    );
+    return row ? pointOut(row) : undefined;
+  }, [highlightOnPage]);
 
   return (
     <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
@@ -772,7 +847,7 @@ function ActiveSharesTable({
             ))}
           </THead>
           <TBody>
-            {table.getRowModel().rows.map((row) => (
+            {table.getRowModel().rows.map((row, position) => (
               <Tr
                 key={row.id}
                 data-share-highlight-target={
@@ -780,9 +855,10 @@ function ActiveSharesTable({
                 }
                 // The stripe is on the row, not its cells: the highlight
                 // tint is the row's background image, which cell colours
-                // would paint over.
+                // would paint over. By its place on the page, not its place
+                // in the listing, so sorting and paging keep the stripes.
                 className={
-                  row.index % 2 === 0
+                  position % 2 === 0
                     ? "bg-[#fbfbfb] dark:bg-[#161616]"
                     : "bg-[#f5f5f5] dark:bg-[#1e1e1e]"
                 }
@@ -799,6 +875,7 @@ function ActiveSharesTable({
           </TBody>
         </Table>
       </div>
+      <ListPager view={view} total={rows.length} setPage={setPage} />
     </TableWrapper>
   );
 }
@@ -1106,14 +1183,8 @@ interface HistoryTableProps {
 
 function HistoryTable({ rows, onRemove }: HistoryTableProps) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
-  const [pagination, setPagination] = React.useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: HISTORY_PAGE_SIZE,
-  });
-  const totalPages = Math.max(1, Math.ceil(rows.length / HISTORY_PAGE_SIZE));
-  // Removing the last entry on the last page would otherwise strand the user
-  // on an empty page; clamp at render rather than syncing state in an effect.
-  const pageIndex = Math.min(pagination.pageIndex, totalPages - 1);
+  // Removing the last entry on the last page steps back a page.
+  const { view, setPage } = useListPage(rows.length);
 
   const columns = React.useMemo(
     () => [
@@ -1187,9 +1258,8 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
   const table = useReactTable({
     data: rows,
     columns,
-    state: { sorting, pagination: { pageIndex, pageSize: HISTORY_PAGE_SIZE } },
-    onSortingChange: setSorting,
-    onPaginationChange: setPagination,
+    state: { sorting, pagination: { pageIndex: view.page - 1, pageSize: SHARES_PAGE_SIZE } },
+    onSortingChange: sortingResetsPage(setSorting, setPage),
     // The history query polls, and a reset on every new data array would
     // bounce the user back to page 1 mid-browse.
     autoResetPageIndex: false,
@@ -1218,7 +1288,7 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
             ))}
           </THead>
           <TBody>
-            {table.getRowModel().rows.map((row) => (
+            {table.getRowModel().rows.map((row, position) => (
               <Tr key={row.id}>
                 {row.getVisibleCells().map((cell) => (
                   <Td
@@ -1226,7 +1296,7 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
                     cell={cell}
                     className={cn(
                       "!border-[#E3E3E3] dark:!border-[#313131]",
-                      row.index % 2 === 0
+                      position % 2 === 0
                         ? "bg-[#fbfbfb] dark:bg-[#161616]"
                         : "bg-[#f5f5f5] dark:bg-[#1e1e1e]",
                     )}
@@ -1237,16 +1307,7 @@ function HistoryTable({ rows, onRemove }: HistoryTableProps) {
           </TBody>
         </Table>
       </div>
-      {totalPages > 1 && (
-        <Pagination
-          className="px-4 py-3 border-t border-[#E3E3E3] dark:border-[#313131]"
-          currentPage={pageIndex + 1}
-          totalPages={totalPages}
-          setPage={(page) => table.setPageIndex(page - 1)}
-          totalCount={rows.length}
-          pageSize={HISTORY_PAGE_SIZE}
-        />
-      )}
+      <ListPager view={view} total={rows.length} setPage={setPage} />
     </TableWrapper>
   );
 }

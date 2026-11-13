@@ -98,7 +98,10 @@ export default function OsDropHost() {
       // No plan or no room: the same plan dialog as the Upload buttons,
       // never a picker or an upload.
       const reason = plan.action === "files" ? "file-upload" : "folder-upload";
-      if (!(await requireUploadRoom(reason, Boolean(target.storageBlocked)))) return;
+      // The drive it lands in, so a drive shared with this account is judged
+      // on its owner's room rather than this account's plan.
+      const driveLabel = destination.kind === "choose" ? null : destination.label;
+      if (!(await requireUploadRoom(reason, Boolean(target.storageBlocked), driveLabel))) return;
 
       const uploaded = () => {
         target.onUploaded?.();
@@ -147,6 +150,7 @@ export default function OsDropHost() {
               subfolder: folder.subfolder,
               syncBasePath: folder.syncBasePath,
               onSuccess: target.onUploaded,
+              driveLabel: label,
             }
           : undefined,
       });

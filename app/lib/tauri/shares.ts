@@ -74,6 +74,24 @@ export interface ServerCapabilities {
   /** The moment of the recording each reaction was made at (hcfs #803). Absent on older servers. */
   share_reaction_moments?: boolean;
   /**
+   * Document views and the per-page Insights they feed. Read by Rust only
+   * (the Pages tab shows when Rust sends `pages`); listed so the type matches
+   * the wire.
+   */
+  share_document_views?: boolean;
+  /**
+   * The owner's Allow download switch on a file link. Read by Rust only (it
+   * sends `download` in the link settings only then); listed so the type
+   * matches the wire.
+   */
+  share_download_switch?: boolean;
+  /**
+   * Email gates on file links ("Ask for email"). Read by Rust only (the
+   * gate commands answer `offered: false` without it); listed so the type
+   * matches the wire.
+   */
+  share_gates?: boolean;
+  /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
    */

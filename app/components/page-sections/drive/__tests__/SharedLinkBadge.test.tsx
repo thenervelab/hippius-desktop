@@ -86,11 +86,24 @@ describe("SharedLinkBadge", () => {
     expect(screen.getByLabelText(/shared via public link/i)).toBeInTheDocument();
   });
 
+  it("badges any file from a link made elsewhere for a file of its name and size", () => {
+    getUnplacedSharesNamedMock.mockReturnValue([
+      { shareToken: "web", filename: "report.pdf", plaintextSize: 48213, createdAt: "2026-10-30T09:00:00Z", expiresAt: null },
+    ]);
+    render(<SharedLinkBadge label="Drive" actualName="Work/report.pdf" fileSize={48213} />);
+    expect(screen.getByLabelText(/shared/i)).toBeInTheDocument();
+    expect(getUnplacedSharesNamedMock).toHaveBeenCalledWith("report.pdf");
+  });
+
   it("does not badge a plain file from another file's link of the same name", () => {
     getUnplacedSharesNamedMock.mockReturnValue([
       { shareToken: "web", filename: "image.png", plaintextSize: 1, createdAt: "2026-10-30T09:00:00Z", expiresAt: null },
     ]);
-    render(<SharedLinkBadge label="Drive" actualName="image.png" fileSize={1} />);
+    const { unmount } = render(<SharedLinkBadge label="Drive" actualName="image.png" fileSize={2} />);
+    expect(screen.queryByLabelText(/shared/i)).not.toBeInTheDocument();
+    unmount();
+    // Without the row's size a plain name is not specific enough.
+    render(<SharedLinkBadge label="Drive" actualName="image.png" />);
     expect(screen.queryByLabelText(/shared/i)).not.toBeInTheDocument();
   });
 

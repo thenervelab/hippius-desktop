@@ -3,7 +3,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { FileCardSkeleton } from "./CardViewSkeleton";
 import { useLoadMoreSentinel } from "@/app/lib/hooks/use-load-more-sentinel";
 import { Button } from "@/components/ui/button";
-import { MoreVertical, Download, FolderOpen, Link2, MonitorDown, Pencil } from "lucide-react";
+import { MoreVertical, Download, FolderOpen, FolderSymlink, Link2, MonitorDown, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
   folderShareFeatureEnabledAtom,
@@ -32,11 +32,15 @@ import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 
 import { Icons } from "@/components/ui";
 import FileCard from "./FileCard";
-import { useCaptureInsightsItem } from "../useCaptureInsightsItem";
+import { useFileInsightsItem } from "../useCaptureInsightsItem";
 import { useCopyLinkItem } from "../useCopyExistingLink";
 import { linkPathFor } from "../existingLink";
 import SelectionActionBar from "../SelectionActionBar";
 import TableActionMenu from "@/app/components/ui/alt-table/TableActionMenu";
+import MoveCard from "../move/MoveCard";
+import { useDriveMove } from "../move/DriveMoveProvider";
+import { normalizePath } from "@/app/lib/drive-move/moveLogic";
+import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { useRouter } from "next/navigation";
 
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
@@ -107,13 +111,15 @@ const CardView: FC<CardViewProps> = ({
   const memberFolderShares = useAtomValue(memberFolderSharesEnabledAtom);
   const writableMemberDriveLabels = useWritableMemberDriveLabels();
   const setShareModalFile = useSetAtom(shareModalFileAtom);
-  const captureInsightsItem = useCaptureInsightsItem();
+  const fileInsightsItem = useFileInsightsItem();
   const copyLinkItem = useCopyLinkItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
   const { basePath } = useDriveRoute();
-  const { isSelectionMode, enterSelectionModeAndSelectFile } =
+  const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile } =
     useFileSelection();
+  const driveMove = useDriveMove();
+  const currentFolder = normalizePath(currentSubfolderPath);
 
   // State for captured files to delete (to handle timing issue with clearSelection)
   const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
@@ -207,8 +213,10 @@ const CardView: FC<CardViewProps> = ({
               }
 
               return (
-                <div
+                <MoveCard
                   key={`${file.arionHash || file.actualFileName || file.name}-${file.label || ""}-${index}`}
+                  file={file}
+                  currentFolder={currentFolder}
                   className="card-container relative"
                   onContextMenu={(e) => localHandleContextMenu(e, file)}
                 >
@@ -432,8 +440,8 @@ const CardView: FC<CardViewProps> = ({
                                 },
                               ]
                             : []),
-                          // Insights for a capture's link, on the Captures page.
-                          ...captureInsightsItem(
+                          // View insights for any file, after Share via link.
+                          ...fileInsightsItem(
                             file,
                             shareTargetFor(file, currentSubfolderPath).relativePath,
                             () => setOpenMenuIndex(null),
@@ -457,6 +465,27 @@ const CardView: FC<CardViewProps> = ({
                               setOpenMenuIndex(null);
                               if (canRenameFile(file)) {
                                 setRenameModalFile(file);
+                              }
+                            },
+                          }]
+                            : []),
+                          // Move to…: the Rename gates, inside a drive folder.
+                          ...(driveMove?.offersMove(file)
+                            ? [{
+                            icon: <FolderSymlink className="size-4" />,
+                            itemTitle: "Move to\u2026",
+                            disabled: !driveMove.canMove(file),
+                            tooltip: !driveMove.canMove(file)
+                              ? MOVE_DISABLED_TOOLTIP
+                              : undefined,
+                            onItemClick: (e?: React.MouseEvent) => {
+                              if (e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }
+                              setOpenMenuIndex(null);
+                              if (driveMove.canMove(file)) {
+                                driveMove.openMoveDialog([file], currentFolder);
                               }
                             },
                           }]
@@ -514,7 +543,7 @@ const CardView: FC<CardViewProps> = ({
                       </TableActionMenu>
                     }
                   />
-                </div>
+                </MoveCard>
               );
             })}
             {/* Placeholder cards while the next remote page is on the wire —
@@ -531,7 +560,7 @@ const CardView: FC<CardViewProps> = ({
       </div>
 
       {/* Selection action bar positioned above pagination */}
-      {isSelectionMode && (
+      {(isSelectionMode || selectedFiles.length > 0) && (
         <SelectionActionBar
           onDelete={handleDeleteSelectedFiles}
           isDeleting={isDeleting}

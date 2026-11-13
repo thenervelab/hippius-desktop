@@ -11,6 +11,10 @@
 //! not `InsufficientCredits`, since the two send the user to different
 //! places.
 //!
+//! It also pins who a write is asked about: a drive shared WITH the account
+//! is paid for by its OWNER, so a member with no plan of their own may write
+//! to it, and its refusals name the drive, never the member's plan.
+//!
 //! One `#[tokio::test]`, because the three env vars below are process-wide
 //! and `INDEXER_API_KEY` / `HIPPIUS_INDEXER_URL` are additionally read into
 //! a `OnceLock` on first use — a second test could not re-point them.
@@ -27,7 +31,10 @@ use tokio::net::TcpListener;
 use tauri_project_lib::app_state::AppState;
 use tauri_project_lib::auth::account_key::account_key;
 use tauri_project_lib::auth::auth_session_repo::{UpsertSession, upsert};
-use tauri_project_lib::billing::eligibility::{InsufficientCreditsAction, require_eligible};
+use tauri_project_lib::billing::eligibility::{
+    InsufficientCreditsAction, SHARED_DRIVE_FROZEN, SHARED_DRIVE_FULL, SHARED_DRIVE_VIEW_ONLY, check_action_eligibility_for_drive,
+    member_drive_for_label, member_drive_for_sync_path, require_eligible, require_eligible_for_drive,
+};
 use tauri_project_lib::error::{AppError, NotReadyKind};
 
 const GIB: u64 = 1024 * 1024 * 1024;
@@ -48,6 +55,11 @@ struct MockDrive {
     /// `size_bytes` of the last `/can_upload` request, so a case can assert
     /// the gate forwarded the real payload size.
     last_can_upload_size: Arc<Mutex<Option<u64>>>,
+    /// Answers for one `ss58_address`, over `can_upload`, so the caller and
+    /// the owner of a drive shared with them can be given different plans.
+    can_upload_for: Arc<Mutex<std::collections::HashMap<String, (u16, Value)>>>,
+    /// `(ss58_address, folder_hash)` of the last `/can_upload` request.
+    last_can_upload_target: Arc<Mutex<Option<(String, String)>>>,
 }
 
 impl MockDrive {
@@ -58,7 +70,18 @@ impl MockDrive {
             used_bytes: Arc::new(Mutex::new(0)),
             can_upload: Arc::new(Mutex::new((200, json!({ "result": true, "error": null })))),
             last_can_upload_size: Arc::new(Mutex::new(None)),
+            can_upload_for: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            last_can_upload_target: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// What `/can_upload` answers when it is asked about `ss58`.
+    fn set_can_upload_for(&self, ss58: &str, status: u16, body: Value) {
+        self.can_upload_for.lock().unwrap().insert(ss58.to_owned(), (status, body));
+    }
+
+    fn last_can_upload_target(&self) -> Option<(String, String)> {
+        self.last_can_upload_target.lock().unwrap().clone()
     }
 
     fn set_used(&self, bytes: u64) {
@@ -84,7 +107,11 @@ impl MockDrive {
 /// whatever the case configured.
 async fn can_upload_handler(State(s): State<MockDrive>, Json(req): Json<Value>) -> axum::response::Response {
     *s.last_can_upload_size.lock().unwrap() = req.get("size_bytes").and_then(Value::as_u64);
-    let (status, body) = s.can_upload.lock().unwrap().clone();
+    let ss58 = req.get("ss58_address").and_then(Value::as_str).unwrap_or_default().to_owned();
+    let hash = req.get("folder_hash").and_then(Value::as_str).unwrap_or_default().to_owned();
+    *s.last_can_upload_target.lock().unwrap() = Some((ss58.clone(), hash));
+    let answer = s.can_upload_for.lock().unwrap().get(&ss58).cloned();
+    let (status, body) = answer.unwrap_or_else(|| s.can_upload.lock().unwrap().clone());
     (StatusCode::from_u16(status).expect("valid status"), Json(body)).into_response()
 }
 
@@ -209,7 +236,42 @@ async fn setup_pool_with_token(account_id: &str, hcfs_url: &str) -> SqlitePool {
         .await
         .unwrap();
 
+    // The drives synced here: what turns a local upload's sync root into the
+    // drive it lands in. The member columns are the ones a drive shared WITH
+    // this account carries.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            owner TEXT NOT NULL DEFAULT '',
+            path TEXT NOT NULL,
+            type TEXT NOT NULL DEFAULT 'private',
+            label TEXT NOT NULL DEFAULT 'default',
+            timestamp INTEGER NOT NULL DEFAULT 0,
+            is_paused INTEGER NOT NULL DEFAULT 0,
+            owner_ss58 TEXT,
+            wire_folder_hash TEXT,
+            UNIQUE(owner, label)
+        )",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     pool
+}
+
+/// Record a drive synced here at `path`: an own drive when `member` is
+/// `None`, else one shared WITH the account by `(owner, folder hash)`.
+async fn add_synced_drive(pool: &SqlitePool, account_id: &str, label: &str, path: &str, member: Option<(&str, &str)>) {
+    sqlx::query("INSERT INTO sync_paths (owner, path, label, owner_ss58, wire_folder_hash) VALUES (?, ?, ?, ?, ?)")
+        .bind(account_key(account_id))
+        .bind(path)
+        .bind(label)
+        .bind(member.map(|(owner, _)| owner))
+        .bind(member.map(|(_, hash)| hash))
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// Assert the action is refused for storage — and specifically NOT for
@@ -239,7 +301,7 @@ async fn the_gate_follows_the_servers_preflight_verdict() {
     let account_id = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
     let pool = setup_pool_with_token(account_id, &base_url).await;
     let state = AppState::new();
-    state.set_pool(pool);
+    state.set_pool(pool.clone());
     state
         .set_active_account(account_id, tauri_project_lib::auth::state::AuthCapabilities::Full)
         .expect("set session account");
@@ -330,7 +392,101 @@ async fn the_gate_follows_the_servers_preflight_verdict() {
     )
     .await;
 
-    unsafe {
-        std::env::remove_var("HIPPIUS_API_BASE_URL");
+    shared_drives_are_asked_about_their_owner(&state, &pool, &mock, account_id).await;
+}
+
+/// A drive shared WITH the account is paid for by its OWNER. A member with no
+/// plan of their own (an access-key account, say) may upload to it as far as
+/// the owner's plan allows, and only the drive's own state refuses them,
+/// in words about the drive. Their own drive still answers to their own plan.
+async fn shared_drives_are_asked_about_their_owner(state: &AppState, pool: &SqlitePool, mock: &MockDrive, account_id: &str) {
+    const OWNER: &str = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty";
+    const HASH: &str = "0123456789abcdef";
+    let browse_label = format!("shared:{OWNER}~{HASH}");
+    add_synced_drive(pool, account_id, "Team", "/drives/Team", Some((OWNER, HASH))).await;
+    add_synced_drive(pool, account_id, "Mine", "/drives/Mine", None).await;
+
+    // The member has no plan; the owner has room.
+    mock.set_can_upload(json!({ "result": true, "error": null }));
+    mock.set_can_upload_for(account_id, 200, json!({ "result": false, "error": "drive_not_entitled" }));
+    mock.set_can_upload_for(OWNER, 200, json!({ "result": true, "error": null }));
+
+    // ── Their own drive still answers to their own plan. ─────────────────
+    assert_refused(state, account_id, InsufficientCreditsAction::FileUpload, GIB, "own drive with no plan").await;
+    assert!(
+        member_drive_for_sync_path(state, account_id, "/drives/Mine").await.is_none(),
+        "an own drive is gated as it always was"
+    );
+    assert!(member_drive_for_label(state, account_id, "Mine").await.is_none());
+    let own = check_action_eligibility_for_drive(state, account_id, InsufficientCreditsAction::FileUpload, GIB, Some("Mine"))
+        .await
+        .expect("own-drive check");
+    assert!(!own.eligible && !own.owner_pays, "own drive, no plan: refused on the member's plan");
+    assert_eq!(own.reason.as_deref(), Some("storage_limit_reached"));
+    assert_eq!(own.message, None, "an own drive's refusal is the plan dialog, not a sentence");
+
+    // ── The shared drive, synced here or only browsed, is asked about as
+    //    its owner, and the owner has room. ────────────────────────────────
+    let synced = member_drive_for_sync_path(state, account_id, "/drives/Team")
+        .await
+        .expect("synced member drive");
+    let browsed = member_drive_for_label(state, account_id, &browse_label)
+        .await
+        .expect("browsed member drive");
+    for (case, drive) in [("synced", &synced), ("browsed", &browsed)] {
+        for action in [
+            InsufficientCreditsAction::FileUpload,
+            InsufficientCreditsAction::FolderUpload,
+            InsufficientCreditsAction::FolderSync,
+        ] {
+            require_eligible_for_drive(state, account_id, action, GIB, Some(drive))
+                .await
+                .unwrap_or_else(|e| panic!("{case} {action:?}: a member with no plan was refused a drive with room: {e:?}"));
+            assert_eq!(
+                mock.last_can_upload_target(),
+                Some((OWNER.to_owned(), HASH.to_owned())),
+                "{case}: the pre-flight must ask about the owner's drive"
+            );
+        }
     }
+    for label in ["Team", browse_label.as_str()] {
+        let verdict = check_action_eligibility_for_drive(state, account_id, InsufficientCreditsAction::FileUpload, GIB, Some(label))
+            .await
+            .expect("shared-drive check");
+        assert!(verdict.eligible, "{label}: the click must not be refused on the member's plan");
+        assert!(verdict.owner_pays, "{label}: the frontend must not judge it on the member's plan either");
+    }
+
+    // ── The owner is out of room: refused, in words about the owner. ─────
+    mock.set_can_upload_for(OWNER, 200, json!({ "result": false, "error": "drive_quota_exceeded" }));
+    match require_eligible_for_drive(state, account_id, InsufficientCreditsAction::FileUpload, GIB, Some(&synced)).await {
+        Err(AppError::Validation(message)) => assert_eq!(message, SHARED_DRIVE_FULL),
+        other => panic!("a full shared drive must name its owner, never the member's plan: {other:?}"),
+    }
+    let full = check_action_eligibility_for_drive(state, account_id, InsufficientCreditsAction::FolderUpload, GIB, Some("Team"))
+        .await
+        .expect("shared-drive check");
+    assert!(!full.eligible && full.owner_pays);
+    assert_eq!(full.reason.as_deref(), Some("shared_drive_full"));
+    assert_eq!(full.message.as_deref(), Some(SHARED_DRIVE_FULL));
+
+    // ── The owner's account is limited (the drive is frozen), or the member
+    //    is a Viewer: the server says so with a 403, and so does the gate. ──
+    for (slug, sentence) in [
+        ("account_read_only", SHARED_DRIVE_FROZEN),
+        ("account_suspended", SHARED_DRIVE_FROZEN),
+        ("forbidden", SHARED_DRIVE_VIEW_ONLY),
+    ] {
+        mock.set_can_upload_for(OWNER, 403, json!({ "error": slug, "message": "refused" }));
+        match require_eligible_for_drive(state, account_id, InsufficientCreditsAction::FileUpload, GIB, Some(&browsed)).await {
+            Err(AppError::Validation(message)) => assert_eq!(message, sentence, "{slug}"),
+            other => panic!("{slug}: expected the drive's own refusal, got {other:?}"),
+        }
+    }
+
+    // ── The same 403 on an own drive keeps falling open, as it always has. ─
+    mock.set_can_upload_for(account_id, 403, json!({ "error": "account_read_only", "message": "refused" }));
+    require_eligible(state, account_id, InsufficientCreditsAction::FileUpload, GIB)
+        .await
+        .expect("an own drive's 403 is not read as a verdict");
 }

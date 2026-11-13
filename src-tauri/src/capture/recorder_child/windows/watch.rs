@@ -130,9 +130,11 @@ pub fn run() -> i32 {
     // unregistered before it and the enumerator are dropped.
     let enumerator: Option<IMMDeviceEnumerator> = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok();
     let client: IMMNotificationClient = endpoints::Endpoints(Mutex::new(tx.clone())).into();
-    let registered = enumerator
-        .as_ref()
-        .is_some_and(|e| unsafe { e.RegisterEndpointNotificationCallback(&client) }.is_ok());
+    let registered = enumerator.as_ref().is_some_and(|e| {
+        // SAFETY: a COM call in this thread's apartment; `client` outlives the
+        // registration, which is removed before `client` is dropped.
+        unsafe { e.RegisterEndpointNotificationCallback(&client) }.is_ok()
+    });
     if !registered {
         let _ = super::writeln_stderr("watch: microphone changes are not announced; polling instead");
     }

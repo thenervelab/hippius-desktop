@@ -7,8 +7,7 @@
 // A flag is either a plain literal — the same on every lane — or
 // `enabledFrom(channel)` from `app/lib/buildChannel.ts`, which turns the
 // feature on from that release lane outwards (`"beta"` → beta and
-// staging, never production). No flag uses it today: screen capture, the
-// last one, now ships on every lane (its per-platform rollout is Rust's).
+// staging, never production). No flag uses it today.
 //
 // Either way, gate on the LANE and never by editing this file differently
 // per branch: `staging → beta` is a merge and `beta → main` a squash, so a
@@ -218,3 +217,14 @@ export const REFERRALS_COMING_SOON = true;
  * Design: `docs/plans/2026-09-22-screen-capture.md`.
  */
 export const SCREEN_CAPTURE_ENABLED = true;
+
+/**
+ * Move to… and drag-and-drop moves within a drive, on every lane. Set it to
+ * `false` (or `enabledFrom("staging")` for internal builds only) to take
+ * every Move entry point away at once: `DriveContainer` then passes no move
+ * target, and the menus, selection bar, drag rows and hint all render nothing
+ * without one (the same path as Recent Files, which never had Move). No Move
+ * code needs removing either way.
+ */
+export const DRIVE_MOVE_ENABLED = true;
+

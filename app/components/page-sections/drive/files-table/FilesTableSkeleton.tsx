@@ -173,7 +173,12 @@ export const FolderRowsSkeleton: React.FC<{
    *  row's chevron slot (matches `depthIndentStyle` in ExpandedFolderRows
    *  so the skeleton lines up with the children that follow). */
   nameIndentPx: number;
-}> = ({ rows = 3, orderedColumnIds, nameIndentPx }) => {
+  /**
+   * Renders each skeleton `<tr>` (default: a plain one). The expanded
+   * folder passes a drop target, so a drop on its loading rows lands in it.
+   */
+  renderRow?: (row: { key: string; className: string; children: React.ReactNode }) => React.ReactNode;
+}> = ({ rows = 3, orderedColumnIds, nameIndentPx, renderRow = defaultRow }) => {
   const skeletonByColumn: Record<string, string> = {
     selection: "16px",
     name: "60%",
@@ -186,12 +191,12 @@ export const FolderRowsSkeleton: React.FC<{
 
   return (
     <>
-      {Array.from({ length: rows }).map((_, rowIndex) => (
-        <tr
-          key={`folder-skeleton-row-${rowIndex}`}
-          className="border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 dark:odd:bg-black-500 dark:even:bg-black-primary-bg"
-        >
-          {orderedColumnIds.map((columnId) => {
+      {Array.from({ length: rows }).map((_, rowIndex) =>
+        renderRow({
+          key: `folder-skeleton-row-${rowIndex}`,
+          className:
+            "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 dark:odd:bg-black-500 dark:even:bg-black-primary-bg",
+          children: orderedColumnIds.map((columnId) => {
             const isName = columnId === "name";
             const isActions = columnId === "actions";
             const isSelection = columnId === "selection";
@@ -228,9 +233,17 @@ export const FolderRowsSkeleton: React.FC<{
                 )}
               </td>
             );
-          })}
-        </tr>
-      ))}
+          }),
+        }),
+      )}
     </>
   );
 };
+
+function defaultRow({ key, className, children }: { key: string; className: string; children: React.ReactNode }) {
+  return (
+    <tr key={key} className={className}>
+      {children}
+    </tr>
+  );
+}

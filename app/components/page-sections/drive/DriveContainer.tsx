@@ -77,6 +77,13 @@ import {
 } from "@/app/lib/hooks/useSharedDriveRoles";
 import { canWriteToDrive, parseDriveRole } from "@/app/lib/shared-drives/roles";
 import { driveWriteRefusal } from "@/app/lib/shared-drives/writeRefusal";
+import DriveMoveProvider, { type MoveTarget } from "./move/DriveMoveProvider";
+import { DRIVE_MOVE_ENABLED } from "@/app/lib/featureFlags";
+import {
+  FROZEN_REASON,
+  READ_ONLY_REASON,
+  normalizePath as normalizeMovePath,
+} from "@/app/lib/drive-move/moveLogic";
 import {
   parseSharedDriveLabel,
   browseNameFromUrl,
@@ -326,7 +333,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   // `/can_upload` fail-opens and is polled with 0 bytes, so it alone
   // left Folder/File/Sync looking live on a no-plan account.
   const { data: storageOverview } = useStorageOverview();
-  const isStorageFull = isUploadBlocked(
+  // This account's OWN plan has no room. Says nothing about a drive shared
+  // with it, which its owner pays for: see `isStorageFull` below.
+  const ownStorageFull = isUploadBlocked(
     storageOverview,
     fileUploadEligibility?.eligible === false,
   );
@@ -634,6 +643,14 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     isRecentFiles || isOnLocalView
       ? null
       : (remoteUploadLabel ?? activeSyncFolderLabel ?? activeRemoteLabel ?? null);
+  // Uploads into a drive shared with this account are paid for by its
+  // owner, so this account's own plan never dims or blocks them; the click
+  // asks Rust about the drive instead (`requireUploadRoom`'s `driveLabel`).
+  const uploadsGoToSharedDrive = isMemberDriveLabel(
+    filterDriveLabel,
+    memberDriveLabels,
+  );
+  const isStorageFull = !uploadsGoToSharedDrive && ownStorageFull;
   const filterDriveSharing = useDriveSharing(
     browsedSharedDrive ? null : filterDriveLabel,
   );
@@ -1524,10 +1541,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
 
   const handleContextAddFolder = useCallback(async () => {
     if (isStorageFull) return;
-    if (!(await requireUploadRoom("folder-upload", false))) return;
+    if (!(await requireUploadRoom("folder-upload", false, filterDriveLabel))) {
+      return;
+    }
     setFolderUploadInitialPath(undefined);
     setIsFolderUploadOpen(true);
-  }, [requireUploadRoom, isStorageFull]);
+  }, [requireUploadRoom, isStorageFull, filterDriveLabel]);
 
   // Open the picker here rather than sending the user to Settings.
   //
@@ -1887,6 +1906,33 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     labelDisplayNames,
   ]);
 
+  // Where a move starts from: the drive and folder on screen. Only inside a
+  // drive; Recent Files and the drive list move nothing. The reason is the
+  // short form for the drag label, not the full refusal sentence.
+  // No target is how a lane without Move hides every Move entry point.
+  const moveTarget = useMemo<MoveTarget | null>(() => {
+    if (!DRIVE_MOVE_ENABLED || !newFolderTarget?.label) return null;
+    return {
+      label: newFolderTarget.label,
+      remote: newFolderTarget.kind === "remote",
+      parentPath: normalizeMovePath(newFolderTarget.parentPath),
+      driveName: openDriveName ?? newFolderTarget.label,
+      syncPath: drivePathsByLabel[newFolderTarget.label] ?? null,
+      readOnlyReason: openDriveFrozen
+        ? FROZEN_REASON
+        : openDriveWriteRefusal || !openDriveCanWrite
+          ? READ_ONLY_REASON
+          : null,
+    };
+  }, [
+    newFolderTarget,
+    openDriveName,
+    drivePathsByLabel,
+    openDriveFrozen,
+    openDriveWriteRefusal,
+    openDriveCanWrite,
+  ]);
+
   // The crumbs after the root (`driveTrail`): the open drive, then each
   // folder down to the one on screen. The root crumb itself is the page the
   // drive was opened from, drawn by the breadcrumb.
@@ -1916,6 +1962,13 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
       label: step.label,
       title: step.label,
       onClick: step.target ? go(step.target) : undefined,
+      // A crumb above the folder on screen takes a drop: the drive's top
+      // level, or that folder's drive-relative path.
+      dropPath: step.target
+        ? step.target.kind === "drive"
+          ? ""
+          : normalizeMovePath(step.target.subPath)
+        : undefined,
     }));
   }, [
     isRecentFiles,
@@ -2582,8 +2635,9 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
             }
 
             // Drive view — DriveHeader owns the nested card structure and
-            // hosts DriveContent as its children.
-            return driveHeader;
+            // hosts DriveContent as its children. The move provider wraps
+            // both, so a breadcrumb crumb takes a drop like a folder row.
+            return <DriveMoveProvider target={moveTarget}>{driveHeader}</DriveMoveProvider>;
           })()}
         </div>
       </FileSelectionProvider>

@@ -8,7 +8,7 @@
 // spinner, silent failure, double-revoke), so we cover all three.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import type { ReactNode } from "react";
@@ -18,7 +18,15 @@ import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import ShareFileModal, { PASSWORD_NO_COMMENTS, SWITCHES_NOT_ON } from "../ShareFileModal";
-import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
+import { FIRST_VIEW_EMAIL, SECURE_LINK } from "../SecureLinkSection";
+import { DOWNLOAD_SWITCH } from "../LinkEngagementSwitches";
+import { GATE_LABEL } from "@/components/page-sections/shares/insights/EmailGateSettings";
+import {
+  DOWNLOAD_LOCKED_PROMPT,
+  DOWNLOAD_NOT_IN_PLAN,
+  LOCKED_ACTION,
+  LOCKED_PROMPT,
+} from "@/components/page-sections/shares/insights/insightsView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
@@ -41,12 +49,21 @@ const linkDefaultMock = vi.fn().mockResolvedValue({ offered: NO_SWITCHES, on: NO
 const setLinkMock = vi.fn().mockResolvedValue(undefined);
 // The finished link reads its switches back; unanswered unless a test says.
 const getLinkMock = vi.fn().mockRejectedValue(new Error("not read in this test"));
+// The account's share-link emails: unread (an older server) unless a test
+// says, so the first-view email switch stays hidden.
+const getPrefsMock = vi.fn().mockRejectedValue(new Error("not offered"));
+const setPrefsMock = vi.fn().mockResolvedValue(undefined);
+// The finished link's email gate: a server without it unless a test says.
+const getGateMock = vi.fn().mockResolvedValue({ offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null });
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
+  share_get_notification_preferences: getPrefsMock,
+  share_set_notification_preferences: setPrefsMock,
   hcfs_share_preview_default: previewDefaultMock,
   hcfs_set_share_preview: setPreviewMock,
   share_link_settings_default: linkDefaultMock,
   share_set_link_settings: setLinkMock,
   share_get_link_settings: getLinkMock,
+  share_get_gate: getGateMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
@@ -216,7 +233,7 @@ describe("ShareFileModal", () => {
     /* eslint-enable @typescript-eslint/no-explicit-any */
 
     // The second share must begin at the chooser with nothing minted yet.
-    expect(await screen.findByText(/general access/i)).toBeInTheDocument();
+    expect(await screen.findByText(/^secure link$/i)).toBeInTheDocument();
     expect(screen.queryByDisplayValue(/tok-first/)).not.toBeInTheDocument();
     expect(screen.getByText("second.pdf")).toBeInTheDocument();
   });
@@ -240,7 +257,7 @@ describe("ShareFileModal", () => {
 
     // The in-app flow opens on the chooser, not a spinner — nothing is minted
     // until the user has picked an expiry and a visibility.
-    expect(screen.getByText(/general access/i)).toBeInTheDocument();
+    expect(screen.getByText(/^secure link$/i)).toBeInTheDocument();
     expect(invokeMock).not.toHaveBeenCalled();
     confirmChooser();
 
@@ -418,7 +435,7 @@ describe("ShareFileModal", () => {
     // NOT a spinner, and must not call any mint IPC until the user confirms.
     render(withFinderState(<ShareFileModal />, CHOOSING));
 
-    expect(screen.getByText(/general access/i)).toBeInTheDocument();
+    expect(screen.getByText(/^secure link$/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /anyone with the link/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /password protected/i })).toBeInTheDocument();
     expect(screen.getByText("big-movie.mov")).toBeInTheDocument();
@@ -804,7 +821,7 @@ describe("ShareFileModal", () => {
           expiresAt: null,
         });
       });
-      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.getByText(/^secure link$/i)).toBeInTheDocument();
       expect(screen.getByText("b.txt")).toBeInTheDocument();
       expect(screen.queryByDisplayValue(/tok-a/)).not.toBeInTheDocument();
     });
@@ -814,7 +831,7 @@ describe("ShareFileModal", () => {
       await act(async () => {
         settle().reject({ kind: "Validation", message: "Share cancelled." });
       });
-      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.getByText(/^secure link$/i)).toBeInTheDocument();
       expect(screen.queryByText(/couldn.?t create share link/i)).not.toBeInTheDocument();
     });
   });
@@ -925,7 +942,7 @@ describe("ShareFileModal", () => {
     it("opens straight on the chooser with the live-link notice — no preflight", async () => {
       render(withProvider(<ShareFileModal />, FOLDER));
 
-      expect(screen.getByText(/general access/i)).toBeInTheDocument();
+      expect(screen.getByText(/^secure link$/i)).toBeInTheDocument();
       // The link is LIVE: the sender must be told later changes are visible.
       expect(
         screen.getByText(/the link always shows the current contents/i),
@@ -1314,6 +1331,64 @@ describe("ShareFileModal link switches", () => {
     expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 
+  it("offers Allow download on the finished link where Rust reports it, and sends only that change", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: true });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: true, download: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    expect(screen.queryByRole("switch", { name: DOWNLOAD_SWITCH.label })).toBeNull();
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+
+    // Read even though no switch was asked for: it is where download comes from.
+    const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
+    expect(download).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(DOWNLOAD_SWITCH.description)).toBeInTheDocument();
+    fireEvent.click(download);
+    await waitFor(() => expect(setLinkMock).toHaveBeenCalledWith("share_set_link_settings", { shareToken: "tok-rec", change: { download: false } }));
+    expect(download).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("shows the upgrade card when turning downloads off is refused for the plan", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: null });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: null, download: true });
+    setLinkMock.mockRejectedValueOnce({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
+    fireEvent.click(download);
+    expect(await screen.findByText(DOWNLOAD_LOCKED_PROMPT)).toBeInTheDocument();
+    expect(download).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("draws no Allow download where Rust sends none (a server without the switch)", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: ALL_ON, switchesInPlan: true, download: null });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    await waitFor(() => expect(getLinkMock).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: DOWNLOAD_SWITCH.label })).toBeNull();
+  });
+
+  it("offers Ask for email on the finished link only where Rust says the server has email gates", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getGateMock.mockResolvedValueOnce({ offered: true, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    const gate = await screen.findByRole("switch", { name: GATE_LABEL });
+    expect(gate).toHaveAttribute("aria-checked", "false");
+    expect(getGateMock).toHaveBeenCalledWith("share_get_gate", { shareToken: "tok-rec" });
+    expect(within(screen.getByRole("group", { name: SECURE_LINK })).getByRole("switch", { name: GATE_LABEL })).toBe(gate);
+  });
+
   it("sends the Finder chooser's switches with the confirm", async () => {
     linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
     invokeMock.mockResolvedValueOnce(LINK);
@@ -1422,5 +1497,115 @@ describe("ShareFileModal on a file that already has a link", () => {
     render(withProvider(<ShareFileModal />, FILE));
     expect(screen.getByRole("button", { name: /create share link/i })).toBeInTheDocument();
     expect(screen.queryByTestId("existing-link")).toBeNull();
+  });
+});
+
+describe("ShareFileModal secure link section", () => {
+  const DOC = { name: "Pitch.pdf", actualFileName: "Pitch.pdf", label: "Drive" };
+  const LINK = {
+    shareToken: "tok-doc",
+    shareUrl: "https://console.hippius.com/share/tok-doc#k=KEY",
+    expiresAt: "2099-01-02T00:00:00Z",
+  };
+  const INSIGHTS_ONLY = { insights: true, comments: false, reactions: false };
+  const PREFS = { firstViews: true, comments: true, digest: "weekly" };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    previewDefaultMock.mockReset().mockResolvedValue({ offered: false, on: false });
+    linkDefaultMock.mockReset().mockResolvedValue({ offered: NO_SWITCHES, on: NO_SWITCHES });
+    getLinkMock.mockReset().mockRejectedValue(new Error("not read in this test"));
+    getPrefsMock.mockReset().mockRejectedValue(new Error("not offered"));
+    setPrefsMock.mockReset().mockResolvedValue(undefined);
+    installClipboard();
+  });
+
+  function chooseExpiry(name: RegExp) {
+    fireEvent.keyDown(screen.getByLabelText(/link expires/i), { key: "Enter" });
+    return screen.findByRole("option", { name }).then((option) => fireEvent.keyDown(option, { key: "Enter" }));
+  }
+
+  it("groups access, password and expiry in one Secure link section", async () => {
+    render(withProvider(<ShareFileModal />, DOC));
+    const section = screen.getByRole("group", { name: "Secure link" });
+    expect(within(section).getByRole("group", { name: "Share access" })).toBeInTheDocument();
+    expect(within(section).getByLabelText(/link expires/i)).toBeInTheDocument();
+    fireEvent.click(within(section).getByRole("button", { name: "Password protected" }));
+    expect(within(section).getByLabelText("Password")).toBeInTheDocument();
+    expect(screen.queryByText("General access")).toBeNull();
+  });
+
+  it("shows the first-view email only while Insights is on, and saves it for the account", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: INSIGHTS_ONLY, on: INSIGHTS_ONLY, switchesInPlan: true });
+    getPrefsMock.mockResolvedValue(PREFS);
+    render(withProvider(<ShareFileModal />, DOC));
+
+    const section = screen.getByRole("group", { name: "Secure link" });
+    const email = await within(section).findByRole("switch", { name: FIRST_VIEW_EMAIL });
+    expect(email).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(email);
+    await waitFor(() =>
+      expect(setPrefsMock).toHaveBeenCalledWith("share_set_notification_preferences", {
+        preferences: { ...PREFS, firstViews: false },
+      }),
+    );
+
+    // Not counting views: no first-view email to ask about.
+    fireEvent.click(screen.getByRole("switch", { name: "Insights" }));
+    expect(screen.queryByRole("switch", { name: FIRST_VIEW_EMAIL })).toBeNull();
+  });
+
+  it("hides the first-view email on a server without these emails", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: INSIGHTS_ONLY, on: INSIGHTS_ONLY, switchesInPlan: true });
+    render(withProvider(<ShareFileModal />, DOC));
+    await screen.findByRole("switch", { name: "Insights" });
+    await waitFor(() => expect(getPrefsMock).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: FIRST_VIEW_EMAIL })).toBeNull();
+  });
+
+  it("changes the finished link's expiry with the existing command, and puts it back if refused", async () => {
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, DOC));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-doc#k=KEY/);
+
+    const section = screen.getByRole("group", { name: "Secure link" });
+    expect(within(section).getByText(/^Expires /)).toBeInTheDocument();
+
+    invokeMock.mockResolvedValueOnce(null);
+    await chooseExpiry(/until i revoke it/i);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("hcfs_update_share_expiry", { shareToken: "tok-doc", ttl: "never" }),
+    );
+    expect(await within(section).findByText("This link stays active until you revoke it.")).toBeInTheDocument();
+
+    invokeMock.mockRejectedValueOnce(new Error("This link is no longer active."));
+    await chooseExpiry(/7 days/i);
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("no longer active")));
+    expect(screen.getByLabelText(/link expires/i)).toHaveTextContent(/until i revoke it/i);
+  });
+
+  it("changes a folder link's expiry with the folder command", async () => {
+    invokeMock.mockResolvedValueOnce({ ...LINK, shareToken: "tok-folder" });
+    const folder = { name: "Photos", actualFileName: "Photos", label: "Drive", isFolder: true };
+    render(withProvider(<ShareFileModal />, folder));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-doc#k=KEY/);
+
+    invokeMock.mockResolvedValueOnce("2099-02-01T00:00:00Z");
+    await chooseExpiry(/30 days/i);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("hcfs_update_folder_share_expiry", { shareToken: "tok-folder", ttl: "30d" }),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith("hcfs_update_share_expiry", expect.anything());
+  });
+
+  it("keeps the password inside the section on a finished password link", async () => {
+    invokeMock.mockResolvedValueOnce({ ...LINK, password: "correct-horse" });
+    render(withProvider(<ShareFileModal />, DOC));
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-doc#k=KEY/);
+    const section = screen.getByRole("group", { name: "Secure link" });
+    expect(within(section).getByDisplayValue("correct-horse")).toBeInTheDocument();
   });
 });
