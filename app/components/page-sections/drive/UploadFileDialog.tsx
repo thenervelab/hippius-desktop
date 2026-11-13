@@ -13,6 +13,11 @@ export interface NestedUploadTarget {
   syncBasePath?: string;
   /** Fired after a successful upload so the parent can refresh listings. */
   onSuccess?: () => void;
+  /**
+   * The drive's label. A drive shared with this account is paid for by its
+   * owner, so the upload gate asks about it rather than this account's plan.
+   */
+  driveLabel?: string | null;
 }
 
 /**
@@ -65,6 +70,7 @@ export default function UploadFileDialog({
           folderName={nestedUpload.folderName}
           subfolder={nestedUpload.subfolder}
           syncBasePath={nestedUpload.syncBasePath}
+          driveLabel={nestedUpload.driveLabel}
           initialFiles={initialFiles}
           initialPaths={initialPaths}
           onSuccess={() => {

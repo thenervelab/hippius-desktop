@@ -11,6 +11,10 @@ import { formatDisplayName } from "@/lib/utils/fileTypeUtils";
 import { basename } from "@tauri-apps/api/path";
 import { getPrivateSyncPath } from "@/lib/utils/syncPathUtils";
 import { UPLOAD_PROCESSING_TOAST_ID } from "@/lib/hooks/useUploadProcessing";
+import {
+  isValidationError,
+  tauriErrorDetail,
+} from "@/app/lib/utils/dispatchTauriError";
 
 export type UploadFilesHandlers = {
   onSuccess?: () => void;
@@ -158,7 +162,14 @@ export function useFilesUpload(handlers: UploadFilesHandlers) {
 
       // Reuse the same toast id so the error overwrites the loading
       // toast instead of stacking — matches the partial-failure path.
-      toast.error(errorText, { id: localToastId, closeButton: true });
+      // A refusal Rust worded (a shared drive that is full or frozen) says
+      // why underneath; any other error's text is not for the user.
+      const reason = isValidationError(err) ? tauriErrorDetail(err) : "";
+      toast.error(errorText, {
+        id: localToastId,
+        closeButton: true,
+        ...(reason ? { description: reason } : {}),
+      });
     }
   }
 

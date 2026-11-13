@@ -205,7 +205,8 @@ export default function FolderUploadDialog({
       return;
     }
 
-    if (!(await checkEligibility("folder-upload"))) {
+    // The drive chosen, so a shared drive is judged on its owner's room.
+    if (!(await checkEligibility("folder-upload", selectedFolderLabel))) {
       handleClose();
       return;
     }

@@ -132,6 +132,15 @@ export function isNotReady(error: unknown, expected?: NotReadyKind): boolean {
 }
 
 /**
+ * `AppError::Validation`: a refusal Rust has already put into words for the
+ * user (a shared drive that is full or frozen, say), so its `message` can be
+ * shown as is. Matched on the `kind` discriminant, never on the text.
+ */
+export function isValidationError(error: unknown): boolean {
+  return (error as TauriError | null)?.kind === "Validation";
+}
+
+/**
  * `AppError::Io` — typically `canonicalize` of a missing path. Match the
  * `kind` discriminant, never a substring of `message` (`xdg-open was not
  * found` would otherwise look like a missing file).
