@@ -35,9 +35,10 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use chacha20poly1305::aead::{Aead, KeyInit, OsRng, Payload, rand_core::RngCore};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use hcfs_client::client::share::{ShareKeystore, ShareSecret};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::debug;
+use tracing::{debug, warn};
 use zeroize::Zeroizing;
 
 use super::insights::{
@@ -66,7 +67,7 @@ const CHECK_THE_LISTS: &str = "Check the lists and try again.";
 const LISTS_NOT_HERE: &str = "Couldn't open your lists on this computer. Try again.";
 /// The link's share key could not be kept before the gate, which would end
 /// its comments and viewer emails here for good.
-const KEY_NOT_KEPT: &str = "Couldn't reach Hippius to get this link ready to ask for an email. Try again.";
+const KEY_NOT_KEPT: &str = "Couldn't get this link ready to ask for an email. Try again.";
 
 /// An email gate's two lists, as the owner edits them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -399,14 +400,19 @@ pub async fn share_set_gate(state: tauri::State<'_, AppState>, share_token: Stri
 /// on this computer (`shares::file_link_key`).
 async fn keep_file_link_key(state: &AppState, account_id: &str, share_token: &str) -> Result<()> {
     let pool = state.pool()?;
-    let client = super::client::build_account_client(pool, account_id).await?;
     let keystore = super::SqliteShareKeystore::new(pool.clone());
-    super::file_link_key::keep_before_gate(&client, &keystore, share_token)
+    let held_back = |e: &dyn std::fmt::Display| {
+        warn!(error = %e, "email gate held back: the link's share key is not kept");
+        AppError::Validation(KEY_NOT_KEPT.into())
+    };
+    // Only a `#s=` link has a key the gate could cost; any other needs no client.
+    let Some(ShareSecret::FileLink(link_secret)) = keystore.get(share_token).map_err(|e| held_back(&e))? else {
+        return Ok(());
+    };
+    let client = super::client::build_account_client(pool, account_id).await?;
+    super::file_link_key::keep_before_gate(&client, &keystore, share_token, &link_secret)
         .await
-        .map_err(|e| {
-            debug!(error = %e, "email gate held back: the link's share key is not kept");
-            AppError::Validation(KEY_NOT_KEPT.into())
-        })
+        .map_err(|e| held_back(&e))
 }
 
 /// Remove the gate, on any plan, so an owner who downgraded can always open

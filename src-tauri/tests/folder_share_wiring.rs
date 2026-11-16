@@ -109,6 +109,17 @@ fn every_file_mint_keeps_a_file_links_share_key() {
     }
 }
 
+/// Turning on an email gate keeps a `#s=` link's share key first: the gate
+/// ends the server handing it out (`shares::file_link_key::keep_before_gate`).
+#[test]
+fn an_email_gate_keeps_the_share_key_before_it_goes_on() {
+    let source = include_str!("../src/shares/gate.rs");
+    let body = fn_body(source, "pub async fn share_set_gate(");
+    let keep = body.find("keep_file_link_key(").expect("share_set_gate keeps the link's share key");
+    let put = body.find("put_gate(").expect("share_set_gate PUTs the gate");
+    assert!(keep < put, "the key is kept before the gate goes on");
+}
+
 #[test]
 fn the_file_list_reconciles_owner_wraps() {
     let source = include_str!("../src/shares/commands.rs");

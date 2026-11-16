@@ -2,29 +2,19 @@
 //! sentence a person reads for each refusal.
 //!
 //! The request and result types are hcfs-shared's
-//! (`hcfs_shared::network::drive_moves`), re-exported so the move code names
-//! them in one place. What hcfs-shared does not have lives here: the session
-//! create's answer, the commit's folder cap, the refusal and its sentence, and
-//! the success message's notice. The tests at the bottom pin the JSON both
+//! (`hcfs_shared::network::drive_moves`, and the ordinary session create's
+//! answer), re-exported so the move code names them in one place. What
+//! hcfs-shared does not have lives here: the commit's folder cap, the refusal
+//! and its sentence, and the success message's notice. The tests at the bottom pin the JSON both
 //! sides send, following `docs/public/api/drive-moves.md`.
 
-use serde::{Deserialize, Serialize};
-
 pub use hcfs_shared::network::{
-    CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, DriveRef, MAX_DRIVE_MOVE_FILES, MoveFolder,
-    MoveRevoked, StageMoveSessionRequest,
+    CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, CreateSessionResult, DriveRef,
+    MAX_DRIVE_MOVE_FILES, MoveFolder, MoveRevoked, StageMoveSessionRequest,
 };
 
 /// Most folders one commit moves whole (`MAX_COMMIT_FOLDERS`).
 pub const MAX_COMMIT_FOLDERS: usize = 100;
-
-/// The `Success` of a session create (the ordinary one's answer).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StagedSession {
-    pub session_id: String,
-    #[serde(default)]
-    pub expires_at: i64,
-}
 
 /// What a commit's success message adds about the access it turned off, or
 /// `None` when nothing was turned off. A backup that followed its folder

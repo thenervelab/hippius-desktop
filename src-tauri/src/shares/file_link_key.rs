@@ -71,22 +71,24 @@ pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareK
     }
 }
 
-/// Before an email gate goes on: make sure a `#s=` link's share key is kept,
-/// since the gate ends the server handing it out. Done when the link is not a
-/// `#s=` one, already has its key, or the server already refuses the envelope
-/// (gated, ended, or minted elsewhere and never opened here), so the gate
-/// loses nothing more.
+/// Before an email gate goes on a `#s=` link: make sure its share key is kept,
+/// since the gate ends the server handing it out. Done when the key is kept
+/// or opens now, and when no key can be had anyway, so the gate costs nothing:
+/// the server already refuses the envelope (gated, ended, or minted elsewhere
+/// and never opened here), or the envelope does not open under this secret.
 ///
 /// # Errors
 ///
-/// The keystore's read error, or a transport or server failure that left the
-/// key unknown: the caller holds the gate back rather than lose the key.
-pub(crate) async fn keep_before_gate(client: &HcfsClient, keystore: &SqliteShareKeystore, token: &str) -> Result<(), ShareError> {
-    let Some(ShareSecret::FileLink(link_secret)) = keystore.get(token)? else {
-        return Ok(());
-    };
-    match share_key(client, keystore, token, &link_secret).await {
-        Ok(_) | Err(ShareError::NotFound) => Ok(()),
+/// A keystore failure, or a transport or server failure that left the key
+/// unknown: the caller holds the gate back rather than lose the key.
+pub(crate) async fn keep_before_gate(
+    client: &HcfsClient,
+    keystore: &SqliteShareKeystore,
+    token: &str,
+    link_secret: &[u8; 32],
+) -> Result<(), ShareError> {
+    match share_key(client, keystore, token, link_secret).await {
+        Ok(_) | Err(ShareError::NotFound | ShareError::Crypto(_)) => Ok(()),
         Err(e) => Err(e),
     }
 }
@@ -255,12 +257,14 @@ mod tests {
         let (_dir, keystore) = keystore().await;
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
 
-        keep_before_gate(&client, &keystore, TOKEN).await.expect("kept");
+        keep_before_gate(&client, &keystore, TOKEN, &link_secret).await.expect("kept");
         assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), Some(SHARE_KEY));
 
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("clears the kept key");
         route.open.store(false, Ordering::SeqCst);
-        keep_before_gate(&client, &keystore, TOKEN).await.expect("nothing left to lose");
+        keep_before_gate(&client, &keystore, TOKEN, &link_secret)
+            .await
+            .expect("nothing left to lose");
 
         let offline = HcfsClient::new(HcfsClientConfig {
             base_url: "http://127.0.0.1:9".into(),
@@ -268,11 +272,16 @@ mod tests {
         })
         .expect("client");
         assert!(
-            keep_before_gate(&offline, &keystore, TOKEN).await.is_err(),
+            keep_before_gate(&offline, &keystore, TOKEN, &link_secret).await.is_err(),
             "no answer holds the gate back"
         );
-        keystore.put("tok-k", &ShareSecret::Public(SHARE_KEY)).expect("put");
-        keep_before_gate(&offline, &keystore, "tok-k").await.expect("a #k= link has its key");
+
+        // An envelope that does not open under the secret: no key to lose.
+        route.open.store(true, Ordering::SeqCst);
+        keep_before_gate(&client, &keystore, TOKEN, &[0xEE; 32])
+            .await
+            .expect("a wrong secret opens nothing");
+        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), None);
     }
 
     /// The kept key lives and dies with its row: only a `file_link` row takes
