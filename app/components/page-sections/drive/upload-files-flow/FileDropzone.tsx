@@ -12,6 +12,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { cn } from "@/lib/utils";
 import { Icons, AbstractIconWrapper } from "@/components/ui";
 import { getLastBrowseDirectory, saveLastBrowseDirectory } from "@/lib/utils/userPreferencesDb";
+import { DROP_UNREADABLE } from "@/app/lib/drive/osDrop";
+import { useClaimOsDrops } from "@/app/lib/drive/useOsDropTarget";
 
 // Type for handling both file paths (from dialog) and browser Files (from drop)
 type SetFilesFunction = (paths: string[], browserFiles?: File[]) => void;
@@ -20,6 +22,9 @@ const FileDropzone: FC<{
   setFiles: SetFilesFunction;
 }> = ({ setFiles }) => {
   const [isDragging, setIsDragging] = useState(false);
+  // This dropzone takes the drop itself while its dialog is open; the
+  // page's drop handler (`OsDropHost`) stands down.
+  useClaimOsDrops(true);
 
   const handleSelectFiles = useCallback(async () => {
     try {
@@ -95,6 +100,10 @@ const FileDropzone: FC<{
             try {
               const { filterDroppedPaths } = await import("@/lib/utils/filterDroppedPaths");
               const { files, folders } = await filterDroppedPaths(paths);
+              if (files.length === 0 && folders.length === 0) {
+                toast.error(DROP_UNREADABLE);
+                return;
+              }
               if (folders.length > 0 && files.length === 0) {
                 // Files-only zone — surface the mismatch.
                 toast.error(

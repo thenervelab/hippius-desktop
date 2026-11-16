@@ -282,3 +282,20 @@ export function previewNeedsBytes(type: PreviewType | null): boolean {
     type === "presentation"
   );
 }
+
+/**
+ * The renderers that unzip their input in the webview. Rust vets the archive
+ * for these before any of their bytes reach a parser (`preview_archive.rs`),
+ * so the type is passed to `read_preview_bytes` and `check_preview_archive`.
+ * The names match Rust's `OfficePreviewFormat`.
+ */
+export type OfficePreviewFormat = "document" | "spreadsheet" | "presentation";
+
+/** The Office format a preview type is vetted as, or `null` for the rest. */
+export function officePreviewFormat(
+  type: PreviewType | null,
+): OfficePreviewFormat | null {
+  return type === "document" || type === "spreadsheet" || type === "presentation"
+    ? type
+    : null;
+}

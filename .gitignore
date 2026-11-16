@@ -48,3 +48,5 @@ coverage/
 # Screen-capture helper build products (built by macos/build-capture-helper.sh)
 macos/HippiusCapture/.build/
 src-tauri/binaries/
+# Video preview engine sources and objects in CI (scripts/video-engine/)
+video-engine-build/

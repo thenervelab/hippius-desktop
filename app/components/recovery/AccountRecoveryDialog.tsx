@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useAtom, useSetAtom } from "jotai";
 import { toast } from "sonner";
 import { HelpCircle, WifiOff } from "lucide-react";
@@ -30,6 +30,8 @@ import {
   MnemonicField,
   StrengthMeter,
   errMessage,
+  seedWordsFor,
+  type SeedWords,
   useLiveStrength,
   UNLOCK_PASSWORD_DOCS_URL,
 } from "./_shared";
@@ -157,17 +159,17 @@ const SignupBranch: React.FC<{
       maxWidth="max-w-[680px]"
     >
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-        Set an unlock password to open your mnemonic seed on other devices
-        and Hippius Console.
+        Set an unlock password to open your files on other computers and in
+        Hippius Console.
       </p>
 
       <div className="flex flex-col gap-4">
         {/* Info box explaining why the password matters. */}
         <div className="flex flex-col gap-2 rounded-lg border border-primary-80 bg-primary-95 p-3 dark:border-primary-80/40 dark:bg-primary-50/10">
           <p className="text-xs text-primary-40 dark:text-grey-dark-600">
-            Your files are encrypted with your mnemonic seed, not this password.
-            The password unlocks a sealed copy of that seed on new devices and
-            on Hippius Console.
+            Your files are encrypted with your recovery seed, not this password.
+            The password opens your recovery seed on a new computer and in
+            Hippius Console.
           </p>
           <button
             type="button"
@@ -214,12 +216,17 @@ const SignupBranch: React.FC<{
 // Unlock — returning user on a fresh device enters their password
 // ---------------------------------------------------------------------------
 
+const LINK_BUTTON_CLASS =
+  "flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors";
+
 const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [showForgot, setShowForgot] = useState(false);
   const [showPhraseRestore, setShowPhraseRestore] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const forgotId = useId();
   const setSyncRequiresReauth = useSetAtom(syncRequiresReauthAtom);
   const { authType } = useWalletAuth();
   const router = useRouter();
@@ -227,10 +234,11 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
   // Mnemonic users reach this dialog via the mount-time self-heal when
   // their keychain is locked/empty but a server blob exists (they set an
   // unlock password in settings). Unlike OAuth users they hold a second,
-  // fully independent recovery path — re-entering the seed phrase — so
-  // the preventClose dialog must not be a dead end for them when the
-  // unlock password is forgotten (PR #124 review).
+  // fully independent recovery path (signing in again with their access
+  // key), so the preventClose dialog must not be a dead end for them when
+  // the unlock password is forgotten (PR #124 review).
   const canEscapeToSeedPhrase = authType === "mnemonic";
+  const seedWords = seedWordsFor(authType);
 
   const handleSeedPhraseEscape = useCallback(() => {
     // `?reauth=1` keeps the login page from bouncing an authenticated
@@ -258,11 +266,23 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
       toast.success("Account unlocked.");
       onDone();
     } catch (err) {
+      // Rust words every refusal, the wrong password included
+      // (`kind: "WrongUnlockPassword"`), so its message is shown as is.
       setError(errMessage(err));
     } finally {
       setSubmitting(false);
     }
   }, [canSubmit, password, onDone, setSyncRequiresReauth]);
+
+  // After a refusal, keep what was typed and select it, so the next
+  // attempt is typed straight over it.
+  useEffect(() => {
+    if (!error || submitting) return;
+    const input = inputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [error, submitting]);
 
   return (
     <FramedDialog
@@ -281,47 +301,68 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
     >
       {showPhraseRestore ? (
         <PhraseRestoreForm
+          seedWords={seedWords}
           onDone={onDone}
           onBack={() => setShowPhraseRestore(false)}
         />
       ) : (
         <>
           <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-            Enter your unlock password to unwrap your mnemonic seed on this
-            device.
+            Enter your unlock password to open your files on this computer.
           </p>
 
           <div className="flex flex-col gap-4">
             <PasswordField
               label="Unlock Password"
               value={password}
-              onChange={setPassword}
+              onChange={(v) => {
+                setPassword(v);
+                setError(null);
+              }}
               errorMessage={error ?? undefined}
               onSubmit={handleSubmit}
               placeholder="Enter your unlock password"
+              autoComplete="current-password"
+              inputRef={inputRef}
+              autoFocus
+              readOnly={submitting}
             />
 
             <button
               type="button"
+              aria-expanded={showForgot}
+              aria-controls={forgotId}
               className="self-start text-xs text-grey-50 underline hover:text-grey-30 dark:text-grey-dark-600 dark:hover:text-grey-dark-500"
               onClick={() => setShowForgot((v) => !v)}
             >
               Forgot your password?
             </button>
             {showForgot && (
-              <div className="rounded-lg border border-primary-80 bg-primary-95 p-3 dark:border-primary-80/40 dark:bg-primary-50/10">
+              <div
+                id={forgotId}
+                className="flex flex-col gap-2 rounded-lg border border-primary-80 bg-primary-95 p-3 dark:border-primary-80/40 dark:bg-primary-50/10"
+              >
                 <p className="text-xs text-primary-40 dark:text-grey-dark-600">
                   {canEscapeToSeedPhrase
-                    ? "Your files are encrypted with your mnemonic seed, not this password. The password only unlocks a sealed copy of that seed. We never see it, so we cannot reset it. If you still have your recovery phrase, you can sign in with it instead — that fully restores access without the unlock password. You can also restore here and set a new password."
-                    : "Your files are encrypted with your mnemonic seed, not this password. The password only unlocks a sealed copy of that seed. We never see the password, so we cannot reset it for you. If you still have your mnemonic seed, you can restore access and set a new password."}
+                    ? "We never see your unlock password, so we can't reset it. You can set a new one with your access key, or sign in with your access key instead."
+                    : "We never see your unlock password, so we can't reset it. If you have your recovery seed, you can use it to set a new one."}
                 </p>
                 <button
                   type="button"
-                  className="mt-2 flex items-center gap-1.5 text-xs text-primary-50 hover:text-primary-40 transition-colors"
+                  className={LINK_BUTTON_CLASS}
                   onClick={() => setShowPhraseRestore(true)}
                 >
-                  Use your mnemonic seed
+                  {canEscapeToSeedPhrase ? "Set a new password" : "Use your recovery seed"}
                 </button>
+                {canEscapeToSeedPhrase && (
+                  <button
+                    type="button"
+                    onClick={handleSeedPhraseEscape}
+                    className={LINK_BUTTON_CLASS}
+                  >
+                    Sign in with your access key
+                  </button>
+                )}
               </div>
             )}
 
@@ -333,18 +374,8 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
               loading={submitting}
               className={PRIMARY_BUTTON_CLASS}
             >
-              {submitting ? "Unlocking..." : "Unlock"}
+              {submitting ? "Unlocking…" : "Unlock"}
             </Button>
-
-            {canEscapeToSeedPhrase && (
-              <button
-                type="button"
-                onClick={handleSeedPhraseEscape}
-                className="self-center text-sm font-medium text-primary-50 underline hover:no-underline dark:text-primary-brand-dark"
-              >
-                Sign in with your recovery phrase instead
-              </button>
-            )}
           </div>
         </>
       )}
@@ -353,9 +384,10 @@ const UnlockBranch: React.FC<{ onDone: () => void }> = ({ onDone }) => {
 };
 
 const PhraseRestoreForm: React.FC<{
+  seedWords: SeedWords;
   onDone: () => void;
   onBack: () => void;
-}> = ({ onDone, onBack }) => {
+}> = ({ seedWords, onDone, onBack }) => {
   const [mnemonic, setMnemonic] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -383,7 +415,7 @@ const PhraseRestoreForm: React.FC<{
       setSyncRequiresReauth(false);
       if (alignPending) {
         toast.warning(
-          "Account unlocked. Finishing applying the new password to your synced folders — this completes automatically the next time you open the app."
+          "Account unlocked. The new password finishes applying to your synced folders the next time you open the app."
         );
       } else {
         toast.success("Account unlocked. Unlock password updated.");
@@ -399,19 +431,18 @@ const PhraseRestoreForm: React.FC<{
   return (
     <>
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-        Enter your mnemonic seed and choose a new unlock password. Your files
-        are encrypted with the seed, not the password.
+        Enter your {seedWords.name} and choose a new unlock password.
       </p>
       <div className="flex flex-col gap-4">
         <MnemonicField
-          label="Mnemonic Seed"
+          label={seedWords.title}
           value={mnemonic}
           onChange={(v) => {
             setMnemonic(v);
             setPhraseError(null);
           }}
           errorMessage={phraseError ?? undefined}
-          placeholder="Enter or paste your 12-word seed phrase"
+          placeholder={seedWords.placeholder}
           disabled={submitting}
         />
         <PasswordField

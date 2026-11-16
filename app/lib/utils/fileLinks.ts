@@ -106,14 +106,16 @@ function baseName(relativePath: string): string {
 }
 
 /**
- * A file's links: the ones this device made for its path, and, for a
- * capture, the ones made elsewhere (the browser extension, the web console,
- * another computer) from a file of the same name, unless the sizes say it was
- * a different file. The server names a link's file by name and size only, and
- * the console and the extension match links to files the same way. Trusted
- * only for a capture's own name ({@link isCaptureName}), which carries the
- * second it was taken; any other file, a plain `image.png` included, gets
- * only this device's links.
+ * A file's links: the ones this device made for its path, and the ones made
+ * elsewhere (the browser extension, the web console, another computer) from
+ * a file of the same name when the sizes say it is the same file. The server
+ * names a link's file by name and size only, and the console and the
+ * extension match links to files by name the same way. For any file both
+ * sizes must be known and equal, so a plain `image.png` never picks up a
+ * different `image.png`'s link; a capture's own name ({@link isCaptureName}),
+ * which carries the second it was taken, is specific enough on its own and
+ * only needs the sizes not to differ. The same rule as Rust's
+ * `link_belongs_to_file`.
  */
 export function captureSharesFrom(
   lookups: ShareLinkLookups,
@@ -124,9 +126,10 @@ export function captureSharesFrom(
   if (!label || !relativePath) return [];
   const placed = lookups.getSharesFor(label, relativePath);
   const name = baseName(relativePath);
-  if (!isCaptureMedia(relativePath) || !isCaptureName(name)) return placed;
-  const named = lookups
-    .getUnplacedSharesNamed(name)
-    .filter((row) => !size || !row.plaintextSize || row.plaintextSize === size);
+  const byCaptureName = isCaptureMedia(relativePath) && isCaptureName(name);
+  const named = lookups.getUnplacedSharesNamed(name).filter((row) => {
+    if (size && row.plaintextSize) return row.plaintextSize === size;
+    return byCaptureName;
+  });
   return named.length === 0 ? placed : [...placed, ...named];
 }

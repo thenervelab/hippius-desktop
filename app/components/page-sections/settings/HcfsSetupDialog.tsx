@@ -170,7 +170,7 @@ export function HcfsSetupDialog({
           </div>
           <p className="font-geist text-[14px] leading-[1.4] tracking-[-0.28px] text-[#7d7d7d] dark:text-grey-dark-600">
             This password cannot be recovered. If you forget it, you will need
-            your mnemonic seed to restore access to your files.
+            your recovery seed or access key to restore access to your files.
           </p>
         </div>
 

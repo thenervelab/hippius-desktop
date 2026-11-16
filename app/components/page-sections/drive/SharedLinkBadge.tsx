@@ -53,8 +53,8 @@ interface SharedLinkBadgeProps {
   onManageShare?: (shareRowIds: string[]) => void;
   /**
    * The file's size, when known. A link made elsewhere is matched to its
-   * capture by name (`captureSharesFrom`), and a size that differs rules the
-   * match out.
+   * file by name and size (`captureSharesFrom`): a size that differs rules
+   * the match out, and only a capture's own name matches without it.
    */
   fileSize?: number;
 }
@@ -85,7 +85,7 @@ const SharedLinkBadge: FC<SharedLinkBadgeProps> = ({
   // the file index too until those links age out.
   //
   // A file's links come from the one matching rule (`captureSharesFrom`) on
-  // every page, so a capture also shows links made for it elsewhere (the
+  // every page, so a file also shows links made for it elsewhere (the
   // browser extension, the web console, another computer) in Recent Files
   // and Drive as it does on the Captures page, and its Copy link (Rust's
   // `link_belongs_to_file`, the same rule) copies that link rather than

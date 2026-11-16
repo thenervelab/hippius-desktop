@@ -104,7 +104,7 @@ pub(crate) fn score_passphrase(passphrase: &str) -> PassphraseStrength {
             label: verdict_label(verdict).to_string(),
             progress_percent: bits_to_percent(0.0),
             hints: vec![format!(
-                "Use at least {MIN_PASSPHRASE_LEN} characters. A passphrase of 4+ unrelated words is easier to remember and stronger than a short complicated password."
+                "Use at least {MIN_PASSPHRASE_LEN} characters. Four or more unrelated words are easier to remember and stronger than a short complicated password."
             )],
             acceptable_for_submit: false,
         };
@@ -336,18 +336,19 @@ pub(crate) fn crypto_to_err(e: hcfs_client::mnemonic_blob::MnemonicBlobError) ->
     use hcfs_client::mnemonic_blob::MnemonicBlobError as E;
     match &e {
         E::AeadTag => {
-            // AeadTag fires on either a wrong passphrase or an SS58
+            // AeadTag fires on either a wrong unlock password or an SS58
             // mismatch. SS58 mismatch is unreachable in normal flows —
             // we always seal/open against the active session's SS58 and
             // the server serves rows keyed by the bearer-resolved SS58.
-            // Surface "wrong passphrase" to users; log the raw error so
-            // an SS58 mismatch is diagnosable from tracing.
+            // Surface a wrong password to users as its own error kind, so
+            // the frontend never has to recognise it by its wording; log
+            // the raw error so an SS58 mismatch is diagnosable from tracing.
             warn!(error = %e, "AEAD tag mismatch decrypting recovery blob");
-            AppError::Validation("Wrong passphrase.".into())
+            AppError::WrongUnlockPassword
         }
-        // Raised before any crypto runs, on the passphrase the user just
+        // Raised before any crypto runs, on the password the user just
         // typed: theirs to fix, so a validation message, not a crypto fault.
-        E::PassphraseTooShort { min } => AppError::Validation(format!("Passphrase must be at least {min} characters.")),
+        E::PassphraseTooShort { min } => AppError::Validation(format!("Your unlock password must be at least {min} characters.")),
         _ => AppError::Crypto(e.to_string()),
     }
 }
@@ -393,6 +394,25 @@ mod tests {
             panic!("expected a validation error, got {err:?}");
         };
         assert!(message.contains(&MIN_PASSPHRASE_CHARS.to_string()), "{message}");
+    }
+
+    /// A wrong unlock password must reach the frontend as its own error
+    /// kind. The unlock and change-password dialogs recognise it by
+    /// `kind`, so rewording the sentence can never stop them telling a
+    /// wrong password from any other failure.
+    #[test]
+    fn a_wrong_unlock_password_is_its_own_error_kind() {
+        use hcfs_client::mnemonic_blob::{open_mnemonic, seal_mnemonic};
+
+        let sealed = seal_mnemonic(TEST_SEAL_MNEMONIC, "violet octopus hammer spruce", TEST_SEAL_SS58).expect("seal");
+        let err = open_mnemonic(&sealed, "violet octopus hammer spruces", TEST_SEAL_SS58)
+            .map_err(crypto_to_err)
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::WrongUnlockPassword), "got {err:?}");
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["kind"], "WrongUnlockPassword");
+        assert_eq!(json["message"], "Wrong password. Try again.");
     }
 
     const TEST_SEAL_MNEMONIC: &str = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";

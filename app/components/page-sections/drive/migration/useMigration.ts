@@ -246,7 +246,7 @@ export function useMigration(): UseMigrationReturn {
                 );
               } else {
                 toast.error(
-                  "Seed phrase not available. Please log out and log back in with your seed phrase to start migration."
+                  "Your access key isn't available on this computer. Log out and sign in again with your access key to start migration."
                 );
               }
               break;

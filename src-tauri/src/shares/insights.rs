@@ -28,7 +28,7 @@
 //! - `GET /v1/shares/{token}/meta`: the link's switches as they stand
 //!   (`settings`), for the sheet's Link settings.
 //! - `PATCH /v1/shares/{token}/settings`: `{insights, comments, reactions}`,
-//!   partial. A new link's defaults are sent right after it is minted, in the
+//!   partial, plus `download` on a server with `share_download_switch`. A new link's defaults are sent right after it is minted, in the
 //!   background and best-effort ([`spawn_apply`]), the way a chat preview is
 //!   (`shares::preview`): a failure never fails or slows the share.
 //!
@@ -53,7 +53,7 @@ use crate::error::{AppError, Result};
 use hcfs_client::client::share::{ShareKeystore, ShareSecret};
 
 /// How long one request may take. These back an open sheet, not a transfer.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// The most comment pages read for one sheet. The server keeps at most 500
 /// comments a link, so this is a bound on a misbehaving cursor, not a limit
 /// anyone reaches.
@@ -64,7 +64,7 @@ const MAX_COMMENT_PAGES: usize = 25;
 /// some other way.
 const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
 const COMMENTS_UNAVAILABLE: &str = "Comments aren't available yet.";
-const LINK_GONE: &str = "This link isn't active any more.";
+pub(super) const LINK_GONE: &str = "This link isn't active any more.";
 /// Shown when the server could not be asked which switches it takes, so a
 /// link's switches can be neither read nor changed. Never "all off": that
 /// would be a guess dressed up as the link's state.
@@ -72,7 +72,7 @@ const SETTINGS_UNREACHABLE: &str = "Couldn't reach Hippius to check this link's 
 /// Shown when the server could not be asked whether it has Insights or
 /// comments at all. Never "aren't available yet", which reads as a feature
 /// that is missing rather than a connection that failed.
-const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
+pub(super) const UNREACHABLE: &str = "Couldn't reach Hippius. Try again.";
 const COMMENT_GONE: &str = "That comment isn't on this link any more.";
 
 // ─── Insights ──────────────────────────────────────────────────────────────
@@ -120,6 +120,12 @@ pub struct InsightsViewer {
     /// document views (`share_document_views`).
     pub pages_seen: Option<u32>,
     pub page_count: Option<u32>,
+    /// The email this viewer proved on a link that asks for one, decrypted
+    /// with the link's key and shown only when it matches the server's check
+    /// of the email they proved ([`comment_crypto::open_viewer_email`]). The
+    /// latest such email when they proved more than one. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
 }
 
 /// Page by page numbers for a document link (`share_document_views`): how
@@ -153,9 +159,10 @@ pub struct ShareInsights {
     pub retention: Gated<Option<Vec<f64>>>,
     /// Newest visit first.
     pub viewers: Gated<Vec<InsightsViewer>>,
-    /// Page by page numbers. `None` on a server without document views
-    /// (`share_document_views`), which shows nothing about pages;
-    /// `Shown(None)` while the link has no document visit.
+    /// Page by page numbers. `None` (no Pages tab) unless the server reports
+    /// them: a pages block on a paid link, or `pages` named in `locked`, and
+    /// only on a server with document views (`share_document_views`).
+    /// `Shown(None)` for a block that holds no readable page count.
     pub pages: Option<Gated<Option<InsightsPages>>>,
 }
 
@@ -237,6 +244,45 @@ struct WireViewer {
     pages_seen: Option<u32>,
     #[serde(default)]
     page_count: Option<u32>,
+    /// The link this row's visits came from. On a link's own insights it is
+    /// that link; a server that predates it omits it.
+    #[serde(default)]
+    share_token: Option<String>,
+    /// The emails this viewer proved on a gated link, oldest first.
+    #[serde(default)]
+    emails: Option<Vec<WireEmail>>,
+}
+
+/// One email a viewer proved: the server's check of it, and the copy the
+/// share page sealed under the link's key (`null` when it sent none).
+#[derive(Debug, Deserialize)]
+pub(crate) struct WireEmail {
+    #[serde(default, rename = "email_check")]
+    pub(crate) check: Option<String>,
+    #[serde(default, rename = "email_ct")]
+    pub(crate) ct: Option<String>,
+    #[serde(default, rename = "email_nonce")]
+    pub(crate) nonce: Option<String>,
+}
+
+/// One viewer's proven emails, as [`parse_insights_with`] hands them over.
+pub(crate) struct ViewerEmails<'a> {
+    pub(crate) share_token: Option<&'a str>,
+    pub(crate) emails: &'a [WireEmail],
+}
+
+/// The email to show for a viewer of link `token`: the latest of their
+/// emails that opens with `key` and matches its check. A row from another
+/// link (group insights) is checked with that link's token, never this one,
+/// so it is left out here rather than checked against the wrong token.
+fn verified_email(key: &CommentKey, token: &str, row: ViewerEmails<'_>) -> Option<String> {
+    if row.share_token.is_some_and(|t| t != token) {
+        return None;
+    }
+    row.emails.iter().rev().find_map(|e| match (&e.nonce, &e.ct, &e.check) {
+        (Some(nonce), Some(ct), Some(check)) => comment_crypto::open_viewer_email(key, token, nonce, ct, check),
+        _ => None,
+    })
 }
 
 fn unit(x: f64) -> f64 {
@@ -254,8 +300,23 @@ fn percent(x: f64) -> f64 {
 /// plan that is not paid: whatever arrives for it is dropped.
 ///
 /// `document_views` is the server's `share_document_views`: without it,
-/// nothing about pages is read, so the screen shows what it does today.
-fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
+/// nothing about pages is read, so the screen shows what it does today. With
+/// it, pages are still `None` until the response carries a pages block or
+/// names `pages` in `locked`.
+#[cfg(test)]
+fn parse_insights(body: &str, document_views: bool, names: impl FnMut(&str, &str) -> Option<String>) -> Result<ShareInsights> {
+    parse_insights_with(body, document_views, names, |_| None)
+}
+
+/// [`parse_insights`], and `emails` opens one viewer's proven emails: given
+/// the row's link token (when the server names it) and its emails, it
+/// answers the one to show, if any.
+fn parse_insights_with(
+    body: &str,
+    document_views: bool,
+    mut names: impl FnMut(&str, &str) -> Option<String>,
+    mut emails: impl FnMut(ViewerEmails<'_>) -> Option<String>,
+) -> Result<ShareInsights> {
     let wire: WireInsights = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("insights parse failed: {e}")))?;
     let plan = if wire.plan == "paid" { InsightsPlan::Paid } else { InsightsPlan::Free };
     let locked: HashSet<&str> = wire.locked.iter().map(String::as_str).collect();
@@ -271,6 +332,14 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
     } else {
         Gated::Shown(wire.retention.filter(|r| !r.is_empty()).map(|r| r.into_iter().map(percent).collect()))
     };
+    // The page count of the link's pages block, when it is shown: the server
+    // sends a viewer's pages seen without a count of their own, so a row
+    // reads "9 of 12 pages" against this one.
+    let link_page_count = if document_views && !is_locked("pages") {
+        wire.pages.as_ref().and_then(|p| page_count_ok(p.page_count))
+    } else {
+        None
+    };
     let viewers = if is_locked("viewers") {
         Gated::Locked
     } else {
@@ -283,10 +352,17 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
                     (Some(ct), Some(nonce)) => names(nonce, ct).map(readable_name),
                     _ => None,
                 };
-                // Pages seen only beside a valid page count, and never more
-                // than it has.
-                let page_count = v.page_count.filter(|_| document_views).and_then(page_count_ok);
+                // Pages seen only beside a valid page count (the viewer's
+                // own, else the link's), and never more than it has.
+                let page_count = v.page_count.filter(|_| document_views).and_then(page_count_ok).or(link_page_count);
                 let pages_seen = page_count.and_then(|n| v.pages_seen.map(|seen| seen.min(n)));
+                let email = match v.emails.as_deref() {
+                    Some(list) if !list.is_empty() => emails(ViewerEmails {
+                        share_token: v.share_token.as_deref(),
+                        emails: list,
+                    }),
+                    _ => None,
+                };
                 InsightsViewer {
                     viewer_id: v.viewer_id,
                     name,
@@ -298,6 +374,7 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
                     reactions: v.reactions,
                     pages_seen,
                     page_count: pages_seen.and(page_count),
+                    email,
                 }
             })
             .collect();
@@ -306,13 +383,17 @@ fn parse_insights(body: &str, document_views: bool, mut names: impl FnMut(&str, 
         Gated::Shown(rows)
     };
 
-    let pages = document_views.then(|| {
-        if is_locked("pages") {
-            Gated::Locked
-        } else {
-            Gated::Shown(wire.pages.and_then(pages_from_wire))
-        }
-    });
+    // The Pages tab is drawn only from what the server reports: a pages
+    // block on a paid link, or `pages` named in `locked`. The capability
+    // alone says the server knows document views, not that it reports them,
+    // so without either there is no tab at all.
+    let pages = if !document_views {
+        None
+    } else if locked.contains("pages") || (plan != InsightsPlan::Paid && wire.pages.is_some()) {
+        Some(Gated::Locked)
+    } else {
+        wire.pages.map(|block| Gated::Shown(pages_from_wire(block)))
+    };
 
     Ok(ShareInsights {
         plan,
@@ -691,11 +772,22 @@ pub struct SettingsPatch {
     pub comments: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reactions: Option<bool>,
+    /// Allow download, sent only to a server with `share_download_switch`
+    /// (any other refuses the key). Never part of a new link's switches: a
+    /// link starts with downloads allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub download: Option<bool>,
 }
 
 impl SettingsPatch {
     const fn is_empty(self) -> bool {
-        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none()
+        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none() && self.download.is_none()
+    }
+
+    /// Whether this patch turns downloads off, which, like turning a switch
+    /// on, needs a paid plan.
+    const fn turns_download_off(self) -> bool {
+        matches!(self.download, Some(false))
     }
 
     /// The switches this patch turns (or keeps) on; one it leaves out or
@@ -721,19 +813,23 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
         insights: offered.insights.then_some(wanted.insights),
         comments: offered.comments.then_some(wanted.comments),
         reactions: offered.reactions.then_some(wanted.reactions),
+        download: None,
     };
     (!patch.is_empty()).then_some(patch)
 }
 
 /// `change` cut to the switches a server offering `offered` takes, or `None`
 /// when nothing is left to send. Unlike [`patch_for`], a switch the change
-/// leaves out stays out: the server keeps it as it stands.
+/// leaves out stays out: the server keeps it as it stands. `download` goes
+/// only to a server that takes it (`download_offered`, its
+/// `share_download_switch`): any other answers the key with a 400.
 #[must_use]
-pub fn change_for(change: SettingsPatch, offered: OfferedSwitches) -> Option<SettingsPatch> {
+pub fn change_for(change: SettingsPatch, offered: OfferedSwitches, download_offered: bool) -> Option<SettingsPatch> {
     let patch = SettingsPatch {
         insights: change.insights.filter(|_| offered.insights),
         comments: change.comments.filter(|_| offered.comments),
         reactions: change.reactions.filter(|_| offered.reactions),
+        download: change.download.filter(|_| download_offered),
     };
     (!patch.is_empty()).then_some(patch)
 }
@@ -749,6 +845,10 @@ pub struct LinkSettingsDefault {
     /// them on shows the upgrade prompt instead; `None` when the plan could
     /// not be read, which locks nothing but starts all three off.
     pub switches_in_plan: Option<bool>,
+    /// Allow download, as the link has it: `None` where there is no such
+    /// switch (a server without `share_download_switch`, or a link not made
+    /// yet, which always starts with downloads allowed).
+    pub download: Option<bool>,
 }
 
 /// The file kinds a share link tracks as a document (PDF, Word and
@@ -823,6 +923,7 @@ pub fn default_for(kind: LinkKind, captures_default: bool, caps: &ServerCapabili
             switches_in_plan,
         ),
         switches_in_plan,
+        download: None,
     }
 }
 
@@ -875,14 +976,20 @@ pub const fn refuses_switching_on(wanted: LinkSettings, was: LinkSettings, switc
 /// read it as paid (`403 paid_plan_required`).
 pub const SWITCHES_NOT_IN_PLAN: &str = "Insights, comments and reactions are available on paid Drive plans.";
 
+/// The refusal for turning downloads off from the free plan. The app shows
+/// the upgrade prompt for it (`DOWNLOAD_NOT_IN_PLAN` in the sheet's words),
+/// so this is matched there word for word.
+pub const DOWNLOAD_NOT_IN_PLAN: &str = "Turning off downloads is available on paid Drive plans.";
+
 /// The server could not read the Drive plan to check a switch turned on
 /// (`502 billing_unavailable`). Nothing changed, and trying again may work.
-const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
+pub(super) const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
 
 /// The server's refusals of a settings change, in the app's words: turning a
-/// switch on without a paid plan is the upgrade prompt's sentence, and a plan
-/// the server could not read says so. Anything else is left as it was.
-fn settings_refusal(err: AppError) -> AppError {
+/// switch on (or downloads off, `download_off`) without a paid plan is the
+/// upgrade prompt's sentence, and a plan the server could not read says so.
+/// Anything else is left as it was.
+fn settings_refusal(err: AppError, download_off: bool) -> AppError {
     let AppError::Api { status, body } = &err else {
         return err;
     };
@@ -890,6 +997,7 @@ fn settings_refusal(err: AppError) -> AppError {
         .ok()
         .and_then(|v| v.get("error").and_then(serde_json::Value::as_str).map(str::to_owned));
     match (*status, code.as_deref()) {
+        (403, Some("paid_plan_required")) if download_off => AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()),
         (403, Some("paid_plan_required")) => AppError::Validation(SWITCHES_NOT_IN_PLAN.into()),
         (502, Some("billing_unavailable")) => AppError::Validation(PLAN_UNREADABLE.into()),
         _ => err,
@@ -922,13 +1030,29 @@ pub(crate) async fn read_switches_in_plan(state: &AppState, account_id: &str) ->
 /// predates them omits the field, which reads as all off, the way a new
 /// link starts.
 fn parse_meta_settings(body: &str) -> Result<LinkSettings> {
+    parse_meta(body).map(|(on, _)| on)
+}
+
+/// [`parse_meta_settings`] and Allow download beside them. A server that
+/// predates the download switch omits `download`, which reads as allowed, as
+/// every link was before it.
+fn parse_meta(body: &str) -> Result<(LinkSettings, bool)> {
     #[derive(Deserialize)]
     struct Wire {
         #[serde(default)]
-        settings: Option<LinkSettings>,
+        settings: Option<WireSettings>,
+    }
+    #[derive(Deserialize)]
+    struct WireSettings {
+        #[serde(flatten)]
+        on: LinkSettings,
+        #[serde(default)]
+        download: Option<bool>,
     }
     let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("share meta parse failed: {e}")))?;
-    Ok(wire.settings.unwrap_or_default())
+    Ok(wire
+        .settings
+        .map_or((LinkSettings::default(), true), |s| (s.on, s.download.unwrap_or(true))))
 }
 
 /// What a capture's automatic link gets: everything on when Settings says
@@ -1008,19 +1132,19 @@ fn preferences_body(prefs: NotificationPreferences) -> serde_json::Value {
 #[derive(Debug, Clone)]
 pub(crate) struct Api {
     base: String,
-    bearer: String,
+    pub(super) bearer: String,
 }
 
 impl Api {
     #[cfg(test)]
-    fn new(base: &str, bearer: &str) -> Self {
+    pub(super) fn new(base: &str, bearer: &str) -> Self {
         Self {
             base: base.trim_end_matches('/').to_string(),
             bearer: bearer.to_string(),
         }
     }
 
-    async fn for_account(state: &AppState, account_id: &str) -> Result<Self> {
+    pub(super) async fn for_account(state: &AppState, account_id: &str) -> Result<Self> {
         let pool = state.pool()?;
         let server_url = crate::sync::remote::get_server_url(pool, account_id).await?;
         let base = crate::sync::region::resolve_base_url(&server_url).trim_end_matches('/').to_string();
@@ -1030,7 +1154,7 @@ impl Api {
         Ok(Self { base, bearer })
     }
 
-    fn share_url(&self, token: &str, rest: &str) -> Result<String> {
+    pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
         Ok(format!("{}/v1/shares/{}{rest}", self.base, path_segment(token)?))
     }
 }
@@ -1064,7 +1188,7 @@ fn path_segment(s: &str) -> Result<&str> {
 
 /// The body of a 2xx, or the error for anything else. A 404 is the link
 /// that is no longer live (revoked or expired), worded for the sheet.
-async fn read_ok(resp: reqwest::Response) -> Result<String> {
+pub(super) async fn read_ok(resp: reqwest::Response) -> Result<String> {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     if status.is_success() {
@@ -1083,7 +1207,7 @@ async fn read_ok(resp: reqwest::Response) -> Result<String> {
 /// `Display` appends the request URL, and every route here carries the
 /// link's token in its path, which opens the link's unencrypted preview.
 /// This text reaches the Insights panel, screenshots of it and the logs.
-fn transport(what: &str, e: reqwest::Error) -> AppError {
+pub(super) fn transport(what: &str, e: reqwest::Error) -> AppError {
     let reason = if e.is_timeout() {
         "Hippius took too long to answer".to_string()
     } else if e.is_connect() {
@@ -1204,7 +1328,10 @@ async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &
         .send()
         .await
         .map_err(|e| transport("share settings", e))?;
-    read_ok(resp).await.map(|_| ()).map_err(settings_refusal)
+    read_ok(resp)
+        .await
+        .map(|_| ())
+        .map_err(|e| settings_refusal(e, patch.turns_download_off() && !patch.asked_on().any()))
 }
 
 async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<NotificationPreferences> {
@@ -1272,14 +1399,14 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
 /// The server's capabilities for something the owner is looking at: a failed
 /// read is an error the owner sees (`unreachable`), never a server without
 /// the feature.
-async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
+pub(super) async fn capabilities_checked(state: &AppState, account_id: &str, unreachable: &str) -> Result<ServerCapabilities> {
     fetch_capabilities(state, account_id).await.map_err(|e| {
         debug!(error = %e, "share insights: capabilities unavailable");
         AppError::Validation(unreachable.into())
     })
 }
 
-async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapabilities {
+pub(crate) async fn capabilities_or_none(state: &AppState, account_id: &str) -> ServerCapabilities {
     match fetch_capabilities(state, account_id).await {
         Ok(caps) => caps,
         Err(e) => {
@@ -1475,17 +1602,23 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
     }
     let api = Api::for_account(&state, &account_id).await?;
     let body = get_insights_body(&state.api_client, &api, &share_token).await?;
-    // A viewer's name is only there when they commented under one, so the
-    // key is only looked for when some row needs it.
-    let key = if body.contains("\"name_ct\":\"") {
+    // A viewer's name is only there when they commented under one, and an
+    // email only on a link that asks for one, so the key is only looked for
+    // when some row needs it.
+    let key = if body.contains("\"name_ct\":\"") || body.contains("\"email_ct\":\"") {
         comment_key_for(&state, &account_id, &share_token).await.ok()
     } else {
         None
     };
-    parse_insights(&body, caps.share_document_views, |nonce, ct| {
-        key.as_ref()
-            .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
-    })
+    parse_insights_with(
+        &body,
+        caps.share_document_views,
+        |nonce, ct| {
+            key.as_ref()
+                .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
+        },
+        |row| key.as_ref().and_then(|k| verified_email(k, &share_token, row)),
+    )
 }
 
 /// A file link's comments, opened with its key.
@@ -1560,7 +1693,8 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     // A new link's own switches first, so what is read is what it has.
     after_mint_switches_sent(&share_token).await;
-    let offered = OfferedSwitches::from_caps(&capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?);
+    let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
+    let offered = OfferedSwitches::from_caps(&caps);
     if !offered.insights {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     }
@@ -1569,11 +1703,12 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
         get_meta_body(&state.api_client, &api, &share_token),
         read_switches_in_plan(&state, &account_id),
     );
-    let on = parse_meta_settings(&meta?)?;
+    let (on, download) = parse_meta(&meta?)?;
     Ok(LinkSettingsDefault {
         offered,
         on,
         switches_in_plan,
+        download: caps.share_download_switch.then_some(download),
     })
 }
 
@@ -1586,21 +1721,44 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     after_mint_switches_sent(&share_token).await;
     let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
-    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps)) else {
+    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps), caps.share_download_switch) else {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
     let api = Api::for_account(&state, &account_id).await?;
     // A switch asked to be on, on the free plan: allowed only if this link
     // already has it on (an older link keeps what it has), so the link's
-    // switches are read only then. Turning switches off never asks.
+    // switches are read only then. Turning switches off never asks, and nor
+    // does allowing downloads; turning them off is refused on the free plan,
+    // as the server would.
     let asked_on = patch.asked_on();
-    if asked_on.any() && read_switches_in_plan(&state, &account_id).await == Some(false) {
+    if (asked_on.any() || patch.turns_download_off()) && read_switches_in_plan(&state, &account_id).await == Some(false) {
+        if patch.turns_download_off() {
+            return Err(AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()));
+        }
         let was = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?;
         if refuses_switching_on(asked_on, was, Some(false)) {
             return Err(AppError::Validation(SWITCHES_NOT_IN_PLAN.into()));
         }
     }
     patch_settings(&state.api_client, &api, &share_token, &patch).await
+}
+
+/// Whether a file is a screenshot or recording this app took: it sits in one
+/// of the account's capture drives, or carries a capture's own name. The one
+/// rule the share dialog's defaults and the Insights panel's Create link use.
+///
+/// # Errors
+///
+/// The database is not open.
+pub(crate) async fn is_capture_file(state: &AppState, account_id: &str, folder_label: Option<&str>, file_name: &str) -> Result<bool> {
+    let pool = state.pool()?;
+    let in_captures_drive = match folder_label {
+        Some(label) => crate::capture::destination::own_capture_labels(pool, account_id)
+            .await
+            .is_ok_and(|labels| labels.iter().any(|l| l == label)),
+        None => false,
+    };
+    Ok(in_captures_drive || super::preview::is_capture_name(file_name))
 }
 
 /// Where the share dialog's Insights, Comments and Reactions switches start
@@ -1614,14 +1772,7 @@ pub async fn share_link_settings_default(
     is_folder: bool,
 ) -> Result<LinkSettingsDefault> {
     let account_id = state.current_account_id()?;
-    let pool = state.pool()?;
-    let in_captures_drive = match folder_label {
-        Some(label) => crate::capture::destination::own_capture_labels(pool, &account_id)
-            .await
-            .is_ok_and(|labels| labels.contains(&label)),
-        None => false,
-    };
-    let is_capture = in_captures_drive || super::preview::is_capture_name(&file_name);
+    let is_capture = is_capture_file(&state, &account_id, folder_label.as_deref(), &file_name).await?;
     let kind = LinkKind::of(is_folder, is_capture, &file_name);
     let (caps, switches_in_plan) = tokio::join!(capabilities_or_none(&state, &account_id), read_switches_in_plan(&state, &account_id),);
     Ok(default_for(kind, captures_default(&state).await, &caps, switches_in_plan))
@@ -1660,7 +1811,7 @@ pub async fn share_set_notification_preferences(state: tauri::State<'_, AppState
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
@@ -1819,6 +1970,20 @@ mod tests {
         assert!(json["pages"].is_null());
     }
 
+    /// The server can say it knows document views before its Insights report
+    /// any: a response with no pages block and no `pages` in `locked` has no
+    /// Pages tab, on either plan, so nobody sees an empty tab or a lock over a
+    /// feature that reports nothing.
+    #[test]
+    fn document_views_alone_show_no_pages() {
+        let paid = r#"{"plan":"paid","total_views":4,"unique_viewers":2,"completion_rate":0.5,"viewers":[],"locked":[]}"#;
+        assert_eq!(parse_insights(paid, true, no_names).unwrap().pages, None);
+        let free = r#"{"plan":"free","total_views":2,"unique_viewers":1,"locked":["completion_rate","viewers","retention"]}"#;
+        assert_eq!(parse_insights(free, true, no_names).unwrap().pages, None);
+        let json = serde_json::to_value(parse_insights(free, true, no_names).unwrap()).unwrap();
+        assert!(json["pages"].is_null());
+    }
+
     /// The free plan's `locked` names `pages` and sends none: it is locked,
     /// with no value to draw, and so is anything a server sends anyway.
     #[test]
@@ -1835,8 +2000,8 @@ mod tests {
         assert_eq!(parse_insights(partly, true, no_names).unwrap().pages, Some(Gated::Locked));
     }
 
-    /// A link with no document visit yet has `pages: null`; a block outside
-    /// the contract (no pages, too many) is none; arrays that do not match the
+    /// `pages: null` is no block, so no tab; a block outside the contract (no
+    /// pages, too many) holds nothing to draw; arrays that do not match the
     /// page count are cut or filled with zeros, and reach stays a percentage.
     #[test]
     fn a_pages_block_is_held_to_the_contract() {
@@ -1844,7 +2009,7 @@ mod tests {
             let body = format!(r#"{{"plan":"paid","total_views":1,"unique_viewers":1,"pages":{block},"locked":[]}}"#);
             parse_insights(&body, true, no_names).unwrap().pages
         };
-        assert_eq!(pages_of("null"), Some(Gated::Shown(None)));
+        assert_eq!(pages_of("null"), None);
         assert_eq!(pages_of(r#"{"page_count":0,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
         assert_eq!(pages_of(r#"{"page_count":1001,"reach":[],"median_ms":[]}"#), Some(Gated::Shown(None)));
         assert_eq!(
@@ -1868,6 +2033,95 @@ mod tests {
         assert!(seen.contains(&("a", Some(4), Some(4))));
         assert!(seen.contains(&("b", None, None)));
         assert!(seen.contains(&("c", None, None)));
+    }
+
+    /// The server gives a viewer's pages seen and puts the page count once,
+    /// in the pages block: each row reads against that count, a viewer's own
+    /// count (if one is ever sent) wins, and nothing is read without a block
+    /// or while it is locked.
+    #[test]
+    fn a_viewers_page_count_comes_from_the_links_pages_block() {
+        let body = r#"{"plan":"paid","total_views":3,"unique_viewers":3,
+            "pages":{"page_count":4,"reach":[100,100,67,33],"median_ms":[1,2,3,4]},
+            "viewers":[
+              {"viewer_id":"a","last_viewed_at":"2026-11-03T10:00:00Z","pages_seen":3,"page_time_ms":9000},
+              {"viewer_id":"b","last_viewed_at":"2026-11-02T10:00:00Z","pages_seen":null,"page_time_ms":null},
+              {"viewer_id":"c","last_viewed_at":"2026-11-01T10:00:00Z","pages_seen":9,"page_time_ms":1}],
+            "locked":[]}"#;
+        let Gated::Shown(rows) = parse_insights(body, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        let seen: Vec<_> = rows.iter().map(|r| (r.viewer_id.as_str(), r.pages_seen, r.page_count)).collect();
+        assert_eq!(seen, [("a", Some(3), Some(4)), ("b", None, None), ("c", Some(4), Some(4))]);
+
+        let video = r#"{"plan":"paid","pages":null,"viewers":[{"viewer_id":"v","pages_seen":2}],"locked":[]}"#;
+        let Gated::Shown(rows) = parse_insights(video, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert_eq!((rows[0].pages_seen, rows[0].page_count), (None, None), "no pages block, no pages");
+
+        let locked = body.replace(r#""locked":[]"#, r#""locked":["pages"]"#);
+        let Gated::Shown(rows) = parse_insights(&locked, true, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.page_count.is_none()), "a locked pages block lends no count");
+        let Gated::Shown(rows) = parse_insights(body, false, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.page_count.is_none()), "nor does a server without document views");
+    }
+
+    /// The emails a viewer proved on a gated link: the latest one that opens
+    /// with the link's key and matches the server's check is shown; a row
+    /// with none, a copy the check does not match, and a row from another
+    /// link show no email.
+    #[test]
+    fn a_viewers_proven_email_is_shown_only_when_it_matches_its_check() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        let token = "q3V9h0kQ2m1xYb7d8Zt4sA";
+        let key = CommentKey::derive(&[9; 32]);
+        let entry = |sealed: &str, proven: &str| {
+            let nonce = [4u8; comment_crypto::NONCE_LEN];
+            let ct = comment_crypto::seal_with_nonce(&key, token, comment_crypto::Purpose::ViewerEmail, &nonce, sealed.as_bytes()).unwrap();
+            serde_json::json!({
+                "email_check": STANDARD.encode(comment_crypto::email_check(token, proven)),
+                "email_ct": STANDARD.encode(ct),
+                "email_nonce": STANDARD.encode(nonce),
+            })
+        };
+        let body = serde_json::json!({
+            "plan": "paid", "total_views": 4, "unique_viewers": 4, "locked": [],
+            "viewers": [
+                { "viewer_id": "a", "last_viewed_at": "2026-11-04T10:00:00Z", "share_token": token,
+                  "emails": [entry("old@acme.com", "old@acme.com"), entry("alice@acme.com", "alice@acme.com")] },
+                { "viewer_id": "b", "last_viewed_at": "2026-11-03T10:00:00Z", "share_token": token,
+                  "emails": [entry("ceo@acme.com", "bob@acme.com")] },
+                { "viewer_id": "c", "last_viewed_at": "2026-11-02T10:00:00Z", "share_token": "another_link_token_12",
+                  "emails": [entry("carol@acme.com", "carol@acme.com")] },
+                { "viewer_id": "d", "last_viewed_at": "2026-11-01T10:00:00Z", "emails": [] },
+                { "viewer_id": "e", "emails": [{ "email_check": "x", "email_ct": null, "email_nonce": null }] }
+            ]
+        })
+        .to_string();
+        let i = parse_insights_with(&body, false, no_names, |row| verified_email(&key, token, row)).unwrap();
+        let Gated::Shown(rows) = i.viewers else { panic!("viewers shown") };
+        let emails: Vec<_> = rows.iter().map(|r| (r.viewer_id.as_str(), r.email.as_deref())).collect();
+        assert_eq!(
+            emails,
+            [("a", Some("alice@acme.com")), ("b", None), ("c", None), ("d", None), ("e", None)]
+        );
+
+        let json = serde_json::to_value(parse_insights_with(&body, false, no_names, |row| verified_email(&key, token, row)).unwrap()).unwrap();
+        assert_eq!(json["viewers"]["value"][0]["email"], "alice@acme.com");
+        assert!(json["viewers"]["value"][1].get("email").is_none(), "no key at all without a proven email");
+
+        // Without the link's key (a password link, a key on no device) no
+        // email shows, and the rest of the row is unchanged.
+        let Gated::Shown(rows) = parse_insights(&body, false, no_names).unwrap().viewers else {
+            panic!("viewers shown")
+        };
+        assert!(rows.iter().all(|r| r.email.is_none()));
     }
 
     fn wire_comment(id: &str, nonce: &str, ct: &str, anonymous: bool) -> WireComment {
@@ -2304,6 +2558,7 @@ mod tests {
             insights: Some(false),
             comments: Some(true),
             reactions: None,
+            download: None,
         };
         assert_eq!(
             patch.asked_on(),
@@ -2361,15 +2616,50 @@ mod tests {
         };
         let change: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": false})).unwrap();
         assert_eq!(
-            serde_json::to_value(change_for(change, all).unwrap()).unwrap(),
+            serde_json::to_value(change_for(change, all, true).unwrap()).unwrap(),
             serde_json::json!({"comments": false})
         );
         let insights_only = OfferedSwitches {
             insights: true,
             ..Default::default()
         };
-        assert_eq!(change_for(change, insights_only), None, "a switch the server does not take is not sent");
-        assert_eq!(change_for(SettingsPatch::default(), all), None, "nothing flipped, nothing sent");
+        assert_eq!(
+            change_for(change, insights_only, true),
+            None,
+            "a switch the server does not take is not sent"
+        );
+        assert_eq!(change_for(SettingsPatch::default(), all, true), None, "nothing flipped, nothing sent");
+    }
+
+    /// Allow download goes only to a server with `share_download_switch`:
+    /// any other refuses the key with a 400. A new link never sends it, as
+    /// every link starts with downloads allowed.
+    #[test]
+    fn download_is_sent_only_to_a_server_that_takes_it() {
+        let all = OfferedSwitches {
+            insights: true,
+            comments: true,
+            reactions: true,
+        };
+        let off: SettingsPatch = serde_json::from_value(serde_json::json!({"download": false})).unwrap();
+        assert_eq!(off.download, Some(false));
+        assert_eq!(
+            serde_json::to_value(change_for(off, all, true).unwrap()).unwrap(),
+            serde_json::json!({"download": false})
+        );
+        assert_eq!(change_for(off, all, false), None, "a server without the switch is never sent download");
+        let both: SettingsPatch = serde_json::from_value(serde_json::json!({"insights": true, "download": true})).unwrap();
+        assert_eq!(
+            serde_json::to_value(change_for(both, all, false).unwrap()).unwrap(),
+            serde_json::json!({"insights": true})
+        );
+        // The FE's older shape, without the key, still reads.
+        let old: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": true})).unwrap();
+        assert_eq!(old.download, None);
+        let new_link = patch_for(LinkSettings::all(true), all, true).unwrap();
+        assert!(serde_json::to_value(new_link).unwrap().get("download").is_none());
+        assert!(off.turns_download_off());
+        assert!(!both.turns_download_off());
     }
 
     /// The owner can flip a switch on a link made seconds ago. Its own
@@ -2458,16 +2748,16 @@ mod tests {
     // ─── Against a mock server ─────────────────────────────────────────────
 
     #[derive(Debug, Clone)]
-    struct Seen {
-        method: String,
-        path: String,
-        query: Option<String>,
-        auth: Option<String>,
-        body: String,
+    pub(in crate::shares) struct Seen {
+        pub(in crate::shares) method: String,
+        pub(in crate::shares) path: String,
+        pub(in crate::shares) query: Option<String>,
+        pub(in crate::shares) auth: Option<String>,
+        pub(in crate::shares) body: String,
     }
 
     /// A loopback server that records each request and answers from `reply`.
-    async fn mock(reply: impl Fn(&Seen) -> (u16, String) + Send + Sync + 'static) -> (String, Arc<Mutex<Vec<Seen>>>) {
+    pub(in crate::shares) async fn mock(reply: impl Fn(&Seen) -> (u16, String) + Send + Sync + 'static) -> (String, Arc<Mutex<Vec<Seen>>>) {
         let seen: Arc<Mutex<Vec<Seen>>> = Arc::default();
         let reply = Arc::new(reply);
         let log = seen.clone();
@@ -2520,6 +2810,7 @@ mod tests {
             insights: Some(true),
             comments: Some(false),
             reactions: None,
+            download: None,
         };
         patch_settings(&reqwest::Client::new(), &api, "tok_1", &patch).await.unwrap();
         let s = seen.lock().unwrap()[0].clone();
@@ -2552,6 +2843,53 @@ mod tests {
             Err(AppError::Api { status: 500, .. })
         ));
         assert!(matches!(patch_settings(&http, &api, "gone", &patch).await, Err(AppError::NotFound(m)) if m == LINK_GONE));
+    }
+
+    /// `/meta` reports Allow download beside the switches; a server that
+    /// predates it omits the key, and every link then still allows downloads.
+    #[test]
+    fn allow_download_is_read_from_meta_and_missing_means_allowed() {
+        let off = r#"{"settings":{"insights":true,"comments":false,"reactions":false,"download":false}}"#;
+        let (on, download) = parse_meta(off).unwrap();
+        assert!(on.insights && !on.comments && !on.reactions);
+        assert!(!download);
+        assert!(
+            parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false}}"#)
+                .unwrap()
+                .1
+        );
+        assert!(parse_meta(r#"{"ciphertext_size":1}"#).unwrap().1);
+        assert_eq!(parse_meta_settings(off).unwrap(), on);
+    }
+
+    /// Turning downloads off from a plan the server reads as free is refused
+    /// in the download prompt's words, not the switches' ones.
+    #[tokio::test]
+    async fn the_servers_refusal_to_turn_downloads_off_reads_as_its_own_prompt() {
+        let (base, _) = mock(|_| {
+            (
+                403,
+                r#"{"error":"paid_plan_required","message":"insights, comments, reactions and view-only links need a paid Drive plan; upgrade the plan to use them"}"#.into(),
+            )
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "b"));
+        let off = SettingsPatch {
+            download: Some(false),
+            ..Default::default()
+        };
+        assert!(matches!(
+            patch_settings(&http, &api, "free", &off).await,
+            Err(AppError::Validation(m)) if m == DOWNLOAD_NOT_IN_PLAN
+        ));
+        let on = SettingsPatch {
+            insights: Some(true),
+            ..Default::default()
+        };
+        assert!(matches!(
+            patch_settings(&http, &api, "free", &on).await,
+            Err(AppError::Validation(m)) if m == SWITCHES_NOT_IN_PLAN
+        ));
     }
 
     /// The server checks the plan too (hcfs `paid_plan_required`): its

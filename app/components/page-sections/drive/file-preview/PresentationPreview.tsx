@@ -302,7 +302,7 @@ export default function PresentationPreview({
     localPath,
     previewByteCap("presentation"),
     parse,
-    { dispose: disposePresentation },
+    { dispose: disposePresentation, format: "presentation" },
   );
   const [current, setCurrent] = useState(0);
   const stripRef = useRef<HTMLDivElement>(null);

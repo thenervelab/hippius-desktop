@@ -18,6 +18,7 @@ import CaptureHost from "@/components/capture/CaptureHost";
 import ScreenshotEditorHost from "@/components/capture/editor/ScreenshotEditorHost";
 import TrayFileActionHost from "@/components/tray/TrayFileActionHost";
 import TrayUploadDialogHost from "@/components/tray/TrayUploadDialogHost";
+import OsDropHost from "@/components/page-sections/drive/OsDropHost";
 import AppContextMenu from "@/components/ui/context-menu/AppContextMenu";
 import AccountRecoveryDialog from "@/components/recovery/AccountRecoveryDialog";
 import RecoveryEventListener from "@/components/recovery/RecoveryEventListener";
@@ -55,6 +56,9 @@ export default function ProtectedLayout({
           <TrayFileActionHost />
           {/* The tray's Upload tile: the "Upload File" dialog over any page. */}
           <TrayUploadDialogHost />
+          {/* Files and folders dropped on the window from the OS, on any page
+              whose view takes them (useOsDropTarget). */}
+          <OsDropHost />
           {/* Replaces the WebView's Back / Reload / Inspect Element menu.
             Yields to the row and card menus, which handle their own
             right-clicks. */}

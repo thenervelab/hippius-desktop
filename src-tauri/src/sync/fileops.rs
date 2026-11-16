@@ -4,6 +4,7 @@
 //! so this grouping is an organizational layer over the file tree, not a path change.
 
 pub mod cloud_drive;
+pub mod drive_move;
 pub mod drive_summaries;
 pub mod files;
 pub mod folders;
@@ -11,5 +12,6 @@ pub mod listing_cache;
 pub mod recent_uploads;
 pub mod rekey_probe;
 pub mod remote;
+pub mod remote_move;
 pub mod remote_rename;
 pub mod remote_upload;

@@ -186,7 +186,7 @@ export function LoginForm({
             onClick={() => setShowRecover(true)}
             className="w-full text-center text-[min(0.875rem,14px)] font-medium text-primary-50 dark:text-primary-65 hover:text-primary-60 transition-colors cursor-pointer"
           >
-            Recover an account with your seed phrase
+            Recover an account with your recovery seed
           </button>
 
           <div className="h-px w-full bg-grey-80 dark:bg-[#494949]" />

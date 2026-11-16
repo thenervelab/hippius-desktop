@@ -24,6 +24,7 @@ import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-section
 import { resolveHostedBy } from "@/app/lib/utils/syncPathUtils";
 import type { HostedBy } from "@/app/lib/types/sync-folder";
 import HostedRootNote from "./multi-folder-sync/HostedRootNote";
+import { useClaimOsDrops } from "@/app/lib/drive/useOsDropTarget";
 
 interface AddLocalFolderDialogProps {
   open: boolean;
@@ -57,6 +58,8 @@ export const AddLocalFolderDialog: React.FC<AddLocalFolderDialogProps> = ({
   const [hostedBy, setHostedBy] = useState<HostedBy | null>(null);
   const [isAdding, setIsAdding] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  // While open, a dropped folder is this dialog's, never a page upload.
+  useClaimOsDrops(open);
   const [showHcfsSetup, setShowHcfsSetup] = useState(false);
 
   const handleClearSelection = useCallback(() => {

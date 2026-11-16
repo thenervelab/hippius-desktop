@@ -120,6 +120,7 @@ export default function DocumentPreview({ localPath }: { localPath: string }) {
     <RenderedFilePreview
       localPath={localPath}
       maxBytes={previewByteCap("document")}
+      format="document"
       loadingTitle="Opening document…"
       errorTitle="Couldn't preview this document"
       render={renderDocument}

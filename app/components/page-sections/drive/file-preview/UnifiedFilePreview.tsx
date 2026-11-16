@@ -6,6 +6,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import {
   derivePreviewType,
   isLegacyOfficeFilename,
+  officePreviewFormat,
   type PreviewType,
 } from "@/app/lib/utils/filePreviewType";
 import { useViewableFileUrl } from "@/app/lib/hooks/useViewableFileUrl";
@@ -22,6 +23,7 @@ import PreviewSurface from "./PreviewSurface";
 import { PreviewFallback, PreviewLoading } from "./PreviewState";
 import SpreadsheetPreview from "./SpreadsheetPreview";
 import SvgPreview from "./SvgPreview";
+import { useOfficeArchiveCheck } from "./useOfficeArchiveCheck";
 import VideoPreviewBody from "./VideoPreviewBody";
 
 /**
@@ -74,6 +76,10 @@ export default function UnifiedFilePreview({
   const needsPath =
     previewType !== null && previewType !== "image" && previewType !== "video" && previewType !== "PDF";
   const resolved = useViewableFileUrl(needsPath ? file : null);
+  const archive = useOfficeArchiveCheck(
+    resolved.localPath ?? null,
+    officePreviewFormat(previewType),
+  );
 
   if (previewType === "image") {
     return <ImagePreviewBody file={file} handleFileDownload={handleFileDownload} />;
@@ -125,6 +131,28 @@ export default function UnifiedFilePreview({
     return (
       <PreviewSurface className="items-center justify-center">
         <PreviewLoading title="Decrypting file…" />
+      </PreviewSurface>
+    );
+  }
+
+  // An Office file Rust will not vouch for (malformed, ZIP64, a zip bomb)
+  // gets the download fallback; its renderer is never mounted.
+  if (archive.status === "checking") {
+    return (
+      <PreviewSurface className="items-center justify-center">
+        <PreviewLoading title="Opening file…" />
+      </PreviewSurface>
+    );
+  }
+  if (archive.status === "refused") {
+    return (
+      <PreviewSurface className="items-center justify-center">
+        <PreviewFallback
+          title="This file can't be previewed"
+          description={archive.message}
+          file={file}
+          handleFileDownload={handleFileDownload}
+        />
       </PreviewSurface>
     );
   }

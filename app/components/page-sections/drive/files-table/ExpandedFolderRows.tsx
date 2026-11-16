@@ -37,6 +37,8 @@ import { sharesPageHref } from "@/app/lib/utils/sharesPageLink";
 import { FolderRowsSkeleton } from "./FilesTableSkeleton";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { preserveClosestScrollPosition } from "./preserveClosestScrollPosition";
+import MoveTr from "../move/MoveTr";
+import MoveDropTr from "../move/MoveDropTr";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 const MAX_INLINE_DEPTH = 8;
@@ -234,6 +236,8 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     toggleFolderSelection,
     removeFileFromSelection,
     addFilesToSelection,
+    selectedFiles,
+    unselectAllFiles,
   } = useFileSelection();
   const {
     isVisuallySelected,
@@ -390,8 +394,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
       columnCount - (hasSelectionColumn ? 1 : 0) - 1,
       0,
     );
+    // A drop target for this folder, like every other row under it.
     return (
-      <tr
+      <MoveDropTr
+        folderPath={folderRelativePath}
+        label={label}
         className={cn(
           // Same zebra striping (and border) a data row uses, so the
           // placeholder keeps the odd/even alternation instead of painting
@@ -414,7 +421,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
         {Array.from({ length: trailingCellCount }).map((_, i) => (
           <td key={`${key}-fill-${i}`} className={BASE_CELL_CLASS} />
         ))}
-      </tr>
+      </MoveDropTr>
     );
   };
 
@@ -427,6 +434,11 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
       <FolderRowsSkeleton
         orderedColumnIds={orderedColumnIds}
         nameIndentPx={BASE_CHILD_INDENT_PX + (depth + 1) * DEPTH_INDENT_PX}
+        renderRow={({ key, className, children }) => (
+          <MoveDropTr key={key} folderPath={folderRelativePath} label={label} className={className}>
+            {children}
+          </MoveDropTr>
+        )}
       />
     );
   }
@@ -554,7 +566,19 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
           <React.Fragment
             key={`${folderRelativePath}-${childRelativePath}-${childFile.name}`}
           >
-            <tr
+            <MoveTr
+              file={annotatedChild}
+              currentFolder={folderRelativePath}
+              disabled={isDeleting}
+              onHoverExpand={
+                isChildFolder && !isSubfolderExpanded && depth < MAX_INLINE_DEPTH
+                  ? () =>
+                      setExpandedSubfolders((previous) => ({
+                        ...previous,
+                        [childRelativePath]: true,
+                      }))
+                  : undefined
+              }
               className={cn(
                 "border-b-0 odd:bg-grey-light-200 even:bg-grey-light-400 hover:bg-grey-light-300 dark:odd:bg-black-500 dark:even:bg-black-primary-bg dark:hover:bg-black-300",
                 rowState === "pending" && "animate-pulse",
@@ -562,10 +586,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 isDeleting &&
                   "opacity-50 cursor-not-allowed pointer-events-none",
                 isSelectionMode && canSelect && "cursor-pointer",
-                isSelectionMode &&
-                  isSelected &&
-                  canSelect &&
-                  "bg-primary-60/10",
+                isSelected && canSelect && "bg-primary-60/10",
                 isSelectionMode &&
                   !isSelected &&
                   canSelect &&
@@ -582,6 +603,19 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                 // basename — which would target a same-named folder at the
                 // drive root.
                 onRowContextMenu?.(event, annotatedChild, sortedChildRows);
+              }}
+              onClickCapture={(event) => {
+                if (isDeleting || isSelectionMode) return;
+                if ((event.target as HTMLElement).closest(".action-menu-area")) return;
+                // Cmd/Ctrl-click (or Shift) toggles the row without the
+                // selection mode, before the name cell can open it.
+                if (event.metaKey || event.ctrlKey || event.shiftKey) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (canSelect) handleToggleChild();
+                  return;
+                }
+                if (selectedFiles.length > 0) unselectAllFiles();
               }}
               onClick={(event) => {
                 if (isDeleting) {
@@ -708,7 +742,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                   </TableActionMenu>
                 </div>
               </td>
-            </tr>
+            </MoveTr>
 
             {/* Recursive nested expansion — rendered as flat <tr> siblings
                 in the same table, so column borders match every level. */}

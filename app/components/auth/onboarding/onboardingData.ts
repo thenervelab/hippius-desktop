@@ -79,9 +79,9 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
       "Set it once and it works across all your devices and the web console.",
     featureLink:
       "Need to open a file on console.hippius.com? This is the password",
-    body: "Your unlock password wraps your mnemonic seed so you can open it on new devices and on Hippius Console. Files themselves are encrypted with the seed. Lose both the password and the seed, and the files stay unreadable — including to us.",
+    body: "Your unlock password opens your recovery seed on a new computer and in Hippius Console. Your files are encrypted with the recovery seed, not the password. Lose both and your files stay unreadable, to us as well.",
     pills: [
-      "Wraps your mnemonic seed",
+      "Protects your recovery seed",
       "Works on new devices",
       "Unlocks web console",
       "Not stored by Hippius",
@@ -93,10 +93,10 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   },
   {
     id: 5,
-    badges: [{ text: "Mnemonic Seed" }],
-    heading: "Your mnemonic seed is your master key",
-    subtitle: "This 12 word mnemonic seed is the only way to recover your account.",
-    featureLink: "Lose your mnemonic seed and your files are gone, no exceptions",
+    badges: [{ text: "Recovery Seed" }],
+    heading: "Your recovery seed is your master key",
+    subtitle: "These 12 words are the only way to recover your account.",
+    featureLink: "Lose your recovery seed and your files are gone, no exceptions",
     body: "Write it down on paper. Store it somewhere offline and secure. Never share it, not even with Hippius support. Keep copies in at least two different locations.",
     pills: [
       "Only you hold the keys",

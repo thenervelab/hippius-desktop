@@ -5,7 +5,10 @@
 //! written by mobile) into the plaintext preview cache; ordinary images are
 //! rejected cheaply after reading only their final 24 bytes.
 //! `read_preview_bytes` hands the renderer the plaintext bytes of a document
-//! (DOCX/XLSX/PPTX/CSV/JSON/text/HTML/Markdown/SVG) under a byte cap.
+//! (DOCX/XLSX/PPTX/CSV/JSON/text/HTML/Markdown/SVG) under a byte cap, and for
+//! the Office formats only after [`crate::preview_archive`] has vetted the
+//! zip. `check_preview_archive` runs that same vetting up front, so the viewer
+//! can offer the download instead of mounting a renderer at all.
 //!
 //! Both take a caller-supplied path and both run it through
 //! [`validate_preview_source`] first, so neither can be used as an arbitrary
@@ -20,6 +23,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, Result};
+use crate::preview_archive::{OfficePreviewFormat, check_office_preview};
 
 const TRAILER_SIZE: u64 = 24;
 const MAGIC: &[u8; 11] = b"HIPPIUSLIVE";
@@ -105,11 +109,19 @@ pub const PREVIEW_TOO_LARGE: &str = "This file is too large to preview. Download
 /// Returns raw bytes via [`tauri::ipc::Response`] rather than a serialised
 /// `Vec<u8>`; the JSON path would encode a 25 MiB document as ~75 MiB of
 /// decimal digits.
+///
+/// `format` names the Office renderer the bytes are for. When set, the bytes
+/// are run through [`check_office_preview`] before they are returned, so a
+/// malformed or bomb-shaped archive never reaches a JavaScript zip reader
+/// (pptx-viewer's fflate hangs the window on one). The check runs on the
+/// bytes being returned, not on a second read of the file, so a file swapped
+/// after `check_preview_archive` passed is still caught here.
 #[tauri::command]
 pub async fn read_preview_bytes(
     state: tauri::State<'_, crate::app_state::AppState>,
     source_path: String,
     max_bytes: u64,
+    format: Option<OfficePreviewFormat>,
 ) -> Result<tauri::ipc::Response> {
     let source = validate_preview_source(&state, Path::new(&source_path)).await?;
     let metadata = tokio::fs::metadata(&source).await?;
@@ -125,7 +137,53 @@ pub async fn read_preview_bytes(
     if bytes.len() as u64 > limit {
         return Err(AppError::Validation(PREVIEW_TOO_LARGE.into()));
     }
+    let bytes = match format {
+        Some(format) => tokio::task::spawn_blocking(move || vet_preview_bytes(bytes, Some(format)))
+            .await
+            .map_err(|e| AppError::Other(format!("preview archive check task failed: {e}")))??,
+        None => bytes,
+    };
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// The bytes `read_preview_bytes` may return: all of them, or for an Office
+/// format only once the archive check has passed on these very bytes.
+fn vet_preview_bytes(bytes: Vec<u8>, format: Option<OfficePreviewFormat>) -> Result<Vec<u8>> {
+    if let Some(format) = format {
+        check_office_preview(format, &mut io::Cursor::new(bytes.as_slice()))?;
+    }
+    Ok(bytes)
+}
+
+/// Vet an Office file before the viewer mounts its renderer.
+///
+/// Applies the same byte cap as `read_preview_bytes`, then reads only the
+/// zip's end record and central directory (never the entries) and refuses the
+/// archive the way `read_preview_bytes` would. Its refusal is the structured
+/// `Validation` error carrying Rust's own copy, which the viewer shows next to
+/// a Download button. A CSV passed as a spreadsheet is not a zip and passes.
+#[tauri::command]
+pub async fn check_preview_archive(
+    state: tauri::State<'_, crate::app_state::AppState>,
+    source_path: String,
+    max_bytes: u64,
+    format: OfficePreviewFormat,
+) -> Result<()> {
+    let source = validate_preview_source(&state, Path::new(&source_path)).await?;
+    tokio::task::spawn_blocking(move || check_preview_file(&source, max_bytes, format))
+        .await
+        .map_err(|e| AppError::Other(format!("preview archive check task failed: {e}")))?
+}
+
+/// The filesystem half of [`check_preview_archive`], after the path gate.
+fn check_preview_file(source: &Path, max_bytes: u64, format: OfficePreviewFormat) -> Result<()> {
+    let mut file = File::open(source)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(AppError::Validation("preview source is not a file".into()));
+    }
+    preview_read_limit(max_bytes, metadata.len())?;
+    check_office_preview(format, &mut file)
 }
 
 /// Open a file in the app the system uses for it (a video player, a PDF
@@ -574,6 +632,54 @@ mod tests {
         // rather than duplicated in TypeScript.
         let error = preview_read_limit(10, 11).expect_err("over cap");
         assert_eq!(error.to_string(), PREVIEW_TOO_LARGE);
+    }
+
+    mod office_archive_check {
+        use super::*;
+        use crate::preview_archive::PREVIEW_UNREADABLE_ARCHIVE;
+        use crate::preview_archive::tests::{fflate_hang_poc, office_file};
+
+        fn message(error: AppError) -> String {
+            match error {
+                AppError::Validation(message) => message,
+                other => panic!("expected a Validation refusal, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn an_office_read_returns_nothing_for_a_refused_archive() {
+            let refused = vet_preview_bytes(fflate_hang_poc(), Some(OfficePreviewFormat::Presentation)).unwrap_err();
+            assert_eq!(message(refused), PREVIEW_UNREADABLE_ARCHIVE);
+            let deck = office_file("ppt/presentation.xml", b"<p:presentation/>");
+            assert_eq!(vet_preview_bytes(deck.clone(), Some(OfficePreviewFormat::Presentation)).unwrap(), deck);
+        }
+
+        #[test]
+        fn a_read_without_a_format_is_not_checked() {
+            // Text, JSON, HTML and the rest never reach a zip reader.
+            assert_eq!(vet_preview_bytes(fflate_hang_poc(), None).unwrap(), fflate_hang_poc());
+        }
+
+        #[test]
+        fn the_up_front_check_reads_the_file_on_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            let bad = dir.path().join("hang.pptx");
+            fs::write(&bad, fflate_hang_poc()).unwrap();
+            let good = dir.path().join("deck.pptx");
+            fs::write(&good, office_file("ppt/presentation.xml", b"<p:presentation/>")).unwrap();
+            let csv = dir.path().join("table.csv");
+            fs::write(&csv, b"a,b\n1,2\n").unwrap();
+
+            let refused = check_preview_file(&bad, 1024, OfficePreviewFormat::Presentation).unwrap_err();
+            assert_eq!(message(refused), PREVIEW_UNREADABLE_ARCHIVE);
+            check_preview_file(&good, 1024 * 1024, OfficePreviewFormat::Presentation).unwrap();
+            check_preview_file(&csv, 1024, OfficePreviewFormat::Spreadsheet).unwrap();
+            // The byte cap applies here too, with the same copy as the read.
+            let over_cap = check_preview_file(&good, 10, OfficePreviewFormat::Presentation).unwrap_err();
+            assert_eq!(message(over_cap), PREVIEW_TOO_LARGE);
+            // A folder is not a file to preview.
+            assert!(check_preview_file(dir.path(), 1024, OfficePreviewFormat::Document).is_err());
+        }
     }
 
     #[test]

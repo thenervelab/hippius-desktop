@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useId, useState } from "react";
 
 import { Input, Icons } from "@/components/ui";
 import {
@@ -25,6 +25,33 @@ export const UNLOCK_PASSWORD_DOCS_URL =
  * strength meters, and debounce.
  */
 
+/**
+ * What the 12 words are called for this account. Accounts that sign in with
+ * Google or another provider back them up as their **recovery seed**;
+ * accounts that sign in with the words call them their **access key**.
+ */
+export interface SeedWords {
+  /** Mid-sentence name: "recovery seed" / "access key". */
+  name: string;
+  /** Field label in Title Case: "Recovery Seed" / "Access Key". */
+  title: string;
+  placeholder: string;
+}
+
+export function seedWordsFor(authType: "mnemonic" | "oauth" | null | undefined): SeedWords {
+  return authType === "mnemonic"
+    ? {
+        name: "access key",
+        title: "Access Key",
+        placeholder: "Enter or paste your 12-word access key",
+      }
+    : {
+        name: "recovery seed",
+        title: "Recovery Seed",
+        placeholder: "Enter or paste your 12-word recovery seed",
+      };
+}
+
 export const PasswordField: React.FC<{
   label: string;
   value: string;
@@ -34,24 +61,63 @@ export const PasswordField: React.FC<{
   onSubmit?: () => void;
   autoComplete?: "current-password" | "new-password";
   placeholder?: string;
-}> = ({ label, value, onChange, errorMessage, onSubmit, autoComplete = "new-password", placeholder }) => {
+  inputRef?: React.Ref<HTMLInputElement>;
+  autoFocus?: boolean;
+  /** Keeps the value and focus while a submit is being checked. */
+  readOnly?: boolean;
+}> = ({
+  label,
+  value,
+  onChange,
+  errorMessage,
+  onSubmit,
+  autoComplete = "new-password",
+  placeholder,
+  inputRef,
+  autoFocus,
+  readOnly,
+}) => {
   const [visible, setVisible] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
+  const id = useId();
+  const errorId = `${id}-error`;
+  const capsId = `${id}-caps`;
+  const describedBy =
+    [errorMessage ? errorId : null, capsLock ? capsId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  // `getModifierState` reports Caps Lock on any key event, so the note
+  // follows the key as it is toggled while typing.
+  const trackCapsLock = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    setCapsLock(e.getModifierState?.("CapsLock") ?? false);
+  };
+
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-grey-40 dark:text-grey-dark-600">{label}</span>
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-xs text-grey-40 dark:text-grey-dark-600">
+        {label}
+      </label>
       <div className="relative">
         <Input
+          id={id}
+          ref={inputRef}
           type={visible ? "text" : "password"}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           aria-invalid={Boolean(errorMessage)}
+          aria-describedby={describedBy}
+          autoFocus={autoFocus}
+          readOnly={readOnly}
           onKeyDown={(e) => {
+            trackCapsLock(e);
             if (e.key === "Enter" && onSubmit) {
               e.preventDefault();
               onSubmit();
             }
           }}
+          onKeyUp={trackCapsLock}
+          onBlur={() => setCapsLock(false)}
           autoComplete={autoComplete}
           autoCapitalize="off"
           spellCheck={false}
@@ -59,7 +125,7 @@ export const PasswordField: React.FC<{
         />
         <button
           type="button"
-          tabIndex={-1}
+          aria-label={visible ? "Hide password" : "Show password"}
           className="absolute right-3 top-1/2 -translate-y-1/2 text-grey-50 hover:text-grey-30 transition-colors"
           onClick={(e) => {
             e.preventDefault();
@@ -67,14 +133,23 @@ export const PasswordField: React.FC<{
           }}
         >
           {visible ? (
-            <Icons.EyeOff className="size-4" />
+            <Icons.EyeOff className="size-4" aria-hidden="true" />
           ) : (
-            <Icons.Eye className="size-4" />
+            <Icons.Eye className="size-4" aria-hidden="true" />
           )}
         </button>
       </div>
-      {errorMessage && <span className="text-xs text-error-60">{errorMessage}</span>}
-    </label>
+      {capsLock && (
+        <span id={capsId} className="text-xs text-grey-50 dark:text-grey-dark-600">
+          Caps Lock is on.
+        </span>
+      )}
+      {errorMessage && (
+        <span id={errorId} role="alert" className="text-xs text-error-60">
+          {errorMessage}
+        </span>
+      )}
+    </div>
   );
 };
 
@@ -94,10 +169,14 @@ export const MnemonicField: React.FC<{
   disabled?: boolean;
 }> = ({ label, value, onChange, errorMessage, placeholder, disabled }) => {
   const isInvalid = Boolean(errorMessage);
+  const id = useId();
+  const errorId = `${id}-error`;
 
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs text-grey-40 dark:text-grey-dark-600">{label}</span>
+    <div className="flex flex-col gap-1">
+      <label htmlFor={id} className="text-xs text-grey-40 dark:text-grey-dark-600">
+        {label}
+      </label>
       <div
         className={cn(
           inputFieldShellClassName,
@@ -108,12 +187,14 @@ export const MnemonicField: React.FC<{
         )}
       >
         <textarea
+          id={id}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder={placeholder}
           rows={3}
           disabled={disabled}
           aria-invalid={isInvalid}
+          aria-describedby={isInvalid ? errorId : undefined}
           autoComplete="off"
           autoCapitalize="off"
           spellCheck={false}
@@ -124,9 +205,11 @@ export const MnemonicField: React.FC<{
         />
       </div>
       {errorMessage && (
-        <span className="text-xs text-error-60">{errorMessage}</span>
+        <span id={errorId} role="alert" className="text-xs text-error-60">
+          {errorMessage}
+        </span>
       )}
-    </label>
+    </div>
   );
 };
 

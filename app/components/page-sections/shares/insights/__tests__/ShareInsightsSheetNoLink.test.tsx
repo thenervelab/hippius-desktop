@@ -293,7 +293,74 @@ describe("the no-link step's words", () => {
     // Turned off in Settings on a paid plan.
     expect(noLinkBody({ offered: ALL, on: NONE, switchesInPlan: true })).toMatch(/turned off in Settings/);
     // Before Rust answers, or on a server without Insights: no promise at all.
-    expect(noLinkBody(null)).toBe(`Create a link to share this capture. ${NO_LINK_PUBLIC}`);
+    expect(noLinkBody(null)).toBe(`Create a link to share this file. ${NO_LINK_PUBLIC}`);
     expect(noLinkBody({ offered: NONE, on: NONE, switchesInPlan: true })).toBe(`Create a link to share this capture. ${NO_LINK_PUBLIC}`);
+  });
+
+  it("says file, never capture, for any other file, and never blames the capture Setting", () => {
+    expect(noLinkBody({ offered: ALL, on: ALL, switchesInPlan: true, isCapture: false })).toMatch(
+      /how many people view this file, and their comments and reactions/,
+    );
+    const free = noLinkBody({ offered: ALL, on: NONE, switchesInPlan: false, isCapture: false });
+    expect(free).toBe(`Create a link to share this file. Counting views, comments and reactions comes with paid Drive plans. ${NO_LINK_PUBLIC}`);
+    expect(noLinkBody({ offered: ALL, on: NONE, switchesInPlan: true, isCapture: false })).not.toMatch(/Settings/);
+    expect(noLinkBody({ offered: ALL, on: ALL, switchesInPlan: true, isCapture: true })).toMatch(/this capture/);
+  });
+});
+
+describe("the Insights panel for any other file with no link", () => {
+  const PDF = "Docs/report.pdf";
+  const PDF_TARGET: InsightsSheetTarget = {
+    shareToken: null,
+    fileName: PDF,
+    capture: { label: "My Drive", relativePath: PDF, fileId: null, size: 900 },
+  };
+  const ALL = { insights: true, comments: true, reactions: true };
+  const NONE = { insights: false, comments: false, reactions: false };
+
+  beforeEach(() => {
+    invokeMock.mockReset();
+    toastSuccess.mockReset();
+  });
+
+  it("asks Rust what Create link would give this file, and says it in file words", async () => {
+    answer(() => [], {
+      insights_panel_link_default: { offered: ALL, on: ALL, switchesInPlan: true, isCapture: false },
+    });
+    renderSheet(PDF_TARGET);
+    expect(
+      await screen.findByText(noLinkBody({ offered: ALL, on: ALL, switchesInPlan: true, isCapture: false })),
+    ).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("insights_panel_link_default", { folderLabel: "My Drive", fileName: PDF });
+  });
+
+  it("on the free plan says counting comes with paid plans", async () => {
+    answer(() => [], {
+      insights_panel_link_default: { offered: ALL, on: NONE, switchesInPlan: false, isCapture: false },
+    });
+    renderSheet(PDF_TARGET);
+    expect(await screen.findByText(/comes with paid Drive plans/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: CREATE_LINK })).toBeEnabled();
+  });
+
+  it("Create link makes the file's link through Rust and opens its Insights", async () => {
+    let listing: ShareSummary[] = [];
+    answer(() => listing, {
+      insights_panel_link_default: { offered: ALL, on: ALL, switchesInPlan: true, isCapture: false },
+      create_capture_link: { shareToken: "pdf", shareUrl: "https://console.hippius.com/s/pdf", copied: true },
+    });
+    const store = renderSheet(PDF_TARGET);
+    const button = await screen.findByRole("button", { name: CREATE_LINK });
+    listing = [link("pdf", { filename: "report.pdf", folderLabel: "My Drive", relativePath: PDF })];
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("create_capture_link", {
+        folderLabel: "My Drive",
+        relativePath: PDF,
+        fileId: null,
+        size: 900,
+      }),
+    );
+    await waitFor(() => expect(store.get(insightsSheetAtom)?.shareToken).toBe("pdf"));
   });
 });

@@ -7,7 +7,9 @@ import React, {
 import {
   MediaPlayer,
   MediaProvider,
+  isHLSProvider,
   type MediaPlayerInstance,
+  type MediaProviderAdapter,
 } from "@vidstack/react";
 import "@vidstack/react/player/styles/default/theme.css";
 import "@vidstack/react/player/styles/default/layouts/video.css";
@@ -18,6 +20,7 @@ import {
 import { isTauri as isTauriRuntime } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import VideoPlayerError from "./VideoPlayerError";
+import { HLS_PREVIEW_CONFIG } from "@/app/components/page-sections/drive/file-preview/hlsIpcLoader";
 
 // Check if running in Tauri (uses window.isTauri injected by the Tauri runtime,
 // which is available regardless of the `withGlobalTauri` setting)
@@ -88,6 +91,11 @@ interface VideoPlayerProps {
   /** The media element reported an error. */
   onPlaybackFailed?: () => void;
   /**
+   * `videoUrl` is a converted preview's HLS playlist (`hippius-video://`),
+   * played through hls.js with segments fetched over IPC.
+   */
+  hls?: boolean;
+  /**
    * Playback stopped to wait for data for more than `STUTTER_MS` after the
    * first frame (once per video). The Linux viewer then offers the system's
    * video player next to this one.
@@ -106,6 +114,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onPlaybackStarted,
   onPlaybackFailed,
   onPlaybackStuttered,
+  hls = false,
 }) => {
   const [error, setError] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -297,7 +306,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     // WKWebView (Tauri on macOS) cannot play MKV or 3GP containers,
     // nor HEVC/x265 codec.  Detect immediately so we don't spin for
     // 2 minutes before the timeout fires.
-    if (_unsupportedEngine && UNSUPPORTED_FORMATS.includes(fileFormat)) {
+    if (!hls && _unsupportedEngine && UNSUPPORTED_FORMATS.includes(fileFormat)) {
       setError(
         "This video format (." +
           fileFormat +
@@ -313,7 +322,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
       clearLoadTimer();
       stopStallWatch();
     };
-  }, [videoUrl, fileFormat, reloadKey, stopStallWatch]);
+  }, [videoUrl, fileFormat, reloadKey, stopStallWatch, hls]);
 
   // Don't render MediaPlayer if no URL is available
   if (!videoUrl || videoUrl.trim() === "") {
@@ -329,8 +338,9 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
   // sniffing the URL — important on the Tauri asset:// protocol where
   // sniffing isn't reliable. If the extension is unknown we still pass
   // the URL string and let the player attempt detection.
-  const mimeType: string | undefined =
-    SUPPORTED_VIDEO_MIME_TYPES[fileFormat?.toLowerCase()];
+  const mimeType: string | undefined = hls
+    ? "application/x-mpegurl"
+    : SUPPORTED_VIDEO_MIME_TYPES[fileFormat?.toLowerCase()];
 
   // Stream the URL directly — the browser handles HTTP range-request
   // streaming natively for remote URLs, and Tauri's asset:// protocol
@@ -376,6 +386,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
         autoPlay
         src={srcProp}
         playsInline
+        onProviderChange={hls ? configureHlsProvider : undefined}
         // Clear the load timer on any progress event so a video that
         // takes a moment to start (slow disk, large moov, asset://
         // range-request overhead) isn't killed prematurely. The console
@@ -448,5 +459,16 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     </div>
   );
 };
+
+/**
+ * A converted preview plays through hls.js, bundled (vidstack would fetch it
+ * from a CDN the CSP blocks) and fed by the IPC loader.
+ */
+function configureHlsProvider(provider: MediaProviderAdapter | null) {
+  if (provider && isHLSProvider(provider)) {
+    provider.library = () => import("hls.js");
+    provider.config = HLS_PREVIEW_CONFIG;
+  }
+}
 
 export default VideoPlayer;

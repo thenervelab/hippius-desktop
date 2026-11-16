@@ -80,6 +80,18 @@ export interface ServerCapabilities {
    */
   share_document_views?: boolean;
   /**
+   * The owner's Allow download switch on a file link. Read by Rust only (it
+   * sends `download` in the link settings only then); listed so the type
+   * matches the wire.
+   */
+  share_download_switch?: boolean;
+  /**
+   * Email gates on file links ("Ask for email"). Read by Rust only (the
+   * gate commands answer `offered: false` without it); listed so the type
+   * matches the wire.
+   */
+  share_gates?: boolean;
+  /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
    */
@@ -89,6 +101,8 @@ export interface ServerCapabilities {
    * so the type matches the wire.
    */
   drive_invite_link_envelopes?: boolean;
+  /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
+  drive_moves?: boolean;
 }
 
 /**

@@ -128,7 +128,8 @@ describe("CaptureInsightsButton", () => {
     const real = getUnplacedSharesNamed.getMockImplementation()!;
     getUnplacedSharesNamed.mockImplementation((name: string) => (name === "image.png" ? [EXTENSION_ROW] : []));
     try {
-      setup({ actualName: "image.png", size: 2048 });
+      // Same name, another size: a different file's link.
+      setup({ actualName: "image.png", size: 4096 });
       expect(screen.getByRole("button", { name: `${VIEW_INSIGHTS_LABEL}, no link yet` })).toBeInTheDocument();
     } finally {
       getUnplacedSharesNamed.mockImplementation(real);

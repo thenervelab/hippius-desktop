@@ -55,6 +55,8 @@ interface FolderUploadProps extends BaseProps {
   subfolder?: string;
   /** Resolved sync root path (avoids incorrect getPrivateSyncPath in multi-drive). */
   syncBasePath?: string;
+  /** The drive's label, so a shared drive is gated on its owner's room. */
+  driveLabel?: string | null;
   onSuccess: () => void;
   onCancel: () => void;
 }
@@ -309,7 +311,7 @@ const UploadFilesFlow: FC<UploadFilesFlowProps> = (props) => {
     // Live Rust eligibility check (replaces legacy stale-cache gate).
     // The Rust `add_files` IPC also enforces this internally via
     // `require_eligible(...)?` so the gate is impossible to bypass.
-    if (!(await checkEligibility("folder-upload"))) {
+    if (!(await checkEligibility("folder-upload", props.driveLabel))) {
       props.onCancel();
       return;
     }
