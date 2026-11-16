@@ -244,7 +244,7 @@ struct SealRequest<'a> {
 /// uploaded is a file that lands and cannot be read back.
 fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
     let ciphertext_hash = encrypt_to_temp(req.source, req.ciphertext_path, req.encryption_key)?;
-    Ok(signed_manifest(ManifestFields {
+    let manifest = signed_manifest(ManifestFields {
         signing_key: req.signing_key,
         identity: req.identity,
         ciphertext_hash,
@@ -254,7 +254,14 @@ fn seal_and_describe(req: SealRequest<'_>) -> Result<Manifest> {
         encrypted_path: req.encrypted_path,
         file_name: req.file_name,
         relative_path: req.relative_path,
-    }))
+    });
+    // Set here, not in `signed_manifest`: a copy between drives shares that
+    // builder and must declare no capture (`drive_move::copy::stage`). The
+    // signature covers only the ciphertext hash, so it still holds.
+    Ok(Manifest {
+        capture: req.capture,
+        ..manifest
+    })
 }
 
 /// What a new file's manifest says, once its ciphertext exists.
@@ -304,7 +311,6 @@ pub(crate) fn signed_manifest(req: ManifestFields<'_>) -> Manifest {
         encrypted_path: req.encrypted_path,
         file_name: Some(req.file_name.to_string()),
         relative_path: Some(req.relative_path.to_string()),
-        capture: req.capture,
         ..Default::default()
     }
 }
