@@ -10,44 +10,102 @@
 //! owner's bearer does not pass the gate) or has ended, which is exactly when
 //! the owner still reads the link's comments and verified viewer emails. So
 //! each mint opens the envelope once, right after the link exists and before
-//! either can hold, and keeps the share key beside the secret
-//! ([`SqliteShareKeystore::keep_opened_share_key`]). Turning on an email gate
-//! tries again first ([`keep_before_gate`]), so a failed GET at the mint is
-//! not the last chance. A link minted on another device is opened on first
-//! use, which fails for a gated or ended link: the owner wrap carries only the
-//! link secret (hcfs#1262), and no owner route hands out the envelope.
+//! either can hold, and keeps the share key in its own table
+//! ([`FileLinkKeys`], `share_file_link_key`), never in the keystore, whose
+//! rows rebuild URLs. Turning on an email gate tries again first
+//! ([`keep_before_gate`]), so a failed GET at the mint is not the last chance.
+//!
+//! A kept key lives exactly as long as its keystore secret: the keystore's
+//! `put` and `forget` delete it. Revoking a link forgets its secret (hcfs-client
+//! `revoke_share`), so a revoked `#s=` link's comments become unreadable here,
+//! as a revoked `#k=` link's do; an expired link keeps both.
+//!
+//! A link minted on another device is opened on first use, which fails for a
+//! gated or ended link: the owner wrap carries only the link secret
+//! (hcfs#1262), and no owner route hands out the envelope yet
+//! (thenervelab/hcfs#1369).
 //!
 //! A `#sp=` link's secret is under its password, so its share key is never
 //! opened or stored, as for a `#p=` link.
 
 use hcfs_client::client::HcfsClient;
 use hcfs_client::client::share::{ShareError, ShareKeystore, ShareSecret};
+use sqlx::sqlite::SqlitePool;
 use tracing::warn;
 
 use super::SqliteShareKeystore;
 
-/// The share key behind `token`'s `#s=` link: the one kept beside its secret,
-/// else opened through the link-key route (one anonymous GET) and then kept.
+/// The kept share keys of `#s=` links, by token (`share_file_link_key`).
+/// Read only for the comment key; no URL is ever built from one.
+#[derive(Clone, Debug)]
+pub(crate) struct FileLinkKeys {
+    pool: SqlitePool,
+}
+
+impl FileLinkKeys {
+    pub(crate) fn new(pool: SqlitePool) -> Self {
+        Self { pool }
+    }
+
+    /// The share key kept for `token`, if any.
+    pub(crate) async fn get(&self, token: &str) -> Result<Option<[u8; 32]>, ShareError> {
+        let stored: Option<Vec<u8>> = sqlx::query_scalar("SELECT share_key FROM share_file_link_key WHERE share_token = ?")
+            .bind(token)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(keys_db)?;
+        stored
+            .map(|bytes| <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| keys_db("kept share key is not 32 bytes")))
+            .transpose()
+    }
+
+    /// Keep `share_key` for `token`, only while the keystore still holds
+    /// `link_secret` for it as a `file_link` row. So a password link's share
+    /// key is never stored, and a key opened under a secret that has since
+    /// been replaced or forgotten is dropped rather than paired with the new
+    /// one.
+    pub(crate) async fn keep(&self, token: &str, link_secret: &[u8; 32], share_key: &[u8; 32]) -> Result<(), ShareError> {
+        sqlx::query(
+            "INSERT INTO share_file_link_key (share_token, share_key) \
+             SELECT ?1, ?2 WHERE EXISTS ( \
+                 SELECT 1 FROM share_keystore \
+                 WHERE share_token = ?1 AND secret_kind = 'file_link' AND share_key = ?3) \
+             ON CONFLICT(share_token) DO UPDATE SET share_key = excluded.share_key",
+        )
+        .bind(token)
+        .bind(share_key.as_slice())
+        .bind(link_secret.as_slice())
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(keys_db)
+    }
+}
+
+fn keys_db(e: impl std::fmt::Display) -> ShareError {
+    ShareError::Keystore(format!("share_file_link_key: {e}"))
+}
+
+/// The share key behind `token`'s `#s=` link: the one kept, else opened
+/// through the link-key route (one anonymous GET) and then kept.
 ///
 /// # Errors
 ///
 /// [`ShareError::NotFound`] when nothing is kept and the server refuses the
-/// envelope (an email gate, an ended link, a wrong secret); the keystore's
-/// error if its read fails; otherwise the transport and crypto variants of
+/// envelope (an email gate, an ended link, a wrong secret); the table's error
+/// if its read fails; otherwise the transport and crypto variants of
 /// [`HcfsClient::open_file_link`]. A failure to keep a key that did open is
 /// only logged.
-pub(crate) async fn share_key(
-    client: &HcfsClient,
-    keystore: &SqliteShareKeystore,
-    token: &str,
-    link_secret: &[u8; 32],
-) -> Result<[u8; 32], ShareError> {
-    if let Some(kept) = keystore.opened_share_key(token)? {
+pub(crate) async fn share_key(client: &HcfsClient, keys: &FileLinkKeys, token: &str, link_secret: &[u8; 32]) -> Result<[u8; 32], ShareError> {
+    if let Some(kept) = keys.get(token).await? {
         return Ok(kept);
     }
+    // TODO(GeorgiosDelkos, thenervelab/hcfs#1369): on a 404 here, fall back to
+    // the owner-authenticated envelope route once it exists, so a gated or
+    // ended link minted on another device stays readable.
     let opened = client.open_file_link(token, link_secret).await?;
     let share_key = *opened.as_bytes();
-    if let Err(e) = keystore.keep_opened_share_key(token, &share_key) {
+    if let Err(e) = keys.keep(token, link_secret, &share_key).await {
         warn!(error = %e, "file link share key opened but not kept");
     }
     Ok(share_key)
@@ -55,9 +113,9 @@ pub(crate) async fn share_key(
 
 /// After a file mint: open and keep the new link's share key when the mint
 /// stored a `#s=` secret. Does nothing for any other secret, and never fails
-/// the mint: the link is already live, and without a kept key its comments
-/// are opened on first use instead (which fails once it has an email gate).
-pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareKeystore, token: &str) {
+/// the mint: the link is already live, and without a kept key its share key
+/// is fetched again before an email gate or on first use.
+pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareKeystore, keys: &FileLinkKeys, token: &str) {
     let link_secret = match keystore.get(token) {
         Ok(Some(ShareSecret::FileLink(link_secret))) => link_secret,
         Ok(_) => return,
@@ -66,7 +124,7 @@ pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareK
             return;
         }
     };
-    if let Err(e) = share_key(client, keystore, token, &link_secret).await {
+    if let Err(e) = share_key(client, keys, token, &link_secret).await {
         warn!(error = %e, "new file link's share key not kept; it is fetched again before an email gate");
     }
 }
@@ -79,15 +137,10 @@ pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareK
 ///
 /// # Errors
 ///
-/// A keystore failure, or a transport or server failure that left the key
+/// A table failure, or a transport or server failure that left the key
 /// unknown: the caller holds the gate back rather than lose the key.
-pub(crate) async fn keep_before_gate(
-    client: &HcfsClient,
-    keystore: &SqliteShareKeystore,
-    token: &str,
-    link_secret: &[u8; 32],
-) -> Result<(), ShareError> {
-    match share_key(client, keystore, token, link_secret).await {
+pub(crate) async fn keep_before_gate(client: &HcfsClient, keys: &FileLinkKeys, token: &str, link_secret: &[u8; 32]) -> Result<(), ShareError> {
+    match share_key(client, keys, token, link_secret).await {
         Ok(_) | Err(ShareError::NotFound | ShareError::Crypto(_)) => Ok(()),
         Err(e) => Err(e),
     }
@@ -168,14 +221,14 @@ mod tests {
         .expect("client")
     }
 
-    async fn keystore() -> (TempDir, SqliteShareKeystore) {
+    async fn stores() -> (TempDir, SqliteShareKeystore, FileLinkKeys) {
         let dir = TempDir::new().expect("tempdir");
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", dir.path().join("k.db").display()))
             .expect("opts")
             .create_if_missing(true);
         let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
         crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
-        (dir, SqliteShareKeystore::new(pool))
+        (dir, SqliteShareKeystore::new(pool.clone()), FileLinkKeys::new(pool))
     }
 
     /// The reason the key is kept at mint: once the link has an email gate
@@ -186,15 +239,15 @@ mod tests {
         let (link_secret, envelope) = sealed_link();
         let route = route(envelope);
         let client = serve(Arc::clone(&route)).await;
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
 
-        keep_after_mint(&client, &keystore, TOKEN).await;
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), Some(SHARE_KEY));
+        keep_after_mint(&client, &keystore, &keys, TOKEN).await;
+        assert_eq!(keys.get(TOKEN).await.expect("read"), Some(SHARE_KEY));
 
         route.open.store(false, Ordering::SeqCst);
         let hits = route.hits.load(Ordering::SeqCst);
-        assert_eq!(share_key(&client, &keystore, TOKEN, &link_secret).await.expect("kept"), SHARE_KEY);
+        assert_eq!(share_key(&client, &keys, TOKEN, &link_secret).await.expect("kept"), SHARE_KEY);
         assert_eq!(route.hits.load(Ordering::SeqCst), hits, "a kept key costs no request");
     }
 
@@ -205,11 +258,11 @@ mod tests {
         let (link_secret, envelope) = sealed_link();
         let route = route(envelope);
         let client = serve(Arc::clone(&route)).await;
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
 
-        assert_eq!(share_key(&client, &keystore, TOKEN, &link_secret).await.expect("opens"), SHARE_KEY);
-        assert_eq!(share_key(&client, &keystore, TOKEN, &link_secret).await.expect("kept"), SHARE_KEY);
+        assert_eq!(share_key(&client, &keys, TOKEN, &link_secret).await.expect("opens"), SHARE_KEY);
+        assert_eq!(share_key(&client, &keys, TOKEN, &link_secret).await.expect("kept"), SHARE_KEY);
         assert_eq!(route.hits.load(Ordering::SeqCst), 1);
     }
 
@@ -221,12 +274,12 @@ mod tests {
         let route = route(envelope);
         route.open.store(false, Ordering::SeqCst);
         let client = serve(route).await;
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
 
-        let err = share_key(&client, &keystore, TOKEN, &link_secret).await.expect_err("refused");
+        let err = share_key(&client, &keys, TOKEN, &link_secret).await.expect_err("refused");
         assert!(matches!(err, ShareError::NotFound), "{err:?}");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), None);
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None);
     }
 
     /// Only a `#s=` mint opens anything: a `#k=` row is the key already, and a
@@ -236,13 +289,13 @@ mod tests {
         let (_, envelope) = sealed_link();
         let route = route(envelope);
         let client = serve(Arc::clone(&route)).await;
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put("tok-k", &ShareSecret::Public(SHARE_KEY)).expect("put");
         keystore.put("tok-sp", &ShareSecret::FileLinkPrivate(vec![1; 89])).expect("put");
 
-        keep_after_mint(&client, &keystore, "tok-k").await;
-        keep_after_mint(&client, &keystore, "tok-sp").await;
-        keep_after_mint(&client, &keystore, "tok-none").await;
+        keep_after_mint(&client, &keystore, &keys, "tok-k").await;
+        keep_after_mint(&client, &keystore, &keys, "tok-sp").await;
+        keep_after_mint(&client, &keystore, &keys, "tok-none").await;
         assert_eq!(route.hits.load(Ordering::SeqCst), 0);
     }
 
@@ -254,17 +307,15 @@ mod tests {
         let (link_secret, envelope) = sealed_link();
         let route = route(envelope);
         let client = serve(Arc::clone(&route)).await;
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
 
-        keep_before_gate(&client, &keystore, TOKEN, &link_secret).await.expect("kept");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), Some(SHARE_KEY));
+        keep_before_gate(&client, &keys, TOKEN, &link_secret).await.expect("kept");
+        assert_eq!(keys.get(TOKEN).await.expect("read"), Some(SHARE_KEY));
 
         keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("clears the kept key");
         route.open.store(false, Ordering::SeqCst);
-        keep_before_gate(&client, &keystore, TOKEN, &link_secret)
-            .await
-            .expect("nothing left to lose");
+        keep_before_gate(&client, &keys, TOKEN, &link_secret).await.expect("nothing left to lose");
 
         let offline = HcfsClient::new(HcfsClientConfig {
             base_url: "http://127.0.0.1:9".into(),
@@ -272,32 +323,32 @@ mod tests {
         })
         .expect("client");
         assert!(
-            keep_before_gate(&offline, &keystore, TOKEN, &link_secret).await.is_err(),
+            keep_before_gate(&offline, &keys, TOKEN, &link_secret).await.is_err(),
             "no answer holds the gate back"
         );
 
         // An envelope that does not open under the secret: no key to lose.
         route.open.store(true, Ordering::SeqCst);
-        keep_before_gate(&client, &keystore, TOKEN, &[0xEE; 32])
+        keep_before_gate(&client, &keys, TOKEN, &[0xEE; 32])
             .await
             .expect("a wrong secret opens nothing");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), None);
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None);
     }
 
     /// The kept key lives and dies with its row: only a `file_link` row takes
     /// one, a new secret for the token clears it, and forget removes it.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn the_kept_key_follows_its_file_link_row() {
-        let (_dir, keystore) = keystore().await;
+        let (_dir, keystore, keys) = stores().await;
         keystore.put("tok-sp", &ShareSecret::FileLinkPrivate(vec![1; 89])).expect("put");
-        keystore.keep_opened_share_key("tok-sp", &SHARE_KEY).expect("no-op");
-        assert_eq!(keystore.opened_share_key("tok-sp").expect("read"), None, "never for a password link");
-        keystore.keep_opened_share_key("tok-none", &SHARE_KEY).expect("no-op");
-        assert_eq!(keystore.opened_share_key("tok-none").expect("read"), None);
+        keys.keep("tok-sp", &[1; 32], &SHARE_KEY).await.expect("no-op");
+        assert_eq!(keys.get("tok-sp").await.expect("read"), None, "never for a password link");
+        keys.keep("tok-none", &[1; 32], &SHARE_KEY).await.expect("no-op");
+        assert_eq!(keys.get("tok-none").await.expect("read"), None);
 
         keystore.put(TOKEN, &ShareSecret::FileLink([7; 32])).expect("put");
-        keystore.keep_opened_share_key(TOKEN, &SHARE_KEY).expect("keep");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), Some(SHARE_KEY));
+        keys.keep(TOKEN, &[7; 32], &SHARE_KEY).await.expect("keep");
+        assert_eq!(keys.get(TOKEN).await.expect("read"), Some(SHARE_KEY));
         assert_eq!(
             keystore.get(TOKEN).expect("get"),
             Some(ShareSecret::FileLink([7; 32])),
@@ -305,10 +356,17 @@ mod tests {
         );
 
         keystore.put(TOKEN, &ShareSecret::FileLink([8; 32])).expect("replace");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), None, "a new secret clears the old key");
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None, "a new secret clears the old key");
+        keys.keep(TOKEN, &[7; 32], &SHARE_KEY).await.expect("no-op");
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None, "a key opened under the old secret is dropped");
 
-        keystore.keep_opened_share_key(TOKEN, &SHARE_KEY).expect("keep");
+        keys.keep(TOKEN, &[8; 32], &SHARE_KEY).await.expect("keep");
+        keystore.put(TOKEN, &ShareSecret::Public(SHARE_KEY)).expect("now a #k= link");
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None, "another kind clears it");
+
+        keystore.put(TOKEN, &ShareSecret::FileLink([8; 32])).expect("put");
+        keys.keep(TOKEN, &[8; 32], &SHARE_KEY).await.expect("keep");
         keystore.forget(TOKEN).expect("forget");
-        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), None);
+        assert_eq!(keys.get(TOKEN).await.expect("read"), None, "revoke forgets it");
     }
 }

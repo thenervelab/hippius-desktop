@@ -516,7 +516,13 @@ async fn create_share_inner(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
-    super::file_link_key::keep_after_mint(&client, &keystore, &result.share_token).await;
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
@@ -795,7 +801,13 @@ pub(crate) async fn share_external_file(
 
     refuse_if_source_moved(&client, &keystore, abs_path, before, &result.share_token).await?;
 
-    super::file_link_key::keep_after_mint(&client, &keystore, &result.share_token).await;
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
@@ -972,7 +984,13 @@ async fn mint_remote_share_at(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
-    super::file_link_key::keep_after_mint(&client, &keystore, &result.share_token).await;
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }

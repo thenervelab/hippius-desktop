@@ -1400,7 +1400,7 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
     }
     match keys.remove(token) {
         Some(ShareSecret::Public(share_key)) => Ok(CommentKey::derive(&share_key)),
-        Some(ShareSecret::FileLink(link_secret)) => file_link_comment_key(pool, account_id, &keystore, token, &link_secret).await,
+        Some(ShareSecret::FileLink(link_secret)) => file_link_comment_key(pool, account_id, token, &link_secret).await,
         Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
@@ -1412,20 +1412,20 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
 async fn file_link_comment_key(
     pool: &sqlx::SqlitePool,
     account_id: &str,
-    keystore: &SqliteShareKeystore,
     token: &str,
     link_secret: &[u8; 32],
 ) -> std::result::Result<CommentKey, KeyUnavailable> {
+    let keys = super::file_link_key::FileLinkKeys::new(pool.clone());
     // A kept key needs no client: building one reads the bearer, which a
     // local decrypt does not need.
-    if let Ok(Some(kept)) = keystore.opened_share_key(token) {
+    if let Ok(Some(kept)) = keys.get(token).await {
         return Ok(CommentKey::derive(&kept));
     }
     let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
         debug!(error = %e, "share comments: no client to fetch the link's key");
         KeyUnavailable::Unreachable
     })?;
-    match super::file_link_key::share_key(&client, keystore, token, link_secret).await {
+    match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
         Ok(share_key) => Ok(CommentKey::derive(&share_key)),
         Err(e) => Err(file_link_key_refusal(&e)),
     }

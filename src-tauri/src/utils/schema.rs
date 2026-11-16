@@ -34,6 +34,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "onboarding",
     "user_preferences",
     "share_keystore",
+    "share_file_link_key",
     "share_origin",
     "folder_share_origin",
     "shared_link_history",
@@ -161,6 +162,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     step!("local_wallets", ensure_local_wallets);
     step!("user_preferences", ensure_user_preferences);
     step!("share_keystore", ensure_share_keystore);
+    step!("share_file_link_key", ensure_share_file_link_key);
     step!("share_origin", ensure_share_origin);
     step!("folder_share_origin", ensure_folder_share_origin);
     step!("bridge_transactions", ensure_bridge_transactions);
@@ -1003,9 +1005,6 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
     // - `secret_kind` with the folder-link kinds but not the file-link ones,
     //   from before link-secret file links (thenervelab/hcfs#1253). Same:
     //   rows keep their kind and the CHECK widens.
-    //
-    // Every older shape also lacks `opened_share_key`, which the copy leaves
-    // NULL: no older row is a `file_link` one.
     let columns = table_columns(&mut *conn, "share_keystore").await?;
     let kind_select = if columns.iter().any(|c| c == "secret_kind") {
         let ddl: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'share_keystore'")
@@ -1044,13 +1043,6 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
 /// the constraint from breaking if hcfs-client ever versions the wrap format.
 /// `ensure_share_keystore` detects an older CHECK by looking for `'file_link'`
 /// (quotes included, so `'file_link_private'` does not match) in the stored DDL.
-///
-/// `opened_share_key` is the share key a `file_link` row's server-held envelope
-/// opened to (`crate::shares::file_link_key`), kept so the owner can read the
-/// link's comments and viewer emails after the server stops handing out the
-/// envelope (an email gate, or the link ending). Only a `file_link` row may hold
-/// one: a password link's share key is never stored, and no URL is ever built
-/// from this column.
 pub fn share_keystore_ddl(name: &str) -> String {
     format!(
         "CREATE TABLE IF NOT EXISTS {name} (
@@ -1059,14 +1051,37 @@ pub fn share_keystore_ddl(name: &str) -> String {
                         CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private', 'file_link', 'file_link_private')),
             share_key BLOB NOT NULL,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-            opened_share_key BLOB,
             CHECK (
                 (secret_kind IN ('public', 'folder_link', 'file_link') AND length(share_key) = 32)
              OR (secret_kind IN ('private', 'folder_link_private', 'file_link_private') AND length(share_key) > 32)
-            ),
-            CHECK (opened_share_key IS NULL OR (secret_kind = 'file_link' AND length(opened_share_key) = 32))
+            )
         )"
     )
+}
+
+/// `share_file_link_key` — the share key a link-secret file link's (`#s=`)
+/// server-held envelope opened to, by token (`crate::shares::file_link_key`).
+///
+/// A `#s=` keystore row holds only the link secret, and the server stops
+/// handing out the envelope once the link has an email gate or has ended, which
+/// is when the owner still reads its comments and viewer emails. Kept beside
+/// the keystore rather than in it: `ShareKeystore` maps a token to the secret a
+/// URL is rebuilt from, and this key must never reach a URL. Only a token whose
+/// keystore row is `file_link` gets one (`FileLinkKeys::keep`), and the
+/// keystore's `put` and `forget` delete it.
+async fn ensure_share_file_link_key(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(share_file_link_key_ddl()).execute(&mut *conn).await?;
+    Ok(())
+}
+
+/// `share_file_link_key`'s DDL, shared with the mock-server suite so it never
+/// tests against a copy.
+pub fn share_file_link_key_ddl() -> &'static str {
+    "CREATE TABLE IF NOT EXISTS share_file_link_key (
+        share_token TEXT PRIMARY KEY,
+        share_key BLOB NOT NULL CHECK (length(share_key) = 32),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )"
 }
 
 /// `share_origin` — sidecar of `share_keystore` recording which local file each

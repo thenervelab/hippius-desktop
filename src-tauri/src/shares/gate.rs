@@ -410,7 +410,7 @@ async fn keep_file_link_key(state: &AppState, account_id: &str, share_token: &st
         return Ok(());
     };
     let client = super::client::build_account_client(pool, account_id).await?;
-    super::file_link_key::keep_before_gate(&client, &keystore, share_token, &link_secret)
+    super::file_link_key::keep_before_gate(&client, &super::file_link_key::FileLinkKeys::new(pool.clone()), share_token, &link_secret)
         .await
         .map_err(|e| held_back(&e))
 }

@@ -83,6 +83,10 @@ const KIND_FILE_LINK: &str = "file_link";
 /// link secret wrapped under the password.
 const KIND_FILE_LINK_PRIVATE: &str = "file_link_private";
 
+/// Ends a token's opened file link share key (`shares::file_link_key`, the
+/// `share_file_link_key` table) whenever its secret is replaced or forgotten.
+const DELETE_FILE_LINK_KEY: &str = "DELETE FROM share_file_link_key WHERE share_token = ?";
+
 /// The 32-byte payload of a `public`, `folder_link` or `file_link` row.
 fn key_bytes(kind: &str, bytes: &[u8]) -> Result<[u8; 32], ShareError> {
     bytes
@@ -132,21 +136,25 @@ impl ShareKeystore for SqliteShareKeystore {
             ShareSecret::FileLinkPrivate(blob) => (KIND_FILE_LINK_PRIVATE, blob.clone()),
         };
         run_sync(async move {
+            // One transaction: a new secret and the end of the old one's
+            // opened share key (`shares::file_link_key`) land together. A share
+            // key opened under the previous secret belongs to that secret only.
+            let mut tx = pool.begin().await.map_err(map_db)?;
             sqlx::query(
                 "INSERT INTO share_keystore (share_token, secret_kind, share_key) \
                  VALUES (?, ?, ?) \
                  ON CONFLICT(share_token) DO UPDATE SET \
                      secret_kind = excluded.secret_kind, \
-                     share_key   = excluded.share_key, \
-                     opened_share_key = NULL",
+                     share_key   = excluded.share_key",
             )
             .bind(&token)
             .bind(kind)
             .bind(&bytes)
-            .execute(&pool)
+            .execute(&mut *tx)
             .await
-            .map(|_| ())
-            .map_err(map_db)
+            .map_err(map_db)?;
+            sqlx::query(DELETE_FILE_LINK_KEY).bind(&token).execute(&mut *tx).await.map_err(map_db)?;
+            tx.commit().await.map_err(map_db)
         })
     }
 
@@ -167,56 +175,19 @@ impl ShareKeystore for SqliteShareKeystore {
         let pool = self.pool.clone();
         let token = token.to_owned();
         run_sync(async move {
+            let mut tx = pool.begin().await.map_err(map_db)?;
             sqlx::query("DELETE FROM share_keystore WHERE share_token = ?")
                 .bind(&token)
-                .execute(&pool)
+                .execute(&mut *tx)
                 .await
-                .map(|_| ())
-                .map_err(map_db)
+                .map_err(map_db)?;
+            sqlx::query(DELETE_FILE_LINK_KEY).bind(&token).execute(&mut *tx).await.map_err(map_db)?;
+            tx.commit().await.map_err(map_db)
         })
     }
 }
 
 impl SqliteShareKeystore {
-    /// The share key `token`'s `file_link` secret opened to, when one was kept
-    /// ([`Self::keep_opened_share_key`]). Never a URL's input: a file link's
-    /// URL is rebuilt from its link secret alone.
-    pub(crate) fn opened_share_key(&self, token: &str) -> Result<Option<[u8; 32]>, ShareError> {
-        let pool = self.pool.clone();
-        let token = token.to_owned();
-        let stored: Option<Vec<u8>> = run_sync(async move {
-            sqlx::query_scalar::<_, Option<Vec<u8>>>("SELECT opened_share_key FROM share_keystore WHERE share_token = ? AND secret_kind = ?")
-                .bind(&token)
-                .bind(KIND_FILE_LINK)
-                .fetch_optional(&pool)
-                .await
-                .map(Option::flatten)
-                .map_err(map_db)
-        })?;
-        stored.map(|bytes| key_bytes("opened_share_key", &bytes)).transpose()
-    }
-
-    /// Keep the share key `token`'s `file_link` secret opened to, beside it.
-    /// Writes nothing when `token` holds no `file_link` row (forgotten since,
-    /// or another kind), so a password link's share key is never stored. A
-    /// later [`ShareKeystore::put`] for the token clears it, and
-    /// [`ShareKeystore::forget`] removes it with the row.
-    pub(crate) fn keep_opened_share_key(&self, token: &str, share_key: &[u8; 32]) -> Result<(), ShareError> {
-        let pool = self.pool.clone();
-        let token = token.to_owned();
-        let share_key = share_key.to_vec();
-        run_sync(async move {
-            sqlx::query("UPDATE share_keystore SET opened_share_key = ? WHERE share_token = ? AND secret_kind = ?")
-                .bind(&share_key)
-                .bind(&token)
-                .bind(KIND_FILE_LINK)
-                .execute(&pool)
-                .await
-                .map(|_| ())
-                .map_err(map_db)
-        })
-    }
-
     /// Batched key lookup keyed by `share_token`.
     ///
     /// `ShareKeystore::get` is called once per row by hcfs-client (to
@@ -567,8 +538,8 @@ mod tests {
     }
 
     /// A row as a previous release's `put` wrote it, into whatever table is
-    /// there. Not `put` itself: it writes `opened_share_key`, which no older
-    /// table has.
+    /// there. Not `put` itself: the previous release's CHECK refuses the new
+    /// kinds, and its schema has no `share_file_link_key` table.
     async fn seed_row(pool: &SqlitePool, token: &str, kind: &str, bytes: &[u8]) -> Result<(), sqlx::Error> {
         sqlx::query("INSERT INTO share_keystore (share_token, secret_kind, share_key) VALUES (?, ?, ?)")
             .bind(token)
@@ -750,11 +721,48 @@ mod tests {
         ks.put("file-p", &ShareSecret::FileLinkPrivate(vec![2u8; 89]))
             .expect("private file link after the rebuild");
         assert_eq!(ks.get("file").expect("get"), Some(ShareSecret::FileLink([1u8; 32])));
+    }
 
-        // A later start leaves the current table alone: a rebuild would copy
-        // no kept share key, and a gated link's comments need it.
-        ks.keep_opened_share_key("file", &[3u8; 32]).expect("keep");
-        crate::utils::schema::ensure_table_schema(&pool).await.expect("a later start");
-        assert_eq!(ks.opened_share_key("file").expect("read"), Some([3u8; 32]));
+    /// `share_file_link_key` exists after a fresh start and after an upgrade of
+    /// a database from the previous release (keystore rows and no such table),
+    /// a second start leaves it and its rows alone, and it takes only 32-byte
+    /// keys.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_file_link_key_table_is_created_on_a_fresh_and_an_existing_database() {
+        use crate::shares::file_link_key::FileLinkKeys;
+
+        let (_fresh_dir, fresh) = fresh_pool().await;
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'share_file_link_key'")
+            .fetch_one(&fresh)
+            .await
+            .expect("count");
+        assert_eq!(exists, 1, "a fresh database has the table");
+
+        let dir = TempDir::new().expect("tempdir");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", dir.path().join("existing.db").display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+        sqlx::query(&crate::utils::schema::share_keystore_ddl("share_keystore"))
+            .execute(&pool)
+            .await
+            .expect("an existing keystore");
+        seed_row(&pool, "pub", "public", &[6u8; 32]).await.expect("seed");
+
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("upgrade");
+        let ks = SqliteShareKeystore::new(pool.clone());
+        let keys = FileLinkKeys::new(pool.clone());
+        assert_eq!(ks.get("pub").expect("get"), Some(ShareSecret::Public([6u8; 32])), "keystore rows survive");
+        ks.put("file", &ShareSecret::FileLink([1u8; 32])).expect("put");
+        keys.keep("file", &[1u8; 32], &[3u8; 32]).await.expect("keep");
+
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("a second start");
+        assert_eq!(keys.get("file").await.expect("read"), Some([3u8; 32]), "a second start keeps kept keys");
+
+        let short = sqlx::query("INSERT INTO share_file_link_key (share_token, share_key) VALUES ('x', ?)")
+            .bind(vec![0u8; 31])
+            .execute(&pool)
+            .await;
+        assert!(short.is_err(), "the CHECK refuses a key that is not 32 bytes: {short:?}");
     }
 }
