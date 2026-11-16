@@ -1017,7 +1017,7 @@ async fn execute(
     results.sort_by_key(|(index, _)| *index);
     Ok(DriveMoveOutcome {
         results: results.into_iter().map(|(_, r)| r).collect(),
-        revoked: committed.revoked.notice(),
+        revoked: wire::revoked_notice(&committed.revoked),
         ..DriveMoveOutcome::default()
     })
 }

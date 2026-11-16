@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri_project_lib::sync::drive_move::api::MoveApi;
 use tauri_project_lib::sync::drive_move::plan::{PlannedCopy, RemoteEntryKey};
-use tauri_project_lib::sync::drive_move::wire::MoveFolder;
+use tauri_project_lib::sync::drive_move::wire::{MoveFolder, revoked_notice};
 use tauri_project_lib::sync::drive_move::{CopyEvent, CopyJob, MoveFailure, Plaintext, Staging, commit_staged, stage_all};
 use tauri_project_lib::sync::identity::DriveIdentity;
 
@@ -274,7 +274,7 @@ async fn open_stage_each_then_commit() {
     assert_eq!(commit["files"].as_array().unwrap().len(), 2);
     assert_eq!(commit["folders"][0]["to"], "Albums/Trip");
     assert_eq!(
-        result.revoked.notice().as_deref(),
+        revoked_notice(&result.revoked).as_deref(),
         Some("Its share link was turned off and 1 person lost access.")
     );
     assert_eq!(f.mock.aborts.load(Ordering::SeqCst), 0);
