@@ -1,13 +1,15 @@
 //! The wire types of hcfs-server's `/v1/drive_moves` routes, and the
 //! sentence a person reads for each refusal.
 //!
-//! Defined here rather than imported: the pinned hcfs-shared predates the
-//! routes. Every shape follows `docs/public/api/drive-moves.md` and
-//! `hcfs-shared/src/network/drive_moves.rs` on hcfs main, and the tests at
-//! the bottom pin the JSON both sides send, so a bump to an hcfs rev that
-//! carries the types can swap these out and keep the tests.
+//! Defined here because the hcfs-shared pin predated the routes when they
+//! were written. The current pin carries them
+//! (`hcfs_shared::network::drive_moves`, revision ids as `RevisionId` there
+//! and here); swapping these out is not done yet. Every shape follows
+//! `docs/public/api/drive-moves.md` and that module, and the tests at the
+//! bottom pin the JSON both sides send, so the swap can keep the tests.
 
 use hcfs_shared::network::CreateSessionRequest;
+use hcfs_shared::revision_id::RevisionId;
 use serde::{Deserialize, Serialize};
 
 /// Most files one move carries (`MAX_DRIVE_MOVE_FILES` on the server). A
@@ -48,7 +50,7 @@ pub struct StageMoveSessionRequest {
     pub source_path_hash: [u8; 32],
     /// The source revision whose bytes were read and encrypted again. The
     /// commit refuses the move if the source has moved on since.
-    pub expected_revision_id: [u8; 32],
+    pub expected_revision_id: RevisionId,
 }
 
 /// The `Success` of a session create (the ordinary one's answer).
@@ -81,7 +83,7 @@ pub struct CommitDriveMoveRequest {
 pub struct CommittedFile {
     pub source_path_hash: [u8; 32],
     pub dest_path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
 }
 
 /// A folder grant a commit removed.
@@ -305,7 +307,7 @@ mod tests {
                 ciphertext_size: 10_485_792,
             },
             source_path_hash: [7; 32],
-            expected_revision_id: [9; 32],
+            expected_revision_id: RevisionId::from_bytes([9; 32]),
         };
         let json = serde_json::to_value(&request).unwrap();
         let keys: std::collections::BTreeSet<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();

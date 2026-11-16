@@ -1,4 +1,5 @@
-//! Persistent storage for share keys: maps `share_token → [u8; 32]`.
+//! Persistent storage for share secrets: maps `share_token` to a
+//! [`ShareSecret`], stored as a kind tag plus its bytes.
 //!
 //! Implements [`hcfs_client::client::share::ShareKeystore`] backed by the
 //! desktop app's SQLite pool. The keystore is rebuilt on startup like
@@ -73,8 +74,16 @@ const KIND_FOLDER_LINK: &str = "folder_link";
 /// Column value for a password-protected link-secret folder link (`#sp=`):
 /// the link secret wrapped under the password.
 const KIND_FOLDER_LINK_PRIVATE: &str = "folder_link_private";
+/// Column value for a link-secret file link (`#s=` on `/share/`): the 32-byte
+/// link secret. Its own kind, never `public` or `folder_link`: read back as
+/// a share key it would rebuild a `#k=` URL that opens nothing, and read back
+/// as a folder link secret it would reach a folder path (hcfs#1253).
+const KIND_FILE_LINK: &str = "file_link";
+/// Column value for a password-protected link-secret file link (`#sp=`): the
+/// link secret wrapped under the password.
+const KIND_FILE_LINK_PRIVATE: &str = "file_link_private";
 
-/// The 32-byte payload of a `public` or `folder_link` row.
+/// The 32-byte payload of a `public`, `folder_link` or `file_link` row.
 fn key_bytes(kind: &str, bytes: &[u8]) -> Result<[u8; 32], ShareError> {
     bytes
         .try_into()
@@ -100,6 +109,8 @@ fn decode_secret(kind: &str, bytes: Vec<u8>) -> Result<ShareSecret, ShareError> 
         KIND_PRIVATE => Ok(ShareSecret::Private(bytes)),
         KIND_FOLDER_LINK => Ok(ShareSecret::FolderLink(key_bytes(kind, &bytes)?)),
         KIND_FOLDER_LINK_PRIVATE => Ok(ShareSecret::FolderLinkPrivate(bytes)),
+        KIND_FILE_LINK => Ok(ShareSecret::FileLink(key_bytes(kind, &bytes)?)),
+        KIND_FILE_LINK_PRIVATE => Ok(ShareSecret::FileLinkPrivate(bytes)),
         other => Err(ShareError::Keystore(format!("share_keystore row has unknown secret_kind {other:?}"))),
     }
 }
@@ -117,6 +128,8 @@ impl ShareKeystore for SqliteShareKeystore {
             ShareSecret::Private(blob) => (KIND_PRIVATE, blob.clone()),
             ShareSecret::FolderLink(secret) => (KIND_FOLDER_LINK, secret.to_vec()),
             ShareSecret::FolderLinkPrivate(blob) => (KIND_FOLDER_LINK_PRIVATE, blob.clone()),
+            ShareSecret::FileLink(secret) => (KIND_FILE_LINK, secret.to_vec()),
+            ShareSecret::FileLinkPrivate(blob) => (KIND_FILE_LINK_PRIVATE, blob.clone()),
         };
         run_sync(async move {
             sqlx::query(
@@ -124,7 +137,8 @@ impl ShareKeystore for SqliteShareKeystore {
                  VALUES (?, ?, ?) \
                  ON CONFLICT(share_token) DO UPDATE SET \
                      secret_kind = excluded.secret_kind, \
-                     share_key   = excluded.share_key",
+                     share_key   = excluded.share_key, \
+                     opened_share_key = NULL",
             )
             .bind(&token)
             .bind(kind)
@@ -164,6 +178,45 @@ impl ShareKeystore for SqliteShareKeystore {
 }
 
 impl SqliteShareKeystore {
+    /// The share key `token`'s `file_link` secret opened to, when one was kept
+    /// ([`Self::keep_opened_share_key`]). Never a URL's input: a file link's
+    /// URL is rebuilt from its link secret alone.
+    pub(crate) fn opened_share_key(&self, token: &str) -> Result<Option<[u8; 32]>, ShareError> {
+        let pool = self.pool.clone();
+        let token = token.to_owned();
+        let stored: Option<Vec<u8>> = run_sync(async move {
+            sqlx::query_scalar::<_, Option<Vec<u8>>>("SELECT opened_share_key FROM share_keystore WHERE share_token = ? AND secret_kind = ?")
+                .bind(&token)
+                .bind(KIND_FILE_LINK)
+                .fetch_optional(&pool)
+                .await
+                .map(Option::flatten)
+                .map_err(map_db)
+        })?;
+        stored.map(|bytes| key_bytes("opened_share_key", &bytes)).transpose()
+    }
+
+    /// Keep the share key `token`'s `file_link` secret opened to, beside it.
+    /// Writes nothing when `token` holds no `file_link` row (forgotten since,
+    /// or another kind), so a password link's share key is never stored. A
+    /// later [`ShareKeystore::put`] for the token clears it, and
+    /// [`ShareKeystore::forget`] removes it with the row.
+    pub(crate) fn keep_opened_share_key(&self, token: &str, share_key: &[u8; 32]) -> Result<(), ShareError> {
+        let pool = self.pool.clone();
+        let token = token.to_owned();
+        let share_key = share_key.to_vec();
+        run_sync(async move {
+            sqlx::query("UPDATE share_keystore SET opened_share_key = ? WHERE share_token = ? AND secret_kind = ?")
+                .bind(&share_key)
+                .bind(&token)
+                .bind(KIND_FILE_LINK)
+                .execute(&pool)
+                .await
+                .map(|_| ())
+                .map_err(map_db)
+        })
+    }
+
     /// Batched key lookup keyed by `share_token`.
     ///
     /// `ShareKeystore::get` is called once per row by hcfs-client (to
@@ -472,6 +525,10 @@ mod tests {
         // old CHECK would have rejected.
         ks.put("new-private", &ShareSecret::Private(vec![7u8; 89]))
             .expect("private put must work after migration");
+        ks.put("new-file-link", &ShareSecret::FileLink([8u8; 32]))
+            .expect("a file link must fit after migration");
+        ks.put("new-file-link-p", &ShareSecret::FileLinkPrivate(vec![9u8; 89]))
+            .expect("a private file link must fit after migration");
     }
 
     /// A link-secret folder link keeps its own kind, so it can never be read
@@ -509,6 +566,19 @@ mod tests {
         assert!(decode_secret("folder_link", vec![1u8; 31]).is_err(), "a link secret is exactly 32 bytes");
     }
 
+    /// A row as a previous release's `put` wrote it, into whatever table is
+    /// there. Not `put` itself: it writes `opened_share_key`, which no older
+    /// table has.
+    async fn seed_row(pool: &SqlitePool, token: &str, kind: &str, bytes: &[u8]) -> Result<(), sqlx::Error> {
+        sqlx::query("INSERT INTO share_keystore (share_token, secret_kind, share_key) VALUES (?, ?, ?)")
+            .bind(token)
+            .bind(kind)
+            .bind(bytes)
+            .execute(pool)
+            .await
+            .map(|_| ())
+    }
+
     /// Upgrading an install whose CHECK names only `public` / `private` must
     /// keep every row and its kind, and then take the folder-link kinds.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -537,11 +607,10 @@ mod tests {
         .execute(&pool)
         .await
         .expect("previous table");
-        let old = SqliteShareKeystore::new(pool.clone());
-        old.put("pub", &ShareSecret::Public([6u8; 32])).expect("seed public");
-        old.put("priv", &ShareSecret::Private(vec![7u8; 89])).expect("seed private");
+        seed_row(&pool, "pub", "public", &[6u8; 32]).await.expect("seed public");
+        seed_row(&pool, "priv", "private", &[7u8; 89]).await.expect("seed private");
         assert!(
-            old.put("link", &ShareSecret::FolderLink([8u8; 32])).is_err(),
+            seed_row(&pool, "link", "folder_link", &[8u8; 32]).await.is_err(),
             "the previous CHECK refuses a folder link: the reason for the rebuild"
         );
 
@@ -557,5 +626,129 @@ mod tests {
         ks.put("link-p", &ShareSecret::FolderLinkPrivate(vec![9u8; 89]))
             .expect("private folder link after the rebuild");
         assert_eq!(ks.get("link").expect("get"), Some(ShareSecret::FolderLink([8u8; 32])));
+        ks.put("file", &ShareSecret::FileLink([3u8; 32])).expect("file link after the rebuild");
+        ks.put("file-p", &ShareSecret::FileLinkPrivate(vec![4u8; 89]))
+            .expect("private file link after the rebuild");
+    }
+
+    /// A link-secret file link keeps its own kind: read back as `Public` it
+    /// would rebuild a `#k=` URL that opens nothing, and read back as a folder
+    /// link secret it would reach a folder path.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn file_link_secrets_round_trip_and_keep_their_kind() {
+        let (_dir, pool) = fresh_pool().await;
+        let ks = SqliteShareKeystore::new(pool);
+        let public = ShareSecret::FileLink([4u8; 32]);
+        let private = ShareSecret::FileLinkPrivate(vec![5u8; 89]);
+        ks.put("s", &public).expect("put file link");
+        ks.put("sp", &private).expect("put private file link");
+
+        assert_eq!(ks.get("s").expect("get"), Some(public.clone()));
+        assert_eq!(ks.get("sp").expect("get"), Some(private.clone()));
+        let many = ks.get_many(&["s", "sp"]).expect("get_many");
+        assert_eq!(many.get("s"), Some(&public));
+        assert_eq!(many.get("sp"), Some(&private));
+        let mut all = ks.all_entries().expect("all_entries");
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(all, vec![("s".to_string(), public), ("sp".to_string(), private)]);
+    }
+
+    #[test]
+    fn decode_secret_reads_each_file_link_kind() {
+        assert_eq!(decode_secret("file_link", vec![1u8; 32]).expect("32"), ShareSecret::FileLink([1u8; 32]));
+        assert_eq!(
+            decode_secret("file_link_private", vec![1u8; 89]).expect("89"),
+            ShareSecret::FileLinkPrivate(vec![1u8; 89])
+        );
+        assert!(decode_secret("file_link", vec![1u8; 31]).is_err(), "a link secret is exactly 32 bytes");
+    }
+
+    /// The DB CHECK holds each file-link kind to its length, as it does the
+    /// older kinds: a 32-byte secret, a longer wrapped blob.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn db_check_holds_the_file_link_kinds_to_their_lengths() {
+        let (_dir, pool) = fresh_pool().await;
+        for (kind, len) in [("file_link", 33usize), ("file_link", 31), ("file_link_private", 32)] {
+            let res = sqlx::query("INSERT INTO share_keystore (share_token, secret_kind, share_key) VALUES (?, ?, ?)")
+                .bind(format!("{kind}-{len}"))
+                .bind(kind)
+                .bind(vec![0u8; len])
+                .execute(&pool)
+                .await;
+            assert!(res.is_err(), "{kind} with {len} bytes must be refused, got {res:?}");
+        }
+    }
+
+    /// Upgrading an install whose CHECK names the folder-link kinds but not the
+    /// file-link ones (the table the previous release created) must keep every
+    /// row and its kind, and then take the file-link kinds.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_install_from_before_file_link_secrets_keeps_its_rows() {
+        let dir = TempDir::new().expect("tempdir");
+        let db_path = dir.path().join("pre-file-link.db");
+        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path.display()))
+            .expect("opts")
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.expect("pool");
+
+        // The table exactly as the previous release created it.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS share_keystore (
+            share_token TEXT PRIMARY KEY,
+            secret_kind TEXT NOT NULL DEFAULT 'public'
+                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private')),
+            share_key BLOB NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            CHECK (
+                (secret_kind IN ('public', 'folder_link') AND length(share_key) = 32)
+             OR (secret_kind IN ('private', 'folder_link_private') AND length(share_key) > 32)
+            )
+        )",
+        )
+        .execute(&pool)
+        .await
+        .expect("previous table");
+        let seeded = [
+            ("pub", ShareSecret::Public([6u8; 32])),
+            ("priv", ShareSecret::Private(vec![7u8; 89])),
+            ("folder", ShareSecret::FolderLink([8u8; 32])),
+            ("folder-p", ShareSecret::FolderLinkPrivate(vec![9u8; 89])),
+        ];
+        for (token, secret) in &seeded {
+            let (kind, bytes): (&str, &[u8]) = match secret {
+                ShareSecret::Public(key) => ("public", key),
+                ShareSecret::Private(blob) => ("private", blob),
+                ShareSecret::FolderLink(key) => ("folder_link", key),
+                ShareSecret::FolderLinkPrivate(blob) => ("folder_link_private", blob),
+                ShareSecret::FileLink(_) | ShareSecret::FileLinkPrivate(_) => unreachable!("the previous release stored no file link"),
+            };
+            seed_row(&pool, token, kind, bytes).await.expect("seed");
+        }
+        let created_before: i64 = sqlx::query_scalar("SELECT created_at FROM share_keystore WHERE share_token = 'pub'")
+            .fetch_one(&pool)
+            .await
+            .expect("created_at");
+        assert!(
+            seed_row(&pool, "file", "file_link", &[1u8; 32]).await.is_err(),
+            "the previous CHECK refuses a file link: the reason for the rebuild"
+        );
+
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("migrate");
+        // A second start finds the new CHECK and leaves the table alone.
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("migrate again");
+
+        let ks = SqliteShareKeystore::new(pool.clone());
+        for (token, secret) in &seeded {
+            assert_eq!(ks.get(token).expect("get").as_ref(), Some(secret), "{token} keeps its secret and kind");
+        }
+        let created_after: i64 = sqlx::query_scalar("SELECT created_at FROM share_keystore WHERE share_token = 'pub'")
+            .fetch_one(&pool)
+            .await
+            .expect("created_at");
+        assert_eq!(created_after, created_before, "the rebuild copies created_at");
+        ks.put("file", &ShareSecret::FileLink([1u8; 32])).expect("file link after the rebuild");
+        ks.put("file-p", &ShareSecret::FileLinkPrivate(vec![2u8; 89]))
+            .expect("private file link after the rebuild");
+        assert_eq!(ks.get("file").expect("get"), Some(ShareSecret::FileLink([1u8; 32])));
     }
 }

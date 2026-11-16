@@ -120,8 +120,8 @@ pub struct AppState {
     /// a `SyncError` every retry cycle; this surfaces ONE notification once a
     /// drive has failed `ERROR_NOTIFY_THRESHOLD` consecutive cycles and
     /// suppresses the rest until the drive recovers. Counted per-label here
-    /// rather than read from the payload's runner-global `consecutive_failures`
-    /// (which any healthy drive resets). Cleared on the recovery edge
+    /// rather than read from the payload's `consecutive_failures`, which a
+    /// stop or reset does not clear. Cleared on the recovery edge
     /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
     /// `crate::sync::error_notify`.
     pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,

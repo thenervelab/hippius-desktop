@@ -1126,7 +1126,7 @@ mod tests {
             files: vec![RemoteEntry {
                 path: "F/a.txt".into(),
                 path_hash: [0; 32],
-                revision_id: [0; 32],
+                revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([0; 32]),
                 salted_hash: [0; 32],
                 size_bytes: 1,
             }],

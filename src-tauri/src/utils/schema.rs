@@ -981,14 +981,14 @@ async fn ensure_user_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx
 
 /// `share_keystore` — per-share AEAD key material for the file-sharing feature.
 ///
-/// The `CHECK (length(share_key) = 32)` is defence-in-depth: a wrong-sized
-/// key would otherwise surface as an opaque AEAD failure several layers up the
-/// stack — see `crate::shares::keystore`.
+/// The length CHECKs in [`share_keystore_ddl`] are defence-in-depth: a
+/// wrong-sized key would otherwise surface as an opaque AEAD failure several
+/// layers up the stack — see `crate::shares::keystore`.
 async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(&share_keystore_ddl("share_keystore")).execute(&mut *conn).await?;
 
     // SQLite cannot alter a CHECK in place, so a table created under an
-    // older constraint is rebuilt and copied. Two older shapes exist:
+    // older constraint is rebuilt and copied. Three older shapes exist:
     //
     // - Pre-`secret_kind`: `share_key BLOB CHECK (length = 32)`, which cannot
     //   hold a wrapped blob. Every row is copied as 'public'. Shares that
@@ -999,13 +999,19 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
     //   Dropping them would break Copy for legitimately public shares.
     // - `secret_kind` limited to 'public' / 'private', from before link-secret
     //   folder links (thenervelab/hcfs#665). Rows keep their kind; the
-    //   rebuild only widens the CHECK so the two folder-link kinds fit.
+    //   rebuild only widens the CHECK so the link kinds fit.
+    // - `secret_kind` with the folder-link kinds but not the file-link ones,
+    //   from before link-secret file links (thenervelab/hcfs#1253). Same:
+    //   rows keep their kind and the CHECK widens.
+    //
+    // Every older shape also lacks `opened_share_key`, which the copy leaves
+    // NULL: no older row is a `file_link` one.
     let columns = table_columns(&mut *conn, "share_keystore").await?;
     let kind_select = if columns.iter().any(|c| c == "secret_kind") {
         let ddl: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'share_keystore'")
             .fetch_one(&mut *conn)
             .await?;
-        if ddl.contains("'folder_link'") {
+        if ddl.contains("'file_link'") {
             return Ok(());
         }
         "secret_kind"
@@ -1031,24 +1037,34 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
 /// `share_keystore`'s DDL under `name`, shared by the create and the rebuild so
 /// the two can never disagree on the CHECK.
 ///
-/// A 32-byte row is a raw file-share key (`public`) or a folder link secret
-/// (`folder_link`); a password row (`private`, `folder_link_private`) holds the
-/// wrapped blob, which is strictly longer. Checking `> 32` rather than the exact
-/// 89-byte framing keeps the constraint from breaking if hcfs-client ever
-/// versions the wrap format. `ensure_share_keystore` detects an older CHECK by
-/// looking for `'folder_link'` in the stored DDL.
+/// A 32-byte row is a raw file-share key (`public`) or a link secret
+/// (`folder_link`, `file_link`); a password row (`private`,
+/// `folder_link_private`, `file_link_private`) holds the wrapped blob, which is
+/// strictly longer. Checking `> 32` rather than the exact 89-byte framing keeps
+/// the constraint from breaking if hcfs-client ever versions the wrap format.
+/// `ensure_share_keystore` detects an older CHECK by looking for `'file_link'`
+/// (quotes included, so `'file_link_private'` does not match) in the stored DDL.
+///
+/// `opened_share_key` is the share key a `file_link` row's server-held envelope
+/// opened to (`crate::shares::file_link_key`), kept so the owner can read the
+/// link's comments and viewer emails after the server stops handing out the
+/// envelope (an email gate, or the link ending). Only a `file_link` row may hold
+/// one: a password link's share key is never stored, and no URL is ever built
+/// from this column.
 pub fn share_keystore_ddl(name: &str) -> String {
     format!(
         "CREATE TABLE IF NOT EXISTS {name} (
             share_token TEXT PRIMARY KEY,
             secret_kind TEXT NOT NULL DEFAULT 'public'
-                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private')),
+                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private', 'file_link', 'file_link_private')),
             share_key BLOB NOT NULL,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+            opened_share_key BLOB,
             CHECK (
-                (secret_kind IN ('public', 'folder_link') AND length(share_key) = 32)
-             OR (secret_kind IN ('private', 'folder_link_private') AND length(share_key) > 32)
-            )
+                (secret_kind IN ('public', 'folder_link', 'file_link') AND length(share_key) = 32)
+             OR (secret_kind IN ('private', 'folder_link_private', 'file_link_private') AND length(share_key) > 32)
+            ),
+            CHECK (opened_share_key IS NULL OR (secret_kind = 'file_link' AND length(opened_share_key) = 32))
         )"
     )
 }

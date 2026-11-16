@@ -1,6 +1,6 @@
 //! File-sharing feature backend.
 //!
-//! Owns the persistent `share_token → share_key` map ([`keystore`])
+//! Owns the persistent `share_token → share secret` map ([`keystore`])
 //! and the Tauri command surface that wraps
 //! [`hcfs_client::client::share`] for create / list / revoke. The
 //! recipient side lives in `hippius-console`; this crate only handles
@@ -10,6 +10,7 @@ pub mod capabilities;
 pub mod client;
 pub mod commands;
 pub mod comment_crypto;
+pub(crate) mod file_link_key;
 pub(crate) mod folder_scan;
 pub mod gate;
 pub mod history;
