@@ -56,7 +56,31 @@ pub fn capture_for(path: &Path) -> Option<hcfs_shared::network::Capture> {
         tracing::warn!("capture: the recording's length could not be read; declared without one");
         0
     });
-    Some(hcfs_shared::network::Capture::Recording { duration_ms })
+    Some(hcfs_shared::network::Capture::Recording {
+        duration_ms: declared_ms(duration_ms),
+    })
+}
+
+/// The length a recording of `measured` milliseconds is declared with: the
+/// measured length, except that one the Free plan stop ended is declared at
+/// the limit.
+///
+/// The server refuses a Free plan recording declared longer than 300000 ms,
+/// and the stop lands a little after 5:00 ([`LIMIT_STOP_OVERSHOOT`]), so
+/// every capped recording was refused. Delivery has only the file, not
+/// whether the app stopped it (see the module docs), so a length within the
+/// overshoot is taken to be the stop's. The server uses the length for this
+/// check only, so the paid plan recording this rounds down loses nothing.
+///
+/// [`LIMIT_STOP_OVERSHOOT`]: super::allowance::LIMIT_STOP_OVERSHOOT
+fn declared_ms(measured: u64) -> u64 {
+    let limit = millis_of(super::allowance::FREE_MAX_RECORDING);
+    let stop_end = limit + millis_of(super::allowance::LIMIT_STOP_OVERSHOOT);
+    if (limit..=stop_end).contains(&measured) { limit } else { measured }
+}
+
+fn millis_of(duration: std::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).expect("the recording limits are minutes, far under u64 milliseconds")
 }
 
 /// The length in milliseconds of an ISO base media file, or `None` when it
@@ -648,6 +672,29 @@ mod tests {
     #[test]
     fn a_huge_length_saturates() {
         assert_eq!(length(boxed(*b"moov", &mvhd_v1(1, u64::MAX - 1))), Some(u64::MAX));
+    }
+
+    /// A recording the Free plan stop ended runs a little past 5:00, and the
+    /// server refuses anything declared over 300000 ms.
+    #[test]
+    fn a_recording_stopped_at_the_limit_is_declared_at_the_limit() {
+        assert_eq!(declared_ms(299_999), 299_999);
+        assert_eq!(declared_ms(300_000), 300_000);
+        assert_eq!(declared_ms(300_001), 300_000);
+        assert_eq!(declared_ms(301_400), 300_000);
+        assert_eq!(declared_ms(305_000), 300_000);
+        assert_eq!(declared_ms(305_001), 305_001);
+        assert_eq!(declared_ms(0), 0);
+        assert_eq!(declared_ms(u64::MAX), u64::MAX);
+
+        let dir = tempfile::tempdir().unwrap();
+        let capped = dir.path().join("Recording.mp4");
+        let file = [fragmented_moov(1, 1_000, &[trex(1, 0)]), moof(1, Some(0), &[300_800])].concat();
+        std::fs::write(&capped, file).unwrap();
+        assert_eq!(
+            capture_for(&capped),
+            Some(hcfs_shared::network::Capture::Recording { duration_ms: 300_000 })
+        );
     }
 
     #[test]
