@@ -91,6 +91,24 @@ fn every_file_mint_path_uploads_an_owner_wrap() {
     }
 }
 
+/// Every file mint keeps a `#s=` link's share key right after the mint, before
+/// an email gate can end the server handing it out (`shares::file_link_key`).
+/// Found by every `.create_share(` call, so a new funnel cannot skip it.
+#[test]
+fn every_file_mint_keeps_a_file_links_share_key() {
+    let source = include_str!("../src/shares/commands.rs");
+    let mints: Vec<usize> = source.match_indices(".create_share(").map(|(i, _)| i).collect();
+    assert!(mints.len() >= 3, "the three file mint funnels call create_share");
+    for at in mints {
+        let rest = &source[at..];
+        let fn_end = rest.find("\n}\n").expect("the mint sits in a top-level fn");
+        assert!(
+            rest[..fn_end].contains("file_link_key::keep_after_mint("),
+            "the create_share call at byte {at} of commands.rs must be followed by keep_after_mint"
+        );
+    }
+}
+
 #[test]
 fn the_file_list_reconciles_owner_wraps() {
     let source = include_str!("../src/shares/commands.rs");

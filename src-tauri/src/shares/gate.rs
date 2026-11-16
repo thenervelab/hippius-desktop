@@ -64,6 +64,9 @@ pub const GATE_NOT_IN_PLAN: &str = "Asking for an email is available on paid Dri
 const GATE_UNAVAILABLE: &str = "Asking for an email isn't available yet.";
 const CHECK_THE_LISTS: &str = "Check the lists and try again.";
 const LISTS_NOT_HERE: &str = "Couldn't open your lists on this computer. Try again.";
+/// The link's share key could not be kept before the gate, which would end
+/// its comments and viewer emails here for good.
+const KEY_NOT_KEPT: &str = "Couldn't reach Hippius to get this link ready to ask for an email. Try again.";
 
 /// An email gate's two lists, as the owner edits them.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -385,9 +388,25 @@ pub async fn share_set_gate(state: tauri::State<'_, AppState>, share_token: Stri
         .await
         .ok_or_else(|| AppError::Validation(LISTS_NOT_HERE.into()))?;
     let sealed = seal_lists(&key, &account_id, &share_token, &lists).map_err(|_| AppError::Validation(LISTS_NOT_HERE.into()))?;
+    keep_file_link_key(&state, &account_id, &share_token).await?;
     let api = Api::for_account(&state, &account_id).await?;
     let wire = put_gate(&state.api_client, &api, &share_token, &lists, &sealed).await?;
     Ok(gate_on(&wire, Some(lists), in_plan))
+}
+
+/// Keep a `#s=` link's share key before its gate goes on: the gate ends the
+/// server handing it out, and with it the link's comments and viewer emails
+/// on this computer (`shares::file_link_key`).
+async fn keep_file_link_key(state: &AppState, account_id: &str, share_token: &str) -> Result<()> {
+    let pool = state.pool()?;
+    let client = super::client::build_account_client(pool, account_id).await?;
+    let keystore = super::SqliteShareKeystore::new(pool.clone());
+    super::file_link_key::keep_before_gate(&client, &keystore, share_token)
+        .await
+        .map_err(|e| {
+            debug!(error = %e, "email gate held back: the link's share key is not kept");
+            AppError::Validation(KEY_NOT_KEPT.into())
+        })
 }
 
 /// Remove the gate, on any plan, so an owner who downgraded can always open

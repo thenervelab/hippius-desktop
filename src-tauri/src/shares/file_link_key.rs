@@ -11,8 +11,11 @@
 //! the owner still reads the link's comments and verified viewer emails. So
 //! each mint opens the envelope once, right after the link exists and before
 //! either can hold, and keeps the share key beside the secret
-//! ([`SqliteShareKeystore::keep_opened_share_key`]). A link minted on another
-//! device is opened on first use, which fails for a gated or ended link.
+//! ([`SqliteShareKeystore::keep_opened_share_key`]). Turning on an email gate
+//! tries again first ([`keep_before_gate`]), so a failed GET at the mint is
+//! not the last chance. A link minted on another device is opened on first
+//! use, which fails for a gated or ended link: the owner wrap carries only the
+//! link secret (hcfs#1262), and no owner route hands out the envelope.
 //!
 //! A `#sp=` link's secret is under its password, so its share key is never
 //! opened or stored, as for a `#p=` link.
@@ -55,11 +58,36 @@ pub(crate) async fn share_key(
 /// the mint: the link is already live, and without a kept key its comments
 /// are opened on first use instead (which fails once it has an email gate).
 pub(crate) async fn keep_after_mint(client: &HcfsClient, keystore: &SqliteShareKeystore, token: &str) {
-    let Ok(Some(ShareSecret::FileLink(link_secret))) = keystore.get(token) else {
-        return;
+    let link_secret = match keystore.get(token) {
+        Ok(Some(ShareSecret::FileLink(link_secret))) => link_secret,
+        Ok(_) => return,
+        Err(e) => {
+            warn!(error = %e, "new file link's secret unreadable; its share key is not kept");
+            return;
+        }
     };
     if let Err(e) = share_key(client, keystore, token, &link_secret).await {
-        warn!(error = %e, "new file link's share key not kept; its comments open on first use");
+        warn!(error = %e, "new file link's share key not kept; it is fetched again before an email gate");
+    }
+}
+
+/// Before an email gate goes on: make sure a `#s=` link's share key is kept,
+/// since the gate ends the server handing it out. Done when the link is not a
+/// `#s=` one, already has its key, or the server already refuses the envelope
+/// (gated, ended, or minted elsewhere and never opened here), so the gate
+/// loses nothing more.
+///
+/// # Errors
+///
+/// The keystore's read error, or a transport or server failure that left the
+/// key unknown: the caller holds the gate back rather than lose the key.
+pub(crate) async fn keep_before_gate(client: &HcfsClient, keystore: &SqliteShareKeystore, token: &str) -> Result<(), ShareError> {
+    let Some(ShareSecret::FileLink(link_secret)) = keystore.get(token)? else {
+        return Ok(());
+    };
+    match share_key(client, keystore, token, &link_secret).await {
+        Ok(_) | Err(ShareError::NotFound) => Ok(()),
+        Err(e) => Err(e),
     }
 }
 
@@ -214,6 +242,37 @@ mod tests {
         keep_after_mint(&client, &keystore, "tok-sp").await;
         keep_after_mint(&client, &keystore, "tok-none").await;
         assert_eq!(route.hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// A gate goes on only once the share key is kept, or once there is no
+    /// key left to lose: a failed GET at the mint gets a second chance here,
+    /// and a failure that leaves the key unknown holds the gate back.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_email_gate_waits_for_the_share_key() {
+        let (link_secret, envelope) = sealed_link();
+        let route = route(envelope);
+        let client = serve(Arc::clone(&route)).await;
+        let (_dir, keystore) = keystore().await;
+        keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("put");
+
+        keep_before_gate(&client, &keystore, TOKEN).await.expect("kept");
+        assert_eq!(keystore.opened_share_key(TOKEN).expect("read"), Some(SHARE_KEY));
+
+        keystore.put(TOKEN, &ShareSecret::FileLink(link_secret)).expect("clears the kept key");
+        route.open.store(false, Ordering::SeqCst);
+        keep_before_gate(&client, &keystore, TOKEN).await.expect("nothing left to lose");
+
+        let offline = HcfsClient::new(HcfsClientConfig {
+            base_url: "http://127.0.0.1:9".into(),
+            ..HcfsClientConfig::default()
+        })
+        .expect("client");
+        assert!(
+            keep_before_gate(&offline, &keystore, TOKEN).await.is_err(),
+            "no answer holds the gate back"
+        );
+        keystore.put("tok-k", &ShareSecret::Public(SHARE_KEY)).expect("put");
+        keep_before_gate(&offline, &keystore, "tok-k").await.expect("a #k= link has its key");
     }
 
     /// The kept key lives and dies with its row: only a `file_link` row takes

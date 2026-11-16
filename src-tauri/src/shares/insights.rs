@@ -595,7 +595,7 @@ pub enum KeyUnavailable {
     Password,
     /// The link's key is not on this computer and no owner wrap brought it.
     NotOnDevice,
-    /// A `#s=` link made on another device whose share key the server no
+    /// A `#s=` link whose share key was never kept here and the server no
     /// longer hands out: it asks for an email, or it has ended.
     NotFetchable,
     /// A `#s=` link's share key could not be fetched: no answer, or an error.
@@ -608,7 +608,7 @@ impl KeyUnavailable {
             Self::Password => "This link has a password, so its comments can only be read on the link's page.",
             Self::NotOnDevice => "Comments can't be read on this computer because the link's key isn't here.",
             Self::NotFetchable => {
-                "Comments can't be read on this computer: this link was made on another device, and it asks for an email or has ended."
+                "Comments can't be read on this computer: this link's key can no longer be fetched, because it asks for an email or has ended."
             }
             Self::Unreachable => "Couldn't reach Hippius to open this link's comments. Try again.",
         }
@@ -1416,6 +1416,11 @@ async fn file_link_comment_key(
     token: &str,
     link_secret: &[u8; 32],
 ) -> std::result::Result<CommentKey, KeyUnavailable> {
+    // A kept key needs no client: building one reads the bearer, which a
+    // local decrypt does not need.
+    if let Ok(Some(kept)) = keystore.opened_share_key(token) {
+        return Ok(CommentKey::derive(&kept));
+    }
     let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
         debug!(error = %e, "share comments: no client to fetch the link's key");
         KeyUnavailable::Unreachable

@@ -750,5 +750,11 @@ mod tests {
         ks.put("file-p", &ShareSecret::FileLinkPrivate(vec![2u8; 89]))
             .expect("private file link after the rebuild");
         assert_eq!(ks.get("file").expect("get"), Some(ShareSecret::FileLink([1u8; 32])));
+
+        // A later start leaves the current table alone: a rebuild would copy
+        // no kept share key, and a gated link's comments need it.
+        ks.keep_opened_share_key("file", &[3u8; 32]).expect("keep");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("a later start");
+        assert_eq!(ks.opened_share_key("file").expect("read"), Some([3u8; 32]));
     }
 }

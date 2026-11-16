@@ -974,8 +974,9 @@ fn revision_id_wire_shape_is_pinned() {
 fn token_refresh_held_event_is_pinned() {
     use hcfs_client::engine::SyncEvent;
 
-    let event = SyncEvent::TokenRefreshHeld { held_secs: 91 };
-    assert!(matches!(event, SyncEvent::TokenRefreshHeld { held_secs: 91 }));
+    let SyncEvent::TokenRefreshHeld { held_secs: _ } = (SyncEvent::TokenRefreshHeld { held_secs: 91 }) else {
+        unreachable!("a TokenRefreshHeld value is that variant");
+    };
 }
 
 /// Compile-time pin of the folder-share structs and owner operations the
