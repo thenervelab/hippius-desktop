@@ -55,6 +55,8 @@ const getPrefsMock = vi.fn().mockRejectedValue(new Error("not offered"));
 const setPrefsMock = vi.fn().mockResolvedValue(undefined);
 // The finished link's email gate: a server without it unless a test says.
 const getGateMock = vi.fn().mockResolvedValue({ offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null });
+// The finished link's NDA setting: a server without it unless a test says.
+const getNdaMock = vi.fn().mockResolvedValue({ offered: false, on: false, text: null, editable: false, inPlan: null });
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   share_get_notification_preferences: getPrefsMock,
   share_set_notification_preferences: setPrefsMock,
@@ -64,6 +66,7 @@ const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   share_set_link_settings: setLinkMock,
   share_get_link_settings: getLinkMock,
   share_get_gate: getGateMock,
+  share_get_nda: getNdaMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because

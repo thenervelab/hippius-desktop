@@ -16,6 +16,7 @@ pub mod history;
 pub mod insights;
 pub mod insights_csv;
 pub mod keystore;
+pub mod nda;
 pub mod origin;
 pub mod outside_folder;
 pub(crate) mod owner_wrap;
