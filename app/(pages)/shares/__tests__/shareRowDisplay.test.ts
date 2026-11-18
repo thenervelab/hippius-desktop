@@ -9,6 +9,7 @@ import {
   folderShareScope,
   mergeActiveShareRows,
   pickHistoryRowDisplay,
+  withLinkActivity,
 } from "../shareRowDisplay";
 
 describe("pickHistoryRowDisplay", () => {
@@ -287,5 +288,27 @@ describe("folderShareRowPlan", () => {
     );
 
     expect(plan.state).toBe("revoked");
+  });
+});
+
+describe("withLinkActivity", () => {
+  const file = { shareToken: "t1", filename: "a.pdf", createdAt: "2026-11-01T00:00:00Z" } as ShareSummary;
+  const folder = { tokenHash: "h1", displayName: "Room", createdAt: "2026-11-02T00:00:00Z" } as FolderShareSummary;
+
+  it("lays a file link's counts and switch and a folder link's switch onto their rows", () => {
+    const rows = withLinkActivity(mergeActiveShareRows([file], [folder]), {
+      files: [{ shareToken: "t1", insightsOn: true, counts: { views: 12, uniqueViewers: 7, comments: 3, newSinceSeen: true } }],
+      folders: [{ tokenHash: "h1", insightsOn: false }],
+    });
+    expect(rows[0]).toMatchObject({ kind: "folder", insightsOn: false });
+    expect(rows[1]).toMatchObject({ kind: "file", file: { views: 12, comments: 3, insightsOn: true, newSinceSeen: true } });
+  });
+
+  it("leaves rows the activity does not name, and a link with no counts, as they are", () => {
+    const merged = mergeActiveShareRows([file], [folder]);
+    expect(withLinkActivity(merged, undefined)).toBe(merged);
+    const rows = withLinkActivity(merged, { files: [{ shareToken: "t1", insightsOn: null, counts: null }], folders: [] });
+    expect(rows[1]).toEqual({ kind: "file", file });
+    expect(rows[0]).toEqual(merged[0]);
   });
 });

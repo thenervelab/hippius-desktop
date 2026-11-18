@@ -9,15 +9,18 @@
 import { atom, type PrimitiveAtom, type SetStateAction, type WritableAtom } from "jotai";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { InsightsSheetTarget, ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
+import type { FolderInsightsTarget } from "@/components/page-sections/shares/folder-insights/folderInsightsTarget";
 
 const fileDetailsTarget = atom<FormattedUserFile | null>(null);
 const insightsTarget = atom<InsightsSheetTarget | null>(null);
 const shareDriveTarget = atom<ShareDriveModalTarget | null>(null);
+const folderInsightsTarget = atom<FolderInsightsTarget | null>(null);
 
 const PANELS: ReadonlyArray<PrimitiveAtom<unknown>> = [
   fileDetailsTarget as PrimitiveAtom<unknown>,
   insightsTarget as PrimitiveAtom<unknown>,
   shareDriveTarget as PrimitiveAtom<unknown>,
+  folderInsightsTarget as PrimitiveAtom<unknown>,
 ];
 
 type PanelAtom<T> = WritableAtom<T | null, [SetStateAction<T | null>], void>;
@@ -40,3 +43,4 @@ function exclusive<T>(own: PrimitiveAtom<T | null>): PanelAtom<T> {
 export const fileDetailsPanelTargetAtom = exclusive(fileDetailsTarget);
 export const insightsPanelTargetAtom = exclusive(insightsTarget);
 export const shareDrivePanelTargetAtom = exclusive(shareDriveTarget);
+export const folderInsightsPanelTargetAtom = exclusive(folderInsightsTarget);
