@@ -950,6 +950,68 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
     });
 
+    // A click as WebKit (the macOS webview) does it: pointer down, then focus
+    // goes to the nearest focusable ancestor (a clicked button never takes it),
+    // then the click. Before the popover took that focus itself, it was the
+    // panel's, which read as focus leaving and closed the popover.
+    function webkitClick(el: HTMLElement) {
+      fireEvent.pointerDown(el, { button: 0 });
+      fireEvent.mouseDown(el, { button: 0 });
+      const holder = el.parentElement?.closest<HTMLElement>("[tabindex]");
+      holder?.focus();
+      fireEvent.mouseUp(el, { button: 0 });
+      fireEvent.click(el);
+    }
+
+    for (const wide of [true, false]) {
+      it(`toggles every switch and stays open, ${wide ? "inline" : "in the narrow-window sheet"}`, async () => {
+        viewport.wide = wide;
+        let link = { ...ALL_SWITCHES_ON, on: { ...ALL_ON } };
+        answer({
+          share_get_insights: PAID,
+          share_list_comments: COMMENTS,
+          share_get_reactions: NO_REACTIONS,
+          share_get_link_settings: () => link,
+          share_set_link_settings: ({ change }: { change: Partial<typeof ALL_ON> }) => {
+            link = { ...link, on: { ...link.on, ...change } };
+          },
+        });
+        renderSheet();
+        const settings = await openSettings();
+        for (const name of ["Insights", "Comments", "Reactions"] as const) {
+          const toggle = await within(settings).findByRole("switch", { name });
+          await waitFor(() => expect(toggle).not.toBeDisabled());
+          expect(toggle).toHaveAttribute("aria-checked", "true");
+          webkitClick(toggle);
+          await waitFor(() => expect(within(settings).getByRole("switch", { name })).toHaveAttribute("aria-checked", "false"));
+          expect(screen.getByRole("dialog", { name: "Link settings" })).toBe(settings);
+          await waitFor(() =>
+            expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", { shareToken: "tok", change: { [name.toLowerCase()]: false } }),
+          );
+        }
+        // Still open once every save has settled, and still closes on Escape.
+        await waitFor(() => expect(within(settings).getByRole("switch", { name: "Reactions" })).not.toBeDisabled());
+        expect(screen.getByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+      });
+    }
+
+    it("stays open when focus moves to the panel around it, and closes when it moves past it", async () => {
+      answer({
+        share_get_insights: PAID,
+        share_list_comments: COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: ALL_SWITCHES_ON,
+      });
+      renderSheet();
+      const settings = await openSettings();
+      fireEvent.focusOut(settings, { relatedTarget: screen.getByTestId("insights-panel") });
+      expect(screen.getByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
+      fireEvent.focusOut(settings, { relatedTarget: screen.getByRole("button", { name: "Close" }) });
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+    });
+
     it("says in the Comments tab that comments are off, with Turn on, and still lists what is there", async () => {
       let link = SOME_OFF;
       answer({
