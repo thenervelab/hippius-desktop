@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Export a link's viewers as a spreadsheet.** Insights has an Export CSV button beside Link settings that saves who viewed, how often, when they last looked, how much they watched and, for a document, how many pages they read, in the same columns as the web. You choose where the file goes, and it opens cleanly in Excel, Numbers or Google Sheets.
 - **Insights for folder links, and views at a glance on Shared Links.** A folder link now has Insights, like a file link: which files were opened, how many times and by how many people, how far people read each document and how long they spent on it, and who opened what. Turn a folder link's Insights on or off, and save its activity as a CSV file. Shared Links also shows each link's views and comments, with an Insights button on every row. Who opened what comes with paid Drive plans.
 - **Preview WMV, AVI, MKV and other videos.** Videos the viewer could not play before now open in Hippius: on Mac and Windows that includes Windows Media (.wmv), AVI, MKV, FLV, MPEG (.mpg) and camcorder (.mts, .m2ts) files, converted on your computer as they play so even a long video starts in a few seconds and you can skip ahead. On Linux, MKV and other files whose picture is already H.264 play; the rest offer Download. Nothing is sent anywhere.
 - **Ask for an email before a share link opens.** A file link can now ask viewers to confirm their email with a code before it opens, from the Share dialog and from Insights' Link settings. Let in only certain addresses or whole company domains, or keep some out. It comes with paid Drive plans and appears once Hippius offers it for your account.
@@ -73,6 +74,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
+- **Clearer page charts for shared documents.** The Pages tab in a document link's Insights now shows two charts, as on the web: where people stopped reading, with the page after which most left, and the time spent on each page, with the page people spent longest on. Point at a chart, or use the arrow keys, to read any page.
 - **Dragging works the way Finder does.** Drop on any row of an open folder, file or subfolder, at any depth, and the item goes into the folder that row belongs to, with that whole folder lit up while you hover. In Move to…, New folder now has its own Create folder and Cancel buttons, then opens the new folder ready to move into.
 - **The unlock screen speaks plainly.** It asks for your unlock password, says "Wrong password. Try again." when it doesn't match, and keeps what you typed selected so you can retype straight away. It calls your 12 words your recovery seed, or your access key if you sign in with them, and "Forgot your password?" explains that we can't reset it and how to set a new one. The show and hide button works from the keyboard, password managers can fill the field, and a note appears when Caps Lock is on.
 - **Shared Links shows a page at a time.** Active links and History each show 10 rows per page with a pager underneath, the same as Shared Drives, and sorting goes back to the first page. A link the Drive points you to opens on the page it sits on.
@@ -234,6 +237,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A shared document's Insights no longer shows a video length.** The line under a PDF, Word or PowerPoint file's name could show a time such as 0:10 as if it were a recording; it now appears only for recordings.
+- **Link settings switches in Insights work on a Mac.** Pressing Insights, Comments, Reactions or Allow download in a link's settings closed the settings instead of changing the switch. Each switch now changes, and the settings stay open until you press Escape, click outside or press the gear again.
 - **Moving and renaming in a drive shared with you works.** Moving a file or renaming it in someone else's drive said it was done but left it where it was. It now moves, and anything the server could not move says so instead of claiming success.
 - **Upload to a drive shared with you without a plan of your own.** The drive's owner pays for its storage, so uploading files and folders into it no longer asks you to subscribe or upgrade. If the drive is out of space or frozen, Hippius now says the owner needs to sort it out.
 - **Pages seen per viewer.** Insights for a PDF, Word or PowerPoint link now says how many pages each viewer saw ("3 of 12 pages"); the count was missing for every viewer.

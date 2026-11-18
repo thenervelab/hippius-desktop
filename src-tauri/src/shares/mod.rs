@@ -15,6 +15,7 @@ pub(crate) mod folder_scan;
 pub mod gate;
 pub mod history;
 pub mod insights;
+pub mod insights_csv;
 pub mod keystore;
 pub mod link_activity;
 pub mod origin;
