@@ -50,11 +50,11 @@ pub enum PortalShot {
 }
 
 /// No screenshot portal on this desktop.
-pub const PORTAL_MISSING: &str = "Your desktop has no screenshot service Hippius can use. Install xdg-desktop-portal and the portal for your desktop (GNOME, KDE or wlroots), then try again.";
+pub const PORTAL_MISSING: &str = "Your desktop has no screenshot service Hippius Drive can use. Install xdg-desktop-portal and the portal for your desktop (GNOME, KDE or wlroots), then try again.";
 /// The portal answered without a screenshot.
 pub const PORTAL_FAILED: &str = "Your desktop's screenshot tool didn't take the screenshot. Try again.";
 /// The portal named a file Hippius cannot read.
-pub const PORTAL_FILE_UNREADABLE: &str = "Hippius couldn't open the screenshot your desktop saved. Try again.";
+pub const PORTAL_FILE_UNREADABLE: &str = "Hippius Drive couldn't open the screenshot your desktop saved. Try again.";
 
 /// A local path from a `file://` URI: `file:///home/me/A%20B.png` and
 /// `file://localhost/...` alike, percent-decoded byte for byte (a Linux file

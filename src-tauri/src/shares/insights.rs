@@ -43,6 +43,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
 
 use super::SqliteShareKeystore;
 use super::capabilities::{ServerCapabilities, fetch_capabilities};
@@ -1187,6 +1188,11 @@ impl Api {
         Ok(Self { base, bearer })
     }
 
+    /// `GET /v1/shares`, the owner listing.
+    pub(super) fn listing_url(&self) -> String {
+        format!("{}/v1/shares", self.base)
+    }
+
     pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
         Ok(format!("{}/v1/shares/{}{rest}", self.base, path_segment(token)?))
     }
@@ -1352,7 +1358,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
     read_ok(resp).await
 }
 
-async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
+pub(super) async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
     let resp = http
         .patch(api.share_url(token, "/settings")?)
         .bearer_auth(&api.bearer)
@@ -1412,6 +1418,13 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 /// `#s=` link's share key is the one kept at its mint, else fetched once
 /// (`shares::file_link_key`).
 pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+    share_key_for(state, account_id, token).await.map(|key| CommentKey::derive(&key))
+}
+
+/// The share key of file link `token`: from this device's keystore, or the
+/// one its owner wrap brings back. A recipient link is made over it, and the
+/// comment key comes from it.
+pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
     let Ok(pool) = state.pool() else {
         return Err(KeyUnavailable::NotOnDevice);
     };
@@ -1423,8 +1436,8 @@ pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &
         super::owner_wrap::sync_file_wraps(state, account_id, &keystore, &mut keys, &[token]).await;
     }
     match keys.remove(token) {
-        Some(ShareSecret::Public(share_key)) => Ok(CommentKey::derive(&share_key)),
-        Some(ShareSecret::FileLink(link_secret)) => file_link_comment_key(pool, account_id, token, &link_secret).await,
+        Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
+        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(pool, account_id, token, &link_secret).await,
         Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
@@ -1432,25 +1445,25 @@ pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &
     }
 }
 
-/// The comment key of a `#s=` link, from its share key.
-async fn file_link_comment_key(
+/// The share key of a `#s=` link: the one kept at its mint, else fetched once.
+async fn file_link_share_key(
     pool: &sqlx::SqlitePool,
     account_id: &str,
     token: &str,
     link_secret: &[u8; 32],
-) -> std::result::Result<CommentKey, KeyUnavailable> {
+) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
     let keys = super::file_link_key::FileLinkKeys::new(pool.clone());
     // A kept key needs no client: building one reads the bearer, which a
     // local decrypt does not need.
     if let Ok(Some(kept)) = keys.get(token).await {
-        return Ok(CommentKey::derive(&kept));
+        return Ok(Zeroizing::new(kept));
     }
     let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
-        debug!(error = %e, "share comments: no client to fetch the link's key");
+        debug!(error = %e, "no client to fetch the file link's key");
         KeyUnavailable::Unreachable
     })?;
     match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
-        Ok(share_key) => Ok(CommentKey::derive(&share_key)),
+        Ok(share_key) => Ok(Zeroizing::new(share_key)),
         Err(e) => Err(file_link_key_refusal(&e)),
     }
 }

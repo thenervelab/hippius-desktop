@@ -21,7 +21,7 @@ export const ONBOARDING_SCREENS: OnboardingScreen[] = [
   {
     id: 1,
     badges: [{ text: "Get Started" }],
-    heading: "Welcome to Hippius",
+    heading: "Welcome to Hippius Drive",
     subtitle:
       "Your personal cloud, encrypted, decentralized, and fully under your control.",
     featureLink:

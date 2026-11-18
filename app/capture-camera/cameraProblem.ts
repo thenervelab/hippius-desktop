@@ -72,8 +72,8 @@ export function problemText(problem: CameraProblem, privacyPlace?: string): { ti
     case "noPicture":
       return { title: "No picture from the camera", hint: `Check the camera is connected and not used by another app, ${AGAIN}` };
     case "unsupported":
-      return { title: "Camera not available here", hint: "This system cannot share the camera with Hippius. Update the system, then try again." };
+      return { title: "Camera not available here", hint: "This system cannot share the camera with Hippius Drive. Update the system, then try again." };
     default:
-      return { title: "Camera could not start", hint: `Turn the camera off and on again. If it keeps failing, restart Hippius.` };
+      return { title: "Camera could not start", hint: `Turn the camera off and on again. If it keeps failing, restart Hippius Drive.` };
   }
 }

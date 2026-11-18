@@ -133,7 +133,7 @@ function errorSentence(error: unknown): string {
       : (error as { message?: unknown } | null)?.message;
   return typeof message === "string" && message.length > 0
     ? message
-    : "That didn't work. Try again from Hippius.";
+    : "That didn't work. Try again from Hippius Drive.";
 }
 
 /** Mirrors Rust's `shares::quick_link::QuickLinkOutcome`. */

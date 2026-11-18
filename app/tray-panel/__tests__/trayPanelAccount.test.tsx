@@ -99,7 +99,7 @@ describe("tray popover header name", () => {
   it("names the app beside the logo, on one line, before the balance", () => {
     render(<TrayPanelPage />);
     const header = screen.getByRole("banner");
-    const name = within(header).getByText("Hippius");
+    const name = within(header).getByText("Hippius Drive");
     const logo = header.querySelector("svg");
     expect(logo).not.toBeNull();
     // One row: the mark and the name are siblings in the same flex line.
@@ -116,7 +116,7 @@ describe("tray popover header name", () => {
   it("lets the name give way before the balance pill does", () => {
     seed({ balance: "-12345678.91" });
     render(<TrayPanelPage />);
-    const name = within(screen.getByRole("banner")).getByText("Hippius");
+    const name = within(screen.getByRole("banner")).getByText("Hippius Drive");
     expect(name).toHaveClass("min-w-0", "truncate");
     expect(name.parentElement).toHaveClass("min-w-0");
     const pill = screen.getByTestId("tray-balance").closest(".rounded-xl");
@@ -129,7 +129,7 @@ describe("tray popover header name", () => {
   it("has its own colour in dark mode, not only the light one", () => {
     render(<TrayPanelPage />);
     const header = screen.getByRole("banner");
-    const name = within(header).getByText("Hippius");
+    const name = within(header).getByText("Hippius Drive");
     expect(name).toHaveClass("text-black-700", "dark:text-white");
     expect(header.querySelector("svg")).toHaveClass("text-primary-50", "dark:text-primary-60");
   });

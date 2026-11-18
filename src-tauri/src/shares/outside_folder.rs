@@ -262,7 +262,7 @@ async fn scan_off_main_thread(folder: &Path) -> Result<FolderScan> {
 /// message verbatim, so the `JoinError` goes to the log, not the user.
 fn scan_task_failed(e: &tokio::task::JoinError) -> AppError {
     warn!(error = %e, "uploaded-copy share: the folder scan task failed");
-    AppError::Validation("Hippius couldn't read that folder. Try again.".into())
+    AppError::Validation("Hippius Drive couldn't read that folder. Try again.".into())
 }
 
 /// The recipient page's title: the folder's own name.
@@ -336,7 +336,7 @@ fn map_item_refusal(e: FolderShareError) -> AppError {
         // Staging the encrypted copy in the temp dir failed: almost always a
         // full disk. The detail is in the caller's warn.
         FolderShareError::Share(ShareError::Io(_)) => AppError::Validation(
-            "Hippius couldn't prepare the folder's files for upload. Make sure your disk has free space, then \
+            "Hippius Drive couldn't prepare the folder's files for upload. Make sure your disk has free space, then \
              share again."
                 .into(),
         ),
@@ -531,7 +531,7 @@ mod tests {
     async fn a_failed_scan_task_reads_as_plain_copy() {
         let join_error = tokio::spawn(async { panic!("scan panicked") }).await.expect_err("panicked");
         match scan_task_failed(&join_error) {
-            AppError::Validation(message) => assert_eq!(message, "Hippius couldn't read that folder. Try again."),
+            AppError::Validation(message) => assert_eq!(message, "Hippius Drive couldn't read that folder. Try again."),
             other => panic!("expected Validation, got {other:?}"),
         }
     }

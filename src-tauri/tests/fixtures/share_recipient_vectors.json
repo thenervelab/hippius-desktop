@@ -1,0 +1,30 @@
+{
+  "_comment": "Sealed in the console's formats (recipient-label.ts, owner-wrap.ts) with its own libraries. Do not regenerate from Rust.",
+  "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+  "owner_ss58": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+  "label_key_hex": "97907438821236004b3d940b57dcc16cb3fdf074f954e0e0114a75772112cc9d",
+  "labels": [
+    {
+      "name": "Alice",
+      "nonce_hex": "010101010101010101010101010101010101010101010101",
+      "sealed_b64": "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAWA7gbYMUBjZjWNmzUYb3yZB2ybrpQ=="
+    },
+    {
+      "name": "bob@example.com",
+      "nonce_hex": "020202020202020202020202020202020202020202020202",
+      "sealed_b64": "AQICAgICAgICAgICAgICAgICAgICAgICAsE8MdUAsQI6Bp8v1YlDfAwJ0CgCMwwDLmWF3IVBaIw="
+    },
+    {
+      "name": "山田太郎",
+      "nonce_hex": "030303030303030303030303030303030303030303030303",
+      "sealed_b64": "AQMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwFZZfvQTpzypJ7/7KmEmr/b47ALiJiiGtqeExs="
+    }
+  ],
+  "file_link_wrap": {
+    "share_token": "AbCdEf0123456789_-xyzXYZ",
+    "link_secret_hex": "00070e151c232a31383f464d545b626970777e858c939aa1a8afb6bdc4cbd2d9",
+    "nonce_hex": "090909090909090909090909090909090909090909090909",
+    "wrap_b64": "AQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCWuI9kg97RkOpSjVxt+NoGjYZVt1wPyhqNPNIVfEr+xinR+ThQ3u4+PH2o+X4Ma5AVU=",
+    "url": "https://console.hippius.com/share/AbCdEf0123456789_-xyzXYZ#s=AAcOFRwjKjE4P0ZNVFtiaXB3foWMk5qhqK-2vcTL0tk"
+  }
+}
