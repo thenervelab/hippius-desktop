@@ -489,8 +489,8 @@ pub fn folder_refused_copy(dir: &Path, home: &Path, kind: std::io::ErrorKind) ->
         (std::io::ErrorKind::PermissionDenied, Some(name)) if cfg!(target_os = "macos") => format!(
             "Hippius isn't allowed to use your {name} folder. Allow it in System Settings › Privacy & Security › Files and Folders, or choose another place."
         ),
-        (std::io::ErrorKind::PermissionDenied, _) => "Hippius isn't allowed to make a folder there. Choose another place.".into(),
-        _ => "Hippius couldn't make a folder there. Choose another place.".into(),
+        (std::io::ErrorKind::PermissionDenied, _) => "Hippius Drive isn't allowed to make a folder there. Choose another place.".into(),
+        _ => "Hippius Drive couldn't make a folder there. Choose another place.".into(),
     }
 }
 
@@ -1223,7 +1223,7 @@ mod tests {
         // sentence of its own, "Choose another place."
         assert!(refused.to_lowercase().contains("choose another place"), "{refused}");
         let other = folder_refused_copy(&docs, &home(), std::io::ErrorKind::Other);
-        assert_eq!(other, "Hippius couldn't make a folder there. Choose another place.");
+        assert_eq!(other, "Hippius Drive couldn't make a folder there. Choose another place.");
     }
 
     #[test]

@@ -118,6 +118,15 @@ pub struct ServerCapabilities {
     /// file opens. Absent on older servers and on one without a gate key: no
     /// "Ask to accept an NDA" switch and no NDA tab, and nothing is sent.
     pub share_nda: bool,
+    /// Links per person (`POST /v1/shares/{token}/recipients`, hcfs #1183):
+    /// one link for each person over one stored copy, each with its own
+    /// name, views and revoke. Absent on older servers and off in production
+    /// until it is turned on: no "Links per person" section, nothing sent.
+    pub share_recipient_links: bool,
+    /// Insights grouped by person (`GET /v1/shares/{token}/group-insights`,
+    /// hcfs #1291): every link of a file's group together. Absent on older
+    /// servers: no People tab.
+    pub share_group_insights: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -263,6 +272,7 @@ mod tests {
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
+            r#""share_recipient_links":true,"share_group_insights":true,"#,
             r#""drive_moves":true,"folder_share_insights":true}"#,
         ))
         .expect("parse");
@@ -314,6 +324,7 @@ mod tests {
                 "share_document_views",
                 "share_download_switch",
                 "share_gates",
+                "share_group_insights",
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
@@ -321,6 +332,7 @@ mod tests {
                 "share_notifications",
                 "share_preview",
                 "share_reaction_moments",
+                "share_recipient_links",
                 "shares",
                 "upload_folder_shares"
             ]
@@ -357,6 +369,17 @@ mod tests {
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="
         );
+    }
+
+    /// Links per person and group insights ship on their own flags; a server
+    /// that omits them offers neither, and one that sends them is read.
+    #[test]
+    fn recipient_links_and_group_insights_read_their_own_flags() {
+        let old = parse_capabilities(r#"{"shares":true,"share_insights":true}"#).expect("parse");
+        assert!(!old.share_recipient_links, "a server without links per person offers no such section");
+        assert!(!old.share_group_insights, "a server without group insights shows no People tab");
+        let new = parse_capabilities(r#"{"share_recipient_links":true,"share_group_insights":true}"#).expect("parse");
+        assert!(new.share_recipient_links && new.share_group_insights);
     }
 
     /// Uploaded-copy folder links ship after browsable folder shares, so a

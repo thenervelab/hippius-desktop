@@ -18,6 +18,7 @@ import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings from "./EmailGateSettings";
 import NdaSettings from "./NdaSettings";
+import RecipientLinks from "./RecipientLinks";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
@@ -212,6 +213,10 @@ export function LinkSettingsPopover({
             router.push(BILLING_ROUTE);
           }}
         />
+      </div>
+      {/* Drawn only where Rust offers it: a server with links per person. */}
+      <div className="mt-2.5 empty:hidden">
+        <RecipientLinks layout="list" shareToken={shareToken} />
       </div>
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />

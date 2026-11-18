@@ -161,7 +161,7 @@ export default function CaptureDriveDialog() {
           </p>
         ) : (
           <p className={TEXT}>
-            Hippius saves your screenshots and recordings in the folder below and backs them up, so each capture gets a
+            Hippius Drive saves your screenshots and recordings in the folder below and backs them up, so each capture gets a
             link you can share.
             {waiting > 0 && (
               <>
@@ -211,7 +211,7 @@ export default function CaptureDriveDialog() {
           </div>
           {madeInside && (
             <p data-testid="capture-drive-made-inside" className="text-xs text-grey-50 dark:text-grey-dark-600">
-              Hippius makes a new folder for your captures inside the one you chose.
+              Hippius Drive makes a new folder for your captures inside the one you chose.
             </p>
           )}
           <button

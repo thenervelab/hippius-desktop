@@ -39,7 +39,7 @@ pub const RECORD_FLAG: &str = "--record";
 /// binds only the screenshot shortcut, so even where the desktop has the
 /// portal, this one is added in the desktop's own keyboard settings.
 pub const RECORD_DESKTOP_SETTINGS_LINE: &str =
-    "Hippius can't set this shortcut on your desktop. Add one in your desktop's keyboard settings that runs this command:";
+    "Hippius Drive can't set this shortcut on your desktop. Add one in your desktop's keyboard settings that runs this command:";
 
 /// The command line a desktop shortcut runs: this executable, quoted for a
 /// shell when its path needs it, and the flag.
@@ -180,7 +180,7 @@ pub fn gnome_shortcut_added() -> Option<bool> {
 #[cfg(target_os = "linux")]
 pub fn add_gnome_shortcut(accelerator: &str) -> crate::error::Result<()> {
     use crate::error::AppError;
-    const FAILED: &str = "Hippius couldn't add the shortcut to your desktop's settings. Add it yourself with the command shown.";
+    const FAILED: &str = "Hippius Drive couldn't add the shortcut to your desktop's settings. Add it yourself with the command shown.";
 
     if !is_gnome(std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref()) {
         return Err(AppError::Validation(FAILED.into()));

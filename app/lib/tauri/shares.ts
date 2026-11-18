@@ -91,6 +91,10 @@ export interface ServerCapabilities {
    * matches the wire.
    */
   share_gates?: boolean;
+  /** Links per person. Read by Rust only; listed so the type matches the wire. */
+  share_recipient_links?: boolean;
+  /** Insights grouped by person. Read by Rust only; listed so the type matches the wire. */
+  share_group_insights?: boolean;
   /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
