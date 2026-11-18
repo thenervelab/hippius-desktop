@@ -116,7 +116,7 @@ describe("the first capture's question", () => {
     // Pictures is too broad to upload whole: Rust put a folder inside it,
     // and the dialog says so before anything is made.
     expect(screen.getByTestId("capture-drive-made-inside")).toHaveTextContent(
-      "Hippius makes a new folder for your captures inside the one you chose.",
+      "Hippius Drive makes a new folder for your captures inside the one you chose.",
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Use this folder" }));

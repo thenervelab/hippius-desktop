@@ -80,7 +80,7 @@ impl AudioPlan {
 
 /// What the viewer says under a video playing without its sound.
 /// Worded like the web console's line for the same case.
-pub const SILENT_NOTICE: &str = "Playing without sound: Hippius can't play this video's audio track.";
+pub const SILENT_NOTICE: &str = "Playing without sound: Hippius Drive can't play this video's audio track.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {

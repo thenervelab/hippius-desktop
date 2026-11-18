@@ -443,7 +443,7 @@ const AccessKeyLoginGate: React.FC = () => {
         <LogoMark />
 
         <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
-          Log In to Hippius
+          Log In to Hippius Drive
         </h1>
 
         <p className="self-stretch text-center text-grey-50 dark:text-grey-dark-600 font-medium text-[16px] leading-[22px] tracking-[-0.32px]">

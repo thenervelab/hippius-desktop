@@ -274,7 +274,7 @@ pub struct ShortcutSetting {
 pub const HELD_BY_ANOTHER_APP: &str = "Another app is already using that shortcut. Choose another.";
 /// The same refusal when a second Hippius is running (the installed app
 /// beside a development build, say): the likely holder is that copy.
-pub const HELD_BY_ANOTHER_HIPPIUS: &str = "Another copy of Hippius is using this shortcut. Quit it, or choose another.";
+pub const HELD_BY_ANOTHER_HIPPIUS: &str = "Another copy of Hippius Drive is using this shortcut. Quit it, or choose another.";
 
 /// The sentence for a shortcut the system refused to register.
 #[must_use]
@@ -443,7 +443,7 @@ pub fn validate(accelerator: &str) -> Result<tauri_plugin_global_shortcut::Short
     use tauri_plugin_global_shortcut::{Modifiers, Shortcut};
 
     let shortcut = Shortcut::from_str(accelerator.trim())
-        .map_err(|_| AppError::Validation("That isn't a shortcut Hippius can use. Try a modifier with a letter or number.".into()))?;
+        .map_err(|_| AppError::Validation("That isn't a shortcut Hippius Drive can use. Try a modifier with a letter or number.".into()))?;
     // The system's own capture keys first: Print Screen alone is refused as
     // Windows' key, not as "needs a modifier".
     if let Some(refusal) = reserved_by(THIS_SYSTEM, &shortcut) {
@@ -993,7 +993,7 @@ mod tests {
     fn a_shortcut_held_by_another_hippius_says_so() {
         assert_eq!(
             held_message(true),
-            "Another copy of Hippius is using this shortcut. Quit it, or choose another."
+            "Another copy of Hippius Drive is using this shortcut. Quit it, or choose another."
         );
         assert_eq!(held_message(false), "Another app is already using that shortcut. Choose another.");
         // The installed app, by its bundle identifier.

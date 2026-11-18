@@ -100,7 +100,7 @@ export default function ReleaseChannelDialog() {
 
       toast.dismiss(toastId);
       toast.success("Installed", {
-        description: "Hippius will restart now.",
+        description: "Hippius Drive will restart now.",
         duration: 3000,
       });
       await relaunch();
