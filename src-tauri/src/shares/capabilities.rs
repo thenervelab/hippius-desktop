@@ -113,6 +113,11 @@ pub struct ServerCapabilities {
     /// on older servers and off in production until the share page is ready:
     /// no "Ask for email" switch is shown and no gate request is sent.
     pub share_gates: bool,
+    /// NDA texts on file links (`PUT|DELETE /v1/shares/{token}/nda`,
+    /// `GET .../nda/accepts`, hcfs #1186): viewers accept a text before the
+    /// file opens. Absent on older servers and on one without a gate key: no
+    /// "Ask to accept an NDA" switch and no NDA tab, and nothing is sent.
+    pub share_nda: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -126,6 +131,13 @@ pub struct ServerCapabilities {
     /// (`HCFS_FEATURE_INVITE_LINK_ENVELOPES`), so until then every invite
     /// mint stays on `#k=`.
     pub drive_invite_link_envelopes: bool,
+    /// Moves between drives (`/v1/drive_moves`, `HCFS_FEATURE_DRIVE_MOVES`).
+    /// Absent on older servers and off in production until it is turned
+    /// on: Move to… shows no drive picker, and no move is sent.
+    pub drive_moves: bool,
+    /// Insights for folder links (`/v1/folder-shares/by-hash/{h}/insights`
+    /// and `/settings`). Absent on older servers: no folder link Insights.
+    pub folder_share_insights: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -250,7 +262,8 @@ mod tests {
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
-            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true}"#,
+            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
+            r#""drive_moves":true,"folder_share_insights":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -272,8 +285,11 @@ mod tests {
         assert!(caps.share_document_views);
         assert!(caps.share_download_switch);
         assert!(caps.share_gates);
+        assert!(caps.share_nda);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
+        assert!(caps.drive_moves);
+        assert!(caps.folder_share_insights);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -284,8 +300,10 @@ mod tests {
             keys,
             [
                 "drive_invite_link_envelopes",
+                "drive_moves",
                 "folder_grant_writes",
                 "folder_grants",
+                "folder_share_insights",
                 "folder_share_link_envelopes",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
@@ -299,6 +317,7 @@ mod tests {
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
+                "share_nda",
                 "share_notifications",
                 "share_preview",
                 "share_reaction_moments",
@@ -328,10 +347,12 @@ mod tests {
         assert!(!old.share_document_views, "a server without document views shows no Pages tab");
         assert!(!old.share_download_switch, "a server without the download switch is never sent one");
         assert!(!old.share_gates, "a server without email gates offers no Ask for email");
+        assert!(!old.share_nda, "a server without NDA texts offers no NDA switch or tab");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="
         );
+        assert!(!old.drive_moves, "a server without drive moves shows no drive picker");
         assert!(
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="

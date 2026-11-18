@@ -5,13 +5,12 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import { BarChart3, Download, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
 import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { SidePanel } from "@/components/ui/SidePanel";
-import TabList from "@/components/ui/tabs/TabList";
 import TabPanel from "@/components/ui/tabs/TabPanel";
 import { cn } from "@/lib/utils";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -50,9 +49,11 @@ import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
 import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
 import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
+import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
+import { saveInsightsCsv } from "./exportCsv";
+import { NdaTab, useNdaAccepts } from "./NdaTab";
 import {
   COMPARE_PLANS,
-  PAGES_PAGE,
   PRICING_URL,
   SAMPLE_DOCUMENT_VIEWERS,
   SAMPLE_PAGES,
@@ -75,24 +76,41 @@ import {
   formatMomentAt,
   formatPercent,
   formatWatched,
+  actionErrorLine,
   headerLine,
   loadErrorLine,
   lockCopy,
   pagesLockCopy,
   pagesSeenLabel,
+  pageReachSummary,
+  pageTimeSummary,
+  longestPage,
+  timeShares,
   pagesTabShown,
   switchOffLine,
   switchesOffLine,
-  tabLabel,
   type InsightsTab,
 } from "./insightsView";
-import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FILL, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
+import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /**
- * Wider than File Details' 305: like Manage access, this panel holds lists,
- * a chart and a row of numbers.
+ * The console's Insights width. Wider than File Details' 305 and Manage
+ * access's 360: it holds lists, charts, a row of numbers and up to five
+ * tabs with their counts in one row.
  */
-export const INSIGHTS_PANEL_WIDTH_PX = 360;
+export const INSIGHTS_PANEL_WIDTH_PX = 440;
+
+/**
+ * The NDA tab's slot. `InsightsPanelFor` fills it itself from the link's NDA
+ * accepts (`useNdaAccepts`, `NdaTab`) once the link has a text or any
+ * accepts; a caller may hand one in instead. The tab appears last, after
+ * Reactions, with its count, and its body scrolls like the others. `count`
+ * is `null` while more accepts are still to load.
+ */
+export interface NdaTabSlot {
+  count: number | null;
+  content: ReactNode;
+}
 
 export { insightsQueryKey, commentsQueryKey, reactionsQueryKey, linkSettingsQueryKey };
 
@@ -504,6 +522,7 @@ function InsightsPanelFor({
   file,
   onClose,
   focusHeading = false,
+  nda: ndaSlot,
 }: {
   shareToken: string;
   fileName: string;
@@ -511,6 +530,8 @@ function InsightsPanelFor({
   onClose: () => void;
   /** Take focus on mount: the panel stayed open while its content changed. */
   focusHeading?: boolean;
+  /** The NDA tab, when there is one (see `NdaTabSlot`); none draws no tab. */
+  nda?: NdaTabSlot;
 }) {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const tabsId = useId();
@@ -541,7 +562,10 @@ function InsightsPanelFor({
   // The recording's length, read off the capture's preview when it is on
   // this device; otherwise worked out from the viewers (`estimateDurationMs`).
   const [mediaMs, setMediaMs] = useState<number | null>(null);
-  const durationMs = useDurationMs(shareToken, mediaMs);
+  // Only a recording has a length: a document's viewers carry reading time,
+  // which would otherwise read as one in the header's line.
+  const recordingMs = useDurationMs(shareToken, mediaMs);
+  const durationMs = VIDEO_NAME.test(fileName) ? recordingMs : null;
   const summary = useCachedShare(shareToken);
   // Seen in the listing, then gone from it: the link was revoked (from
   // Shared Links, say) while its panel was open.
@@ -572,6 +596,7 @@ function InsightsPanelFor({
     enabled: commentsEnabled,
   });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
+  const ndaAccepts = useNdaAccepts(shareToken);
   const settings = switches.current.data ?? null;
   // What the link has turned off, said once in the header's line; the gear
   // changes it.
@@ -587,23 +612,36 @@ function InsightsPanelFor({
   const loading = insights.isPending;
 
   const viewers = insights.data?.viewers.state === "shown" ? insights.data.viewers.value : null;
-  const tabs: Array<{ tabKey: InsightsTab; tabName: string }> = [];
+  // The NDA tab names a person the way the Viewers tab does.
+  const viewerNames = useMemo(
+    () => Object.fromEntries((viewers ?? []).map((v) => [v.viewerId, v.name ?? v.email ?? null])),
+    [viewers],
+  );
+  // The NDA tab, once the link has a text or any accepts (Rust says whether
+  // the server has NDAs). A slot handed in by the caller wins.
+  const nda: NdaTabSlot | undefined =
+    ndaSlot ??
+    (ndaAccepts.shown
+      ? {
+          count: ndaAccepts.query.hasNextPage ? null : ndaAccepts.count,
+          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} />,
+        }
+      : undefined);
+  const tabs: InsightsTabItem[] = [];
   if (commentsEnabled) {
-    tabs.push({
-      tabKey: "comments",
-      tabName: tabLabel("Comments", moderation.comments.isSuccess ? commentList.length : null),
-    });
+    tabs.push({ key: "comments", label: "Comments", count: moderation.comments.isSuccess ? commentList.length : null });
   }
-  if (insights.isSuccess) tabs.push({ tabKey: "viewers", tabName: tabLabel("Viewers", viewers ? viewers.length : null) });
+  if (insights.isSuccess) tabs.push({ key: "viewers", label: "Viewers", count: viewers ? viewers.length : null });
   // Only on a server with document views (Rust sends `pages` only then).
   const pages = insights.data?.pages ?? null;
-  if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ tabKey: "pages", tabName: "Pages" });
+  if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ key: "pages", label: "Pages", count: null });
   if (commentsEnabled) {
-    tabs.push({ tabKey: "reactions", tabName: tabLabel("Reactions", reactions.isSuccess ? reactions.data.total : null) });
+    tabs.push({ key: "reactions", label: "Reactions", count: reactions.isSuccess ? reactions.data.total : null });
   }
-  const has = (key: InsightsTab | null) => key !== null && tabs.some((t) => t.tabKey === key);
+  if (nda) tabs.push({ key: "nda", label: "NDA", count: nda.count });
+  const has = (key: InsightsTab | null) => key !== null && tabs.some((t) => t.key === key);
   const fallback = defaultInsightsTab(commentCount);
-  const tab: InsightsTab | null = has(chosenTab) ? chosenTab : has(fallback) ? fallback : (tabs[0]?.tabKey ?? null);
+  const tab: InsightsTab | null = has(chosenTab) ? chosenTab : has(fallback) ? fallback : (tabs[0]?.key ?? null);
   const goToTab = (next: InsightsTab) => {
     setChosenTab(next);
     scrollRef.current?.scrollTo?.({ top: 0 });
@@ -651,6 +689,8 @@ function InsightsPanelFor({
             onTurnOn={openSettings}
           />
         );
+      case "nda":
+        return nda?.content ?? null;
     }
   };
 
@@ -667,6 +707,8 @@ function InsightsPanelFor({
           subtitle={turnedOff ? LINK_TURNED_OFF : [subtitle, offLine].filter(Boolean).join(" · ")}
           settings={
             !turnedOff && (
+            <>
+            {viewers && viewers.length > 0 && <ExportCsvButton shareToken={shareToken} fileName={fileName} />}
             <button
               type="button"
               {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
@@ -679,6 +721,7 @@ function InsightsPanelFor({
             >
               <Settings className="size-4" aria-hidden />
             </button>
+            </>
             )
           }
         />
@@ -720,27 +763,14 @@ function InsightsPanelFor({
           />
           {tabs.length > 1 && tab && (
             <div className="shrink-0 px-6 pt-5">
-              <TabList
-                idBase={tabsId}
-                ariaLabel="Insights"
-                tabs={tabs}
-                activeTab={tab}
-                onTabChange={(key) => goToTab(key as InsightsTab)}
-                className={cn("flex w-full rounded-[9px] p-[3px]", FILL)}
-                gap="gap-[3px]"
-                width="min-w-0 flex-1"
-                height="h-[30px]"
-                tabItemPaddingX="px-1.5"
-                textClassName="text-[13px] font-medium"
-                showTooltip={false}
-              />
+              <InsightsTabs idBase={tabsId} tabs={tabs} active={tab} onChange={goToTab} />
             </div>
           )}
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-3" data-testid="insights-body">
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4" data-testid="insights-body">
             {tabs.length > 1
-              ? tabs.map(({ tabKey }) => (
-                  <TabPanel key={tabKey} idBase={tabsId} tabKey={tabKey} activeTab={tab ?? ""}>
-                    {tabContent(tabKey)}
+              ? tabs.map(({ key }) => (
+                  <TabPanel key={key} idBase={tabsId} tabKey={key} activeTab={tab ?? ""}>
+                    {tabContent(key)}
                   </TabPanel>
                 ))
               : tab && tabContent(tab)}
@@ -748,6 +778,39 @@ function InsightsPanelFor({
         </>
       )}
     </div>
+  );
+}
+
+/** What the header's download button is called, the console's words. */
+export const EXPORT_CSV_LABEL = "Export CSV";
+
+/**
+ * Export CSV, beside the gear, as on the console: saves the link's viewers
+ * as a CSV file where the owner chooses. Drawn only while there are viewers
+ * to list (the free plan locks the list, and an empty file says nothing).
+ */
+function ExportCsvButton({ shareToken, fileName }: { shareToken: string; fileName: string }) {
+  const online = useIsOnline();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={EXPORT_CSV_LABEL}
+      title={EXPORT_CSV_LABEL}
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        saveInsightsCsv(shareToken, fileName)
+          .then((outcome) => {
+            if (outcome === "saved") toast.success("Activity saved as CSV");
+          })
+          .catch((err: unknown) => toast.error(actionErrorLine("export the activity", err, online)))
+          .finally(() => setBusy(false));
+      }}
+      className={cn(ICON_BUTTON, "disabled:opacity-50")}
+    >
+      <Download className="size-4" aria-hidden />
+    </button>
   );
 }
 
@@ -1006,9 +1069,11 @@ function ViewersTab({
 }
 
 /**
- * The Pages tab, for a PDF, Word or PowerPoint link: how many visits reached
- * each page (the drop-off) and the median time on it. On the free plan, the
- * lock over sample pages and viewers.
+ * The Pages tab, for a PDF, Word or PowerPoint link, laid out as the
+ * console's: where people stopped (the share of visits that reached each
+ * page, and the page after which most left), then the time per page (the
+ * median on each, and the page people spent longest on). On the free plan,
+ * the lock over the same charts drawn from sample pages.
  */
 function PagesTab({
   pages,
@@ -1028,7 +1093,7 @@ function PagesTab({
     return (
       <Locked {...pagesLockCopy({ notCounting })} onUpgrade={onUpgrade}>
         <div className="flex flex-col gap-4 p-3.5 pt-10">
-          <PageRows pages={SAMPLE_PAGES} />
+          <PageCharts pages={SAMPLE_PAGES} />
           <ViewerRows viewers={SAMPLE_DOCUMENT_VIEWERS} video={false} />
         </div>
       </Locked>
@@ -1043,63 +1108,57 @@ function PagesTab({
       </>
     );
   }
-  const drop = biggestPageDrop(pages.value.reach);
   return (
     <div className="flex flex-col gap-5">
       {notice}
-      <Section title="Drop-off by page" aside={drop ? `Most left after page ${drop.afterPage}` : undefined}>
-        <PageRows pages={pages.value} paged />
-      </Section>
+      <PageCharts pages={pages.value} />
     </div>
   );
 }
 
 /**
- * One row a page: its number, a bar and the share of visits that reached it,
- * and the median time on it. `paged` lists `PAGES_PAGE` at a time.
+ * A document's two page charts, one point per page: where people stopped
+ * and the time per page. A one page document has no curve to draw, so it
+ * gets its one time instead.
  */
-function PageRows({ pages, paged = false }: { pages: InsightsPages; paged?: boolean }) {
-  const [limit, setLimit] = useState(PAGES_PAGE);
-  const all = pages.reach.map((reach, i) => ({ page: i + 1, reach, ms: pages.medianMs[i] ?? 0 }));
-  const shown = paged ? all.slice(0, limit) : all;
+function PageCharts({ pages }: { pages: InsightsPages }) {
+  const { reach, medianMs } = pages;
+  const n = reach.length;
+  if (n < 2) {
+    return (
+      <Section title="Time on page">
+        <p className={cn("text-[13px] tabular-nums", STRONG)}>{formatWatched(medianMs[0] ?? 0)}</p>
+      </Section>
+    );
+  }
+  const drop = biggestPageDrop(reach);
+  const longest = longestPage(medianMs);
+  const maxMs = Math.max(0, ...medianMs);
+  const ends = ["Page 1", `Page ${n}`] as const;
   return (
-    <>
-      <div aria-hidden className={cn("mb-1 flex items-center gap-3 text-[11.5px]", MUTED)}>
-        <span className="w-14 shrink-0">Page</span>
-        <span className="min-w-0 flex-1">Reached</span>
-        <span className="w-11 shrink-0 text-right">Time</span>
-      </div>
-      <ul className="flex flex-col" aria-label="Pages">
-        {shown.map(({ page, reach, ms }) => (
-          <li key={page} className="flex items-center gap-3 py-1.5">
-            <span className={cn("w-14 shrink-0 text-[13px] tabular-nums", STRONG)}>Page {page}</span>
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className={cn(BAR_TRACK, "min-w-0 flex-1")} aria-hidden>
-                <div className={BAR_FILL} style={{ width: `${Math.round(reach)}%` }} />
-              </div>
-              <span className={cn("w-9 shrink-0 text-right text-xs tabular-nums", MUTED)}>
-                <span className="sr-only">reached by </span>
-                {Math.round(reach)}%
-              </span>
-            </div>
-            <span className={cn("w-11 shrink-0 text-right text-xs tabular-nums", MUTED)}>
-              <span className="sr-only">, median time </span>
-              {formatWatched(ms)}
-            </span>
-          </li>
-        ))}
-      </ul>
-      {shown.length < all.length && (
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <button type="button" className={TEXT_LINK} onClick={() => setLimit((n) => n + PAGES_PAGE)}>
-            Show more pages
-          </button>
-          <span className={cn("text-xs tabular-nums", MUTED)}>
-            {shown.length} of {all.length}
-          </span>
-        </div>
-      )}
-    </>
+    <div className="flex flex-col gap-5" data-testid="insights-pages">
+      <Section title="Where people stopped" aside={drop ? `Most left after page ${drop.afterPage}` : undefined}>
+        <RetentionChart
+          values={reach}
+          durationMs={null}
+          summary={pageReachSummary(reach)}
+          pointLabel={(i) => ({ at: `Page ${i + 1}`, value: `${Math.round(reach[i] ?? 0)}% saw it` })}
+          endLabels={ends}
+          testId="insights-page-reach"
+        />
+      </Section>
+      <Section title="Time per page" aside={longest !== null ? `Longest on page ${longest}` : undefined}>
+        <RetentionChart
+          values={timeShares(medianMs)}
+          durationMs={null}
+          summary={pageTimeSummary(medianMs)}
+          pointLabel={(i) => ({ at: `Page ${i + 1}`, value: formatWatched(medianMs[i] ?? 0) })}
+          endLabels={ends}
+          scaleLabels={[formatWatched(maxMs), formatWatched(maxMs / 2), "0:00"]}
+          testId="insights-page-time"
+        />
+      </Section>
+    </div>
   );
 }
 

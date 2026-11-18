@@ -101,6 +101,10 @@ export interface ServerCapabilities {
    * so the type matches the wire.
    */
   drive_invite_link_envelopes?: boolean;
+  /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
+  drive_moves?: boolean;
+  /** Insights for folder links: which files were opened, and by whom. */
+  folder_share_insights?: boolean;
 }
 
 /**

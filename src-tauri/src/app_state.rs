@@ -215,6 +215,9 @@ pub struct AppState {
     /// removal), wholesale on `SyncReset` and logout. See
     /// `crate::sync::listing_cache`.
     pub remote_listing_cache: std::sync::Arc<crate::sync::listing_cache::RemoteListingCache>,
+    /// Cancel flags of the moves between drives running now, by the id the
+    /// webview gave each. See `crate::sync::drive_move`.
+    pub drive_moves: crate::sync::drive_move::DriveMoveJobs,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -434,6 +437,7 @@ impl AppState {
             folder_entity_sync: std::sync::Arc::new(crate::sync::folder_entries_reconcile::PerLabelThrottle::new()),
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             remote_listing_cache: std::sync::Arc::default(),
+            drive_moves: crate::sync::drive_move::DriveMoveJobs::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),
