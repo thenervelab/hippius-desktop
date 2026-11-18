@@ -52,6 +52,7 @@ import { RetentionChart } from "./RetentionChart";
 import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
 import { saveInsightsCsv } from "./exportCsv";
 import { NdaTab, useNdaAccepts } from "./NdaTab";
+import { PeopleTab, useGroupInsights } from "./PeopleTab";
 import {
   COMPARE_PLANS,
   PRICING_URL,
@@ -597,6 +598,8 @@ function InsightsPanelFor({
   });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
   const ndaAccepts = useNdaAccepts(shareToken);
+  // Insights by person, when the link's file went to more than one link.
+  const group = useGroupInsights(shareToken);
   const settings = switches.current.data ?? null;
   // What the link has turned off, said once in the header's line; the gear
   // changes it.
@@ -632,6 +635,7 @@ function InsightsPanelFor({
     tabs.push({ key: "comments", label: "Comments", count: moderation.comments.isSuccess ? commentList.length : null });
   }
   if (insights.isSuccess) tabs.push({ key: "viewers", label: "Viewers", count: viewers ? viewers.length : null });
+  if (group.shown) tabs.push({ key: "people", label: "People", count: group.count });
   // Only on a server with document views (Rust sends `pages` only then).
   const pages = insights.data?.pages ?? null;
   if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ key: "pages", label: "Pages", count: null });
@@ -689,6 +693,8 @@ function InsightsPanelFor({
             onTurnOn={openSettings}
           />
         );
+      case "people":
+        return <PeopleTab state={group} />;
       case "nda":
         return nda?.content ?? null;
     }
