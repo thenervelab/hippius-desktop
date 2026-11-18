@@ -56,7 +56,7 @@ export const COPY_FAILED = "Couldn't copy the link.";
 export const SHOW_LINK = "Show full link";
 export const HIDE_LINK = "Hide full link";
 export const UNLOCK_TO_COPY = "Unlock to copy";
-export const LINK_LOCKED_NOTE = "Unlock Hippius on this computer to see and copy this link.";
+export const LINK_LOCKED_NOTE = "Unlock Hippius Drive on this computer to see and copy this link.";
 export const LINK_UNAVAILABLE_NOTE =
   "This link was made somewhere else and its key isn't on this computer, so it can't be copied here.";
 export const LINK_NEEDS_PASSWORD = "People also need the link's password to open it.";

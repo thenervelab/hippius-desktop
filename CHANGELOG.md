@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **A link of its own for each person.** After making a file link, type the names or emails of the people it goes to and each one gets a separate link to the same file, with no second upload. Copy a link, copy them all, or open one in your mail app, and turn off one person's link while the others keep working. Insights gains a People tab showing who opened their link, how often and, for a document, how far they read. Names stay private to you.
 - **Export a link's viewers as a spreadsheet.** Insights has an Export CSV button beside Link settings that saves who viewed, how often, when they last looked, how much they watched and, for a document, how many pages they read, in the same columns as the web. You choose where the file goes, and it opens cleanly in Excel, Numbers or Google Sheets.
 - **Ask viewers to accept an NDA.** A file link can now ask people to accept your terms before the file opens, and its Insights show who accepted and when. On paid Drive plans; the text stays private to you and your viewers.
 - **Insights for folder links, and views at a glance on Shared Links.** A folder link now has Insights, like a file link: which files were opened, how many times and by how many people, how far people read each document and how long they spent on it, and who opened what. Turn a folder link's Insights on or off, and save its activity as a CSV file. Shared Links also shows each link's views and comments, with an Insights button on every row. Who opened what comes with paid Drive plans.
@@ -77,6 +78,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
 - **Clearer page charts for shared documents.** The Pages tab in a document link's Insights now shows two charts, as on the web: where people stopped reading, with the page after which most left, and the time spent on each page, with the page people spent longest on. Point at a chart, or use the arrow keys, to read any page.
 - **Dragging works the way Finder does.** Drop on any row of an open folder, file or subfolder, at any depth, and the item goes into the folder that row belongs to, with that whole folder lit up while you hover. In Move to…, New folder now has its own Create folder and Cancel buttons, then opens the new folder ready to move into.

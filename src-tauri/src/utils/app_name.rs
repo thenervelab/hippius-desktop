@@ -1,0 +1,98 @@
+//! The name the app shows people: "Hippius Drive".
+//!
+//! The DISPLAY name and the BUNDLE name are deliberately different.
+//! `productName` in `tauri.conf.json` stays "Hippius": Tauri derives the
+//! macOS bundle folder (`Hippius.app`), the binary, the Windows install
+//! folder, uninstall entry and MSI upgrade code, the Linux package and
+//! `.desktop` file, and every release asset name from it. Renaming it would
+//! leave existing installs beside a second copy instead of updating them, and
+//! break the release scripts that look for `Hippius.app`. So only what people
+//! read changes: the window title, the tray, the macOS menu bar
+//! (`CFBundleName` in `Info.plist`) and the app menu below.
+//!
+//! Pinned against `tauri.conf.json` and `Info.plist` by this module's tests.
+
+/// What the app calls itself wherever it names the app.
+pub const APP_DISPLAY_NAME: &str = "Hippius Drive";
+
+/// The macOS app menu (the bold one beside the Apple menu), with the app's
+/// display name in About, Hide and Quit.
+///
+/// Tauri's default menu takes those from `productName`, which stays "Hippius"
+/// (see the module docs), so this swaps in an app submenu that names the app
+/// "Hippius Drive" and keeps every other default menu (Edit, View, Window,
+/// Help) exactly as Tauri builds it.
+#[cfg(target_os = "macos")]
+pub fn macos_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu};
+
+    let menu = Menu::default(app)?;
+    let pkg = app.package_info();
+    let config = app.config();
+    let about = AboutMetadata {
+        name: Some(APP_DISPLAY_NAME.to_string()),
+        version: Some(pkg.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config.bundle.publisher.clone().map(|p| vec![p]),
+        ..Default::default()
+    };
+    let app_menu = Submenu::with_items(
+        app,
+        APP_DISPLAY_NAME,
+        true,
+        &[
+            &PredefinedMenuItem::about(app, Some(&format!("About {APP_DISPLAY_NAME}")), Some(about))?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::services(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, Some(&format!("Hide {APP_DISPLAY_NAME}")))?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, Some(&format!("Quit {APP_DISPLAY_NAME}")))?,
+        ],
+    )?;
+    // On macOS the default menu's first entry is the app submenu.
+    menu.remove_at(0)?;
+    menu.prepend(&app_menu)?;
+    Ok(menu)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::APP_DISPLAY_NAME;
+
+    fn conf() -> serde_json::Value {
+        serde_json::from_str(include_str!("../../tauri.conf.json")).expect("tauri.conf.json parses")
+    }
+
+    /// The `<string>` right after `<key>{key}</key>` in Info.plist.
+    fn plist_string(key: &str) -> Option<String> {
+        let plist = include_str!("../../Info.plist");
+        let after = plist.split(&format!("<key>{key}</key>")).nth(1)?;
+        let start = after.find("<string>")? + "<string>".len();
+        let end = after.find("</string>")?;
+        Some(after[start..end].trim().to_string())
+    }
+
+    /// `productName` names the bundle folder, the Windows install and the
+    /// Linux package. A rename there ships a second app beside every
+    /// existing install instead of updating it, so it must not ride along
+    /// with a display-name change.
+    #[test]
+    fn the_bundle_name_stays_hippius_so_installs_update_in_place() {
+        assert_eq!(conf()["productName"].as_str(), Some("Hippius"));
+        assert_eq!(plist_string("CFBundleExecutable").as_deref(), Some("Hippius"));
+        assert_eq!(plist_string("CFBundleIdentifier").as_deref(), Some("hippius.com"));
+        assert_eq!(conf()["identifier"].as_str(), Some("hippius.com"));
+    }
+
+    /// The macOS menu bar shows `CFBundleName`; it must say what the window
+    /// title and the app menu say.
+    #[test]
+    fn the_menu_bar_name_is_the_display_name() {
+        assert_eq!(plist_string("CFBundleName").as_deref(), Some(APP_DISPLAY_NAME));
+        assert_eq!(plist_string("CFBundleDisplayName").as_deref(), Some(APP_DISPLAY_NAME));
+        // macOS truncates a CFBundleName longer than 15 characters.
+        assert!(APP_DISPLAY_NAME.chars().count() <= 15);
+    }
+}

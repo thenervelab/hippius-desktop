@@ -577,6 +577,10 @@ fn main() {
             crate::shares::nda::share_set_nda,
             crate::shares::nda::share_remove_nda,
             crate::shares::nda::share_nda_accepts,
+            crate::shares::recipients::share_recipient_links,
+            crate::shares::recipients::share_add_recipient_links,
+            crate::shares::recipients::share_revoke_recipient_link,
+            crate::shares::recipients::share_group_insights,
             crate::shares::insights::share_link_settings_default,
             crate::shares::insights::share_switches_in_plan,
             crate::shares::insights::share_get_notification_preferences,
@@ -964,6 +968,11 @@ fn main() {
     } else {
         builder
     };
+
+    // The app menu names the app "Hippius Drive"; Tauri's default would say
+    // "Hippius", its bundle name (see utils::app_name).
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(crate::utils::app_name::macos_menu);
 
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");

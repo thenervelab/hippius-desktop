@@ -26,7 +26,7 @@ export function confirmCopy(
     description:
       `Only do this if you emptied “${drive.label}” on purpose. ` +
       `${files(drive.syncedCount)} in this drive will be deleted from ${device} to match Hippius. ` +
-      "This cannot be undone from Hippius Desktop.",
+      "This cannot be undone from Hippius Drive.",
     confirm: `Remove ${files(drive.syncedCount)}`,
   };
 }

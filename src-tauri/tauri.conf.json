@@ -37,7 +37,7 @@
     "windows": [
       {
         "dragDropEnabled": true,
-        "title": "Hippius",
+        "title": "Hippius Drive",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {

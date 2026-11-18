@@ -25,7 +25,7 @@ export function HippiusBrandMark({
           textClassName,
         )}
       >
-        Hippius
+        Hippius Drive
       </span>
     </>
   );

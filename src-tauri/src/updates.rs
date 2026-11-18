@@ -149,7 +149,7 @@ fn updater_for(app: &AppHandle, channel: ReleaseChannel, cross_channel: bool) ->
     // the only one of the three that a source edit can realistically cause.
     let misconfigured = |err: &dyn std::fmt::Display| {
         error!(?channel, %err, "the updater could not be pointed at this channel's manifest");
-        AppError::Other("This build's updater is not configured correctly. Reinstall Hippius to update.".into())
+        AppError::Other("This build's updater is not configured correctly. Reinstall Hippius Drive to update.".into())
     };
 
     let url = Url::parse(manifest).map_err(|err| misconfigured(&err))?;

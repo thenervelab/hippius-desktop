@@ -178,7 +178,7 @@ describe("failedRowAction", () => {
 describe("isRetryableFailedFile", () => {
   it("decides by kind, so a refusal's own text is never read as retryable", () => {
     const refusal =
-      "Hippius couldn't read this file. Check that it isn't locked or open in another app; " +
+      "Hippius Drive couldn't read this file. Check that it isn't locked or open in another app; " +
       "it syncs once it can be read.";
     expect(isRetryableFailedFile({ kind: "refused", error: refusal })).toBe(false);
     expect(isRetryableFailedFile({ kind: "network", error: UNDECRYPTABLE_MESSAGE })).toBe(true);

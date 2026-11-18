@@ -142,7 +142,7 @@ export function LoginForm({
         <LogoMark />
 
         <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.75rem,28px)] leading-[min(2.25rem,36px)] tracking-[-0.03em]">
-          Sign In to Hippius
+          Sign In to Hippius Drive
         </h1>
 
         <div className="flex flex-col gap-[min(1rem,16px)] items-center w-full">

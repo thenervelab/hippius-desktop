@@ -372,7 +372,7 @@ impl std::fmt::Display for NotReadyKind {
                 )
             }
             Self::ScreenRecordingPermission => {
-                write!(f, "Hippius needs permission to record your screen before it can take a capture.")
+                write!(f, "Hippius Drive needs permission to record your screen before it can take a capture.")
             }
             Self::CaptureDestinationUnset => {
                 write!(f, "Choose where your captures should be saved first.")

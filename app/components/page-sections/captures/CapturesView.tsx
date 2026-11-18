@@ -196,7 +196,7 @@ export function CapturesEmptyState({ place, onSetUp }: { place?: string; onSetUp
       <h2 className="mt-4 text-base font-medium text-grey-10 dark:text-white">No captures yet</h2>
       <p className="mt-1 max-w-md text-sm text-grey-50 dark:text-grey-dark-600">
         {onSetUp
-          ? `Record your screen or take a screenshot. The first time, Hippius makes a folder for your captures${
+          ? `Record your screen or take a screenshot. The first time, Hippius Drive makes a folder for your captures${
               place ? ` (${place})` : ""
             }, backs it up as a drive of its own, and copies a link you can paste anywhere.`
           : "Record your screen or take a screenshot. It lands here and a link you can paste anywhere is copied."}

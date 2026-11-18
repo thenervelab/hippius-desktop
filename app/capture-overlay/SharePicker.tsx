@@ -291,7 +291,7 @@ export default function SharePicker({ kind, firstTab, barDisplayId, onChoose, on
             Choose what to share
           </h2>
           <p className={`mt-0.5 text-[12.5px] ${GLASS_MUTED}`}>
-            Hippius will {verb} the {tab === "window" ? "window" : "screen"} you choose.
+            Hippius Drive will {verb} the {tab === "window" ? "window" : "screen"} you choose.
           </p>
           <div role="tablist" aria-label="What to share" className="mt-3 inline-flex rounded-[9px] bg-[#000]/35 p-0.5">
             {TABS.map(({ tab: t, label, Icon }) => (
