@@ -51,6 +51,7 @@ import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQuer
 import { RetentionChart } from "./RetentionChart";
 import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
 import { saveInsightsCsv } from "./exportCsv";
+import { NdaTab, useNdaAccepts } from "./NdaTab";
 import {
   COMPARE_PLANS,
   PRICING_URL,
@@ -100,12 +101,11 @@ import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, HAIRLINE, ICON_BUTTON, MUTED, RING, 
 export const INSIGHTS_PANEL_WIDTH_PX = 440;
 
 /**
- * The NDA tab's slot. Nothing passes it yet, so the tab never shows. To turn
- * it on, read the link's NDA accepts in `InsightsPanelFor` (or pass them in
- * from `ShareInsightsSheet`) and hand the panel
- * `nda={{ count, content: <NdaAcceptsTab ... /> }}`: the tab then appears
- * last, after Reactions, with its count, and its body scrolls like the
- * others. `count` is `null` while the accepts load.
+ * The NDA tab's slot. `InsightsPanelFor` fills it itself from the link's NDA
+ * accepts (`useNdaAccepts`, `NdaTab`) once the link has a text or any
+ * accepts; a caller may hand one in instead. The tab appears last, after
+ * Reactions, with its count, and its body scrolls like the others. `count`
+ * is `null` while more accepts are still to load.
  */
 export interface NdaTabSlot {
   count: number | null;
@@ -522,7 +522,7 @@ function InsightsPanelFor({
   file,
   onClose,
   focusHeading = false,
-  nda,
+  nda: ndaSlot,
 }: {
   shareToken: string;
   fileName: string;
@@ -596,6 +596,7 @@ function InsightsPanelFor({
     enabled: commentsEnabled,
   });
   const moderation = useCommentModeration(shareToken, commentsEnabled);
+  const ndaAccepts = useNdaAccepts(shareToken);
   const settings = switches.current.data ?? null;
   // What the link has turned off, said once in the header's line; the gear
   // changes it.
@@ -611,6 +612,21 @@ function InsightsPanelFor({
   const loading = insights.isPending;
 
   const viewers = insights.data?.viewers.state === "shown" ? insights.data.viewers.value : null;
+  // The NDA tab names a person the way the Viewers tab does.
+  const viewerNames = useMemo(
+    () => Object.fromEntries((viewers ?? []).map((v) => [v.viewerId, v.name ?? v.email ?? null])),
+    [viewers],
+  );
+  // The NDA tab, once the link has a text or any accepts (Rust says whether
+  // the server has NDAs). A slot handed in by the caller wins.
+  const nda: NdaTabSlot | undefined =
+    ndaSlot ??
+    (ndaAccepts.shown
+      ? {
+          count: ndaAccepts.query.hasNextPage ? null : ndaAccepts.count,
+          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} />,
+        }
+      : undefined);
   const tabs: InsightsTabItem[] = [];
   if (commentsEnabled) {
     tabs.push({ key: "comments", label: "Comments", count: moderation.comments.isSuccess ? commentList.length : null });

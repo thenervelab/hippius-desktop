@@ -113,6 +113,11 @@ pub struct ServerCapabilities {
     /// on older servers and off in production until the share page is ready:
     /// no "Ask for email" switch is shown and no gate request is sent.
     pub share_gates: bool,
+    /// NDA texts on file links (`PUT|DELETE /v1/shares/{token}/nda`,
+    /// `GET .../nda/accepts`, hcfs #1186): viewers accept a text before the
+    /// file opens. Absent on older servers and on one without a gate key: no
+    /// "Ask to accept an NDA" switch and no NDA tab, and nothing is sent.
+    pub share_nda: bool,
     /// Link-secret folder links (thenervelab/hcfs#665): a folder link's
     /// fragment is a per-link secret (`#s=` / `#sp=`) and the server keeps the
     /// drive key sealed under it. Advertised only once the console can open
@@ -257,7 +262,7 @@ mod tests {
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
-            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"#,
+            r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
             r#""drive_moves":true,"folder_share_insights":true}"#,
         ))
         .expect("parse");
@@ -280,6 +285,7 @@ mod tests {
         assert!(caps.share_document_views);
         assert!(caps.share_download_switch);
         assert!(caps.share_gates);
+        assert!(caps.share_nda);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
@@ -311,6 +317,7 @@ mod tests {
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
+                "share_nda",
                 "share_notifications",
                 "share_preview",
                 "share_reaction_moments",
@@ -340,6 +347,7 @@ mod tests {
         assert!(!old.share_document_views, "a server without document views shows no Pages tab");
         assert!(!old.share_download_switch, "a server without the download switch is never sent one");
         assert!(!old.share_gates, "a server without email gates offers no Ask for email");
+        assert!(!old.share_nda, "a server without NDA texts offers no NDA switch or tab");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="

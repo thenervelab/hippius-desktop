@@ -17,6 +17,7 @@ import {
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings from "./EmailGateSettings";
+import NdaSettings from "./NdaSettings";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
@@ -193,6 +194,17 @@ export function LinkSettingsPopover({
       {/* Drawn only where Rust says the server has email gates. */}
       <div className="mt-2.5 empty:hidden">
         <EmailGateSettings
+          layout="list"
+          shareToken={shareToken}
+          onUpgrade={() => {
+            onLeave();
+            router.push(BILLING_ROUTE);
+          }}
+        />
+      </div>
+      {/* Drawn only where Rust offers it: never on a password link without a text. */}
+      <div className="mt-2.5 empty:hidden">
+        <NdaSettings
           layout="list"
           shareToken={shareToken}
           onUpgrade={() => {

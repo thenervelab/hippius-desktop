@@ -10,6 +10,7 @@ import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../Sh
 import { OFFLINE_LINE, UNREACHABLE_LINE } from "../insightsView";
 import { DOWNLOAD_SWITCH } from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { GATE_LABEL } from "../EmailGateSettings";
+import { NDA_LABEL } from "../NdaSettings";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
@@ -755,6 +756,52 @@ describe("ShareInsightsSheet", () => {
     const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
     expect(ask).toHaveAttribute("aria-checked", "true");
     expect(within(settings).getByRole("textbox", { name: "Only allow" })).toBeInTheDocument();
+  });
+
+  it("offers Ask to accept an NDA in Link settings and an NDA tab once the link has a text", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_nda: { offered: true, on: true, text: "Keep it quiet.", editable: true, inPlan: true },
+      share_nda_accepts: {
+        offered: true,
+        hasText: true,
+        text: "Keep it quiet.",
+        // Viewer "b" is "Ahmad" on the Viewers tab.
+        accepts: [{ id: 1, viewerId: "b", email: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
+        nextAfter: null,
+      },
+    });
+    renderSheet();
+    const panel = await showTab("NDA");
+    expect(screen.getByRole("tab", { name: "NDA 1" })).toBeInTheDocument();
+    expect(within(panel).getByTestId("nda-current-text")).toHaveTextContent("Keep it quiet.");
+    expect(within(panel).getByTestId("nda-accept")).toHaveTextContent("Ahmad");
+
+    const settings = await openSettings();
+    expect(await within(settings).findByRole("switch", { name: NDA_LABEL })).toHaveAttribute("aria-checked", "true");
+    expect(within(settings).getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it quiet.");
+  });
+
+  it("has no NDA tab or switch on a server without NDA texts", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_nda: { offered: false, on: false, text: null, editable: false, inPlan: null },
+      share_nda_accepts: { offered: false, hasText: false, text: null, accepts: [], nextAfter: null },
+    });
+    renderSheet();
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_nda_accepts", { shareToken: "tok", after: 0 }));
+    expect(screen.queryByRole("tab", { name: (n) => n.startsWith("NDA") })).toBeNull();
+    const settings = await openSettings();
+    await within(settings).findByRole("switch", { name: "Insights" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_nda", { shareToken: "tok" }));
+    expect(within(settings).queryByRole("switch", { name: NDA_LABEL })).toBeNull();
   });
 
   it("has no Ask for email on a server without email gates", async () => {

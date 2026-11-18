@@ -1400,7 +1400,7 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 
 /// The comment key for `token`: from the share key this device holds, or the
 /// one its owner wrap brings back (the same hydration Shared Links runs).
-async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
     let Ok(pool) = state.pool() else {
         return Err(KeyUnavailable::NotOnDevice);
     };
