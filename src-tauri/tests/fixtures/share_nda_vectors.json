@@ -1,0 +1,19 @@
+{
+  "about": "NDA texts sealed by the web console's sealNdaText (src/lib/files/share/nda/nda-crypto.ts) with a fixed nonce. The comment key is HKDF-SHA256 of share_key_hex, as in share_comments_vectors.json. Desktop must seal each text to these exact bytes and open each one, so a text set in either app opens in the other. text_hash is BLAKE3 derive_key(\"hippius.hcfs.share-nda-text.v1\", text); the first case is the hcfs docs' known answer.",
+  "share_key_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "token": "tok_abcdefghijklmnopqrst",
+  "vectors": [
+    {
+      "text": "I will keep this confidential.",
+      "text_hash": "gzXRfm1f5AOB9+S/D/nsZ5nPZVXEf4zLdog/pU4bdaY=",
+      "text_ct": "CMVHs3TLjFHOPfYRpVEpMBY6WxjZQyzR6XbxQEUZGTr3nrY/01+4b/vnDnGLPA==",
+      "text_nonce": "BwcHBwcHBwcHBwcH"
+    },
+    {
+      "text": "Keep it to yourself.\nThanks. Ünïcödé ✓",
+      "text_hash": "alWJ2PIyXkMtidCqT5OpQsADX5Bom85sE3frGB0j9Ew=",
+      "text_ct": "fgcALlDjl6jgVZSb/LcOyZ5/74wjeMix24n+YmUfS4+xZRbWSq1tAaWLVbTjDxoivcbr1FrzZ5Pnier9",
+      "text_nonce": "CQkJCQkJCQkJCQkJ"
+    }
+  ]
+}

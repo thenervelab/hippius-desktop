@@ -11,6 +11,7 @@
 //! rename issued from a stale listing from silently clobbering a newer
 //! change made elsewhere.
 
+use hcfs_shared::revision_id::RevisionId;
 use std::collections::HashMap;
 
 use ed25519_dalek::Signer;
@@ -41,7 +42,7 @@ const MAX_STATE_PAGES: u32 = 40;
 /// listing may be minutes old, and a `base_revision_id` is precisely the
 /// claim "I am changing the version I last saw". Sourcing it from stale
 /// data would defeat the check it exists to make.
-async fn current_revision_id(client: &hcfs_client::client::HcfsClient, ss58: &str, folder_hash: &str, path_hash: &[u8; 32]) -> Result<[u8; 32]> {
+async fn current_revision_id(client: &hcfs_client::client::HcfsClient, ss58: &str, folder_hash: &str, path_hash: &[u8; 32]) -> Result<RevisionId> {
     let mut offset = 0u32;
     for _ in 0..MAX_STATE_PAGES {
         let page = client
@@ -191,7 +192,7 @@ pub struct RemoteEntry {
     /// Drive-relative, `/`-separated, no leading or trailing slash.
     pub path: String,
     pub path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
     /// `BLAKE3(owner ss58 || plaintext)` as the server lists it. A move
     /// between drives checks the bytes it read against it.
     pub salted_hash: [u8; 32],
@@ -219,7 +220,7 @@ pub struct RemoteFolderTree {
 pub struct PlannedRename {
     pub old_path_hash: [u8; 32],
     pub new_path: String,
-    pub base_revision_id: [u8; 32],
+    pub base_revision_id: RevisionId,
 }
 
 /// Everything a folder rename has to do, in the three parts it takes.
@@ -747,7 +748,7 @@ mod tests {
         RemoteEntry {
             path: path.to_string(),
             path_hash: [seed; 32],
-            revision_id: [seed.wrapping_add(100); 32],
+            revision_id: RevisionId::from_bytes([seed.wrapping_add(100); 32]),
             salted_hash: [seed.wrapping_add(50); 32],
             size_bytes: u64::from(seed),
         }
@@ -831,8 +832,8 @@ mod tests {
     fn carries_each_files_own_base_revision() {
         let t = tree(&["Trip"], &[file("Trip/a.txt", 1), file("Trip/b.txt", 2)]);
         let plan = plan_folder_rename(&t, "Trip", "Holiday").expect("plan");
-        assert_eq!(plan.files[0].base_revision_id, [101u8; 32]);
-        assert_eq!(plan.files[1].base_revision_id, [102u8; 32]);
+        assert_eq!(plan.files[0].base_revision_id, RevisionId::from_bytes([101u8; 32]));
+        assert_eq!(plan.files[1].base_revision_id, RevisionId::from_bytes([102u8; 32]));
         assert_eq!(plan.files[0].old_path_hash, [1u8; 32]);
         assert_eq!(plan.files[1].old_path_hash, [2u8; 32]);
     }

@@ -287,6 +287,15 @@ export function setNotificationPreferences(preferences: NotificationPreferences)
   return invoke<void>("share_set_notification_preferences", { preferences });
 }
 
+/**
+ * Whether the share-link emails can reach this account: `false` for an
+ * access-key account, which has no email address. Rust decides; rejects when
+ * it cannot tell.
+ */
+export function canReceiveLinkEmails(): Promise<boolean> {
+  return invoke<boolean>("share_can_receive_link_emails");
+}
+
 /** The capture card's Insights: Rust brings this window forward with it. */
 export const CAPTURE_OPEN_INSIGHTS_EVENT = "capture_open_insights";
 

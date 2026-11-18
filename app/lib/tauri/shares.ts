@@ -103,11 +103,14 @@ export interface ServerCapabilities {
   drive_invite_link_envelopes?: boolean;
   /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
   drive_moves?: boolean;
+  /** Insights for folder links: which files were opened, and by whom. */
+  folder_share_insights?: boolean;
 }
 
 /**
  * Returned by `hcfs_create_share`. `shareUrl` already includes the
- * `#k=<key>` fragment so the FE can hand it directly to the user; the
+ * fragment (`#s=` / `#sp=`, or `#k=` / `#p=` from an older server) so the FE
+ * can hand it directly to the user; the
  * fragment is never transmitted to the server (browsers don't send
  * fragments on navigation).
  */
@@ -290,10 +293,11 @@ export interface ShareSummary {
   /** RFC 3339 timestamp, or `null` when the link never expires. */
   expiresAt: string | null;
   /**
-   * Recipient URL, or `null` if the key is unknown locally. Carries a `#k=`
-   * fragment for a public share and a `#p=` one for a password-protected
-   * share — the backend derives it from the stored secret's kind, so this can
-   * never be a password-free link to a protected share.
+   * Recipient URL, or `null` if the key is unknown locally. Carries a `#s=`
+   * (or legacy `#k=`) fragment for a public share and a `#sp=` (or `#p=`) one
+   * for a password-protected share — the backend derives it from the stored
+   * secret's kind, so this can never be a password-free link to a protected
+   * share.
    */
   shareUrl: string | null;
   /**

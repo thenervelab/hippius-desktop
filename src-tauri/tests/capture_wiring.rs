@@ -3386,8 +3386,8 @@ fn no_password_share_sends_a_chat_preview() {
     assert!(confirm.contains("preview::allowed(&choice, chat_preview.unwrap_or(false))"));
     let set = fn_body(&shares, "pub async fn hcfs_set_share_preview(");
     assert!(
-        set.contains("ShareSecret::Public(_)"),
-        "turning it back on checks the link has no password"
+        set.contains("preview::secret_takes_preview("),
+        "turning it back on checks the link has no password (`secret_takes_preview` holds the rule, unit-tested in preview.rs)"
     );
 }
 

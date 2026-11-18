@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri_project_lib::sync::drive_move::api::MoveApi;
 use tauri_project_lib::sync::drive_move::plan::{PlannedCopy, RemoteEntryKey};
-use tauri_project_lib::sync::drive_move::wire::MoveFolder;
+use tauri_project_lib::sync::drive_move::wire::{MoveFolder, revoked_notice};
 use tauri_project_lib::sync::drive_move::{CopyEvent, CopyJob, MoveFailure, Plaintext, Staging, commit_staged, stage_all};
 use tauri_project_lib::sync::identity::DriveIdentity;
 
@@ -155,7 +155,7 @@ async fn fixture(files: &[(&str, Vec<u8>)]) -> Fixture {
                     source: RemoteEntryKey {
                         path: (*path).to_string(),
                         path_hash: hcfs_crypto::compute_path_hash(path),
-                        revision_id: [i as u8 + 1; 32],
+                        revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([i as u8 + 1; 32]),
                         salted_hash: salted,
                         size_bytes: size,
                     },
@@ -231,7 +231,7 @@ async fn open_stage_each_then_commit() {
             .iter()
             .map(|v| v.as_u64().unwrap() as u8)
             .collect();
-        assert_eq!(expected, job.copy.source.revision_id.to_vec(), "names the revision it read");
+        assert_eq!(expected, job.copy.source.revision_id.as_bytes().to_vec(), "names the revision it read");
         let (salted, _) =
             hcfs_crypto::compute_salted_hash(&mut std::fs::File::open(f.dir.path().join(&job.copy.source.path)).unwrap(), DEST_OWNER).unwrap();
         let manifest_salted: Vec<u8> = manifest["salted_hash"]
@@ -274,7 +274,7 @@ async fn open_stage_each_then_commit() {
     assert_eq!(commit["files"].as_array().unwrap().len(), 2);
     assert_eq!(commit["folders"][0]["to"], "Albums/Trip");
     assert_eq!(
-        result.revoked.notice().as_deref(),
+        revoked_notice(&result.revoked).as_deref(),
         Some("Its share link was turned off and 1 person lost access.")
     );
     assert_eq!(f.mock.aborts.load(Ordering::SeqCst), 0);

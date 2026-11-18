@@ -6,6 +6,10 @@ import {
   PAGES_LOCK_BODY_NOT_COUNTING,
   PAGES_LOCK_TITLE,
   biggestPageDrop,
+  longestPage,
+  pageReachSummary,
+  pageTimeSummary,
+  timeShares,
   pagesLockCopy,
   pagesSeenLabel,
   pagesTabShown,
@@ -420,5 +424,23 @@ describe("the Pages tab helpers", () => {
   it("locks with its own words, counting or not", () => {
     expect(pagesLockCopy({ notCounting: false })).toEqual({ title: PAGES_LOCK_TITLE, body: PAGES_LOCK_BODY });
     expect(pagesLockCopy({ notCounting: true }).body).toBe(PAGES_LOCK_BODY_NOT_COUNTING);
+  });
+});
+
+describe("a document's page charts", () => {
+  it("finds the page people spent longest on, and none when no time was counted", () => {
+    expect(longestPage([4_200, 9_000, 900])).toBe(2);
+    expect(longestPage([0, 0])).toBeNull();
+  });
+
+  it("draws each page's time as a share of the longest", () => {
+    expect(timeShares([5_000, 10_000, 0])).toEqual([50, 100, 0]);
+    expect(timeShares([0, 0])).toEqual([0, 0]);
+  });
+
+  it("names each chart by what it shows", () => {
+    expect(pageReachSummary([100, 75, 30, 25])).toBe("Where people stopped: 25% reached page 4. Most left after page 2.");
+    expect(pageTimeSummary([4_200, 3_000])).toBe("Time per page: longest on page 1, 0:04.");
+    expect(pageTimeSummary([0, 0])).toBe("Time per page: none counted yet.");
   });
 });

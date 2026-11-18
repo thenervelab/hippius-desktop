@@ -1017,7 +1017,7 @@ async fn execute(
     results.sort_by_key(|(index, _)| *index);
     Ok(DriveMoveOutcome {
         results: results.into_iter().map(|(_, r)| r).collect(),
-        revoked: committed.revoked.notice(),
+        revoked: wire::revoked_notice(&committed.revoked),
         ..DriveMoveOutcome::default()
     })
 }
@@ -1126,7 +1126,7 @@ mod tests {
             files: vec![RemoteEntry {
                 path: "F/a.txt".into(),
                 path_hash: [0; 32],
-                revision_id: [0; 32],
+                revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([0; 32]),
                 salted_hash: [0; 32],
                 size_bytes: 1,
             }],

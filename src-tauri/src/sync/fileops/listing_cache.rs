@@ -362,7 +362,7 @@ mod tests {
 
         assert_eq!(row.salted_hash.as_bytes(), &[8; 32]);
         assert_eq!(row.size_bytes, 7);
-        assert_eq!(row.revision_id, [9; 32]);
+        assert_eq!(row.revision_id.as_bytes(), &[9; 32]);
     }
 
     /// The regression this exists for: a screen of thumbnails is one listing,

@@ -75,7 +75,16 @@ import {
   folderShareFeatureEnabledAtom,
   folderShareRevokeByHashEnabledAtom,
   shareFeatureEnabledAtom,
+  shareListingCountsEnabledAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
+import { getLinkActivity } from "@/app/lib/tauri/folderInsights";
+import { InsightsButton } from "@/components/page-sections/drive/CaptureInsightsButton";
+import {
+  folderInsightsAtom,
+  folderShareInsightsEnabledAtom,
+  LINK_ACTIVITY_QUERY_KEY,
+  type FolderInsightsTarget,
+} from "@/components/page-sections/shares/folder-insights/folderInsightsTarget";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRelative } from "@/app/lib/utils/timeRelative";
@@ -93,6 +102,7 @@ import {
   OLD_LINK_BADGE,
   OLD_LINK_TOOLTIP,
   pickHistoryRowDisplay,
+  withLinkActivity,
   type ActiveShareRow,
 } from "./shareRowDisplay";
 import FolderShareScope from "@/app/(pages)/shares/FolderShareScope";
@@ -239,9 +249,21 @@ function MySharesContent() {
     refetchInterval: LIVE_DATA_REFRESH_MS,
   });
 
+  // Views, comments and each link's Insights switch, read by Rust from the
+  // same listings. Only on a server with Insights; the table never waits on it.
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
+  const { data: activity } = useQuery({
+    queryKey: [LINK_ACTIVITY_QUERY_KEY, polkadotAddress],
+    queryFn: () => getLinkActivity(),
+    enabled: Boolean(polkadotAddress) && shareEnabled && insightsEnabled,
+    staleTime: 0,
+    refetchOnWindowFocus: true,
+    refetchInterval: LIVE_DATA_REFRESH_MS,
+  });
+
   const mergedRows = React.useMemo(
-    () => mergeActiveShareRows(data, folderData),
-    [data, folderData],
+    () => withLinkActivity(mergeActiveShareRows(data, folderData), activity),
+    [data, folderData, activity],
   );
 
   const confirmRevoke = async () => {
@@ -636,6 +658,12 @@ function ActiveSharesTable({
   // separate flag. Unfetched capabilities read as false, which keeps the
   // controls disabled until the answer is known rather than the reverse.
   const revokeByHashEnabled = useAtomValue(folderShareRevokeByHashEnabledAtom);
+  // The Insights button column, and Views and Comments once the listing
+  // carries them (console parity).
+  const insightsEnabled = useAtomValue(shareInsightsEnabledAtom);
+  const listingCounts = useAtomValue(shareListingCountsEnabledAtom) && insightsEnabled;
+  const folderInsightsEnabled = useAtomValue(folderShareInsightsEnabledAtom);
+  const openFolderInsights = useSetAtom(folderInsightsAtom);
 
   const columns = React.useMemo(
     () => [
@@ -675,6 +703,48 @@ function ActiveSharesTable({
           return <LinkCell shareUrl={original.folder.shareUrl} />;
         },
       }),
+      ...(insightsEnabled
+        ? [
+            activeColumnHelper.display({
+              id: "insights",
+              header: "Insights",
+              enableSorting: false,
+              cell: ({ row }) => {
+                const original = row.original;
+                if (original.kind === "file") {
+                  return <InsightsButton share={original.file} fileName={original.file.filename} showCount={!listingCounts} />;
+                }
+                if (!folderInsightsEnabled) return null;
+                return (
+                  <InsightsButton
+                    share={{ shareToken: "", insightsOn: original.insightsOn ?? undefined }}
+                    fileName={original.folder.displayName}
+                    onOpen={() => openFolderInsights(folderInsightsTarget(original.folder, original.insightsOn))}
+                  />
+                );
+              },
+            }),
+          ]
+        : []),
+      ...(listingCounts
+        ? (["views", "comments"] as const).map((which) =>
+            activeColumnHelper.accessor((row) => (row.kind === "file" ? (row.file[which] ?? -1) : -2), {
+              id: which,
+              header: which === "views" ? "Views" : "Comments",
+              enableSorting: true,
+              cell: (info) => {
+                const row = info.row.original;
+                if (row.kind !== "file") return null;
+                const n = row.file[which];
+                return typeof n === "number" ? (
+                  <span className="font-medium tabular-nums text-grey-20 dark:text-grey-dark-200">{n}</span>
+                ) : (
+                  <span className="text-grey-50 dark:text-grey-dark-600">None</span>
+                );
+              },
+            }),
+          )
+        : []),
       activeColumnHelper.accessor(
         (row) => (row.kind === "file" ? row.file.plaintextSize : -1),
         {
@@ -779,12 +849,29 @@ function ActiveSharesTable({
               onReshare={onReshareFolder}
               canActByHash={revokeByHashEnabled}
               isBusy={original.folder.tokenHash === busyToken}
+              onViewInsights={
+                folderInsightsEnabled
+                  ? () => openFolderInsights(folderInsightsTarget(original.folder, original.insightsOn))
+                  : undefined
+              }
             />
           );
         },
       }),
     ],
-    [onCopy, onRevoke, onChangeExpiry, onChangeFolderExpiry, onReshareFolder, busyToken, revokeByHashEnabled],
+    [
+      onCopy,
+      onRevoke,
+      onChangeExpiry,
+      onChangeFolderExpiry,
+      onReshareFolder,
+      busyToken,
+      revokeByHashEnabled,
+      insightsEnabled,
+      listingCounts,
+      folderInsightsEnabled,
+      openFolderInsights,
+    ],
   );
 
   const table = useReactTable({
@@ -831,7 +918,7 @@ function ActiveSharesTable({
   return (
     <TableWrapper className="border-0 shadow-none bg-transparent dark:bg-transparent dark:border-0 dark:shadow-none rounded-none">
       <div ref={scrollerRef} className="overflow-x-auto custom-scrollbar-thin">
-        <Table className="min-w-[540px]">
+        <Table className={insightsEnabled ? (listingCounts ? "min-w-[820px]" : "min-w-[680px]") : "min-w-[540px]"}>
           <THead>
             {table.getHeaderGroups().map((hg) => (
               <Tr key={hg.id}>
@@ -932,6 +1019,18 @@ function FolderNameCell({ row }: { row: FolderShareSummary }) {
   );
 }
 
+/** What the folder Insights panel needs from a folder link's row. */
+function folderInsightsTarget(row: FolderShareSummary, insightsOn: boolean | null | undefined): FolderInsightsTarget {
+  return {
+    tokenHash: row.tokenHash,
+    name: row.displayName,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    revoked: row.revokedAt !== null,
+    insightsOn: insightsOn ?? null,
+  };
+}
+
 /**
  * Expiry presets offered in a live link's row menu, matching the create-time
  * chooser. Rendered as separate menu items rather than a nested submenu — the
@@ -1025,8 +1124,11 @@ function FolderActionsCell({
   onReshare,
   isBusy,
   canActByHash,
+  onViewInsights,
 }: {
   row: FolderShareSummary;
+  /** Opens the folder link's Insights; absent on a server without them. */
+  onViewInsights?: () => void;
   onCopy: (url: string | null) => void;
   /** Replace a link that carries the drive key; offered per `canReshare`. */
   onReshare: (tokenHash: string) => void;
@@ -1048,6 +1150,15 @@ function FolderActionsCell({
   const plan = folderShareRowPlan(row, undefined, canActByHash);
 
   const items: ActionItem[] = [
+    ...(onViewInsights
+      ? [
+          {
+            icon: <BarChart3 className="size-4" />,
+            itemTitle: VIEW_INSIGHTS_LABEL,
+            onItemClick: onViewInsights,
+          },
+        ]
+      : []),
     {
       icon: <CopyIcon className="size-4" />,
       itemTitle: "Copy link",

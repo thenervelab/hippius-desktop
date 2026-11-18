@@ -27,6 +27,8 @@ use image::{DynamicImage, ImageDecoder, Rgb, RgbImage};
 use tauri::Manager;
 use tracing::{debug, info, warn};
 
+use hcfs_client::client::share::ShareSecret;
+
 use super::commands::ShareChoice;
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
@@ -138,6 +140,20 @@ pub fn default_for(file_name: &str, is_folder: bool, is_capture: bool, captures_
 #[must_use]
 pub fn allowed(choice: &ShareChoice, wanted: bool) -> bool {
     wanted && matches!(choice, ShareChoice::Public)
+}
+
+/// Whether an existing link may be given a preview, from the secret this
+/// device holds for it: a public link, `#k=` or a link-secret `#s=` one
+/// (thenervelab/hcfs#1253), and never a password link, for the reason given
+/// at [`allowed`]. The preview is a plaintext picture sent with the owner's
+/// bearer, so the share key itself is not needed. A folder link secret is
+/// never a file link's.
+#[must_use]
+pub fn secret_takes_preview(secret: &ShareSecret) -> bool {
+    match secret {
+        ShareSecret::Public(_) | ShareSecret::FileLink(_) => true,
+        ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_) | ShareSecret::FolderLink(_) | ShareSecret::FolderLinkPrivate(_) => false,
+    }
 }
 
 /// `file_name` as the preview's title, cleaned to the server's rules: no
@@ -904,5 +920,17 @@ mod tests {
         assert!(!allowed(&private, false));
         assert!(allowed(&ShareChoice::Public, true));
         assert!(!allowed(&ShareChoice::Public, false), "switched off sends nothing");
+    }
+
+    /// A link-secret file link (`#s=`) is a public link and takes a preview
+    /// like a `#k=` one; its password form (`#sp=`) never does.
+    #[test]
+    fn an_existing_public_link_takes_a_preview_and_a_password_link_never_does() {
+        assert!(secret_takes_preview(&ShareSecret::Public([1; 32])));
+        assert!(secret_takes_preview(&ShareSecret::FileLink([1; 32])));
+        assert!(!secret_takes_preview(&ShareSecret::Private(vec![1; 89])));
+        assert!(!secret_takes_preview(&ShareSecret::FileLinkPrivate(vec![1; 89])));
+        assert!(!secret_takes_preview(&ShareSecret::FolderLink([1; 32])), "no file token holds one");
+        assert!(!secret_takes_preview(&ShareSecret::FolderLinkPrivate(vec![1; 89])));
     }
 }

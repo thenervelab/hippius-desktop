@@ -1,158 +1,67 @@
 //! The wire types of hcfs-server's `/v1/drive_moves` routes, and the
 //! sentence a person reads for each refusal.
 //!
-//! Defined here rather than imported: the pinned hcfs-shared predates the
-//! routes. Every shape follows `docs/public/api/drive-moves.md` and
-//! `hcfs-shared/src/network/drive_moves.rs` on hcfs main, and the tests at
-//! the bottom pin the JSON both sides send, so a bump to an hcfs rev that
-//! carries the types can swap these out and keep the tests.
+//! The request and result types are hcfs-shared's
+//! (`hcfs_shared::network::drive_moves`, and the ordinary session create's
+//! answer), re-exported so the move code names them in one place. What
+//! hcfs-shared does not have lives here: the commit's folder cap, the refusal
+//! and its sentence, and the success message's notice. The tests at the bottom pin the JSON both
+//! sides send, following `docs/public/api/drive-moves.md`.
 
-use hcfs_shared::network::CreateSessionRequest;
-use serde::{Deserialize, Serialize};
-
-/// Most files one move carries (`MAX_DRIVE_MOVE_FILES` on the server). A
-/// commit rewrites every file it moves in one transaction, so the server
-/// refuses more, and a folder must move whole in ONE commit.
-pub const MAX_DRIVE_MOVE_FILES: usize = 2_000;
+pub use hcfs_shared::network::{
+    CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, CreateSessionResult, DriveRef,
+    MAX_DRIVE_MOVE_FILES, MoveFolder, MoveRevoked, StageMoveSessionRequest,
+};
 
 /// Most folders one commit moves whole (`MAX_COMMIT_FOLDERS`).
 pub const MAX_COMMIT_FOLDERS: usize = 100;
 
-/// One drive, by its owner and folder hash.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DriveRef {
-    pub ss58_address: String,
-    pub folder_hash: String,
-}
-
-/// `POST /v1/drive_moves`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CreateDriveMoveRequest {
-    pub source: DriveRef,
-    pub dest: DriveRef,
-}
-
-/// The `Success` of `POST /v1/drive_moves`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CreateDriveMoveResult {
-    pub move_id: String,
-    /// Unix seconds; the hourly sweep aborts the move after it.
-    pub expires_at: i64,
-}
-
-/// `POST /v1/drive_moves/{move_id}/sessions`: an ordinary session create
-/// for the copy in the destination, plus the source file it replaces.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct StageMoveSessionRequest {
-    pub session: CreateSessionRequest,
-    pub source_path_hash: [u8; 32],
-    /// The source revision whose bytes were read and encrypted again. The
-    /// commit refuses the move if the source has moved on since.
-    pub expected_revision_id: [u8; 32],
-}
-
-/// The `Success` of a session create (the ordinary one's answer).
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct StagedSession {
-    pub session_id: String,
-    #[serde(default)]
-    pub expires_at: i64,
-}
-
-/// A folder a commit carries whole.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct MoveFolder {
-    pub from: String,
-    pub to: String,
-}
-
-/// `POST /v1/drive_moves/{move_id}/commit`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommitDriveMoveRequest {
-    /// Every source `path_hash` the move carries, each once: exactly the
-    /// staged copies, or the commit refuses (`move_incomplete`).
-    pub files: Vec<[u8; 32]>,
-    #[serde(default)]
-    pub folders: Vec<MoveFolder>,
-}
-
-/// One file a commit moved.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommittedFile {
-    pub source_path_hash: [u8; 32],
-    pub dest_path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
-}
-
-/// A folder grant a commit removed.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RevokedGrant {
-    pub member_ss58: String,
-    pub path_prefix: String,
-}
-
-/// What a commit turned off under the moved folders.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct MoveRevoked {
-    #[serde(default)]
-    pub folder_grants: Vec<RevokedGrant>,
-    #[serde(default)]
-    pub folder_links: Vec<String>,
-    #[serde(default)]
-    pub invites: Vec<String>,
-    #[serde(default)]
-    pub backups_moved: Vec<String>,
-    #[serde(default)]
-    pub backups_removed: Vec<String>,
-}
-
-impl MoveRevoked {
-    /// What the success message adds, or `None` when nothing was turned
-    /// off. A backup that followed its folder keeps working, so it is not
-    /// news; one that was removed is, since its phone must be set up again.
-    pub fn notice(&self) -> Option<String> {
-        let people = {
-            let mut members: Vec<&str> = self.folder_grants.iter().map(|g| g.member_ss58.as_str()).collect();
-            members.sort_unstable();
-            members.dedup();
-            members.len()
-        };
-        let links = self.folder_links.len();
-        let mut parts = Vec::new();
-        if links > 0 {
-            parts.push(if links == 1 {
-                "its share link was turned off".to_string()
-            } else {
-                format!("its {links} share links were turned off")
-            });
-        }
-        if people > 0 {
-            parts.push(if people == 1 {
-                "1 person lost access".to_string()
-            } else {
-                format!("{people} people lost access")
-            });
-        }
-        if !self.invites.is_empty() {
-            parts.push(if self.invites.len() == 1 {
-                "an open invite was cancelled".to_string()
-            } else {
-                "open invites were cancelled".to_string()
-            });
-        }
-        if !self.backups_removed.is_empty() {
-            parts.push("a phone backup into it was stopped".to_string());
-        }
-        if parts.is_empty() {
-            return None;
-        }
-        let mut sentence = join_clauses(&parts);
-        if let Some(first) = sentence.get_mut(..1) {
-            first.make_ascii_uppercase();
-        }
-        sentence.push('.');
-        Some(sentence)
+/// What a commit's success message adds about the access it turned off, or
+/// `None` when nothing was turned off. A backup that followed its folder
+/// keeps working, so it is not news; one that was removed is, since its phone
+/// must be set up again.
+pub fn revoked_notice(revoked: &MoveRevoked) -> Option<String> {
+    let people = {
+        let mut members: Vec<&str> = revoked.folder_grants.iter().map(|g| g.member_ss58.as_str()).collect();
+        members.sort_unstable();
+        members.dedup();
+        members.len()
+    };
+    let links = revoked.folder_links.len();
+    let mut parts = Vec::new();
+    if links > 0 {
+        parts.push(if links == 1 {
+            "its share link was turned off".to_string()
+        } else {
+            format!("its {links} share links were turned off")
+        });
     }
+    if people > 0 {
+        parts.push(if people == 1 {
+            "1 person lost access".to_string()
+        } else {
+            format!("{people} people lost access")
+        });
+    }
+    if !revoked.invites.is_empty() {
+        parts.push(if revoked.invites.len() == 1 {
+            "an open invite was cancelled".to_string()
+        } else {
+            "open invites were cancelled".to_string()
+        });
+    }
+    if !revoked.backups_removed.is_empty() {
+        parts.push("a phone backup into it was stopped".to_string());
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let mut sentence = join_clauses(&parts);
+    if let Some(first) = sentence.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    sentence.push('.');
+    Some(sentence)
 }
 
 /// "a", "a and b", "a, b and c".
@@ -162,14 +71,6 @@ pub(crate) fn join_clauses(parts: &[String]) -> String {
         [one] => one.clone(),
         [init @ .., last] => format!("{} and {last}", init.join(", ")),
     }
-}
-
-/// The `Success` of a commit; a repeated commit answers the same.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CommitDriveMoveResult {
-    pub files: Vec<CommittedFile>,
-    #[serde(default)]
-    pub revoked: MoveRevoked,
 }
 
 /// A refusal from any drive-move route, or a failure to reach one.
@@ -260,6 +161,8 @@ impl MoveRefusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hcfs_shared::network::{CreateSessionRequest, RevokedGrant};
+    use hcfs_shared::revision_id::RevisionId;
 
     /// The bodies `docs/public/api/drive-moves.md` documents, sent and read
     /// exactly as the server writes them.
@@ -305,7 +208,7 @@ mod tests {
                 ciphertext_size: 10_485_792,
             },
             source_path_hash: [7; 32],
-            expected_revision_id: [9; 32],
+            expected_revision_id: RevisionId::from_bytes([9; 32]),
         };
         let json = serde_json::to_value(&request).unwrap();
         let keys: std::collections::BTreeSet<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
@@ -456,12 +359,12 @@ mod tests {
 
     #[test]
     fn the_revoked_notice_says_what_was_turned_off() {
-        assert_eq!(MoveRevoked::default().notice(), None);
+        assert_eq!(revoked_notice(&MoveRevoked::default()), None);
         let only_followed = MoveRevoked {
             backups_moved: vec!["b".into()],
             ..Default::default()
         };
-        assert_eq!(only_followed.notice(), None, "a backup that followed its folder still works");
+        assert_eq!(revoked_notice(&only_followed), None, "a backup that followed its folder still works");
 
         let grant = |who: &str| RevokedGrant {
             member_ss58: who.into(),
@@ -473,7 +376,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            revoked.notice().as_deref(),
+            revoked_notice(&revoked).as_deref(),
             Some("Its share link was turned off and 2 people lost access.")
         );
     }

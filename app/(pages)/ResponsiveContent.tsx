@@ -13,6 +13,7 @@ import { SyncReauthRequiredAlert } from "@/components/ui/SyncReauthRequiredAlert
 import FileDetailsPanel from "../components/page-sections/drive/FileDetailsPanel";
 import ShareDrivePanel from "../components/page-sections/drive/ShareDrivePanel";
 import ShareInsightsSheet from "../components/page-sections/shares/insights/ShareInsightsSheet";
+import FolderInsightsPanel from "../components/page-sections/shares/folder-insights/FolderInsightsPanel";
 import ShareDialog from "../components/page-sections/drive/share-dialog/ShareDialog";
 
 /**
@@ -133,6 +134,7 @@ export default function ResponsiveContent({
           (`global-atoms/sidePanelAtoms`). */}
       <FileDetailsPanel />
       <ShareInsightsSheet />
+      <FolderInsightsPanel />
       <ShareDrivePanel />
       <ShareDialog />
     </div>

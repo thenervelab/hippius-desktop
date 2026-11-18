@@ -131,7 +131,7 @@ async fn synced_drive(root: &std::path::Path, config_dir: &std::path::Path, serv
                 "salted_hash": meta.salted_hash.as_bytes().to_vec(),
                 "size_bytes": meta.size_bytes,
                 "revision_seq": meta.revision_seq,
-                "revision_id": meta.revision_id.to_vec(),
+                "revision_id": meta.revision_id.as_bytes().to_vec(),
                 "encrypted_path": Vec::<u8>::new(),
                 "file_name": state.path_index[id].display().to_string(),
             })

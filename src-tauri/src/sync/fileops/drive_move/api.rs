@@ -13,7 +13,8 @@
 //! request and response code with no Tauri runtime.
 
 use super::wire::{
-    CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, MoveRefusal, StageMoveSessionRequest, StagedSession,
+    CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, CreateSessionResult, MoveRefusal,
+    StageMoveSessionRequest,
 };
 use hcfs_shared::network::NetworkResponse;
 use serde::de::DeserializeOwned;
@@ -64,7 +65,7 @@ impl MoveApi {
     }
 
     /// `POST /v1/drive_moves/{move_id}/sessions`: the copy's session id.
-    pub async fn open_copy_session(&self, move_id: &str, request: &StageMoveSessionRequest) -> Result<StagedSession, MoveRefusal> {
+    pub async fn open_copy_session(&self, move_id: &str, request: &StageMoveSessionRequest) -> Result<CreateSessionResult, MoveRefusal> {
         self.post_json(&format!("/v1/drive_moves/{move_id}/sessions"), request).await
     }
 
