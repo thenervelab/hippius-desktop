@@ -4,6 +4,7 @@ import "@testing-library/jest-dom";
 import { toast } from "sonner";
 
 import ShareLinkEmailsSetting from "../ShareLinkEmailsSetting";
+import { LINK_EMAILS_NEED_SIGN_IN } from "../../drive/SecureLinkSection";
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
@@ -13,10 +14,39 @@ vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const PREFS = { firstViews: true, comments: true, digest: "weekly" };
 
+/** Answers `share_can_receive_link_emails` itself; every other command from `invokeMock`. */
+const canReceive = vi.hoisted(() => ({ value: true as boolean | Error }));
+vi.mock("@/app/lib/tauri/shareInsights", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/app/lib/tauri/shareInsights")>();
+  return {
+    ...actual,
+    canReceiveLinkEmails: () =>
+      canReceive.value instanceof Error ? Promise.reject(canReceive.value) : Promise.resolve(canReceive.value),
+  };
+});
+
 describe("ShareLinkEmailsSetting", () => {
   beforeEach(() => {
     invokeMock.mockReset();
     vi.mocked(toast.error).mockReset();
+    canReceive.value = true;
+  });
+
+  it("shows an access-key account one line instead of the switches", async () => {
+    canReceive.value = false;
+    render(<ShareLinkEmailsSetting />);
+
+    expect(await screen.findByText(LINK_EMAILS_NEED_SIGN_IN)).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByText("Summary")).toBeNull();
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it("says it could not load when it cannot tell whether the account has an email", async () => {
+    canReceive.value = new Error("offline");
+    render(<ShareLinkEmailsSetting />);
+    expect(await screen.findByText("Couldn't load these settings right now.")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).toBeNull();
   });
 
   it("shows the three preferences the server holds", async () => {
@@ -26,6 +56,7 @@ describe("ShareLinkEmailsSetting", () => {
     expect(await screen.findByRole("switch", { name: "First views" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("switch", { name: "New comments" })).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText("Summary")).toBeInTheDocument();
+    expect(screen.queryByText(LINK_EMAILS_NEED_SIGN_IN)).toBeNull();
     expect(invokeMock).toHaveBeenCalledWith("share_get_notification_preferences");
   });
 

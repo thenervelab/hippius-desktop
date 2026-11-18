@@ -237,6 +237,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Link emails are no longer offered to accounts without an email address.** An account that signs in with an access key no longer sees an "email me" switch that could never send anything; the Share dialog and Settings say to sign in with Google or Apple to get these emails.
 - **A shared document's Insights no longer shows a video length.** The line under a PDF, Word or PowerPoint file's name could show a time such as 0:10 as if it were a recording; it now appears only for recordings.
 - **Link settings switches in Insights work on a Mac.** Pressing Insights, Comments, Reactions or Allow download in a link's settings closed the settings instead of changing the switch. Each switch now changes, and the settings stay open until you press Escape, click outside or press the gear again.
 - **Moving and renaming in a drive shared with you works.** Moving a file or renaming it in someone else's drive said it was done but left it where it was. It now moves, and anything the server could not move says so instead of claiming success.

@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { Select } from "@/components/ui/select/Select";
+import { LinkEmailsNeedSignIn } from "@/app/components/page-sections/drive/SecureLinkSection";
 import {
+  canReceiveLinkEmails,
   getNotificationPreferences,
   setNotificationPreferences,
   type Digest,
@@ -24,17 +26,26 @@ const DIGEST_OPTIONS: ReadonlyArray<{ value: Digest; label: string }> = [
  * The emails about share links (the same three the console offers): a
  * link's first views, new comments, and a summary. Each change is saved at
  * once, and put back if the server refuses it. Shown only when the server
- * sends these emails (`share_notifications`).
+ * sends these emails (`share_notifications`). An account with no email
+ * address (an access-key sign-in) gets one line instead of the switches.
  */
 export default function ShareLinkEmailsSetting() {
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
+  const [noEmail, setNoEmail] = useState(false);
   const [failed, setFailed] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    getNotificationPreferences()
-      .then((p) => alive && setPrefs(p))
+    canReceiveLinkEmails()
+      .then(async (canReceive) => {
+        if (!canReceive) {
+          if (alive) setNoEmail(true);
+          return;
+        }
+        const p = await getNotificationPreferences();
+        if (alive) setPrefs(p);
+      })
       .catch(() => alive && setFailed(true));
     return () => {
       alive = false;
@@ -59,7 +70,9 @@ export default function ShareLinkEmailsSetting() {
 
   return (
     <SettingsCard label="Emails about your links">
-      {failed ? (
+      {noEmail ? (
+        <LinkEmailsNeedSignIn className="px-4 py-4 text-sm" />
+      ) : failed ? (
         <p className="px-4 py-4 text-sm text-grey-60 dark:text-grey-70">
           Couldn&apos;t load these settings right now.
         </p>
