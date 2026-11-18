@@ -656,7 +656,8 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() => expect(within(blurred).getByText(String(SAMPLE_VIEWS))).toBeInTheDocument());
       expect(within(blurred).getByText(`${SAMPLE_UNIQUE_VIEWERS} people viewed`)).toBeInTheDocument();
       // No "0 views" outside the lock: nothing is being counted, and it says so.
-      expect(screen.queryByText("0")).toBeNull();
+      // (The tabs' own counts, comments and reactions, may be zero.)
+      expect(screen.queryAllByText("0").filter((el) => !el.closest('[role="tablist"]'))).toEqual([]);
       expect(within(screen.getByRole("region", { name: "Summary" })).getByText("Not counting views")).toBeInTheDocument();
       expect(within(locked).getByText(LOCK_BODY_NOT_COUNTING)).toBeInTheDocument();
     });
@@ -1659,6 +1660,14 @@ describe("the Insights Pages tab", () => {
     renderSheet(CAPS, undefined, DOC);
     await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
     expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
+  });
+
+  it("draws four tabs in one underlined row, and no NDA tab until one is handed in", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS, share_get_reactions: NO_REACTIONS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Comments 0", "Viewers 1", "Pages", "Reactions 0"]);
+    expect(screen.queryByRole("tab", { name: /NDA/ })).toBeNull();
   });
 
   it("has no Pages tab on a recording's link, even on the free plan", async () => {

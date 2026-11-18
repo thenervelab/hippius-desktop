@@ -11,7 +11,6 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { SidePanel } from "@/components/ui/SidePanel";
-import TabList from "@/components/ui/tabs/TabList";
 import TabPanel from "@/components/ui/tabs/TabPanel";
 import { cn } from "@/lib/utils";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -50,6 +49,7 @@ import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
 import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
 import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
+import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
 import {
   COMPARE_PLANS,
   PRICING_URL,
@@ -86,16 +86,29 @@ import {
   pagesTabShown,
   switchOffLine,
   switchesOffLine,
-  tabLabel,
   type InsightsTab,
 } from "./insightsView";
 import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FILL, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /**
- * Wider than File Details' 305: like Manage access, this panel holds lists,
- * a chart and a row of numbers.
+ * The console's Insights width. Wider than File Details' 305 and Manage
+ * access's 360: it holds lists, charts, a row of numbers and up to five
+ * tabs with their counts in one row.
  */
-export const INSIGHTS_PANEL_WIDTH_PX = 360;
+export const INSIGHTS_PANEL_WIDTH_PX = 440;
+
+/**
+ * The NDA tab's slot. Nothing passes it yet, so the tab never shows. To turn
+ * it on, read the link's NDA accepts in `InsightsPanelFor` (or pass them in
+ * from `ShareInsightsSheet`) and hand the panel
+ * `nda={{ count, content: <NdaAcceptsTab ... /> }}`: the tab then appears
+ * last, after Reactions, with its count, and its body scrolls like the
+ * others. `count` is `null` while the accepts load.
+ */
+export interface NdaTabSlot {
+  count: number | null;
+  content: ReactNode;
+}
 
 export { insightsQueryKey, commentsQueryKey, reactionsQueryKey, linkSettingsQueryKey };
 
@@ -507,6 +520,7 @@ function InsightsPanelFor({
   file,
   onClose,
   focusHeading = false,
+  nda,
 }: {
   shareToken: string;
   fileName: string;
@@ -514,6 +528,8 @@ function InsightsPanelFor({
   onClose: () => void;
   /** Take focus on mount: the panel stayed open while its content changed. */
   focusHeading?: boolean;
+  /** The NDA tab, when there is one (see `NdaTabSlot`); none draws no tab. */
+  nda?: NdaTabSlot;
 }) {
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const tabsId = useId();
@@ -590,23 +606,21 @@ function InsightsPanelFor({
   const loading = insights.isPending;
 
   const viewers = insights.data?.viewers.state === "shown" ? insights.data.viewers.value : null;
-  const tabs: Array<{ tabKey: InsightsTab; tabName: string }> = [];
+  const tabs: InsightsTabItem[] = [];
   if (commentsEnabled) {
-    tabs.push({
-      tabKey: "comments",
-      tabName: tabLabel("Comments", moderation.comments.isSuccess ? commentList.length : null),
-    });
+    tabs.push({ key: "comments", label: "Comments", count: moderation.comments.isSuccess ? commentList.length : null });
   }
-  if (insights.isSuccess) tabs.push({ tabKey: "viewers", tabName: tabLabel("Viewers", viewers ? viewers.length : null) });
+  if (insights.isSuccess) tabs.push({ key: "viewers", label: "Viewers", count: viewers ? viewers.length : null });
   // Only on a server with document views (Rust sends `pages` only then).
   const pages = insights.data?.pages ?? null;
-  if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ tabKey: "pages", tabName: "Pages" });
+  if (insights.isSuccess && pagesTabShown(pages, fileName)) tabs.push({ key: "pages", label: "Pages", count: null });
   if (commentsEnabled) {
-    tabs.push({ tabKey: "reactions", tabName: tabLabel("Reactions", reactions.isSuccess ? reactions.data.total : null) });
+    tabs.push({ key: "reactions", label: "Reactions", count: reactions.isSuccess ? reactions.data.total : null });
   }
-  const has = (key: InsightsTab | null) => key !== null && tabs.some((t) => t.tabKey === key);
+  if (nda) tabs.push({ key: "nda", label: "NDA", count: nda.count });
+  const has = (key: InsightsTab | null) => key !== null && tabs.some((t) => t.key === key);
   const fallback = defaultInsightsTab(commentCount);
-  const tab: InsightsTab | null = has(chosenTab) ? chosenTab : has(fallback) ? fallback : (tabs[0]?.tabKey ?? null);
+  const tab: InsightsTab | null = has(chosenTab) ? chosenTab : has(fallback) ? fallback : (tabs[0]?.key ?? null);
   const goToTab = (next: InsightsTab) => {
     setChosenTab(next);
     scrollRef.current?.scrollTo?.({ top: 0 });
@@ -654,6 +668,8 @@ function InsightsPanelFor({
             onTurnOn={openSettings}
           />
         );
+      case "nda":
+        return nda?.content ?? null;
     }
   };
 
@@ -723,27 +739,14 @@ function InsightsPanelFor({
           />
           {tabs.length > 1 && tab && (
             <div className="shrink-0 px-6 pt-5">
-              <TabList
-                idBase={tabsId}
-                ariaLabel="Insights"
-                tabs={tabs}
-                activeTab={tab}
-                onTabChange={(key) => goToTab(key as InsightsTab)}
-                className={cn("flex w-full rounded-[9px] p-[3px]", FILL)}
-                gap="gap-[3px]"
-                width="min-w-0 flex-1"
-                height="h-[30px]"
-                tabItemPaddingX="px-1.5"
-                textClassName="text-[13px] font-medium"
-                showTooltip={false}
-              />
+              <InsightsTabs idBase={tabsId} tabs={tabs} active={tab} onChange={goToTab} />
             </div>
           )}
-          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-3" data-testid="insights-body">
+          <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4" data-testid="insights-body">
             {tabs.length > 1
-              ? tabs.map(({ tabKey }) => (
-                  <TabPanel key={tabKey} idBase={tabsId} tabKey={tabKey} activeTab={tab ?? ""}>
-                    {tabContent(tabKey)}
+              ? tabs.map(({ key }) => (
+                  <TabPanel key={key} idBase={tabsId} tabKey={key} activeTab={tab ?? ""}>
+                    {tabContent(key)}
                   </TabPanel>
                 ))
               : tab && tabContent(tab)}
