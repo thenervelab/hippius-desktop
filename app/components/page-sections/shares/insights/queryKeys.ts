@@ -16,3 +16,4 @@ export const linkSettingsQueryKey = (shareToken: string) => ["share-link-setting
  */
 export const PANEL_QUERY = { retry: false, networkMode: "always" } as const;
 export const PANEL_MUTATION = { networkMode: "always" } as const;
+export const ndaAcceptsQueryKey = (shareToken: string) => ["share-nda-accepts", shareToken] as const;

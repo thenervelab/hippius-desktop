@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import {
+  canReceiveLinkEmails,
   getNotificationPreferences,
   setNotificationPreferences,
   type NotificationPreferences,
@@ -22,6 +23,12 @@ export const SECURE_LINK = "Secure link";
 export const FIRST_VIEW_EMAIL = "Email me when a link is first opened";
 
 /**
+ * Shown in place of the link email switches for an account with no email
+ * address (one that signs in with an access key).
+ */
+export const LINK_EMAILS_NEED_SIGN_IN = "To get an email when your links are opened, sign in with Google or Apple.";
+
+/**
  * Who can open the link and for how long, in one place: access and password,
  * expiry, and the first-view email. Same grouping as the web app's share
  * dialog. Only a layout: each control inside keeps its own behaviour.
@@ -33,6 +40,31 @@ export function SecureLinkSection({ children, className }: { children: ReactNode
       {children}
     </section>
   );
+}
+
+/**
+ * Whether link emails can reach this account (Rust's
+ * `share_can_receive_link_emails`), asked only while `enabled`. `null` while
+ * asking and for good when Rust cannot tell, so nothing is shown then.
+ */
+export function useCanReceiveLinkEmails(enabled: boolean): boolean | null {
+  const [canReceive, setCanReceive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!enabled || canReceive !== null) return;
+    let alive = true;
+    canReceiveLinkEmails()
+      .then((v) => alive && setCanReceive(v))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [enabled, canReceive]);
+  return canReceive;
+}
+
+/** The one line an account with no email sees instead of the switches. */
+export function LinkEmailsNeedSignIn({ className }: { className?: string }) {
+  return <p className={cn("text-xs text-grey-60 dark:text-grey-70", className)}>{LINK_EMAILS_NEED_SIGN_IN}</p>;
 }
 
 /**
@@ -77,11 +109,15 @@ function useNotificationPreferences(enabled: boolean) {
 /**
  * "Email me when a link is first opened": the account's first-view email,
  * shown while the link counts views (`viewsCounted`) and the server sends
- * these emails.
+ * these emails. An account with no email address gets one line saying how to
+ * get them instead, never a switch that cannot do anything.
  */
 export function FirstViewEmailSwitch({ viewsCounted }: { viewsCounted: boolean }) {
-  const { prefs, saving, setFirstViews } = useNotificationPreferences(viewsCounted);
-  if (!viewsCounted || !prefs) return null;
+  const canReceive = useCanReceiveLinkEmails(viewsCounted);
+  const { prefs, saving, setFirstViews } = useNotificationPreferences(viewsCounted && canReceive === true);
+  if (!viewsCounted || canReceive === null) return null;
+  if (!canReceive) return <LinkEmailsNeedSignIn className="mt-3" />;
+  if (!prefs) return null;
   return (
     <div className="mt-3 flex items-center justify-between gap-3">
       <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">{FIRST_VIEW_EMAIL}</span>
