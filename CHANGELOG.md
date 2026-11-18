@@ -233,6 +233,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Link emails are no longer offered to accounts without an email address.** An account that signs in with an access key no longer sees an "email me" switch that could never send anything; the Share dialog and Settings say to sign in with Google or Apple to get these emails.
 - **Moving and renaming in a drive shared with you works.** Moving a file or renaming it in someone else's drive said it was done but left it where it was. It now moves, and anything the server could not move says so instead of claiming success.
 - **Upload to a drive shared with you without a plan of your own.** The drive's owner pays for its storage, so uploading files and folders into it no longer asks you to subscribe or upgrade. If the drive is out of space or frozen, Hippius now says the owner needs to sort it out.
 - **Pages seen per viewer.** Insights for a PDF, Word or PowerPoint link now says how many pages each viewer saw ("3 of 12 pages"); the count was missing for every viewer.

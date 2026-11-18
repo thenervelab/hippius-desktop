@@ -570,6 +570,7 @@ fn main() {
             crate::shares::insights::share_switches_in_plan,
             crate::shares::insights::share_get_notification_preferences,
             crate::shares::insights::share_set_notification_preferences,
+            crate::shares::insights::share_can_receive_link_emails,
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_reshare_folder_link,
