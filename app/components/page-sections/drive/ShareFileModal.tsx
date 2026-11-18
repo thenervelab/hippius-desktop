@@ -80,6 +80,7 @@ import {
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
 import EmailGateSettings from "@/components/page-sections/shares/insights/EmailGateSettings";
 import NdaSettings from "@/components/page-sections/shares/insights/NdaSettings";
+import RecipientLinks from "@/components/page-sections/shares/insights/RecipientLinks";
 import { isDownloadNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
 import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
 import { BILLING_ROUTE } from "@/app/lib/routes";
@@ -1524,6 +1525,8 @@ function DoneBody({
         {engagement && <EmailGateSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
         {/* File links only (folder links have no NDA); Rust leaves it out on a password link. */}
         {engagement && <NdaSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
+        {/* File links only; Rust offers it only on a server with links per person. */}
+        {engagement && <RecipientLinks shareToken={link.shareToken} />}
         <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
       </SecureLinkSection>
 
