@@ -60,7 +60,7 @@ export default function FinderExtensionSetting() {
       if (preference === "wanted" && next.kind !== "enabled") {
         // Registered and elected but macOS does not read it as on yet — the
         // Enable path's own fallback copy names the pane to check.
-        toast.warning("Hippius could not turn the Finder extension on", {
+        toast.warning("Hippius Drive could not turn the Finder extension on", {
           description:
             "Open System Settings › General › Login Items & Extensions › File Providers and turn on Hippius.",
         });

@@ -969,6 +969,11 @@ fn main() {
         builder
     };
 
+    // The app menu names the app "Hippius Drive"; Tauri's default would say
+    // "Hippius", its bundle name (see utils::app_name).
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(crate::utils::app_name::macos_menu);
+
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");
 

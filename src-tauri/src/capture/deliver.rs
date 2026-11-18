@@ -619,7 +619,7 @@ pub fn failed_notice(error: &AppError, card_showing: bool) -> (String, String) {
     let next = if card_showing {
         "Retry from the capture card."
     } else {
-        "Hippius kept it and offers it again on your next capture."
+        "Hippius Drive kept it and offers it again on your next capture."
     };
     ("Capture not uploaded".into(), format!("{reason} {next}"))
 }

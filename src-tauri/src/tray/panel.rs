@@ -428,7 +428,7 @@ fn build_panel(app: &AppHandle) -> Result<WebviewWindow> {
     // does not exist. Pick the path that resolves for the current build.
     let route = if cfg!(dev) { "tray-panel" } else { "tray-panel.html" };
     WebviewWindowBuilder::new(app, PANEL_LABEL, WebviewUrl::App(route.into()))
-        .title("Hippius")
+        .title(crate::utils::app_name::APP_DISPLAY_NAME)
         .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
         .decorations(false)
         // Transparent on every platform so the card's rounded corners cut out

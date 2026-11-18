@@ -76,6 +76,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
 - **Clearer page charts for shared documents.** The Pages tab in a document link's Insights now shows two charts, as on the web: where people stopped reading, with the page after which most left, and the time spent on each page, with the page people spent longest on. Point at a chart, or use the arrow keys, to read any page.
 - **Dragging works the way Finder does.** Drop on any row of an open folder, file or subfolder, at any depth, and the item goes into the folder that row belongs to, with that whole folder lit up while you hover. In Move to…, New folder now has its own Create folder and Cancel buttons, then opens the new folder ready to move into.

@@ -31,7 +31,7 @@ export default function TranslocationGuard() {
         if (!translocated) return;
         toast.warning("Move Hippius to your Applications folder", {
           description:
-            "Hippius is running from a temporary location, so macOS keeps re-asking for folder access. Quit Hippius, drag it into Applications, then reopen it.",
+            "Hippius Drive is running from a temporary location, so macOS keeps re-asking for folder access. Quit Hippius Drive, drag it into Applications, then reopen it.",
           duration: Infinity,
           // Stable id so a re-mount (navigation) reuses the same toast instead
           // of stacking duplicates.
