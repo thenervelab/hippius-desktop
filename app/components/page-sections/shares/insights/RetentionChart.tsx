@@ -138,7 +138,8 @@ export function RetentionChart({
         onBlur={() => setAt(null)}
         onKeyDown={onKey}
         className={cn(
-          "relative mt-3 h-[120px] touch-none select-none rounded-sm outline-none",
+          // Room above the top gridline for its label, clear of the heading.
+          "relative mt-5 h-[120px] touch-none select-none rounded-sm outline-none",
           "focus-visible:ring-2 focus-visible:ring-primary-50/40 focus-visible:ring-offset-4",
           "focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#1f1f1f]",
         )}

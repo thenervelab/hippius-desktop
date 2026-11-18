@@ -556,6 +556,8 @@ fn main() {
             crate::shares::commands::hcfs_share_preview_default,
             crate::shares::insights::share_engagement_features,
             crate::shares::insights::share_get_insights,
+            crate::shares::insights_csv::share_insights_csv_name,
+            crate::shares::insights_csv::share_export_insights_csv,
             crate::shares::insights::share_list_comments,
             crate::shares::insights::share_delete_comment,
             crate::shares::insights::share_block_commenter,

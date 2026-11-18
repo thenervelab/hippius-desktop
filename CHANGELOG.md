@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Export a link's viewers as a spreadsheet.** Insights has an Export CSV button beside Link settings that saves who viewed, how often, when they last looked, how much they watched and, for a document, how many pages they read, in the same columns as the web. You choose where the file goes, and it opens cleanly in Excel, Numbers or Google Sheets.
 - **Preview WMV, AVI, MKV and other videos.** Videos the viewer could not play before now open in Hippius: on Mac and Windows that includes Windows Media (.wmv), AVI, MKV, FLV, MPEG (.mpg) and camcorder (.mts, .m2ts) files, converted on your computer as they play so even a long video starts in a few seconds and you can skip ahead. On Linux, MKV and other files whose picture is already H.264 play; the rest offer Download. Nothing is sent anywhere.
 - **Ask for an email before a share link opens.** A file link can now ask viewers to confirm their email with a code before it opens, from the Share dialog and from Insights' Link settings. Let in only certain addresses or whole company domains, or keep some out. It comes with paid Drive plans and appears once Hippius offers it for your account.
 - **See who opened a link that asks for an email.** Insights names each viewer by the email they confirmed, so you know exactly who read your document.
@@ -235,6 +236,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A shared document's Insights no longer shows a video length.** The line under a PDF, Word or PowerPoint file's name could show a time such as 0:10 as if it were a recording; it now appears only for recordings.
 - **Link settings switches in Insights work on a Mac.** Pressing Insights, Comments, Reactions or Allow download in a link's settings closed the settings instead of changing the switch. Each switch now changes, and the settings stay open until you press Escape, click outside or press the gear again.
 - **Moving and renaming in a drive shared with you works.** Moving a file or renaming it in someone else's drive said it was done but left it where it was. It now moves, and anything the server could not move says so instead of claiming success.
 - **Upload to a drive shared with you without a plan of your own.** The drive's owner pays for its storage, so uploading files and folders into it no longer asks you to subscribe or upgrade. If the drive is out of space or frozen, Hippius now says the owner needs to sort it out.

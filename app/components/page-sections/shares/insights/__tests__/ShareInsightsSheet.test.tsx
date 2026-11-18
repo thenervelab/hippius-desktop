@@ -43,6 +43,12 @@ const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
+const saveDialog = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: (...a: unknown[]) => saveDialog(...a) }));
+vi.mock("@tauri-apps/api/path", () => ({
+  downloadDir: () => Promise.resolve("/Users/me/Downloads"),
+  join: (...parts: string[]) => Promise.resolve(parts.join("/")),
+}));
 const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -1668,6 +1674,54 @@ describe("the Insights Pages tab", () => {
     await screen.findByRole("tab", { name: "Pages" });
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Comments 0", "Viewers 1", "Pages", "Reactions 0"]);
     expect(screen.queryByRole("tab", { name: /NDA/ })).toBeNull();
+  });
+
+  it("exports the viewers as CSV through the save dialog, and Rust writes it", async () => {
+    answer({
+      share_get_insights: PAID_DOC,
+      share_list_comments: NO_COMMENTS,
+      share_insights_csv_name: "Pitch deck activity 2026-11-18.csv",
+      share_export_insights_csv: undefined,
+    });
+    saveDialog.mockResolvedValueOnce("/Users/me/Downloads/Pitch deck activity 2026-11-18.csv");
+    renderSheet(DOC_CAPS, undefined, DOC);
+    fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_export_insights_csv", {
+        shareToken: "tok",
+        fileName: DOC,
+        destination: "/Users/me/Downloads/Pitch deck activity 2026-11-18.csv",
+      }),
+    );
+    expect(saveDialog).toHaveBeenCalledWith({
+      defaultPath: "/Users/me/Downloads/Pitch deck activity 2026-11-18.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+  });
+
+  it("writes nothing when the save dialog is dismissed", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS, share_insights_csv_name: "x.csv" });
+    saveDialog.mockResolvedValueOnce(null);
+    renderSheet(DOC_CAPS, undefined, DOC);
+    fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+    await waitFor(() => expect(saveDialog).toHaveBeenCalled());
+    expect(invokeMock).not.toHaveBeenCalledWith("share_export_insights_csv", expect.anything());
+  });
+
+  it("gives a document no recording length in the header's line", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    // Maya read for 8s at half way: a recording's estimate would say 0:16.
+    expect(screen.queryByTestId("insights-subtitle")?.textContent ?? "").not.toMatch(/\d:\d\d/);
+  });
+
+  it("offers no CSV while the plan locks the viewer list", async () => {
+    answer({ share_get_insights: { ...FREE, pages: { state: "locked" } }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export CSV" })).toBeNull();
   });
 
   it("has no Pages tab on a recording's link, even on the free plan", async () => {

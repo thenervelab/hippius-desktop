@@ -5,7 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BarChart3, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import { BarChart3, Download, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
 import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
@@ -50,6 +50,7 @@ import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwi
 import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { RetentionChart } from "./RetentionChart";
 import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
+import { saveInsightsCsv } from "./exportCsv";
 import {
   COMPARE_PLANS,
   PRICING_URL,
@@ -74,6 +75,7 @@ import {
   formatMomentAt,
   formatPercent,
   formatWatched,
+  actionErrorLine,
   headerLine,
   loadErrorLine,
   lockCopy,
@@ -88,7 +90,7 @@ import {
   switchesOffLine,
   type InsightsTab,
 } from "./insightsView";
-import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FILL, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
+import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /**
  * The console's Insights width. Wider than File Details' 305 and Manage
@@ -560,7 +562,10 @@ function InsightsPanelFor({
   // The recording's length, read off the capture's preview when it is on
   // this device; otherwise worked out from the viewers (`estimateDurationMs`).
   const [mediaMs, setMediaMs] = useState<number | null>(null);
-  const durationMs = useDurationMs(shareToken, mediaMs);
+  // Only a recording has a length: a document's viewers carry reading time,
+  // which would otherwise read as one in the header's line.
+  const recordingMs = useDurationMs(shareToken, mediaMs);
+  const durationMs = VIDEO_NAME.test(fileName) ? recordingMs : null;
   const summary = useCachedShare(shareToken);
   // Seen in the listing, then gone from it: the link was revoked (from
   // Shared Links, say) while its panel was open.
@@ -686,6 +691,8 @@ function InsightsPanelFor({
           subtitle={turnedOff ? LINK_TURNED_OFF : [subtitle, offLine].filter(Boolean).join(" · ")}
           settings={
             !turnedOff && (
+            <>
+            {viewers && viewers.length > 0 && <ExportCsvButton shareToken={shareToken} fileName={fileName} />}
             <button
               type="button"
               {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
@@ -698,6 +705,7 @@ function InsightsPanelFor({
             >
               <Settings className="size-4" aria-hidden />
             </button>
+            </>
             )
           }
         />
@@ -754,6 +762,39 @@ function InsightsPanelFor({
         </>
       )}
     </div>
+  );
+}
+
+/** What the header's download button is called, the console's words. */
+export const EXPORT_CSV_LABEL = "Export CSV";
+
+/**
+ * Export CSV, beside the gear, as on the console: saves the link's viewers
+ * as a CSV file where the owner chooses. Drawn only while there are viewers
+ * to list (the free plan locks the list, and an empty file says nothing).
+ */
+function ExportCsvButton({ shareToken, fileName }: { shareToken: string; fileName: string }) {
+  const online = useIsOnline();
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      aria-label={EXPORT_CSV_LABEL}
+      title={EXPORT_CSV_LABEL}
+      disabled={busy}
+      onClick={() => {
+        setBusy(true);
+        saveInsightsCsv(shareToken, fileName)
+          .then((outcome) => {
+            if (outcome === "saved") toast.success("Activity saved as CSV");
+          })
+          .catch((err: unknown) => toast.error(actionErrorLine("export the activity", err, online)))
+          .finally(() => setBusy(false));
+      }}
+      className={cn(ICON_BUTTON, "disabled:opacity-50")}
+    >
+      <Download className="size-4" aria-hidden />
+    </button>
   );
 }
 
