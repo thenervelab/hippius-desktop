@@ -72,6 +72,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Clearer page charts for shared documents.** The Pages tab in a document link's Insights now shows two charts, as on the web: where people stopped reading, with the page after which most left, and the time spent on each page, with the page people spent longest on. Point at a chart, or use the arrow keys, to read any page.
 - **Dragging works the way Finder does.** Drop on any row of an open folder, file or subfolder, at any depth, and the item goes into the folder that row belongs to, with that whole folder lit up while you hover. In Move to…, New folder now has its own Create folder and Cancel buttons, then opens the new folder ready to move into.
 - **The unlock screen speaks plainly.** It asks for your unlock password, says "Wrong password. Try again." when it doesn't match, and keeps what you typed selected so you can retype straight away. It calls your 12 words your recovery seed, or your access key if you sign in with them, and "Forgot your password?" explains that we can't reset it and how to set a new one. The show and hide button works from the keyboard, password managers can fill the field, and a note appears when Caps Lock is on.
 - **Shared Links shows a page at a time.** Active links and History each show 10 rows per page with a pager underneath, the same as Shared Drives, and sorting goes back to the first page. A link the Drive points you to opens on the page it sits on.

@@ -30,12 +30,22 @@ function timeTicks(durationMs: number): number[] {
  *
  * Positions are percentages over a `preserveAspectRatio="none"` SVG, so the
  * avatars and the playhead (plain HTML on top) line up at any width.
+ *
+ * A document's pages use it too, one point per page, as the console does:
+ * `pointLabel` gives the playhead's words at each point (it then snaps to
+ * the points), `endLabels` the axis, `scaleLabels` the gridlines and
+ * `summary` the chart's name.
  */
 export function RetentionChart({
   values,
   durationMs,
   comments = [],
   className,
+  pointLabel,
+  endLabels = ["Start", "End"],
+  scaleLabels = ["100%", "50%", "0%"],
+  summary,
+  testId,
 }: {
   /** One value per point, 0 to 100, start to end. */
   values: readonly number[];
@@ -43,6 +53,15 @@ export function RetentionChart({
   durationMs: number | null;
   comments?: readonly ShareComment[];
   className?: string;
+  /** The playhead's words at point `i`, in place of the moment and "% still watching". */
+  pointLabel?: (i: number) => { at: string; value: string };
+  /** Under the axis when it has no time ticks. */
+  endLabels?: readonly [string, string];
+  /** Beside the top, middle and bottom gridlines. */
+  scaleLabels?: readonly [string, string, string];
+  /** The chart's accessible name, in place of the recording's. */
+  summary?: string;
+  testId?: string;
 }) {
   const [at, setAt] = useState<number | null>(null);
   const liveId = useId();
@@ -65,14 +84,21 @@ export function RetentionChart({
       });
   }, [comments, durationMs, values]);
 
+  const point = at === null || !pointLabel ? null : pointLabel(Math.round(at * n));
   const readout =
-    at === null ? null : `${formatMomentAt(at, durationMs)} · ${Math.round(retentionAt(values, at))}% still watching`;
+    at === null
+      ? null
+      : point
+        ? `${point.at} · ${point.value}`
+        : `${formatMomentAt(at, durationMs)} · ${Math.round(retentionAt(values, at))}% still watching`;
   const step = 1 / n;
 
   const onPointer = (e: PointerEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     if (rect.width <= 0) return;
-    setAt(Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)));
+    const f = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    // Per page, the playhead sits on a page, never between two.
+    setAt(pointLabel ? Math.round(f * n) / n : f);
   };
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     const from = at ?? drop?.at ?? 0;
@@ -99,14 +125,16 @@ export function RetentionChart({
       <div
         role="group"
         tabIndex={0}
-        aria-label={`Where people stopped. ${end}% reached the end.${
-          drop ? ` Most left at ${formatMomentAt(drop.at, durationMs)}.` : ""
+        aria-label={`${
+          summary ??
+          `Where people stopped. ${end}% reached the end.${drop ? ` Most left at ${formatMomentAt(drop.at, durationMs)}.` : ""}`
         } Use the arrow keys to read the chart.`}
+        data-testid={testId}
         aria-describedby={liveId}
         onPointerMove={onPointer}
         onPointerDown={onPointer}
         onPointerLeave={() => setAt(null)}
-        onFocus={() => setAt(drop?.at ?? 0)}
+        onFocus={() => setAt(pointLabel ? 0 : (drop?.at ?? 0))}
         onBlur={() => setAt(null)}
         onKeyDown={onKey}
         className={cn(
@@ -116,7 +144,7 @@ export function RetentionChart({
         )}
       >
         {/* Gridlines at 100%, 50% and 0%, labelled at the right. */}
-        {[100, 50, 0].map((v) => (
+        {([100, 50, 0] as const).map((v, i) => (
           <div
             key={v}
             aria-hidden
@@ -129,7 +157,7 @@ export function RetentionChart({
             style={{ top: `${y(v)}%` }}
           >
             <span className="absolute -top-4 right-0 font-mono text-[10px] text-grey-50 dark:text-grey-dark-600">
-              {v}%
+              {scaleLabels[i]}
             </span>
           </div>
         ))}
@@ -216,8 +244,8 @@ export function RetentionChart({
           })
         ) : (
           <>
-            <span className="absolute left-0">Start</span>
-            <span className="absolute right-0">End</span>
+            <span className="absolute left-0">{endLabels[0]}</span>
+            <span className="absolute right-0">{endLabels[1]}</span>
           </>
         )}
       </div>

@@ -1551,17 +1551,33 @@ describe("the Insights Pages tab", () => {
     viewport.wide = true;
   });
 
-  it("shows drop-off and time per page, and where most people stopped", async () => {
+  it("shows where people stopped and the time per page, as the console does", async () => {
     answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
     renderSheet(DOC_CAPS, undefined, DOC);
 
     const panel = await showTab("Pages");
-    expect(within(panel).getByText("Drop-off by page")).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "Where people stopped" })).toBeInTheDocument();
     expect(within(panel).getByText("Most left after page 2")).toBeInTheDocument();
-    const rows = within(within(panel).getByRole("list", { name: "Pages" })).getAllByRole("listitem");
-    expect(rows).toHaveLength(4);
-    expect(rows[0]).toHaveTextContent(/Page 1.*reached by 100%.*median time 0:04/);
-    expect(rows[2]).toHaveTextContent(/Page 3.*30%.*0:01/);
+    expect(within(panel).getByRole("heading", { name: "Time per page" })).toBeInTheDocument();
+    expect(within(panel).getByText("Longest on page 1")).toBeInTheDocument();
+    expect(within(panel).queryByText("Drop-off by page")).toBeNull();
+
+    // Each chart reads out what it shows, and its axis runs page 1 to the last.
+    const reach = within(panel).getByTestId("insights-page-reach");
+    expect(reach).toHaveAccessibleName(/25% reached page 4\. Most left after page 2\./);
+    const time = within(panel).getByTestId("insights-page-time");
+    expect(time).toHaveAccessibleName(/longest on page 1, 0:04\./);
+    expect(within(panel).getAllByText("Page 1")).toHaveLength(2);
+    expect(within(panel).getAllByText("Page 4")).toHaveLength(2);
+    expect(within(panel).getByText("0:04")).toBeInTheDocument();
+
+    // The arrow keys read a page at a time.
+    fireEvent.focus(reach);
+    fireEvent.keyDown(reach, { key: "ArrowRight" });
+    expect(within(panel).getAllByText("Page 2 · 75% saw it").length).toBeGreaterThan(0);
+    fireEvent.focus(time);
+    fireEvent.keyDown(time, { key: "End" });
+    expect(within(panel).getAllByText("Page 4 · 0:00").length).toBeGreaterThan(0);
     expect(screen.queryByTestId("insights-locked")).toBeNull();
   });
 
@@ -1612,7 +1628,9 @@ describe("the Insights Pages tab", () => {
     expect(within(locked).getByText(PAGES_LOCK_BODY)).toBeInTheDocument();
     const blurred = locked.firstElementChild as HTMLElement;
     expect(blurred).toHaveAttribute("aria-hidden", "true");
-    expect(within(blurred).getAllByText(/^Page \d+$/)).toHaveLength(SAMPLE_PAGES.pageCount);
+    expect(within(blurred).getByText("Where people stopped")).toBeInTheDocument();
+    expect(within(blurred).getByText("Time per page")).toBeInTheDocument();
+    expect(within(blurred).getAllByText(`Page ${SAMPLE_PAGES.pageCount}`)).toHaveLength(2);
   });
 
   it("has no Pages tab while the server has document views but reports no pages", async () => {
