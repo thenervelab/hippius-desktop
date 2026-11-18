@@ -12,8 +12,14 @@
     <string>hippius.com</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <!-- The name people read: the menu bar, About, and the system's own
+         prompts. NOT the bundle folder, binary or productName, which stay
+         "Hippius" so existing installs update in place (see
+         src/utils/app_name.rs, whose tests pin this). -->
     <key>CFBundleName</key>
-    <string>Hippius</string>
+    <string>Hippius Drive</string>
+    <key>CFBundleDisplayName</key>
+    <string>Hippius Drive</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <!-- CFBundleShortVersionString is deliberately ABSENT. Tauri merges this
@@ -75,9 +81,9 @@
         <true/>
     </dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Hippius needs microphone access to include your voice in screen recordings.</string>
+    <string>Hippius Drive needs microphone access to include your voice in screen recordings.</string>
     <key>NSCameraUsageDescription</key>
-    <string>Hippius needs camera access to show your camera in screen recordings.</string>
+    <string>Hippius Drive needs camera access to show your camera in screen recordings.</string>
     <!-- Opts in to iPhones as Continuity Cameras (macOS 14+) for the camera
          window's getUserMedia. The recording helper, which lists the cameras
          the capture bar offers, carries the same key in its own embedded

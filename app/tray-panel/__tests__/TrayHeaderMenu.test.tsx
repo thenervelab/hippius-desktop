@@ -83,14 +83,14 @@ describe("the tray's ⋮ menu", () => {
     expect(itemTexts(menu)).toEqual([
       "Balance$12.35Top up",
       "PlanPlus · 640 GB / 2 TB",
-      "Open Hippius⌘O",
+      "Open Hippius Drive⌘O",
       "Open captures folder",
       "Settings⌘,",
       "Help & Support",
-      "Quit Hippius⌘Q",
+      "Quit Hippius Drive⌘Q",
     ]);
     expect(within(menu).getAllByRole("separator")).toHaveLength(2);
-    expect(within(menu).getByRole("menuitem", { name: /^Quit Hippius/ })).toHaveAttribute("aria-keyshortcuts", "Meta+Q");
+    expect(within(menu).getByRole("menuitem", { name: /^Quit Hippius Drive/ })).toHaveAttribute("aria-keyshortcuts", "Meta+Q");
   });
 
   it("asks for the plan as the signed-in account", async () => {
@@ -117,9 +117,9 @@ describe("the tray's ⋮ menu", () => {
   it("shows Ctrl off the Mac", async () => {
     platform.mac = false;
     const menu = await openMenu();
-    expect(within(menu).getByRole("menuitem", { name: /^Open Hippius/ })).toHaveTextContent("Ctrl+O");
+    expect(within(menu).getByRole("menuitem", { name: /^Open Hippius Drive/ })).toHaveTextContent("Ctrl+O");
     expect(within(menu).getByRole("menuitem", { name: /^Settings/ })).toHaveTextContent("Ctrl+,");
-    expect(within(menu).getByRole("menuitem", { name: /^Quit Hippius/ })).toHaveAttribute("aria-keyshortcuts", "Control+Q");
+    expect(within(menu).getByRole("menuitem", { name: /^Quit Hippius Drive/ })).toHaveAttribute("aria-keyshortcuts", "Control+Q");
   });
 
   it("leaves the captures folder out where capture is not offered", async () => {
@@ -176,7 +176,7 @@ describe("the tray's ⋮ menu", () => {
 
   it("quits through the same command as the tray icon's menu", async () => {
     const menu = await openMenu();
-    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Quit Hippius/ }));
+    fireEvent.click(within(menu).getByRole("menuitem", { name: /^Quit Hippius Drive/ }));
     await waitFor(() => expect(invoked("app_close")).toHaveLength(1));
   });
 

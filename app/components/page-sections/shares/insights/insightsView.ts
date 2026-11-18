@@ -94,7 +94,7 @@ export const SUMMARY_REACTIONS = 4;
  * The panel's tabs, in the order they are shown. `nda` is a slot: drawn only
  * when the panel is handed one (`NdaTabSlot` in `ShareInsightsSheet`).
  */
-export type InsightsTab = "comments" | "viewers" | "pages" | "reactions" | "nda";
+export type InsightsTab = "comments" | "viewers" | "people" | "pages" | "reactions" | "nda";
 
 /**
  * The files whose links count page by page views: PDF, Word and PowerPoint,

@@ -785,6 +785,51 @@ describe("ShareInsightsSheet", () => {
     expect(within(settings).getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it quiet.");
   });
 
+  it("adds a People tab for a file sent to several people, and Links per person in Link settings", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_group_insights: {
+        offered: true,
+        namesHidden: false,
+        overVisitBudget: false,
+        people: [
+          { shareToken: "tok", recipient: false, name: null, views: 2, viewers: 1, pages: null, emails: [] },
+          { shareToken: "r1", recipient: true, name: "Alice", views: 3, viewers: 1, pages: null, emails: [] },
+        ],
+      },
+      share_recipient_links: {
+        offered: true,
+        canAdd: true,
+        people: [{ shareToken: "r1", name: "Alice", url: "https://c/share/r1#s=AA", mailto: null }],
+      },
+    });
+    renderSheet();
+    const panel = await showTab("People");
+    expect(screen.getByRole("tab", { name: "People 2" })).toBeInTheDocument();
+    expect(within(panel).getAllByTestId("people-row")[1]).toHaveTextContent("Alice");
+
+    const settings = await openSettings();
+    expect(await within(settings).findByRole("textbox", { name: "Names or emails" })).toBeInTheDocument();
+    expect(within(settings).getByRole("button", { name: "Copy link for Alice" })).toBeInTheDocument();
+  });
+
+  it("has no People tab for a link sent to no one else", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_group_insights: { offered: false, namesHidden: false, overVisitBudget: false, people: [] },
+    });
+    renderSheet();
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_group_insights", { shareToken: "tok" }));
+    expect(screen.queryByRole("tab", { name: (n) => n.startsWith("People") })).toBeNull();
+  });
+
   it("has no NDA tab or switch on a server without NDA texts", async () => {
     answer({
       share_get_insights: PAID,

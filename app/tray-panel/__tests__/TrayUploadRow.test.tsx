@@ -467,7 +467,7 @@ describe("row menu", () => {
       "Download",
       "Copy link",
       "Share via link…",
-      "Show in Hippius",
+      "Show in Hippius Drive",
       expect.stringMatching(/^Reveal in /),
       "Save to Desktop",
       "Rename…",

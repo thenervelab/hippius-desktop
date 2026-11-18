@@ -19,7 +19,7 @@ use super::session::CapturePhase;
 pub const TRAY_ID: &str = "hippius-tray";
 
 /// The tooltip when no recording is running (the icon's normal one).
-pub const IDLE_TOOLTIP: &str = "Hippius Cloud";
+pub const IDLE_TOOLTIP: &str = crate::utils::app_name::APP_DISPLAY_NAME;
 
 /// "03:07": a recording's elapsed time, as the pill and the menu bar show it
 /// (minutes keep counting past 59, the same as the pill's `mmss`).
