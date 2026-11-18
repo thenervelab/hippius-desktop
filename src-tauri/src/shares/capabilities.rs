@@ -130,6 +130,9 @@ pub struct ServerCapabilities {
     /// Absent on older servers and off in production until it is turned
     /// on: Move to… shows no drive picker, and no move is sent.
     pub drive_moves: bool,
+    /// Insights for folder links (`/v1/folder-shares/by-hash/{h}/insights`
+    /// and `/settings`). Absent on older servers: no folder link Insights.
+    pub folder_share_insights: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -255,7 +258,7 @@ mod tests {
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"#,
-            r#""drive_moves":true}"#,
+            r#""drive_moves":true,"folder_share_insights":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -280,6 +283,7 @@ mod tests {
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
+        assert!(caps.folder_share_insights);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -293,6 +297,7 @@ mod tests {
                 "drive_moves",
                 "folder_grant_writes",
                 "folder_grants",
+                "folder_share_insights",
                 "folder_share_link_envelopes",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
