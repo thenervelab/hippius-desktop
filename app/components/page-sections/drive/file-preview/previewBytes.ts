@@ -10,6 +10,8 @@
 
 import { invoke } from "@tauri-apps/api/core";
 
+import type { OfficePreviewFormat } from "@/app/lib/utils/filePreviewType";
+
 /** Structured Tauri error shape (`AppError`'s custom `Serialize`). */
 interface StructuredIpcError {
   kind: string;
@@ -76,12 +78,35 @@ export async function readPreviewBytes(
   localPath: string,
   maxBytes: number,
   signal: AbortSignal,
+  /**
+   * Set by the Office renderers: Rust then vets the zip before returning the
+   * bytes, so a malformed archive is refused instead of reaching a JS unzip.
+   */
+  format?: OfficePreviewFormat,
 ): Promise<Uint8Array> {
   if (signal.aborted) throw abortError();
   const buffer = await invoke<ArrayBuffer>("read_preview_bytes", {
     sourcePath: localPath,
     maxBytes,
+    ...(format ? { format } : {}),
   });
   if (signal.aborted) throw abortError();
   return new Uint8Array(buffer);
+}
+
+/**
+ * Ask Rust whether an Office file is safe to hand to its renderer, before the
+ * renderer is mounted. Resolves when it is; rejects with the structured
+ * `{ kind, message }` error, whose message is Rust's own copy, when it is not.
+ */
+export function checkPreviewArchive(
+  localPath: string,
+  maxBytes: number,
+  format: OfficePreviewFormat,
+): Promise<void> {
+  return invoke("check_preview_archive", {
+    sourcePath: localPath,
+    maxBytes,
+    format,
+  });
 }

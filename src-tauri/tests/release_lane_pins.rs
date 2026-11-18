@@ -936,7 +936,7 @@ fn every_linux_build_has_gstreamer_and_the_deb_requires_the_plugins_every_record
 #[test]
 fn only_staging_builds_an_rpm_and_it_recommends_fedoras_plugins() {
     let staging = repo_file("../.github/workflows/tauri-staging.yml");
-    assert!(staging.contains("args: '--bundles deb,rpm'"), "staging builds deb and rpm");
+    assert!(staging.contains("args: '--bundles deb,rpm"), "staging builds deb and rpm");
     for lane in ["tauri-beta.yml", "tauri-build.yml"] {
         let text = repo_file(&format!("../.github/workflows/{lane}"));
         assert!(!text.contains("rpm"), "{lane} must not build an rpm");

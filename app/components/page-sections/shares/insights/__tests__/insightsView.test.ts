@@ -6,9 +6,15 @@ import {
   PAGES_LOCK_BODY_NOT_COUNTING,
   PAGES_LOCK_TITLE,
   biggestPageDrop,
+  longestPage,
+  pageReachSummary,
+  pageTimeSummary,
+  timeShares,
   pagesLockCopy,
   pagesSeenLabel,
   pagesTabShown,
+  DOWNLOAD_NOT_IN_PLAN,
+  isDownloadNotInPlan,
   actionErrorLine,
   loadErrorLine,
   OFFLINE_LINE,
@@ -383,7 +389,7 @@ describe("what Insights promise the owner", () => {
 describe("the Pages tab helpers", () => {
   const SHOWN = { state: "shown" as const, value: { pageCount: 3, reach: [100, 60, 50], medianMs: [1, 2, 3] } };
 
-  it("shows the tab only on a server with document views, for a document or a link with page numbers", () => {
+  it("shows the tab only when Rust sends pages, for a document or a link with page numbers", () => {
     expect(pagesTabShown(null, "Deck.pdf")).toBe(false);
     expect(pagesTabShown(undefined, "Deck.pdf")).toBe(false);
     expect(pagesTabShown({ state: "locked" }, "Deck.pdf")).toBe(true);
@@ -392,6 +398,15 @@ describe("the Pages tab helpers", () => {
     expect(pagesTabShown({ state: "locked" }, "Recording.mp4")).toBe(false);
     expect(pagesTabShown({ state: "shown", value: null }, "photo.png")).toBe(false);
     expect(pagesTabShown(SHOWN, "renamed-without-extension")).toBe(true);
+  });
+
+  it("knows Rust's refusal to turn downloads off on the free plan", () => {
+    expect(DOWNLOAD_NOT_IN_PLAN).toBe("Turning off downloads is available on paid Drive plans.");
+    expect(isDownloadNotInPlan({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN })).toBe(true);
+    expect(isDownloadNotInPlan({ kind: "Api", message: DOWNLOAD_NOT_IN_PLAN })).toBe(false);
+    expect(isDownloadNotInPlan({ kind: "Validation", message: "Insights, comments and reactions are available on paid Drive plans." })).toBe(false);
+    expect(isDownloadNotInPlan(null)).toBe(false);
+    expect(isDownloadNotInPlan("nope")).toBe(false);
   });
 
   it("finds the page after which the most visits left", () => {
@@ -409,5 +424,23 @@ describe("the Pages tab helpers", () => {
   it("locks with its own words, counting or not", () => {
     expect(pagesLockCopy({ notCounting: false })).toEqual({ title: PAGES_LOCK_TITLE, body: PAGES_LOCK_BODY });
     expect(pagesLockCopy({ notCounting: true }).body).toBe(PAGES_LOCK_BODY_NOT_COUNTING);
+  });
+});
+
+describe("a document's page charts", () => {
+  it("finds the page people spent longest on, and none when no time was counted", () => {
+    expect(longestPage([4_200, 9_000, 900])).toBe(2);
+    expect(longestPage([0, 0])).toBeNull();
+  });
+
+  it("draws each page's time as a share of the longest", () => {
+    expect(timeShares([5_000, 10_000, 0])).toEqual([50, 100, 0]);
+    expect(timeShares([0, 0])).toEqual([0, 0]);
+  });
+
+  it("names each chart by what it shows", () => {
+    expect(pageReachSummary([100, 75, 30, 25])).toBe("Where people stopped: 25% reached page 4. Most left after page 2.");
+    expect(pageTimeSummary([4_200, 3_000])).toBe("Time per page: longest on page 1, 0:04.");
+    expect(pageTimeSummary([0, 0])).toBe("Time per page: none counted yet.");
   });
 });

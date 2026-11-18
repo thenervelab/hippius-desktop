@@ -20,7 +20,7 @@ use zeroize::Zeroizing;
 use crate::auth::account_key::account_key;
 use crate::auth::service::IdentityError;
 use crate::console_access::{HcfsServerCtx, HttpOutcome, crypto_to_err, get_json, post_json_discard};
-use crate::error::{AppError, Result};
+use crate::error::{AppError, NotReadyKind, Result};
 use crate::recovery_proof::{
     MasterProof, Probe, ProofMethod, ProofProbes, RemoteAttempt, RemoteProbeOutcome, classify_remote_attempts, decide_master_proof,
 };
@@ -438,9 +438,9 @@ fn decide_seal_upload(probe: &BlobProbe, origin: SealOrigin) -> Result<()> {
 /// (Hippius Console), so an opened blob whose master does not derive
 /// this device's folder seals is refused with nothing changed.
 ///
-/// Wrong password surfaces as [`AppError::Validation("Wrong passphrase.")`]
+/// Wrong password surfaces as [`AppError::WrongUnlockPassword`]
 /// — same mapping the existing Console Access flow uses, so the frontend
-/// matches one error shape. SS58 mismatch collapses to the same variant
+/// matches one error kind. SS58 mismatch collapses to the same variant
 /// (hcfs-client's `AeadTag`) and is logged for diagnosis; in practice it
 /// shouldn't happen because the blob is keyed by the bearer-resolved
 /// SS58 on the server side.
@@ -737,10 +737,9 @@ enum MasterMismatch {
     Folder(String),
 }
 
-const UNLOCK_MASTER_MISMATCH: &str = "The unlock password on the server protects a different seed than the one this device's files were \
-                                      encrypted with. Nothing was changed on this device. Restore your original seed (choose \"Forgot \
-                                      your password?\", then \"Use your mnemonic seed\", and enter your recovery phrase) or contact \
-                                      support.";
+const UNLOCK_MASTER_MISMATCH: &str = "This unlock password opens a different seed than the one your files on this computer were \
+                                      encrypted with. Nothing was changed on this computer. Choose \"Forgot your password?\" and enter \
+                                      your original recovery seed or access key, or contact support.";
 
 /// Map a guard mismatch to the error the calling flow should surface.
 ///
@@ -1034,7 +1033,7 @@ pub async fn seal_and_upload_mnemonic(state: tauri::State<'_, crate::app_state::
 ///
 /// Flow (filled in across Tasks 2-5; this is the skeleton):
 /// 1. GET sealed blob.
-/// 2. Decrypt with `current` (wrong password → `Validation("Wrong passphrase.")`).
+/// 2. Decrypt with `current` (wrong password → `WrongUnlockPassword`).
 /// 3. Validate `new` (non-empty, strength, != current).
 /// 4. Derivation guard (reuses [`validate_master_against_existing_folders`]).
 /// 5. Reseal under `new`.
@@ -1095,7 +1094,7 @@ pub async fn change_recovery_password(
         }
     };
 
-    // 2. Decrypt with `current`. Wrong password → Validation("Wrong passphrase.").
+    // 2. Decrypt with `current`. Wrong password → WrongUnlockPassword.
     //    Argon2id off the executor (see run_kdf).
     let blob_k = blob;
     let current_k = current.clone();
@@ -1220,9 +1219,11 @@ pub async fn mark_recovery_skipped(state: tauri::State<'_, crate::app_state::App
 /// phrase must never upsert `/v1/mnemonic-blob` — that would overwrite
 /// the real sealed backup. Never mints a master (`seal_and_upload_mnemonic`
 /// does; this command must not call it).
-const PHRASE_MISMATCH: &str = "This recovery phrase does not match this account's files. Check the words and try again.";
-const PHRASE_UNPROVEN: &str = "We couldn't verify this recovery phrase against this account yet (no files on this device or in the cloud to check). The unlock password is the only way to open the backup until a file has been synced.";
-const SESSION_MNEMONIC_MISSING: &str = "This device doesn't have your mnemonic seed unlocked. Enter the seed to restore.";
+const PHRASE_MISMATCH: &str = "These words don't match this account's files. Check them and try again.";
+const PHRASE_UNPROVEN: &str = "We can't check these words yet, because this account has no files to check them against. Until a file has synced, only your unlock password can open your account.";
+/// Shown when typed words do not parse as a recovery seed / access key.
+/// The parser's own reason ("invalid word count") is logged, not shown.
+const PHRASE_INVALID: &str = "That doesn't look like a valid recovery seed or access key. Check for typos and extra words.";
 
 #[tauri::command]
 pub async fn restore_with_mnemonic(
@@ -1236,7 +1237,10 @@ pub async fn restore_with_mnemonic(
     let new_password = Zeroizing::new(new_password);
     reject_if_weak(&new_password)?;
 
-    bip39::Mnemonic::parse_normalized(mnemonic.trim()).map_err(|e| AppError::Validation(format!("Invalid recovery phrase: {e}")))?;
+    bip39::Mnemonic::parse_normalized(mnemonic.trim()).map_err(|e| {
+        debug!(error = %e, "recovery: typed words are not a valid mnemonic");
+        AppError::Validation(PHRASE_INVALID.into())
+    })?;
 
     let account_id = state.current_account_id()?;
     let pool = state.pool()?;
@@ -1276,9 +1280,9 @@ pub async fn reset_unlock_password(
 
     let mnemonic = crate::sync::mnemonic::get_mnemonic_for_account(state.inner(), &account_id)
         .await
-        .map_err(|_| AppError::Validation(SESSION_MNEMONIC_MISSING.into()))?;
+        .map_err(|_| AppError::NotReady(NotReadyKind::RecoverySeedRequired))?;
     if mnemonic.is_empty() {
-        return Err(AppError::Validation(SESSION_MNEMONIC_MISSING.into()));
+        return Err(AppError::NotReady(NotReadyKind::RecoverySeedRequired));
     }
 
     validate_master_against_existing_folders(pool, &account_id, &mnemonic, GuardFlow::Seal).await?;
@@ -1314,7 +1318,8 @@ async fn prove_master_for_account(pool: &SqlitePool, account_id: &str, candidate
         Ok(_) => probes.identity_match = true,
         Err(IdentityError::Mismatch { .. }) => {}
         Err(IdentityError::DeriveFailed(e)) => {
-            return Err(AppError::Validation(format!("Invalid recovery phrase: {e}")));
+            debug!(error = %e, "recovery: typed words are not a valid mnemonic");
+            return Err(AppError::Validation(PHRASE_INVALID.into()));
         }
     }
     if let Some(done) = finished_proof(probes) {
@@ -1401,9 +1406,7 @@ async fn probe_remote_decrypt(pool: &SqlitePool, account_id: &str, candidate: &s
         RemoteProbeOutcome::Confirmed => Ok(Probe::Confirmed),
         RemoteProbeOutcome::Mismatch => Ok(Probe::Mismatch),
         RemoteProbeOutcome::Unproven => Ok(Probe::Absent),
-        RemoteProbeOutcome::Transport => Err(AppError::Hcfs(
-            "Couldn't reach the server to verify this recovery phrase. Try again.".into(),
-        )),
+        RemoteProbeOutcome::Transport => Err(AppError::Hcfs("Couldn't reach the server to check these words. Try again.".into())),
     }
 }
 
@@ -2412,10 +2415,7 @@ mod tests {
         let err = super::prove_master_for_account(&pool, "5Whatever", "not a bip39 phrase")
             .await
             .unwrap_err();
-        assert!(
-            matches!(err, AppError::Validation(ref msg) if msg.contains("Invalid recovery phrase")),
-            "got {err:?}"
-        );
+        assert!(matches!(err, AppError::Validation(ref msg) if msg == PHRASE_INVALID), "got {err:?}");
     }
 
     #[tokio::test]

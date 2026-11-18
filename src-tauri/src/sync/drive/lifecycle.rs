@@ -103,11 +103,15 @@ pub async fn setup_and_init_sync(
         Ok(p) if !p.is_empty() => crate::sync::files::sum_regular_file_bytes(std::path::Path::new(&p)).await,
         _ => 0,
     };
-    crate::billing::eligibility::require_eligible(
+    // A drive shared WITH this account is paid for by its owner, so its
+    // owner's allowance is what the gate asks about.
+    let drive = crate::billing::eligibility::member_drive_for_label(&state, &account_id, &label).await;
+    crate::billing::eligibility::require_eligible_for_drive(
         &state,
         &account_id,
         crate::billing::eligibility::InsufficientCreditsAction::FolderSync,
         bytes,
+        drive.as_ref(),
     )
     .await?;
 
@@ -1302,9 +1306,10 @@ pub(crate) async fn initialize_sync_inner(
         // peer drive's sync: the reported "app freezes when a second folder is
         // added while one is already syncing". hcfs now reads the paths from the
         // drive slots, but hot-add still watches each root (a tree walk on
-        // Linux). The new drive is already registered (just above), so the
-        // running loop picks it up on its next cycle regardless; spawn the
-        // hot-add so init can commit its status and return immediately.
+        // Linux). The new drive is already registered (just above), and
+        // `add_drive` schedules a full first cycle of it in the running loop at
+        // once; the hot-add only adds the watch, so spawn it and let init
+        // commit its status and return immediately.
         //
         // When no loop is running yet, keep awaiting: creation is cheap (there
         // is no busy peer manager to wait on) and awaiting keeps the first

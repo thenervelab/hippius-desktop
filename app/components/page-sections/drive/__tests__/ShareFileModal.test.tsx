@@ -18,8 +18,15 @@ import { Channel } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 
 import ShareFileModal, { PASSWORD_NO_COMMENTS, SWITCHES_NOT_ON } from "../ShareFileModal";
-import { FIRST_VIEW_EMAIL } from "../SecureLinkSection";
-import { LOCKED_ACTION, LOCKED_PROMPT } from "@/components/page-sections/shares/insights/insightsView";
+import { FIRST_VIEW_EMAIL, LINK_EMAILS_NEED_SIGN_IN, SECURE_LINK } from "../SecureLinkSection";
+import { DOWNLOAD_SWITCH } from "../LinkEngagementSwitches";
+import { GATE_LABEL } from "@/components/page-sections/shares/insights/EmailGateSettings";
+import {
+  DOWNLOAD_LOCKED_PROMPT,
+  DOWNLOAD_NOT_IN_PLAN,
+  LOCKED_ACTION,
+  LOCKED_PROMPT,
+} from "@/components/page-sections/shares/insights/insightsView";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { insufficientCreditsDialogOpenAtom } from "@/app/components/page-sections/drive/atoms/query-atoms";
 import {
@@ -46,14 +53,24 @@ const getLinkMock = vi.fn().mockRejectedValue(new Error("not read in this test")
 // says, so the first-view email switch stays hidden.
 const getPrefsMock = vi.fn().mockRejectedValue(new Error("not offered"));
 const setPrefsMock = vi.fn().mockResolvedValue(undefined);
+// Whether link emails can reach the account: unknown (an older server)
+// unless a test says.
+const canReceiveMock = vi.fn().mockRejectedValue(new Error("not offered"));
+// The finished link's email gate: a server without it unless a test says.
+const getGateMock = vi.fn().mockResolvedValue({ offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null });
+// The finished link's NDA setting: a server without it unless a test says.
+const getNdaMock = vi.fn().mockResolvedValue({ offered: false, on: false, text: null, editable: false, inPlan: null });
 const PREVIEW_COMMANDS: Record<string, ReturnType<typeof vi.fn>> = {
   share_get_notification_preferences: getPrefsMock,
   share_set_notification_preferences: setPrefsMock,
+  share_can_receive_link_emails: canReceiveMock,
   hcfs_share_preview_default: previewDefaultMock,
   hcfs_set_share_preview: setPreviewMock,
   share_link_settings_default: linkDefaultMock,
   share_set_link_settings: setLinkMock,
   share_get_link_settings: getLinkMock,
+  share_get_gate: getGateMock,
+  share_get_nda: getNdaMock,
 };
 // `createShare` opens a `Channel` for progress, so the mock module must
 // expose a constructable `Channel`. The class is defined INLINE because
@@ -1321,6 +1338,64 @@ describe("ShareFileModal link switches", () => {
     expect(screen.queryByText(LOCKED_PROMPT)).toBeNull();
   });
 
+  it("offers Allow download on the finished link where Rust reports it, and sends only that change", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: true });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: true, download: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    expect(screen.queryByRole("switch", { name: DOWNLOAD_SWITCH.label })).toBeNull();
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+
+    // Read even though no switch was asked for: it is where download comes from.
+    const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
+    expect(download).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByText(DOWNLOAD_SWITCH.description)).toBeInTheDocument();
+    fireEvent.click(download);
+    await waitFor(() => expect(setLinkMock).toHaveBeenCalledWith("share_set_link_settings", { shareToken: "tok-rec", change: { download: false } }));
+    expect(download).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("shows the upgrade card when turning downloads off is refused for the plan", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: null });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: { insights: false, comments: false, reactions: false }, switchesInPlan: null, download: true });
+    setLinkMock.mockRejectedValueOnce({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
+    fireEvent.click(download);
+    expect(await screen.findByText(DOWNLOAD_LOCKED_PROMPT)).toBeInTheDocument();
+    expect(download).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("draws no Allow download where Rust sends none (a server without the switch)", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getLinkMock.mockResolvedValueOnce({ offered: ALL_ON, on: ALL_ON, switchesInPlan: true, download: null });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    await screen.findByDisplayValue(/tok-rec#k=KEY/);
+    await waitFor(() => expect(getLinkMock).toHaveBeenCalled());
+    expect(screen.queryByRole("switch", { name: DOWNLOAD_SWITCH.label })).toBeNull();
+  });
+
+  it("offers Ask for email on the finished link only where Rust says the server has email gates", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
+    getGateMock.mockResolvedValueOnce({ offered: true, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: true });
+    invokeMock.mockResolvedValueOnce(LINK);
+    render(withProvider(<ShareFileModal />, RECORDING));
+    await screen.findByRole("switch", { name: "Insights" });
+    confirmChooser();
+    const gate = await screen.findByRole("switch", { name: GATE_LABEL });
+    expect(gate).toHaveAttribute("aria-checked", "false");
+    expect(getGateMock).toHaveBeenCalledWith("share_get_gate", { shareToken: "tok-rec" });
+    expect(within(screen.getByRole("group", { name: SECURE_LINK })).getByRole("switch", { name: GATE_LABEL })).toBe(gate);
+  });
+
   it("sends the Finder chooser's switches with the confirm", async () => {
     linkDefaultMock.mockResolvedValue({ offered: ALL_ON, on: ALL_ON });
     invokeMock.mockResolvedValueOnce(LINK);
@@ -1449,6 +1524,7 @@ describe("ShareFileModal secure link section", () => {
     getLinkMock.mockReset().mockRejectedValue(new Error("not read in this test"));
     getPrefsMock.mockReset().mockRejectedValue(new Error("not offered"));
     setPrefsMock.mockReset().mockResolvedValue(undefined);
+    canReceiveMock.mockReset().mockRejectedValue(new Error("not offered"));
     installClipboard();
   });
 
@@ -1469,11 +1545,13 @@ describe("ShareFileModal secure link section", () => {
 
   it("shows the first-view email only while Insights is on, and saves it for the account", async () => {
     linkDefaultMock.mockResolvedValue({ offered: INSIGHTS_ONLY, on: INSIGHTS_ONLY, switchesInPlan: true });
+    canReceiveMock.mockResolvedValue(true);
     getPrefsMock.mockResolvedValue(PREFS);
     render(withProvider(<ShareFileModal />, DOC));
 
     const section = screen.getByRole("group", { name: "Secure link" });
     const email = await within(section).findByRole("switch", { name: FIRST_VIEW_EMAIL });
+    expect(screen.queryByText(LINK_EMAILS_NEED_SIGN_IN)).toBeNull();
     expect(email).toHaveAttribute("aria-checked", "true");
     fireEvent.click(email);
     await waitFor(() =>
@@ -1491,8 +1569,22 @@ describe("ShareFileModal secure link section", () => {
     linkDefaultMock.mockResolvedValue({ offered: INSIGHTS_ONLY, on: INSIGHTS_ONLY, switchesInPlan: true });
     render(withProvider(<ShareFileModal />, DOC));
     await screen.findByRole("switch", { name: "Insights" });
-    await waitFor(() => expect(getPrefsMock).toHaveBeenCalled());
+    await waitFor(() => expect(canReceiveMock).toHaveBeenCalled());
     expect(screen.queryByRole("switch", { name: FIRST_VIEW_EMAIL })).toBeNull();
+    expect(screen.queryByText(LINK_EMAILS_NEED_SIGN_IN)).toBeNull();
+  });
+
+  it("shows an access-key account how to get link emails instead of the switch", async () => {
+    linkDefaultMock.mockResolvedValue({ offered: INSIGHTS_ONLY, on: INSIGHTS_ONLY, switchesInPlan: true });
+    canReceiveMock.mockResolvedValue(false);
+    getPrefsMock.mockResolvedValue(PREFS);
+    render(withProvider(<ShareFileModal />, DOC));
+
+    const section = screen.getByRole("group", { name: "Secure link" });
+    expect(await within(section).findByText(LINK_EMAILS_NEED_SIGN_IN)).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: FIRST_VIEW_EMAIL })).toBeNull();
+    // The preferences are never read: there is nothing to show them on.
+    expect(getPrefsMock).not.toHaveBeenCalled();
   });
 
   it("changes the finished link's expiry with the existing command, and puts it back if refused", async () => {

@@ -86,11 +86,11 @@ describe("SyncReauthRequiredAlert", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("mnemonic user: shows seed-phrase copy and routes straight to the login form", () => {
+  it("mnemonic user: shows access-key copy and routes straight to the login form", () => {
     renderBanner();
-    expect(screen.getByText("Sync needs your seed phrase")).toBeInTheDocument();
+    expect(screen.getByText("Sync needs your access key")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /re-enter seed phrase/i }));
+    fireEvent.click(screen.getByRole("button", { name: /enter access key/i }));
 
     expect(pushMock).toHaveBeenCalledWith("/login?reauth=1");
     // The seed-phrase path must never consult the recovery probe.
@@ -101,8 +101,8 @@ describe("SyncReauthRequiredAlert", () => {
     authState.authType = "oauth";
     renderBanner();
     expect(screen.getByText("Sync needs your unlock password")).toBeInTheDocument();
-    expect(screen.queryByText("Sync needs your seed phrase")).not.toBeInTheDocument();
-    expect(screen.getByText(/mnemonic seed if you forgot/i)).toBeInTheDocument();
+    expect(screen.queryByText("Sync needs your access key")).not.toBeInTheDocument();
+    expect(screen.getByText(/recovery seed if you forgot/i)).toBeInTheDocument();
   });
 
   // `proceed` means two opposite things and the banner used to treat both as

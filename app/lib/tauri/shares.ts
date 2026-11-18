@@ -80,6 +80,18 @@ export interface ServerCapabilities {
    */
   share_document_views?: boolean;
   /**
+   * The owner's Allow download switch on a file link. Read by Rust only (it
+   * sends `download` in the link settings only then); listed so the type
+   * matches the wire.
+   */
+  share_download_switch?: boolean;
+  /**
+   * Email gates on file links ("Ask for email"). Read by Rust only (the
+   * gate commands answer `offered: false` without it); listed so the type
+   * matches the wire.
+   */
+  share_gates?: boolean;
+  /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
    */
@@ -89,11 +101,16 @@ export interface ServerCapabilities {
    * so the type matches the wire.
    */
   drive_invite_link_envelopes?: boolean;
+  /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
+  drive_moves?: boolean;
+  /** Insights for folder links: which files were opened, and by whom. */
+  folder_share_insights?: boolean;
 }
 
 /**
  * Returned by `hcfs_create_share`. `shareUrl` already includes the
- * `#k=<key>` fragment so the FE can hand it directly to the user; the
+ * fragment (`#s=` / `#sp=`, or `#k=` / `#p=` from an older server) so the FE
+ * can hand it directly to the user; the
  * fragment is never transmitted to the server (browsers don't send
  * fragments on navigation).
  */
@@ -276,10 +293,11 @@ export interface ShareSummary {
   /** RFC 3339 timestamp, or `null` when the link never expires. */
   expiresAt: string | null;
   /**
-   * Recipient URL, or `null` if the key is unknown locally. Carries a `#k=`
-   * fragment for a public share and a `#p=` one for a password-protected
-   * share — the backend derives it from the stored secret's kind, so this can
-   * never be a password-free link to a protected share.
+   * Recipient URL, or `null` if the key is unknown locally. Carries a `#s=`
+   * (or legacy `#k=`) fragment for a public share and a `#sp=` (or `#p=`) one
+   * for a password-protected share — the backend derives it from the stored
+   * secret's kind, so this can never be a password-free link to a protected
+   * share.
    */
   shareUrl: string | null;
   /**

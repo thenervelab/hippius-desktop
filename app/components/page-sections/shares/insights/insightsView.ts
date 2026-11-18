@@ -16,6 +16,22 @@ export const ANONYMOUS = "Anonymous viewer";
  * Reactions switch is turned on: the same words the web app uses.
  */
 export const LOCKED_PROMPT = "Insights, comments and reactions are available on paid Drive plans";
+/** The upgrade prompt where Allow download is turned off on the free plan. */
+export const DOWNLOAD_LOCKED_PROMPT = "Turning off downloads is available on paid Drive plans";
+/** The line under it. */
+export const DOWNLOAD_UPGRADE_BODY = "Upgrade to hide the download button on your links.";
+/**
+ * Rust's refusal when downloads are turned off on the free plan (its
+ * `DOWNLOAD_NOT_IN_PLAN`, word for word), which shows the prompt above.
+ */
+export const DOWNLOAD_NOT_IN_PLAN = "Turning off downloads is available on paid Drive plans.";
+
+/** Whether `err` is Rust's refusal to turn downloads off on the free plan. */
+export function isDownloadNotInPlan(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  return kind === "Validation" && message === DOWNLOAD_NOT_IN_PLAN;
+}
 /** Every upgrade button in Insights says this, as the sheet's own does. */
 export const LOCKED_ACTION = "Upgrade plan";
 /** The line under the prompt where a switch was turned on. */
@@ -74,8 +90,11 @@ export const VIEWERS_PAGE = 20;
 /** Reaction chips in the summary before the rest fold into "+N". */
 export const SUMMARY_REACTIONS = 4;
 
-/** The panel's tabs, in the order they are shown. */
-export type InsightsTab = "comments" | "viewers" | "pages" | "reactions";
+/**
+ * The panel's tabs, in the order they are shown. `nda` is a slot: drawn only
+ * when the panel is handed one (`NdaTabSlot` in `ShareInsightsSheet`).
+ */
+export type InsightsTab = "comments" | "viewers" | "pages" | "reactions" | "nda";
 
 /**
  * The files whose links count page by page views: PDF, Word and PowerPoint,
@@ -84,9 +103,11 @@ export type InsightsTab = "comments" | "viewers" | "pages" | "reactions";
 export const DOCUMENT_NAME = /\.(pdf|docx|pptx)$/i;
 
 /**
- * Whether the Pages tab shows: only on a server with document views (Rust
- * sends `pages` only then), for a document's link, or for any link that
- * already has page numbers. On the free plan it is the lock.
+ * Whether the Pages tab shows: only when Rust sends `pages`, which it does
+ * only when the server reports them (a pages block on a paid link, or
+ * `pages` locked on the free plan), never from the capability alone. Then
+ * for a document's link, or any link that already has page numbers. On the
+ * free plan it is the lock.
  */
 export function pagesTabShown(pages: Gated<InsightsPages | null> | null | undefined, fileName: string): boolean {
   if (!pages) return false;
@@ -109,13 +130,43 @@ export function biggestPageDrop(reach: readonly number[]): { afterPage: number; 
 }
 const MIN_PAGE_DROP_POINTS = 2;
 
+/** The page people spent longest on, 1-based, or null when no time was counted. */
+export function longestPage(medianMs: readonly number[]): number | null {
+  let at = -1;
+  medianMs.forEach((ms, i) => {
+    if (ms > 0 && (at < 0 || ms > medianMs[at])) at = i;
+  });
+  return at < 0 ? null : at + 1;
+}
+
+/** Each page's time as a share of the longest, 0 to 100, for the time chart. */
+export function timeShares(medianMs: readonly number[]): number[] {
+  const max = Math.max(0, ...medianMs);
+  return medianMs.map((ms) => (max > 0 ? (Math.max(0, ms) / max) * 100 : 0));
+}
+
+/** The reach chart's name: how many reached the last page, and where most left. */
+export function pageReachSummary(reach: readonly number[]): string {
+  const last = reach.length;
+  const drop = biggestPageDrop(reach);
+  return `Where people stopped: ${Math.round(reach[last - 1] ?? 0)}% reached page ${last}.${
+    drop ? ` Most left after page ${drop.afterPage}.` : ""
+  }`;
+}
+
+/** The time chart's name: the page people spent longest on. */
+export function pageTimeSummary(medianMs: readonly number[]): string {
+  const at = longestPage(medianMs);
+  return at === null
+    ? "Time per page: none counted yet."
+    : `Time per page: longest on page ${at}, ${formatWatched(medianMs[at - 1])}.`;
+}
+
 /** A viewer's pages: `5 of 12 pages`, or `1 of 1 page`. */
 export function pagesSeenLabel(seen: number, count: number): string {
   return `${seen} of ${count} ${count === 1 ? "page" : "pages"}`;
 }
 
-/** Pages listed before "Show more pages", and how many each press adds. */
-export const PAGES_PAGE = 20;
 
 /**
  * The tab the panel opens on: Comments when there are any (that is what an
@@ -450,7 +501,11 @@ export const SAMPLE_VIEWERS: InsightsViewer[] = [
   { viewerId: "sample-2", name: "Example viewer", visits: 1, watchedMs: 47_000, completion: 0.41, lastViewedAt: null, comments: 0, reactions: 1 },
 ];
 
-/** The sample pages behind the Pages tab's lock: a 10 page document. */
+/**
+ * The sample pages behind the Pages tab's lock: a 10 page document. Drawn
+ * only when the server locks `pages` itself, so a sample never stands in for
+ * a feature the server does not report yet.
+ */
 export const SAMPLE_PAGES: InsightsPages = {
   pageCount: 10,
   reach: [100, 92, 84, 80, 61, 58, 55, 41, 38, 30],

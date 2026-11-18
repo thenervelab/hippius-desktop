@@ -39,6 +39,26 @@ fn the_main_window_reads_no_static_path_under_home() {
     }
 }
 
+/// A drop is sorted into files and folders with the fs plugin's `stat`
+/// (`filterDroppedPaths`) before anything uploads. `fs:default` does not
+/// allow `stat`, and without it every stat is refused, every dropped path is
+/// discarded and a drop does nothing at all. The command is granted with no
+/// static path: it reaches only what the plugin scopes at runtime (dropped
+/// and picked paths, the app's own folders).
+#[test]
+fn dropped_files_can_be_sorted_into_files_and_folders() {
+    let capability = json("capabilities/default.json");
+    let ids: Vec<&str> = capability["permissions"]
+        .as_array()
+        .expect("permissions")
+        .iter()
+        .filter_map(|p| p.as_str())
+        .collect();
+    assert!(ids.contains(&"fs:allow-stat"), "the main window must be able to stat a dropped path");
+    let classify = read("../app/lib/utils/filterDroppedPaths.ts");
+    assert!(classify.contains("await stat("), "drops are sorted with the fs plugin's stat");
+}
+
 #[test]
 fn files_open_in_their_app_through_the_checked_command() {
     let main = read("src/main.rs");

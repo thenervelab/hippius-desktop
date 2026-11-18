@@ -11,6 +11,7 @@ import { MnemonicBackupDialog } from "./MnemonicBackupDialog";
 import { SettingsWarningNotice } from "./SettingsWarningNotice";
 import ChangeRecoveryPasswordDialog from "@/components/recovery/ChangeRecoveryPasswordDialog";
 import SetRecoveryPasswordDialog from "@/components/recovery/SetRecoveryPasswordDialog";
+import { seedWordsFor } from "@/components/recovery/_shared";
 import { checkRecoveryState } from "@/app/lib/utils/recovery";
 import type { RecoveryCheck } from "@/app/lib/global-atoms/recoveryAtoms";
 import { cn } from "@/lib/utils";
@@ -66,7 +67,7 @@ function SecurityRow({
 }
 
 const RecoveryPhraseSettings: React.FC = () => {
-  const { getMnemonic, polkadotAddress } = useWalletAuth();
+  const { getMnemonic, polkadotAddress, authType } = useWalletAuth();
   const [mnemonic, setMnemonic] = useState<string | null>(null);
   const [showDialog, setShowDialog] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -125,7 +126,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       setMnemonic(result);
       setShowDialog(true);
     } else {
-      toast.error("Mnemonic seed not available yet. Please configure sync first.");
+      toast.error("Your recovery seed isn't available yet. Set up sync first.");
     }
   };
 
@@ -159,7 +160,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       <InView triggerOnce>
         {({ inView, ref }) => (
           <div ref={ref} className="flex flex-col gap-4">
-            {/* Row 1: Mnemonic Seed backup */}
+            {/* Row 1: recovery seed backup */}
             <div
               className={cn(
                 "transition-all duration-500 ease-out",
@@ -168,9 +169,9 @@ const RecoveryPhraseSettings: React.FC = () => {
             >
               <SecurityRow
                 Icon={Key}
-                title="Mnemonic Seed"
-                description="Your mnemonic seed is the only way to restore access to your wallet and encrypted files."
-                actionLabel="Backup Mnemonic Seed"
+                title="Recovery Seed"
+                description="Your recovery seed is the only way to restore your wallet and encrypted files."
+                actionLabel="Back Up Recovery Seed"
                 onAction={handleBackup}
               />
             </div>
@@ -183,8 +184,8 @@ const RecoveryPhraseSettings: React.FC = () => {
               )}
             >
               <SettingsWarningNotice
-                title="Keep your Mnemonic key secure"
-                description="If you lose your mnemonic seed, you will permanently lose access to your encrypted files. There is no way to recover it."
+                title="Keep your recovery seed safe"
+                description="If you lose your recovery seed, you lose your encrypted files for good. Nobody can recover it for you."
               />
             </div>
 
@@ -201,7 +202,7 @@ const RecoveryPhraseSettings: React.FC = () => {
                 description={
                   hasServerBlob
                     ? "Your unlock password is set. You can change it at any time."
-                    : "You haven't set unlock password yet. Without it you won't be able to preview or download files on Hippius Console."
+                    : "You haven't set an unlock password yet. Without it you can't preview or download files in Hippius Console."
                 }
                 actionLabel={
                   hasServerBlob ? "Change Unlock Password" : "Set Unlock Password"
@@ -224,6 +225,7 @@ const RecoveryPhraseSettings: React.FC = () => {
       <ChangeRecoveryPasswordDialog
         open={showChangePassword}
         onOpenChange={setShowChangePassword}
+        seedWords={seedWordsFor(authType)}
       />
       <SetRecoveryPasswordDialog
         open={showSetPassword}

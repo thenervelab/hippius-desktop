@@ -8,9 +8,14 @@ import { MotionGlobalConfig } from "framer-motion";
 
 import ShareInsightsSheet, { LINK_TURNED_OFF, LINK_TURNED_OFF_BODY } from "../ShareInsightsSheet";
 import { OFFLINE_LINE, UNREACHABLE_LINE } from "../insightsView";
+import { DOWNLOAD_SWITCH } from "@/components/page-sections/drive/LinkEngagementSwitches";
+import { GATE_LABEL } from "../EmailGateSettings";
+import { NDA_LABEL } from "../NdaSettings";
 import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
+  DOWNLOAD_LOCKED_PROMPT,
+  DOWNLOAD_NOT_IN_PLAN,
   LOCK_BODY,
   LOCK_BODY_NOT_COUNTING,
   LOCK_BODY_STILL,
@@ -38,6 +43,12 @@ import type { ShareComments, ShareInsights } from "@/app/lib/tauri/shareInsights
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
+}));
+const saveDialog = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: (...a: unknown[]) => saveDialog(...a) }));
+vi.mock("@tauri-apps/api/path", () => ({
+  downloadDir: () => Promise.resolve("/Users/me/Downloads"),
+  join: (...parts: string[]) => Promise.resolve(parts.join("/")),
 }));
 const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
@@ -652,7 +663,8 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() => expect(within(blurred).getByText(String(SAMPLE_VIEWS))).toBeInTheDocument());
       expect(within(blurred).getByText(`${SAMPLE_UNIQUE_VIEWERS} people viewed`)).toBeInTheDocument();
       // No "0 views" outside the lock: nothing is being counted, and it says so.
-      expect(screen.queryByText("0")).toBeNull();
+      // (The tabs' own counts, comments and reactions, may be zero.)
+      expect(screen.queryAllByText("0").filter((el) => !el.closest('[role="tablist"]'))).toEqual([]);
       expect(within(screen.getByRole("region", { name: "Summary" })).getByText("Not counting views")).toBeInTheDocument();
       expect(within(locked).getByText(LOCK_BODY_NOT_COUNTING)).toBeInTheDocument();
     });
@@ -727,6 +739,146 @@ describe("ShareInsightsSheet", () => {
           change: { insights: false },
         }),
       );
+    });
+  });
+
+  it("offers Ask for email in Link settings only where Rust says the server has email gates", async () => {
+    const gate = { offered: true, on: true, allowCount: 0, blockCount: 0, lists: { allow: [], block: [] }, inPlan: true };
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_gate: gate,
+    });
+    renderSheet();
+    const settings = await openSettings();
+    const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
+    expect(ask).toHaveAttribute("aria-checked", "true");
+    expect(within(settings).getByRole("textbox", { name: "Only allow" })).toBeInTheDocument();
+  });
+
+  it("offers Ask to accept an NDA in Link settings and an NDA tab once the link has a text", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_nda: { offered: true, on: true, text: "Keep it quiet.", editable: true, inPlan: true },
+      share_nda_accepts: {
+        offered: true,
+        hasText: true,
+        text: "Keep it quiet.",
+        // Viewer "b" is "Ahmad" on the Viewers tab.
+        accepts: [{ id: 1, viewerId: "b", email: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
+        nextAfter: null,
+      },
+    });
+    renderSheet();
+    const panel = await showTab("NDA");
+    expect(screen.getByRole("tab", { name: "NDA 1" })).toBeInTheDocument();
+    expect(within(panel).getByTestId("nda-current-text")).toHaveTextContent("Keep it quiet.");
+    expect(within(panel).getByTestId("nda-accept")).toHaveTextContent("Ahmad");
+
+    const settings = await openSettings();
+    expect(await within(settings).findByRole("switch", { name: NDA_LABEL })).toHaveAttribute("aria-checked", "true");
+    expect(within(settings).getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it quiet.");
+  });
+
+  it("has no NDA tab or switch on a server without NDA texts", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_nda: { offered: false, on: false, text: null, editable: false, inPlan: null },
+      share_nda_accepts: { offered: false, hasText: false, text: null, accepts: [], nextAfter: null },
+    });
+    renderSheet();
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_nda_accepts", { shareToken: "tok", after: 0 }));
+    expect(screen.queryByRole("tab", { name: (n) => n.startsWith("NDA") })).toBeNull();
+    const settings = await openSettings();
+    await within(settings).findByRole("switch", { name: "Insights" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_nda", { shareToken: "tok" }));
+    expect(within(settings).queryByRole("switch", { name: NDA_LABEL })).toBeNull();
+  });
+
+  it("has no Ask for email on a server without email gates", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_get_reactions: NO_REACTIONS,
+      share_get_link_settings: { offered: ALL_ON, on: ALL_ON, switchesInPlan: true },
+      share_get_gate: { offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null },
+    });
+    renderSheet();
+    const settings = await openSettings();
+    await within(settings).findByRole("switch", { name: "Insights" });
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_get_gate", { shareToken: "tok" }));
+    expect(within(settings).queryByRole("switch", { name: GATE_LABEL })).toBeNull();
+  });
+
+  describe("Allow download", () => {
+    const ALL = { insights: true, comments: true, reactions: true };
+    function link({ plan, download, refuse = false }: { plan: boolean; download?: boolean | null; refuse?: boolean }) {
+      let current = download;
+      invokeMock.mockImplementation((cmd: string, args?: { change?: { download?: boolean } }) => {
+        if (cmd === "share_get_insights") return Promise.resolve(plan ? PAID : { ...FREE, totalViews: 0, uniqueViewers: 0 });
+        if (cmd === "share_list_comments") return Promise.resolve({ comments: [], unreadable: null });
+        if (cmd === "share_get_reactions") return Promise.resolve({ counts: [], total: 0 });
+        if (cmd === "share_get_link_settings")
+          return Promise.resolve({ offered: ALL, on: ALL, switchesInPlan: plan, download: current });
+        if (cmd === "share_set_link_settings") {
+          if (refuse) return Promise.reject({ kind: "Validation", message: DOWNLOAD_NOT_IN_PLAN });
+          current = args?.change?.download ?? current;
+          return Promise.resolve();
+        }
+        return Promise.reject(new Error(`unexpected ${cmd}`));
+      });
+    }
+
+    it("is not drawn on a server without the switch", async () => {
+      link({ plan: true, download: null });
+      renderSheet();
+      const settings = await openSettings();
+      await within(settings).findByRole("switch", { name: "Insights" });
+      expect(within(settings).queryByRole("switch", { name: "Allow download" })).toBeNull();
+    });
+
+    it("turns downloads off on a paid plan, sending only that switch", async () => {
+      link({ plan: true, download: true });
+      renderSheet();
+      const settings = await openSettings();
+      const allow = await within(settings).findByRole("switch", { name: "Allow download" });
+      expect(allow).toHaveAttribute("aria-checked", "true");
+      fireEvent.click(allow);
+      await waitFor(() =>
+        expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", { shareToken: "tok", change: { download: false } }),
+      );
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Allow download" })).toHaveAttribute("aria-checked", "false"));
+    });
+
+    it("shows the upgrade prompt on the free plan instead of turning it off", async () => {
+      link({ plan: false, download: true });
+      renderSheet();
+      const settings = await openSettings();
+      const allow = await within(settings).findByRole("switch", { name: "Allow download" });
+      expect(within(settings).getByText(DOWNLOAD_SWITCH.locked)).toBeInTheDocument();
+      fireEvent.click(allow);
+      expect(allow).toHaveAttribute("aria-checked", "true");
+      const prompt = within(settings).getByRole("region", { name: "Upgrade to turn off downloads" });
+      expect(within(prompt).getByText(DOWNLOAD_LOCKED_PROMPT)).toBeInTheDocument();
+      expect(invokeMock).not.toHaveBeenCalledWith("share_set_link_settings", expect.anything());
+    });
+
+    it("shows the upgrade prompt when the server refuses it for the plan", async () => {
+      link({ plan: true, download: true, refuse: true });
+      renderSheet();
+      const settings = await openSettings();
+      fireEvent.click(await within(settings).findByRole("switch", { name: "Allow download" }));
+      expect(await within(settings).findByRole("region", { name: "Upgrade to turn off downloads" })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole("switch", { name: "Allow download" })).toHaveAttribute("aria-checked", "true"));
     });
   });
 
@@ -849,6 +1001,68 @@ describe("ShareInsightsSheet", () => {
       expect(await screen.findByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
       fireEvent.pointerDown(gear);
       fireEvent.click(gear);
+      await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+    });
+
+    // A click as WebKit (the macOS webview) does it: pointer down, then focus
+    // goes to the nearest focusable ancestor (a clicked button never takes it),
+    // then the click. Before the popover took that focus itself, it was the
+    // panel's, which read as focus leaving and closed the popover.
+    function webkitClick(el: HTMLElement) {
+      fireEvent.pointerDown(el, { button: 0 });
+      fireEvent.mouseDown(el, { button: 0 });
+      const holder = el.parentElement?.closest<HTMLElement>("[tabindex]");
+      holder?.focus();
+      fireEvent.mouseUp(el, { button: 0 });
+      fireEvent.click(el);
+    }
+
+    for (const wide of [true, false]) {
+      it(`toggles every switch and stays open, ${wide ? "inline" : "in the narrow-window sheet"}`, async () => {
+        viewport.wide = wide;
+        let link = { ...ALL_SWITCHES_ON, on: { ...ALL_ON } };
+        answer({
+          share_get_insights: PAID,
+          share_list_comments: COMMENTS,
+          share_get_reactions: NO_REACTIONS,
+          share_get_link_settings: () => link,
+          share_set_link_settings: ({ change }: { change: Partial<typeof ALL_ON> }) => {
+            link = { ...link, on: { ...link.on, ...change } };
+          },
+        });
+        renderSheet();
+        const settings = await openSettings();
+        for (const name of ["Insights", "Comments", "Reactions"] as const) {
+          const toggle = await within(settings).findByRole("switch", { name });
+          await waitFor(() => expect(toggle).not.toBeDisabled());
+          expect(toggle).toHaveAttribute("aria-checked", "true");
+          webkitClick(toggle);
+          await waitFor(() => expect(within(settings).getByRole("switch", { name })).toHaveAttribute("aria-checked", "false"));
+          expect(screen.getByRole("dialog", { name: "Link settings" })).toBe(settings);
+          await waitFor(() =>
+            expect(invokeMock).toHaveBeenCalledWith("share_set_link_settings", { shareToken: "tok", change: { [name.toLowerCase()]: false } }),
+          );
+        }
+        // Still open once every save has settled, and still closes on Escape.
+        await waitFor(() => expect(within(settings).getByRole("switch", { name: "Reactions" })).not.toBeDisabled());
+        expect(screen.getByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
+        fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+      });
+    }
+
+    it("stays open when focus moves to the panel around it, and closes when it moves past it", async () => {
+      answer({
+        share_get_insights: PAID,
+        share_list_comments: COMMENTS,
+        share_get_reactions: NO_REACTIONS,
+        share_get_link_settings: ALL_SWITCHES_ON,
+      });
+      renderSheet();
+      const settings = await openSettings();
+      fireEvent.focusOut(settings, { relatedTarget: screen.getByTestId("insights-panel") });
+      expect(screen.getByRole("dialog", { name: "Link settings" })).toBeInTheDocument();
+      fireEvent.focusOut(settings, { relatedTarget: screen.getByRole("button", { name: "Close" }) });
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
     });
 
@@ -1391,17 +1605,33 @@ describe("the Insights Pages tab", () => {
     viewport.wide = true;
   });
 
-  it("shows drop-off and time per page, and where most people stopped", async () => {
+  it("shows where people stopped and the time per page, as the console does", async () => {
     answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
     renderSheet(DOC_CAPS, undefined, DOC);
 
     const panel = await showTab("Pages");
-    expect(within(panel).getByText("Drop-off by page")).toBeInTheDocument();
+    expect(within(panel).getByRole("heading", { name: "Where people stopped" })).toBeInTheDocument();
     expect(within(panel).getByText("Most left after page 2")).toBeInTheDocument();
-    const rows = within(within(panel).getByRole("list", { name: "Pages" })).getAllByRole("listitem");
-    expect(rows).toHaveLength(4);
-    expect(rows[0]).toHaveTextContent(/Page 1.*reached by 100%.*median time 0:04/);
-    expect(rows[2]).toHaveTextContent(/Page 3.*30%.*0:01/);
+    expect(within(panel).getByRole("heading", { name: "Time per page" })).toBeInTheDocument();
+    expect(within(panel).getByText("Longest on page 1")).toBeInTheDocument();
+    expect(within(panel).queryByText("Drop-off by page")).toBeNull();
+
+    // Each chart reads out what it shows, and its axis runs page 1 to the last.
+    const reach = within(panel).getByTestId("insights-page-reach");
+    expect(reach).toHaveAccessibleName(/25% reached page 4\. Most left after page 2\./);
+    const time = within(panel).getByTestId("insights-page-time");
+    expect(time).toHaveAccessibleName(/longest on page 1, 0:04\./);
+    expect(within(panel).getAllByText("Page 1")).toHaveLength(2);
+    expect(within(panel).getAllByText("Page 4")).toHaveLength(2);
+    expect(within(panel).getByText("0:04")).toBeInTheDocument();
+
+    // The arrow keys read a page at a time.
+    fireEvent.focus(reach);
+    fireEvent.keyDown(reach, { key: "ArrowRight" });
+    expect(within(panel).getAllByText("Page 2 · 75% saw it").length).toBeGreaterThan(0);
+    fireEvent.focus(time);
+    fireEvent.keyDown(time, { key: "End" });
+    expect(within(panel).getAllByText("Page 4 · 0:00").length).toBeGreaterThan(0);
     expect(screen.queryByTestId("insights-locked")).toBeNull();
   });
 
@@ -1410,6 +1640,30 @@ describe("the Insights Pages tab", () => {
     renderSheet(DOC_CAPS, undefined, DOC);
     const viewers = await showTab("Viewers");
     expect(within(viewers).getByText("2 of 4 pages")).toBeInTheDocument();
+  });
+
+  it("names a viewer by the email they confirmed, with no verified mark", async () => {
+    const viewers: ShareInsights["viewers"] = {
+      state: "shown",
+      value: [
+        { viewerId: "a", name: null, email: "alice@acme.com", visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+        { viewerId: "b", name: "Bob", email: "bob@acme.com", visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+        { viewerId: "c", name: null, visits: 1, watchedMs: 0, completion: null, lastViewedAt: null, comments: 0, reactions: 0 },
+      ],
+    };
+    answer({ share_get_insights: { ...PAID_DOC, viewers }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const panel = await showTab("Viewers");
+    const rows = within(within(panel).getByRole("list", { name: "Viewers" })).getAllByRole("listitem");
+    // No name chosen: the email is the name.
+    expect(rows[0]).toHaveTextContent("alice@acme.com");
+    // A chosen name stays first, the email under it.
+    expect(rows[1]).toHaveTextContent(/Bob.*bob@acme\.com/);
+    // No email Rust could verify: anonymous, with no email.
+    expect(rows[2]).toHaveTextContent("Anonymous viewer");
+    expect(rows[2]).not.toHaveTextContent("@");
+    // Every email shown is a proven one, so no row carries a "verified" mark.
+    for (const row of rows) expect(within(row).queryByText(/verified/i)).toBeNull();
   });
 
   it("says no page views yet on a document link nobody has read", async () => {
@@ -1428,7 +1682,27 @@ describe("the Insights Pages tab", () => {
     expect(within(locked).getByText(PAGES_LOCK_BODY)).toBeInTheDocument();
     const blurred = locked.firstElementChild as HTMLElement;
     expect(blurred).toHaveAttribute("aria-hidden", "true");
-    expect(within(blurred).getAllByText(/^Page \d+$/)).toHaveLength(SAMPLE_PAGES.pageCount);
+    expect(within(blurred).getByText("Where people stopped")).toBeInTheDocument();
+    expect(within(blurred).getByText("Time per page")).toBeInTheDocument();
+    expect(within(blurred).getAllByText(`Page ${SAMPLE_PAGES.pageCount}`)).toHaveLength(2);
+  });
+
+  it("has no Pages tab while the server has document views but reports no pages", async () => {
+    // Rust sends no `pages` from the capability alone.
+    const { pages: _pages, ...noPages } = PAID_DOC;
+    void _pages;
+    answer({ share_get_insights: { ...noPages, pages: null }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
+    expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
+    expect(screen.queryByText(PAGES_LOCK_TITLE)).toBeNull();
+  });
+
+  it("has no Pages tab on the free plan unless the server locks pages", async () => {
+    answer({ share_get_insights: { ...FREE, pages: null }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByTestId("insights-locked");
+    expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
   });
 
   it("has no Pages tab until the server has document views", async () => {
@@ -1439,6 +1713,62 @@ describe("the Insights Pages tab", () => {
     renderSheet(CAPS, undefined, DOC);
     await screen.findByRole("tab", { name: (n) => n.startsWith("Viewers") });
     expect(screen.queryByRole("tab", { name: "Pages" })).toBeNull();
+  });
+
+  it("draws four tabs in one underlined row, and no NDA tab until one is handed in", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS, share_get_reactions: NO_REACTIONS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Comments 0", "Viewers 1", "Pages", "Reactions 0"]);
+    expect(screen.queryByRole("tab", { name: /NDA/ })).toBeNull();
+  });
+
+  it("exports the viewers as CSV through the save dialog, and Rust writes it", async () => {
+    answer({
+      share_get_insights: PAID_DOC,
+      share_list_comments: NO_COMMENTS,
+      share_insights_csv_name: "Pitch deck activity 2026-11-18.csv",
+      share_export_insights_csv: undefined,
+    });
+    saveDialog.mockResolvedValueOnce("/Users/me/Downloads/Pitch deck activity 2026-11-18.csv");
+    renderSheet(DOC_CAPS, undefined, DOC);
+    fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_export_insights_csv", {
+        shareToken: "tok",
+        fileName: DOC,
+        destination: "/Users/me/Downloads/Pitch deck activity 2026-11-18.csv",
+      }),
+    );
+    expect(saveDialog).toHaveBeenCalledWith({
+      defaultPath: "/Users/me/Downloads/Pitch deck activity 2026-11-18.csv",
+      filters: [{ name: "CSV", extensions: ["csv"] }],
+    });
+  });
+
+  it("writes nothing when the save dialog is dismissed", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS, share_insights_csv_name: "x.csv" });
+    saveDialog.mockResolvedValueOnce(null);
+    renderSheet(DOC_CAPS, undefined, DOC);
+    fireEvent.click(await screen.findByRole("button", { name: "Export CSV" }));
+    await waitFor(() => expect(saveDialog).toHaveBeenCalled());
+    expect(invokeMock).not.toHaveBeenCalledWith("share_export_insights_csv", expect.anything());
+  });
+
+  it("gives a document no recording length in the header's line", async () => {
+    answer({ share_get_insights: PAID_DOC, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    // Maya read for 8s at half way: a recording's estimate would say 0:16.
+    expect(screen.queryByTestId("insights-subtitle")?.textContent ?? "").not.toMatch(/\d:\d\d/);
+  });
+
+  it("offers no CSV while the plan locks the viewer list", async () => {
+    answer({ share_get_insights: { ...FREE, pages: { state: "locked" } }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    await screen.findByRole("tab", { name: "Pages" });
+    expect(screen.getByRole("button", { name: "Link settings" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Export CSV" })).toBeNull();
   });
 
   it("has no Pages tab on a recording's link, even on the free plan", async () => {

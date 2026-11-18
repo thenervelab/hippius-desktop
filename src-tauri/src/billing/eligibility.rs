@@ -238,6 +238,11 @@ pub struct ActionEligibility {
     ///   that need to sign an extrinsic; see [`requires_chain_balance`])
     /// - `"insufficient_credits"` — marketplace credits below the
     ///   action's threshold
+    /// - `"storage_limit_reached"`: a Drive write this account's own plan
+    ///   has no room for
+    /// - `"shared_drive_full"`, `"shared_drive_frozen"`,
+    ///   `"shared_drive_view_only"`: a write into a drive shared with this
+    ///   account that the drive refuses (see [`ActionEligibility::message`])
     /// - `None` when eligible
     pub reason: Option<String>,
     /// Live marketplace credit balance at the time of the check, in
@@ -246,6 +251,133 @@ pub struct ActionEligibility {
     pub current_balance: f64,
     /// Threshold the action requires.
     pub required_balance: f64,
+    /// The write lands in a drive shared WITH this account, whose OWNER pays
+    /// for it. The frontend then judges the click on this answer alone and
+    /// never on this account's own plan, which says nothing about the drive.
+    pub owner_pays: bool,
+    /// Rust's sentence for a refusal the frontend shows as is (a shared
+    /// drive's: full, frozen, or not this account's to add to). `None` for a
+    /// refusal the frontend answers with its plan dialog.
+    pub message: Option<String>,
+}
+
+/// A shared drive whose owner has no room left. Aimed at the owner's
+/// storage, because nothing the member buys changes it.
+pub const SHARED_DRIVE_FULL: &str = "This shared drive is out of space. Its owner needs more storage before anything else can be added.";
+/// A shared drive whose owner's account is limited by billing.
+pub const SHARED_DRIVE_FROZEN: &str = "This shared drive is frozen, so nobody can upload to it until its owner resolves their account limit.";
+/// A shared drive this account may only view.
+pub const SHARED_DRIVE_VIEW_ONLY: &str = "You can view this shared drive but not add to it. Ask whoever shared it with you to make you an Editor.";
+
+/// Whether `drive` is one this account writes to at somebody else's expense.
+fn owner_pays(drive: Option<&crate::sync::identity::DriveIdentity>) -> bool {
+    drive.is_some_and(|d| d.is_member)
+}
+
+/// The error a refused Drive write is answered with.
+///
+/// An own drive keeps `NotReady(StorageLimitReached)`, which opens the plan
+/// dialog. A shared drive never does: the dialog offers THIS account a plan,
+/// and a member's plan neither pays for the drive nor unfreezes it. Its
+/// refusals are Rust's sentences instead, naming the owner or the role.
+fn drive_refusal(verdict: &crate::billing::drive_quota::QuotaVerdict, owner_pays: bool) -> Option<AppError> {
+    use crate::billing::drive_quota::Refusal;
+    if verdict.allowed {
+        return None;
+    }
+    if !owner_pays {
+        return Some(AppError::NotReady(NotReadyKind::StorageLimitReached));
+    }
+    let sentence = match verdict.refusal.unwrap_or(Refusal::NoRoom) {
+        Refusal::NoRoom => SHARED_DRIVE_FULL,
+        Refusal::PayerLimited => SHARED_DRIVE_FROZEN,
+        Refusal::NotAWriter => SHARED_DRIVE_VIEW_ONLY,
+    };
+    Some(AppError::Validation(sentence.to_owned()))
+}
+
+/// The machine-readable reason for a refused Drive write, for
+/// [`ActionEligibility::reason`].
+fn drive_refusal_reason(verdict: &crate::billing::drive_quota::QuotaVerdict, owner_pays: bool) -> &'static str {
+    use crate::billing::drive_quota::Refusal;
+    if !owner_pays {
+        return "storage_limit_reached";
+    }
+    match verdict.refusal.unwrap_or(Refusal::NoRoom) {
+        Refusal::NoRoom => "shared_drive_full",
+        Refusal::PayerLimited => "shared_drive_frozen",
+        Refusal::NotAWriter => "shared_drive_view_only",
+    }
+}
+
+/// The proactive answer for a Drive write into `drive` (`None`: no drive in
+/// scope, which asks about this account's own plan).
+async fn drive_eligibility(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    bytes: u64,
+    drive: Option<&crate::sync::identity::DriveIdentity>,
+) -> Result<ActionEligibility> {
+    let account = state.require_session_account_typed(account_id)?;
+    let verdict = crate::billing::drive_quota::check_drive_quota_for(state, &account, bytes, drive).await;
+    let owner_pays = owner_pays(drive);
+    let refusal = drive_refusal(&verdict, owner_pays);
+    Ok(ActionEligibility {
+        eligible: verdict.allowed,
+        reason: (!verdict.allowed).then(|| drive_refusal_reason(&verdict, owner_pays).to_owned()),
+        // The pre-flight answers yes/no; it carries no numbers. The
+        // frontend reads only `eligible` for Drive actions (the balance
+        // pair renders in the VM dialog alone), so zero here is honest
+        // rather than a guess at the plan.
+        current_balance: 0.0,
+        required_balance: 0.0,
+        owner_pays,
+        message: match refusal {
+            Some(AppError::Validation(sentence)) => Some(sentence),
+            _ => None,
+        },
+    })
+}
+
+/// The drive a write names, when it is one shared WITH this account.
+///
+/// `label` is the drive's local label, or the browse label of a drive opened
+/// without syncing it (`shared:<owner>~<hash>`, `grant:...`), the same label
+/// every drive-scoped command takes. An own drive answers `None`, so its
+/// pre-flight is exactly the one it always was. A label that cannot be read
+/// answers `None` too: the write's own gate and the server still decide.
+pub async fn member_drive_for_label(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    label: &str,
+) -> Option<crate::sync::identity::DriveIdentity> {
+    let pool = state.pool().ok()?;
+    match crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await {
+        Ok(identity) => identity.is_member.then_some(identity),
+        Err(err) => {
+            tracing::warn!(%err, "could not resolve the drive a write names; gating it as an own-drive write");
+            None
+        }
+    }
+}
+
+/// The drive a write into a LOCAL sync folder lands in, when it is one shared
+/// WITH this account (see [`member_drive_for_label`]).
+///
+/// `add_file`, `add_files` and `add_folder` are handed the drive's sync root,
+/// not its label, so the root is turned into the label first. A path with no
+/// drive row answers `None`.
+pub async fn member_drive_for_sync_path(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    sync_path: &str,
+) -> Option<crate::sync::identity::DriveIdentity> {
+    let pool = state.pool().ok()?;
+    let label = crate::sync::paths::label_for_sync_path(pool, account_id, sync_path)
+        .await
+        .ok()
+        .flatten()?;
+    member_drive_for_label(state, account_id, &label).await
 }
 
 /// Inner check, callable from any context (Tauri command OR
@@ -330,18 +462,7 @@ pub(crate) async fn check_action_eligibility_inner(
     // Drive actions answer from hcfs-server's pre-flight so the proactive
     // check and the gate below can never disagree about the same write.
     if action.is_drive_storage() {
-        let account = state.require_session_account_typed(account_id)?;
-        let verdict = crate::billing::drive_quota::check_drive_quota(state, &account, bytes).await;
-        return Ok(ActionEligibility {
-            eligible: verdict.allowed,
-            reason: if verdict.allowed { None } else { Some("storage_limit_reached".into()) },
-            // The pre-flight answers yes/no; it carries no numbers. The
-            // frontend reads only `eligible` for Drive actions (the balance
-            // pair renders in the VM dialog alone), so zero here is honest
-            // rather than a guess at the plan.
-            current_balance: 0.0,
-            required_balance: 0.0,
-        });
+        return drive_eligibility(state, account_id, bytes, None).await;
     }
 
     let pool = state.pool()?;
@@ -375,6 +496,8 @@ pub(crate) async fn check_action_eligibility_inner(
             reason: Some("insufficient_credits".into()),
             current_balance: credits,
             required_balance: required,
+            owner_pays: false,
+            message: None,
         });
     }
 
@@ -397,6 +520,8 @@ pub(crate) async fn check_action_eligibility_inner(
                     // have chain balance to pay the extrinsic fee.
                     current_balance: credits,
                     required_balance: required,
+                    owner_pays: false,
+                    message: None,
                 });
             }
             Ok(_) => {}
@@ -411,6 +536,8 @@ pub(crate) async fn check_action_eligibility_inner(
         reason: None,
         current_balance: credits,
         required_balance: required,
+        owner_pays: false,
+        message: None,
     })
 }
 
@@ -424,14 +551,41 @@ pub(crate) async fn check_action_eligibility_inner(
 /// files about to be uploaded) should pass it so `required_balance` in
 /// the structured response is the actual computed cost — that lets the
 /// FE render "$1.38 needed, $0.33 available" instead of a constant.
+///
+/// `drive_label` names the drive the click writes into, when the surface
+/// knows it. For a drive shared WITH this account the answer is about that
+/// drive and its OWNER (`ownerPays`), never this account's own plan: a member
+/// with no plan of their own may fill the drive as far as the owner's plan
+/// allows. Omitted, or naming an own drive, the answer is the one it always
+/// was.
 #[tauri::command]
 pub async fn check_action_eligibility(
     state: tauri::State<'_, crate::app_state::AppState>,
     account_id: String,
     action: InsufficientCreditsAction,
     bytes: Option<u64>,
+    drive_label: Option<String>,
 ) -> Result<ActionEligibility> {
-    check_action_eligibility_inner(&state, &account_id, action, bytes.unwrap_or(0)).await
+    check_action_eligibility_for_drive(&state, &account_id, action, bytes.unwrap_or(0), drive_label.as_deref()).await
+}
+
+/// [`check_action_eligibility`] without the Tauri state wrapper, so the rule
+/// is testable against a stand-in server.
+pub async fn check_action_eligibility_for_drive(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    action: InsufficientCreditsAction,
+    bytes: u64,
+    drive_label: Option<&str>,
+) -> Result<ActionEligibility> {
+    if action.is_drive_storage()
+        && let Some(label) = drive_label.filter(|l| !l.is_empty())
+    {
+        let account = state.require_session_account(account_id)?;
+        let drive = member_drive_for_label(state, &account, label).await;
+        return drive_eligibility(state, &account, bytes, drive.as_ref()).await;
+    }
+    check_action_eligibility_inner(state, account_id, action, bytes).await
 }
 
 /// Enforcement helper called as the FIRST line of every gated action
@@ -492,10 +646,9 @@ pub async fn require_eligible_for_drive(
     if action.is_drive_storage() {
         let account = state.require_session_account_typed(account_id)?;
         let verdict = crate::billing::drive_quota::check_drive_quota_for(state, &account, bytes, drive).await;
-        return if verdict.allowed {
-            Ok(())
-        } else {
-            Err(AppError::NotReady(NotReadyKind::StorageLimitReached))
+        return match drive_refusal(&verdict, owner_pays(drive)) {
+            None => Ok(()),
+            Some(refusal) => Err(refusal),
         };
     }
 

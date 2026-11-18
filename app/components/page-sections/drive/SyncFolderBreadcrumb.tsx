@@ -4,6 +4,7 @@ import { FC, Fragment } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { resolveBreadcrumbBack } from "./breadcrumbBack";
 import { cn } from "@/lib/utils";
+import { dropStateClass, useMoveDropTarget } from "./move/useMoveDnd";
 
 /**
  * One node in the drive breadcrumb path. The last segment in the array is
@@ -17,6 +18,11 @@ export interface BreadcrumbSegment {
   onClick?: () => void;
   /** Optional tooltip — useful when `label` is truncated. */
   title?: string;
+  /**
+   * Drive-relative folder this crumb names, when items dragged onto it
+   * should move there ("" for the drive's top level). Unset takes no drop.
+   */
+  dropPath?: string;
 }
 
 interface SyncFolderBreadcrumbProps {
@@ -69,6 +75,28 @@ const SEGMENT_ACTIVE = "text-black-700 dark:text-grey-light-200";
 
 const CHEVRON_CLASSES =
   "size-[14px] text-black-700 dark:text-grey-light-200 opacity-40 shrink-0";
+
+/** An ancestor crumb: navigates on click, and takes a drop mid-drag. */
+const CrumbButton: FC<{ segment: BreadcrumbSegment }> = ({ segment }) => {
+  const drop = useMoveDropTarget(segment.dropPath ?? null, segment.label, "crumb");
+  return (
+    <button
+      ref={drop.setNodeRef}
+      type="button"
+      onClick={segment.onClick}
+      className={cn(
+        SEGMENT_BASE,
+        SEGMENT_INACTIVE,
+        "bg-transparent border-0 p-0 m-0 truncate max-w-[16rem] rounded-[4px]",
+        drop.state && "px-1 opacity-100",
+        dropStateClass(drop.state),
+      )}
+      title={segment.title ?? segment.label}
+    >
+      {segment.label}
+    </button>
+  );
+};
 
 const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
   onLocalClick,
@@ -137,18 +165,7 @@ const SyncFolderBreadcrumb: FC<SyncFolderBreadcrumbProps> = ({
                 {segment.label}
               </span>
             ) : (
-              <button
-                type="button"
-                onClick={segment.onClick}
-                className={cn(
-                  SEGMENT_BASE,
-                  SEGMENT_INACTIVE,
-                  "bg-transparent border-0 p-0 m-0 truncate max-w-[16rem]",
-                )}
-                title={segment.title ?? segment.label}
-              >
-                {segment.label}
-              </button>
+              <CrumbButton segment={segment} />
             )}
           </Fragment>
         );

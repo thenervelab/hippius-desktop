@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -16,9 +16,11 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
+import EmailGateSettings from "./EmailGateSettings";
+import NdaSettings from "./NdaSettings";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
-import { actionErrorLine, DEFINITIONS, loadErrorLine } from "./insightsView";
+import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
 import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
@@ -26,14 +28,17 @@ import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelS
 export const SETTINGS_TRIGGER_ATTR = "data-link-settings-trigger";
 
 /**
- * A link's Insights, Comments and Reactions switches: what the header's line
- * says and what Link settings changes. Each change sends only the switch
- * flipped, shows at once, is put back if the server refuses it, and is then
- * read back from the server, so what shows is what the link has.
+ * A link's Insights, Comments and Reactions switches (and Allow download,
+ * where the server has it): what the header's line says and what Link
+ * settings changes. Each change sends only the switch flipped, shows at
+ * once, is put back if the server refuses it, and is then read back from the
+ * server, so what shows is what the link has. Turning downloads off refused
+ * for the plan shows the upgrade prompt (`downloadRefused`), not a toast.
  */
 export function useLinkSwitches(shareToken: string) {
   const queryClient = useQueryClient();
   const key = linkSettingsQueryKey(shareToken);
+  const [downloadRefused, setDownloadRefused] = useState(false);
   const current = useQuery({
     queryKey: key,
     queryFn: () => getLinkSettings(shareToken),
@@ -46,16 +51,28 @@ export function useLinkSwitches(shareToken: string) {
       // A read still in flight would land over the change shown here.
       await queryClient.cancelQueries({ queryKey: key });
       const before = queryClient.getQueryData<LinkSettingsDefault>(key);
-      if (before) queryClient.setQueryData<LinkSettingsDefault>(key, { ...before, on: { ...before.on, ...change } });
+      if (before) {
+        const { download, ...switches } = change;
+        queryClient.setQueryData<LinkSettingsDefault>(key, {
+          ...before,
+          on: { ...before.on, ...switches },
+          download: download ?? before.download,
+        });
+      }
+      setDownloadRefused(false);
       return { before };
     },
     onError: (err, _change, ctx) => {
       if (ctx?.before) queryClient.setQueryData(key, ctx.before);
+      if (isDownloadNotInPlan(err)) {
+        setDownloadRefused(true);
+        return;
+      }
       toast.error(actionErrorLine("change that setting", err, navigator.onLine));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
-  return { current, save };
+  return { current, save, downloadRefused };
 }
 
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
@@ -69,6 +86,7 @@ export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
  */
 export function LinkSettingsPopover({
   id,
+  shareToken,
   switches,
   top,
   opener,
@@ -76,6 +94,8 @@ export function LinkSettingsPopover({
   onLeave,
 }: {
   id: string;
+  /** The link these settings are for. */
+  shareToken: string;
   switches: LinkSwitches;
   /** Pixels from the panel's top: just under its header. */
   top: number;
@@ -89,7 +109,7 @@ export function LinkSettingsPopover({
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const { current, save } = switches;
+  const { current, save, downloadRefused } = switches;
   const online = useIsOnline();
 
   // The panel hands a new `onClose` every render; the listeners read the latest.
@@ -131,16 +151,16 @@ export function LinkSettingsPopover({
       aria-labelledby={titleId}
       data-testid="link-settings"
       style={{ top, maxHeight: `calc(100% - ${top + 12}px)` }}
+      // Focusable itself, so a click inside lands focus here. WebKit (the
+      // macOS webview) never focuses a clicked button: it focuses the nearest
+      // focusable ancestor instead, which without this was the panel around
+      // the popover, so pressing a switch read as focus leaving and closed it.
+      tabIndex={-1}
       onBlur={(e) => {
-        // Tabbing out of it closes it, like any popover. A switch that turns
-        // disabled while it saves blurs with nowhere to go: that stays open.
-        const next = e.relatedTarget;
-        if (next instanceof Node && !e.currentTarget.contains(next) && !(next instanceof Element && next.closest(`[${SETTINGS_TRIGGER_ATTR}]`))) {
-          onCloseRef.current();
-        }
+        if (leftPopover(e.currentTarget, e.relatedTarget)) onCloseRef.current();
       }}
       className={cn(
-        "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3",
+        "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3 outline-none",
         FLOATING,
       )}
     >
@@ -160,6 +180,9 @@ export function LinkSettingsPopover({
           disabled={save.isPending}
           switchesInPlan={current.data.switchesInPlan ?? null}
           onChange={(next) => save.mutate(switchChange(current.data.on, next))}
+          download={current.data.download ?? null}
+          onDownloadChange={(download) => save.mutate({ download })}
+          downloadRefused={downloadRefused}
           onUpgrade={() => {
             onLeave();
             router.push(BILLING_ROUTE);
@@ -168,11 +191,46 @@ export function LinkSettingsPopover({
       ) : (
         <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
       )}
+      {/* Drawn only where Rust says the server has email gates. */}
+      <div className="mt-2.5 empty:hidden">
+        <EmailGateSettings
+          layout="list"
+          shareToken={shareToken}
+          onUpgrade={() => {
+            onLeave();
+            router.push(BILLING_ROUTE);
+          }}
+        />
+      </div>
+      {/* Drawn only where Rust offers it: never on a password link without a text. */}
+      <div className="mt-2.5 empty:hidden">
+        <NdaSettings
+          layout="list"
+          shareToken={shareToken}
+          onUpgrade={() => {
+            onLeave();
+            router.push(BILLING_ROUTE);
+          }}
+        />
+      </div>
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />
       </div>
     </div>
   );
+}
+
+/**
+ * Whether focus moving to `next` means it left the popover: tabbing out
+ * does, like any popover. Focus going nowhere (a switch that turns disabled
+ * while it saves), to the gear, or to something that holds the popover (the
+ * panel or the sheet, where WebKit puts focus on a click it gives no
+ * element) does not: a press outside closes it through its own listener.
+ */
+export function leftPopover(popover: Element, next: EventTarget | null): boolean {
+  if (!(next instanceof Node)) return false;
+  if (popover.contains(next) || next.contains(popover)) return false;
+  return !(next instanceof Element && next.closest(`[${SETTINGS_TRIGGER_ATTR}]`));
 }
 
 /** What each number means, opened in place: there is no help page for it yet. */

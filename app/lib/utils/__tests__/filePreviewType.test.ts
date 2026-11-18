@@ -19,6 +19,7 @@ import {
   previewByteCap,
   previewExtension,
   previewNeedsBytes,
+  officePreviewFormat,
   type PreviewType,
 } from "@/app/lib/utils/filePreviewType";
 
@@ -58,6 +59,16 @@ describe("derivePreviewType: every required format", () => {
     for (const name of ["a.mp4", "a.mov", "a.webm"]) {
       expect(derivePreviewType(name)).toBe("video");
     }
+  });
+
+  it("opens the videos Rust converts for the preview", () => {
+    for (const name of ["a.wmv", "A.WMV", "a.asf", "a.avi", "a.mkv", "a.flv", "a.mpg", "a.mpeg", "a.m2ts", "a.mts", "a.3gp", "a.m4v", "a.ogv", "a.vob"]) {
+      expect(derivePreviewType(name)).toBe("video");
+    }
+  });
+
+  it("keeps a .ts file TypeScript, not an MPEG transport stream", () => {
+    expect(derivePreviewType("index.ts")).not.toBe("video");
   });
 });
 
@@ -280,5 +291,19 @@ describe("per-format byte caps", () => {
     for (const type of buffered) {
       expect(previewByteCap(type)).toBeLessThanOrEqual(RUST_PREVIEW_READ_CEILING_BYTES);
     }
+  });
+});
+
+describe("officePreviewFormat", () => {
+  it("names exactly the renderers that unzip in the webview", () => {
+    // These are the formats Rust vets before a JS zip reader sees them; a
+    // zip-based format missing here would reach its parser unchecked.
+    expect(officePreviewFormat("document")).toBe("document");
+    expect(officePreviewFormat("spreadsheet")).toBe("spreadsheet");
+    expect(officePreviewFormat("presentation")).toBe("presentation");
+    for (const type of ["text", "json", "markdown", "html", "svg", "image", "video", "PDF"] as const) {
+      expect(officePreviewFormat(type)).toBeNull();
+    }
+    expect(officePreviewFormat(null)).toBeNull();
   });
 });

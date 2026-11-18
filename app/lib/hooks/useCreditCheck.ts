@@ -22,7 +22,18 @@ interface ActionEligibility {
   reason: string | null;
   currentBalance: number;
   requiredBalance: number;
+  /**
+   * The write lands in a drive shared with this account, whose owner pays.
+   * The answer is then about the drive alone; this account's own plan
+   * (Overview) says nothing about it.
+   */
+  ownerPays?: boolean;
+  /** Rust's sentence for a shared drive's refusal, shown as is. */
+  message?: string | null;
 }
+
+/** Shown when Rust refused a shared drive's upload without a sentence. */
+const SHARED_DRIVE_REFUSED = "This shared drive can't take uploads right now.";
 
 /**
  * Async credit-check hook backed by the Rust `check_action_eligibility`
@@ -30,6 +41,12 @@ interface ActionEligibility {
  * an access-key account with no plan (`source: "none"`) must open the
  * subscribe dialog without relying on `/can_upload`, which fail-opens and
  * is polled with `bytes: 0`.
+ *
+ * A click that names the drive it writes into (`driveLabel`) asks Rust
+ * first. When Rust says the drive is shared with this account (`ownerPays`)
+ * the owner pays for it, so this account's own Overview is not consulted:
+ * a member with no plan of their own may still upload, and a refusal is
+ * Rust's sentence about the drive, never the plan dialog.
  */
 export function useCreditCheck() {
   const { polkadotAddress } = useWalletAuth();
@@ -39,10 +56,18 @@ export function useCreditCheck() {
   const uploadBlocked = isUploadBlocked(overview, false);
 
   const checkEligibility = useCallback(
-    async (action: InsufficientCreditsReason): Promise<boolean> => {
-      // Overview already knows this account cannot store anything — do not
-      // wait on a fail-open pre-flight that would open the picker.
-      if (getUploadBlockReason(overview) !== null) {
+    async (
+      action: InsufficientCreditsReason,
+      driveLabel?: string | null,
+      knownStorageFull = false,
+    ): Promise<boolean> => {
+      // This account's own plan already says it cannot store anything.
+      const ownBlocked =
+        knownStorageFull || getUploadBlockReason(overview) !== null;
+      // Overview already knows this account cannot store anything, and the
+      // write names no drive that somebody else pays for: do not wait on a
+      // fail-open pre-flight that would open the picker.
+      if (ownBlocked && !driveLabel) {
         setReason(action);
         return false;
       }
@@ -56,9 +81,15 @@ export function useCreditCheck() {
           {
             accountId: polkadotAddress,
             action,
+            ...(driveLabel ? { driveLabel } : {}),
           },
         );
-        if (!result.eligible) {
+        if (result.ownerPays) {
+          if (result.eligible) return true;
+          toast.error(result.message || SHARED_DRIVE_REFUSED);
+          return false;
+        }
+        if (ownBlocked || !result.eligible) {
           setReason(action);
           return false;
         }
@@ -82,21 +113,21 @@ export function useCreditCheck() {
   /**
    * Upload / sync click sites: open subscribe/upgrade immediately when
    * Overview (or a polled eligibility refusal) already says there is no
-   * room — no picker, no encrypt-then-fail. Backend `require_eligible`
+   * room, no picker, no encrypt-then-fail. Backend `require_eligible`
    * remains the gate on the write itself.
+   *
+   * `driveLabel` is the drive the upload lands in, when the surface knows
+   * it. A drive shared with this account is judged on its owner's room,
+   * whatever this account's own plan says (see the hook's doc).
    */
   const requireUploadRoom = useCallback(
     async (
       action: InsufficientCreditsReason,
       knownStorageFull = false,
-    ): Promise<boolean> => {
-      if (knownStorageFull || getUploadBlockReason(overview) !== null) {
-        setReason(action);
-        return false;
-      }
-      return checkEligibility(action);
-    },
-    [checkEligibility, setReason, overview],
+      driveLabel?: string | null,
+    ): Promise<boolean> =>
+      checkEligibility(action, driveLabel, knownStorageFull),
+    [checkEligibility],
   );
 
   return {

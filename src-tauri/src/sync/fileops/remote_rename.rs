@@ -11,8 +11,11 @@
 //! rename issued from a stale listing from silently clobbering a newer
 //! change made elsewhere.
 
+use hcfs_shared::revision_id::RevisionId;
+use std::collections::HashMap;
+
 use ed25519_dalek::Signer;
-use hcfs_shared::network::{BatchRenameRequest, SingleRename};
+use hcfs_shared::network::{BatchRenameRequest, BatchRenameResult, SingleRename};
 use sqlx::sqlite::SqlitePool;
 
 use crate::app_state::AppState;
@@ -39,7 +42,7 @@ const MAX_STATE_PAGES: u32 = 40;
 /// listing may be minutes old, and a `base_revision_id` is precisely the
 /// claim "I am changing the version I last saw". Sourcing it from stale
 /// data would defeat the check it exists to make.
-async fn current_revision_id(client: &hcfs_client::client::HcfsClient, ss58: &str, folder_hash: &str, path_hash: &[u8; 32]) -> Result<[u8; 32]> {
+async fn current_revision_id(client: &hcfs_client::client::HcfsClient, ss58: &str, folder_hash: &str, path_hash: &[u8; 32]) -> Result<RevisionId> {
     let mut offset = 0u32;
     for _ in 0..MAX_STATE_PAGES {
         let page = client
@@ -138,18 +141,49 @@ pub async fn rename_in_remote_folder(state: &AppState, pool: &SqlitePool, req: R
     let signature = signing_key.sign(BatchRenameRequest::generate_signing_text(&renames).as_bytes());
 
     let request = BatchRenameRequest {
-        ss58_address: account_id.to_string(),
+        // The drive's OWNER: `/rename_files` looks the files up under this
+        // account, and a member's own account holds none of them.
+        ss58_address: identity.wire_ss58.clone(),
         folder_hash,
         renames,
         signature: signature.to_bytes(),
         signing_key: signing_key.verifying_key().to_bytes(),
     };
 
-    client
+    let result = client
         .rename_files(&request)
         .await
         .map_err(|e| AppError::Hcfs(format!("Rename failed: {e}")))?;
+    if let Some(reason) = refused_renames(&result).into_values().next() {
+        return Err(AppError::Validation(format!("Rename failed: {reason}")));
+    }
     Ok(())
+}
+
+/// What the user reads for one entry `/rename_files` refused.
+///
+/// The route answers `200` even when an entry was not renamed and lists it in
+/// `failures` with a reason code, so a caller that reads only the status
+/// reports a refused rename or move as done.
+pub(crate) fn rename_failure_sentence(reason: &str) -> String {
+    match reason {
+        "not_found" => "It's no longer there. Refresh and try again".to_string(),
+        "target_exists" => "Something with that name is already there".to_string(),
+        r if r == "revision_mismatch" || r.starts_with("revision mismatch") => {
+            "It changed while it was being moved. Refresh and try again".to_string()
+        }
+        other => format!("The server refused it ({other})"),
+    }
+}
+
+/// The entries of a batch the server refused, by their old path hash, with
+/// the sentence to show for each.
+pub(crate) fn refused_renames(result: &BatchRenameResult) -> HashMap<[u8; 32], String> {
+    result
+        .failures
+        .iter()
+        .map(|f| (f.old_path_hash, rename_failure_sentence(&f.reason)))
+        .collect()
 }
 
 /// One file under the folder being renamed, with its path in plaintext.
@@ -158,7 +192,12 @@ pub struct RemoteEntry {
     /// Drive-relative, `/`-separated, no leading or trailing slash.
     pub path: String,
     pub path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
+    /// `BLAKE3(owner ss58 || plaintext)` as the server lists it. A move
+    /// between drives checks the bytes it read against it.
+    pub salted_hash: [u8; 32],
+    /// Plaintext size as the server lists it.
+    pub size_bytes: u64,
 }
 
 /// A folder subtree as the server holds it: the FILES beneath it, and the
@@ -181,7 +220,7 @@ pub struct RemoteFolderTree {
 pub struct PlannedRename {
     pub old_path_hash: [u8; 32],
     pub new_path: String,
-    pub base_revision_id: [u8; 32],
+    pub base_revision_id: RevisionId,
 }
 
 /// Everything a folder rename has to do, in the three parts it takes.
@@ -274,7 +313,7 @@ fn assert_destination_available(folders: &[String], files: &[String], old_path: 
 }
 
 /// Every page of one directory level.
-async fn browse_directory(
+pub(crate) async fn browse_directory(
     client: &hcfs_client::client::HcfsClient,
     ss58: &str,
     folder_hash: &str,
@@ -310,7 +349,7 @@ async fn browse_directory(
 /// Iterative rather than recursive: an async recursion needs boxing at
 /// every level, and a drive is untrusted input — an explicit stack cannot
 /// blow the real one.
-async fn collect_folder_tree(
+pub(crate) async fn collect_folder_tree(
     client: &hcfs_client::client::HcfsClient,
     ss58: &str,
     folder_hash: &str,
@@ -352,6 +391,8 @@ async fn collect_folder_tree(
                 path: resolved.replace('\\', "/").trim_matches('/').to_string(),
                 path_hash: file.path_hash,
                 revision_id: file.revision_id,
+                salted_hash: *file.salted_hash.as_bytes(),
+                size_bytes: file.size_bytes,
             });
         }
 
@@ -451,14 +492,33 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
     let sibling_file_paths: Vec<String> = sibling_files.iter().filter_map(|f| f.relative_path.clone()).collect();
     assert_destination_available(&sibling_folder_paths, &sibling_file_paths, &old_prefix, &new_prefix)?;
 
-    let tree = collect_folder_tree(&client, &identity.wire_ss58, &folder_hash, &old_prefix, &encryption_key).await?;
-    let plan = plan_folder_rename(&tree, &old_prefix, &new_prefix)?;
+    move_folder_by_batches(&client, identity, &encryption_key, &signing_key, &old_prefix, &new_prefix).await
+}
+
+/// Move every file and directory row under `old_prefix` to `new_prefix`,
+/// with `/rename_files` batches and the folder-entry calls.
+///
+/// The body of a remote folder rename, shared with a move: a move is the
+/// same operation with a prefix in another parent folder. Also the
+/// fallback when `/rename_folder` refuses a folder as too large. The
+/// caller checks the destination is free first.
+pub(super) async fn move_folder_by_batches(
+    client: &hcfs_client::client::HcfsClient,
+    identity: &DriveIdentity,
+    encryption_key: &hcfs_crypto::FileKey,
+    signing_key: &ed25519_dalek::SigningKey,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> Result<usize> {
+    let folder_hash = identity.wire_folder_hash.clone();
+    let tree = collect_folder_tree(client, &identity.wire_ss58, &folder_hash, old_prefix, encryption_key).await?;
+    let plan = plan_folder_rename(&tree, old_prefix, new_prefix)?;
 
     let mut moved = 0usize;
     for batch in plan.files.chunks(RENAME_BATCH) {
         let mut renames = Vec::with_capacity(batch.len());
         for item in batch {
-            let new_encrypted_path = hcfs_crypto::encrypt_small(item.new_path.as_bytes(), &encryption_key)
+            let new_encrypted_path = hcfs_crypto::encrypt_small(item.new_path.as_bytes(), encryption_key)
                 .map_err(|e| AppError::Crypto(format!("Failed to seal the new path: {e}")))?;
             renames.push(SingleRename {
                 old_path_hash: item.old_path_hash,
@@ -474,17 +534,22 @@ pub async fn rename_folder_in_remote_folder(state: &AppState, pool: &SqlitePool,
         // uses to verify — deriving our own would be a second definition.
         let signature = signing_key.sign(BatchRenameRequest::generate_signing_text(&renames).as_bytes());
         let request = BatchRenameRequest {
-            ss58_address: account_id.to_string(),
+            // The drive's owner, as in `rename_remote_file`.
+            ss58_address: identity.wire_ss58.clone(),
             folder_hash: folder_hash.clone(),
             renames,
             signature: signature.to_bytes(),
             signing_key: signing_key.verifying_key().to_bytes(),
         };
-        client
+        let result = client
             .rename_files(&request)
             .await
             .map_err(|e| AppError::Hcfs(format!("Rename failed after moving {moved} item(s): {e}")))?;
-        moved += batch.len();
+        let refused = refused_renames(&result);
+        moved += batch.len() - refused.len();
+        if let Some(reason) = refused.into_values().next() {
+            return Err(AppError::Hcfs(format!("Rename failed after moving {moved} item(s): {reason}")));
+        }
     }
 
     // The half `/rename_files` cannot do. Without it the original folder
@@ -632,6 +697,44 @@ pub async fn rename_remote_folder(
 mod tests {
     use super::*;
 
+    /// `/rename_files` answers `200` with refused entries in `failures`. A
+    /// member's move once sent its own address, the server found none of
+    /// the files, and the move read as done because only the status was
+    /// checked. The body below is the server's documented shape.
+    #[test]
+    fn a_refused_entry_in_a_200_is_read_as_refused() {
+        let moved = [1u8; 32];
+        let missing = [2u8; 32];
+        let new_hash = [3u8; 32];
+        let revision = [4u8; 32];
+        let body = serde_json::json!({
+            "status": "ok",
+            "renamed_count": 1,
+            "successes": [{
+                "old_path_hash": moved,
+                "new_path_hash": new_hash,
+                "new_revision_id": revision,
+                "new_revision_seq": 5
+            }],
+            "failures": [{ "old_path_hash": missing, "reason": "not_found" }]
+        });
+        let result: BatchRenameResult = serde_json::from_value(body).unwrap();
+        let refused = refused_renames(&result);
+        assert_eq!(refused.len(), 1);
+        assert!(!refused.contains_key(&moved), "a renamed entry is not refused");
+        assert_eq!(refused[&missing], "It's no longer there. Refresh and try again");
+    }
+
+    #[test]
+    fn every_refusal_reason_reads_as_a_sentence() {
+        assert_eq!(rename_failure_sentence("target_exists"), "Something with that name is already there");
+        let changed = "It changed while it was being moved. Refresh and try again";
+        assert_eq!(rename_failure_sentence("revision_mismatch"), changed);
+        // Servers before the fixed codes sent this one message for all three.
+        assert_eq!(rename_failure_sentence("revision mismatch or target path already exists"), changed);
+        assert!(rename_failure_sentence("invalid_relative_path: too deep").contains("invalid_relative_path"));
+    }
+
     /// The walk advances by rows RETURNED, so its reach is pages times the
     /// server's page size, not pages times whatever we ask for. Pin both
     /// halves: the page size is the server's, and the reach is unchanged.
@@ -645,7 +748,9 @@ mod tests {
         RemoteEntry {
             path: path.to_string(),
             path_hash: [seed; 32],
-            revision_id: [seed.wrapping_add(100); 32],
+            revision_id: RevisionId::from_bytes([seed.wrapping_add(100); 32]),
+            salted_hash: [seed.wrapping_add(50); 32],
+            size_bytes: u64::from(seed),
         }
     }
 
@@ -727,8 +832,8 @@ mod tests {
     fn carries_each_files_own_base_revision() {
         let t = tree(&["Trip"], &[file("Trip/a.txt", 1), file("Trip/b.txt", 2)]);
         let plan = plan_folder_rename(&t, "Trip", "Holiday").expect("plan");
-        assert_eq!(plan.files[0].base_revision_id, [101u8; 32]);
-        assert_eq!(plan.files[1].base_revision_id, [102u8; 32]);
+        assert_eq!(plan.files[0].base_revision_id, RevisionId::from_bytes([101u8; 32]));
+        assert_eq!(plan.files[1].base_revision_id, RevisionId::from_bytes([102u8; 32]));
         assert_eq!(plan.files[0].old_path_hash, [1u8; 32]);
         assert_eq!(plan.files[1].old_path_hash, [2u8; 32]);
     }

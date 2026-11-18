@@ -734,6 +734,28 @@ fn a_remote_upload_names_its_drive_before_the_storage_gate() {
     }
 }
 
+/// An upload into a drive synced here names that drive to the storage gate.
+///
+/// `add_file`, `add_files` and `add_folder` take the drive's sync root, and a
+/// drive shared WITH this account is synced like any other. Gating them with
+/// the bare `require_eligible` asked about the uploader's own plan, so a
+/// member with no plan of their own was sent to buy one before writing into a
+/// drive its owner pays for.
+#[test]
+fn a_local_upload_names_its_drive_before_the_storage_gate() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/sync/fileops/files/add.rs")).expect("read add.rs");
+    for sig in ["pub async fn add_file(", "pub async fn add_folder(", "pub async fn add_files("] {
+        let body = fn_body(&src, sig);
+        let resolved = body.find("member_drive_for_sync_path").unwrap_or(usize::MAX);
+        let gated = body.find("require_eligible_for_drive").unwrap_or(0);
+        assert!(resolved < gated, "{sig} must resolve its drive before the storage gate");
+        assert!(
+            !body.contains("require_eligible("),
+            "{sig} must not gate on the uploader's own plan alone"
+        );
+    }
+}
+
 /// The file-upload command is a thin wrapper over its `_inner`, which is
 /// where the two pins around this one look. Screen capture calls the inner
 /// directly; if the command grew its own copy of the body again, those pins
@@ -872,4 +894,30 @@ fn automatic_delivery_uses_the_approve_path_and_the_manager_gate() {
     let logout = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/auth/logout.rs")).expect("read logout.rs");
     let body = fn_body(&logout, "pub async fn logout_full(");
     assert!(body.contains("invite_auto_seal.stop()"), "sign-out stops delivery");
+}
+
+/// Every `/rename_files` request the desktop builds names the drive's OWNER
+/// (`identity.wire_ss58`) and reads the server's refused entries.
+///
+/// The server looks the files up under `ss58_address`, so a member sending
+/// its own address renames nothing, and the route still answers `200` with
+/// every entry in `failures`. Both halves together made a member's move in a
+/// shared drive report success while nothing moved. Counted per file, so a
+/// new request that forgets either half fails here.
+#[test]
+fn every_batch_rename_names_the_owner_and_reads_refusals() {
+    for file in ["remote_rename.rs", "remote_move.rs"] {
+        let full = std::fs::read_to_string(format!("{}/src/sync/fileops/{file}", env!("CARGO_MANIFEST_DIR"))).expect("read source");
+        // The code only: the unit tests below it quote these calls.
+        let src = full.split("#[cfg(test)]").next().unwrap_or_default();
+        // `/rename_folder` takes the owner the same way.
+        let requests = src.matches("BatchRenameRequest {").count() + src.matches("RenameFolderRequest {").count();
+        let owner = src.matches("ss58_address: identity.wire_ss58.clone()").count();
+        let calls = src.matches(".rename_files(&request)").count();
+        let read = src.matches("refused_renames(&result)").count();
+        assert!(requests > 0, "{file}: no batch rename found; update this pin");
+        assert_eq!(owner, requests, "{file}: every rename request must name the drive owner, not the caller");
+        assert!(!src.contains("ss58_address: account_id"), "{file}: a batch rename names the caller");
+        assert_eq!(read, calls, "{file}: every rename_files result must go through refused_renames");
+    }
 }

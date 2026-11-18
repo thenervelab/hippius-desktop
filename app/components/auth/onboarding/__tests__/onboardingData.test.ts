@@ -12,7 +12,7 @@ describe("ONBOARDING_SCREENS copy", () => {
     );
   });
 
-  // Files are keyed from the mnemonic seed; the password only wraps that
+  // Files are keyed from the recovery seed; the password only wraps that
   // seed. The old body ("Your unlock password encrypts files locally")
   // told users the wrong threat model.
   it("unlock-password screen does not claim the password encrypts files", () => {
@@ -20,6 +20,7 @@ describe("ONBOARDING_SCREENS copy", () => {
     const pills = unlockScreen?.pills.join(" ") ?? "";
     expect(body.toLowerCase()).not.toContain("unlock password encrypts files");
     expect(pills.toLowerCase()).not.toContain("encrypts files locally");
-    expect(body.toLowerCase()).toContain("mnemonic seed");
+    expect(body.toLowerCase()).toContain("recovery seed");
+    expect(body.toLowerCase()).not.toContain("mnemonic");
   });
 });

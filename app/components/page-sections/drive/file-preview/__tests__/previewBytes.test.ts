@@ -60,6 +60,18 @@ describe("readPreviewBytes", () => {
     expect(Array.from(bytes)).toEqual([1, 2, 3]);
   });
 
+  it("asks Rust to vet the archive for an Office renderer", async () => {
+    invoke.mockResolvedValue(new Uint8Array([1]).buffer);
+
+    await readPreviewBytes("/drive/a.pptx", 99, new AbortController().signal, "presentation");
+
+    expect(invoke).toHaveBeenCalledWith("read_preview_bytes", {
+      sourcePath: "/drive/a.pptx",
+      maxBytes: 99,
+      format: "presentation",
+    });
+  });
+
   it("does not call Rust at all when the request is already stale", async () => {
     // The user pressed the arrow key before this load even started.
     const controller = new AbortController();

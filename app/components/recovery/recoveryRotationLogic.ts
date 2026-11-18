@@ -72,13 +72,23 @@ export function canSubmitPhraseRestore(form: {
 export type RotationError = "wrong_password" | "mnemonic_missing" | "generic";
 
 /**
- * Classify a rotation failure. Rust surfaces a bad current password as
- * `Validation("Wrong passphrase.")`; that case re-prompts the current field
- * inline. `mnemonic_missing` is the Settings forgot path when this device
- * cannot open the master — the FE switches to the seed form.
+ * Classify a recovery-command failure by the structured `{ kind, subkind }`
+ * shape Rust serializes (`src-tauri/src/error.rs`), never by its wording:
+ *
+ * - `kind: "WrongUnlockPassword"`: the unlock password did not open the
+ *   sealed recovery seed. The dialog keeps the field and asks again.
+ * - `subkind: "RECOVERY_SEED_REQUIRED"`: Settings "forgot current
+ *   password" on a device that cannot open the seed. The dialog switches to
+ *   the form that asks for the recovery seed / access key.
  */
-export const classifyRotationError = (message: string): RotationError => {
-  if (/wrong passphrase/i.test(message)) return "wrong_password";
-  if (/doesn't have your mnemonic seed/i.test(message)) return "mnemonic_missing";
+export const classifyRotationError = (err: unknown): RotationError => {
+  if (typeof err !== "object" || err === null) return "generic";
+  const { kind, subkind } = err as { kind?: unknown; subkind?: unknown };
+  if (kind === "WrongUnlockPassword") return "wrong_password";
+  if (kind === "NotReady" && subkind === "RECOVERY_SEED_REQUIRED") return "mnemonic_missing";
   return "generic";
 };
+
+/** True when Rust refused an unlock password as wrong. */
+export const isWrongUnlockPassword = (err: unknown): boolean =>
+  classifyRotationError(err) === "wrong_password";

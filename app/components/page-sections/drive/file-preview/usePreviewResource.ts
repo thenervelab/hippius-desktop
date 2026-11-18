@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { OfficePreviewFormat } from "@/app/lib/utils/filePreviewType";
+
 import {
   abortError,
   isAbortReason,
@@ -28,6 +30,8 @@ export interface PreviewResourceOptions<T> {
    * away from would leak everything it allocated.
    */
   dispose?: (data: T) => void;
+  /** The Office format, for a renderer that unzips its bytes (see `readPreviewBytes`). */
+  format?: OfficePreviewFormat;
 }
 
 /**
@@ -59,6 +63,7 @@ export function usePreviewResource<T>(
   // re-running (and therefore re-reading the file) on every render.
   const disposeRef = useRef(options.dispose);
   disposeRef.current = options.dispose;
+  const { format } = options;
 
   useEffect(() => {
     if (!localPath) {
@@ -70,7 +75,7 @@ export function usePreviewResource<T>(
     let current: { data: T } | null = null;
     setState({ status: "loading" });
 
-    void readPreviewBytes(localPath, maxBytes, controller.signal)
+    void readPreviewBytes(localPath, maxBytes, controller.signal, format)
       .then((bytes) => parser(bytes, controller.signal))
       .then((data) => {
         if (controller.signal.aborted) {
@@ -89,7 +94,7 @@ export function usePreviewResource<T>(
       controller.abort();
       if (current) disposeRef.current?.(current.data);
     };
-  }, [localPath, maxBytes, parser]);
+  }, [localPath, maxBytes, parser, format]);
 
   return state;
 }

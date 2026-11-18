@@ -431,6 +431,10 @@ mod tests {
     fn a_pause_is_cut_out() {
         let rig = rig(&[], false, false);
         frame(&rig, 1_000_000);
+        // The file starts when Start is answered, so wait for that before
+        // moving the clock on: on a slow runner the answer can otherwise
+        // come after the clock moved, and the file starts late.
+        assert_eq!(rig.ready.recv_timeout(Duration::from_secs(5)).unwrap(), Ok((2, 2)));
         rig.clock.store(1_200_000, Ordering::SeqCst);
         rig.shared.pause();
         assert_eq!(rig.shared.place(1_500_000), None, "inside the pause");
@@ -471,6 +475,10 @@ mod tests {
     fn the_file_ends_when_stop_was_asked() {
         let rig = rig(&[], false, false);
         frame(&rig, 1_000_000);
+        // The file starts when Start is answered, so wait for that before
+        // moving the clock on: on a slow runner the answer can otherwise
+        // come after the clock moved, and the file starts late.
+        assert_eq!(rig.ready.recv_timeout(Duration::from_secs(5)).unwrap(), Ok((2, 2)));
         let (tx, rx) = mpsc::channel();
         // Stop asked at 2 s; the sources took until 2.4 s to stop.
         rig.clock.store(2_400_000, Ordering::SeqCst);
