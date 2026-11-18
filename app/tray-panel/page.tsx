@@ -656,7 +656,7 @@ function Footer({
           onClick={() => void openMainWindow()}
           className="flex h-8 shrink-0 items-center justify-center gap-1 rounded-lg px-3 text-[14px] font-semibold"
         >
-          Open Hippius
+          Open Hippius Drive
           <ArrowRight className="size-4" />
         </Button>
       </div>

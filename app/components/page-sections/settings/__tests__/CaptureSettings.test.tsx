@@ -130,7 +130,7 @@ describe("the capture shortcut recorder", () => {
     tauri.onInvoke("capture_get_shortcut", () => ({
       accelerator,
       defaultAccelerator: DEFAULT,
-      problem: "Another copy of Hippius is using this shortcut. Quit it, or choose another.",
+      problem: "Another copy of Hippius Drive is using this shortcut. Quit it, or choose another.",
     }));
     tauri.onInvoke("capture_drive_status", () => READY);
     const store = createStore();
@@ -141,7 +141,7 @@ describe("the capture shortcut recorder", () => {
       </Provider>,
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Another copy of Hippius is using this shortcut. Quit it, or choose another.",
+      "Another copy of Hippius Drive is using this shortcut. Quit it, or choose another.",
     );
     // Choosing another hides it while the keys are being pressed (the first
     // Change is the shortcut's; the second is the drive's).

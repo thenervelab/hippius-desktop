@@ -76,7 +76,7 @@ export async function checkForUpdates(notifyOnce = false) {
         notificationType: "Hippius",
         notificationSubtype: version,
         notificationTitleText: "Update Available",
-        notificationDescription: `Hippius ${version} is ready. Install and restart now.`,
+        notificationDescription: `Hippius Drive ${version} is ready. Install and restart now.`,
         notificationLinkText: "Install Update",
         notificationLink: "Install Update",
         notificationReleaseNotes: releaseNotes,

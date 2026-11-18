@@ -6,6 +6,6 @@ export const dashboardPageHeaderAtom = atomWithReset<{
   subText?: string;
   infoTooltip?: ReactNode;
 }>({
-  mainText: "Welcome to Hippius",
+  mainText: "Welcome to Hippius Drive",
   subText: "Your decentralized storage solution",
 });

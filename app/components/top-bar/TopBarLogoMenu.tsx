@@ -38,7 +38,7 @@ const TopBarLogoMenu = () => {
             "overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
             collapsed
               ? "max-w-0 opacity-0 -ml-[8px]"
-              : "max-w-[120px] opacity-100",
+              : "max-w-[160px] opacity-100",
           )}
         />
       </div>

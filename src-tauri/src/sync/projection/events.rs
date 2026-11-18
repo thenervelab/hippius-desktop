@@ -1912,7 +1912,7 @@ fn refusal_copy(message: &str) -> String {
         );
     }
     if unreadable.value(message).is_some() {
-        return "Hippius couldn't read this file. Check that it isn't locked or open in another app; \
+        return "Hippius Drive couldn't read this file. Check that it isn't locked or open in another app; \
                 it syncs once it can be read."
             .to_string();
     }

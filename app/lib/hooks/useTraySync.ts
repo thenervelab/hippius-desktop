@@ -174,7 +174,7 @@ async function buildTrayContextMenu(): Promise<Menu> {
     leadingItems.push(
       await MenuItem.new({
         id: CTX_OPEN_HIPPIUS_ID,
-        text: "Open Hippius",
+        text: "Open Hippius Drive",
         action: openHippiusFromTray,
       }),
     );
@@ -211,7 +211,7 @@ async function buildTrayContextMenu(): Promise<Menu> {
 
   const quit = await MenuItem.new({
     id: CTX_QUIT_ID,
-    text: "Quit Hippius",
+    text: "Quit Hippius Drive",
     action: async () => {
       await invoke("app_close");
     },
@@ -358,7 +358,7 @@ export function useTrayInit(isAuthenticated: boolean) {
         id: TRAY_ID,
         icon: defaultIconPath!,
         iconAsTemplate: false,
-        tooltip: "Hippius Cloud",
+        tooltip: "Hippius Drive",
         menu: contextMenu,
         showMenuOnLeftClick: isLinuxPlatform,
       });
@@ -510,7 +510,7 @@ async function setTrayIconSyncing(
         id: TRAY_ID,
         icon: iconPath,
         iconAsTemplate: false,
-        tooltip: "Hippius Cloud",
+        tooltip: "Hippius Drive",
         menu: contextMenu,
         showMenuOnLeftClick: isLinuxPlatform,
       });

@@ -30,8 +30,8 @@
     <key>NSCameraUseContinuityCameraDeviceType</key>
     <true/>
     <key>NSCameraUsageDescription</key>
-    <string>Hippius needs camera access to show your camera in screen recordings.</string>
+    <string>Hippius Drive needs camera access to show your camera in screen recordings.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Hippius needs microphone access to include your voice in screen recordings.</string>
+    <string>Hippius Drive needs microphone access to include your voice in screen recordings.</string>
 </dict>
 </plist>

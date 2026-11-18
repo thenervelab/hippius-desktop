@@ -51,7 +51,7 @@ function withVersion(base: string, status: ChannelStatus): string {
       : `${base} ${status.manualInstallHint}`;
   }
 
-  const restart = "Hippius will download the build and restart.";
+  const restart = "Hippius Drive will download the build and restart.";
   return status.targetVersion
     ? `${base} ${restart.replace("the build", status.targetVersion)}`
     : `${base} ${restart}`;

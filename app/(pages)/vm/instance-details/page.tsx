@@ -6,7 +6,7 @@ import { VM_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Hippius Console - VM Instance Details",
+  title: "Hippius Drive - VM Instance Details",
   description: "Manage your virtual machine instance",
 };
 

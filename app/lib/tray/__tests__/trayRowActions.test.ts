@@ -60,7 +60,7 @@ describe("tray row menu, per file state", () => {
     ]);
     const labels = getTrayRowActions(row(), "Finder", editor.on).map((a) => a.label);
     expect(labels).toContain("Reveal in Finder");
-    expect(labels).toContain("Show in Hippius");
+    expect(labels).toContain("Show in Hippius Drive");
   });
 
   it("keeps a cloud-only file's link and download but nothing that needs a local copy", () => {

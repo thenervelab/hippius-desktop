@@ -262,7 +262,7 @@ export function getTrayRowActions(
     actions.push({ id: "insights", label: "View insights" });
   }
   if (hasDrive(item)) {
-    actions.push({ id: "show-in-drive", label: "Show in Hippius" });
+    actions.push({ id: "show-in-drive", label: "Show in Hippius Drive" });
   }
   if (canRevealTrayRow(item)) {
     actions.push({ id: "reveal", label: `Reveal in ${fileManager}` });

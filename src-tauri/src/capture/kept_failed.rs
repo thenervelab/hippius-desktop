@@ -57,7 +57,7 @@ pub struct KeptFailed {
 }
 
 /// What a capture the app quit on says when it comes back.
-pub const INTERRUPTED: &str = "Hippius closed before this was uploaded. Retry to upload it.";
+pub const INTERRUPTED: &str = "Hippius Drive closed before this was uploaded. Retry to upload it.";
 
 /// This run of the app: its process and when it started, so a marker of a
 /// run that ended is told apart from one whose capture is still going.
