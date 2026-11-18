@@ -1,0 +1,1030 @@
+//! Drive Trash: Move to Trash with Undo, and the Trash page's list,
+//! restore, delete forever and empty.
+//!
+//! Everything here is behind the server's `drive_trash` capability; each
+//! command refuses without it, and the webview hides every Trash surface
+//! until it is on. With it off, Delete stays today's permanent delete
+//! (`files::delete_files`), which is also what "Delete forever" and the
+//! "Skip Trash when deleting" setting use for a synced item.
+//!
+//! The desktop calls the Trash routes itself (`api`), as moves between
+//! drives call theirs, because the pinned hcfs-client has no Trash calls:
+//! its sync engine still deletes for good what is deleted in Finder. Move
+//! to Trash therefore never goes through the engine. With the drive's sync
+//! lock held it trashes the item on the server, then moves the local copy
+//! into the hold (`hold`), so the next cycle sees "both deleted" and sends
+//! nothing. See "Drive Trash" in `.claude/rules/sync-engine.md`.
+//!
+//! No size limit anywhere: `run` carries any number of files through the
+//! server's batches, reports progress on [`PROGRESS_EVENT`], and every step
+//! is safe to repeat, so a stopped run resumes by running it again.
+
+pub mod api;
+pub mod hold;
+pub mod run;
+pub mod wire;
+
+use crate::app_state::AppState;
+use crate::error::{AppError, Result};
+use crate::sync::drive_move::{DriveLock, entry_path, list_move_destinations_inner, lock_drive, resolve_side, unsettled_folder};
+use crate::sync::files::FileDeleteError;
+use crate::sync::files::move_entries::{basename_of, join_path, keep_both_name, parent_of};
+use crate::sync::identity::{DriveIdentity, resolve_drive_identity_or_own};
+use api::TrashApi;
+use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem};
+use run::FileToTrash;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use tauri::Emitter;
+use tracing::{info, warn};
+use wire::{TrashItemKind, TrashRefusal};
+
+/// Progress of a running Trash operation, for its toast.
+pub const PROGRESS_EVENT: &str = "trash_progress";
+
+/// What Rust says when the server has Trash switched off.
+const UNAVAILABLE: &str = "Trash isn't available yet.";
+
+/// One step of progress: `done` of `total` files (items for delete).
+#[derive(Serialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashProgress {
+    pub job_id: String,
+    /// `trash`, `restore`, `delete` or `empty`.
+    pub action: &'static str,
+    pub done: u64,
+    pub total: u64,
+}
+
+struct Progress {
+    app: Option<tauri::AppHandle>,
+    job_id: String,
+    action: &'static str,
+    total: u64,
+}
+
+impl Progress {
+    fn report(&self, done: u64) {
+        if let Some(app) = &self.app {
+            let _ = app.emit(
+                PROGRESS_EVENT,
+                TrashProgress {
+                    job_id: self.job_id.clone(),
+                    action: self.action,
+                    done,
+                    total: self.total,
+                },
+            );
+        }
+    }
+}
+
+/// One item moved into a hold, for Undo.
+#[derive(Clone, Debug)]
+struct HeldItem {
+    label: String,
+    root: PathBuf,
+    rel: String,
+    held: PathBuf,
+    /// The Trash items it became; empty when the server named none, which
+    /// leaves the item in Trash on Undo.
+    item_ids: Vec<String>,
+}
+
+/// The holds whose Undo toast is still up, by token.
+#[derive(Default)]
+pub struct TrashHolds(std::sync::Mutex<HashMap<String, Vec<HeldItem>>>);
+
+impl TrashHolds {
+    fn put(&self, token: &str, items: Vec<HeldItem>) {
+        if let Ok(mut holds) = self.0.lock() {
+            holds.insert(token.to_string(), items);
+        }
+    }
+
+    fn take(&self, token: &str) -> Option<Vec<HeldItem>> {
+        self.0.lock().ok().and_then(|mut holds| holds.remove(token))
+    }
+}
+
+/// One item to move to Trash, as the webview names a row to delete.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashFileRequest {
+    pub name: String,
+    pub source: Option<String>,
+    pub label: Option<String>,
+}
+
+/// What Move to Trash did.
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveToTrashResult {
+    pub trashed: u32,
+    pub failed: Vec<FileDeleteError>,
+    /// The hold to pass to `undo_move_to_trash` or `release_trash_hold`.
+    pub hold: Option<String>,
+    /// Every trashed item can be brought back by Undo.
+    pub undoable: bool,
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default()
+}
+
+async fn require_trash(state: &AppState, account_id: &str) -> Result<()> {
+    let caps = crate::shares::capabilities::fetch_capabilities(state, account_id).await?;
+    if !caps.drive_trash {
+        return Err(AppError::Validation(UNAVAILABLE.into()));
+    }
+    Ok(())
+}
+
+/// The Trash calls' HTTP context: one concrete base URL for every call.
+async fn trash_api(state: &AppState, account_id: &str) -> Result<TrashApi> {
+    let pool = state.pool()?;
+    let server_url = crate::sync::remote::get_server_url(pool, account_id).await?;
+    let bearer = crate::auth::tokens::get_api_token(pool, account_id)
+        .await?
+        .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
+    Ok(TrashApi {
+        http: state.api_client.clone(),
+        base_url: crate::sync::region::resolve_base_url(&server_url).to_string(),
+        bearer,
+    })
+}
+
+fn refusal(refusal: TrashRefusal) -> AppError {
+    AppError::Validation(refusal.sentence())
+}
+
+// ---------------------------------------------------------------------------
+// Move to Trash
+// ---------------------------------------------------------------------------
+
+/// Move synced files and folders to Trash. No confirm: Undo
+/// (`undo_move_to_trash`) brings them back while its toast is up, and the
+/// Trash page after that.
+#[tauri::command]
+pub async fn move_to_trash(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    job_id: String,
+    files: Vec<TrashFileRequest>,
+) -> Result<MoveToTrashResult> {
+    let account_id = state.require_session_account(&account_id)?;
+    require_trash(&state, &account_id).await?;
+    let (result, folder_labels) = move_to_trash_inner(&state, Some(app.clone()), &account_id, &job_id, &files).await?;
+    let _ = hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    // A held folder is a removed directory: its folder entities need the
+    // forced reconcile `delete_files` runs for the same reason.
+    for label in folder_labels {
+        crate::sync::folder_entries_materialize::spawn_folder_entity_sync(
+            app.clone(),
+            account_id.clone(),
+            label,
+            crate::sync::folder_entries_materialize::FolderEntitySyncTrigger::Forced,
+        );
+    }
+    Ok(result)
+}
+
+/// One row to trash, read from disk and the server.
+struct Target {
+    index: usize,
+    rel: String,
+    is_dir: bool,
+    size: u64,
+    files: Vec<FileToTrash>,
+}
+
+async fn move_to_trash_inner(
+    state: &AppState,
+    app: Option<tauri::AppHandle>,
+    account_id: &str,
+    job_id: &str,
+    files: &[TrashFileRequest],
+) -> Result<(MoveToTrashResult, Vec<String>)> {
+    let pool = state.pool()?;
+    let label_to_path: HashMap<String, String> = crate::sync::folders::get_all_sync_paths_or_warn(pool, account_id, "move_to_trash")
+        .await
+        .into_iter()
+        .map(|sp| (sp.label, sp.path))
+        .collect();
+
+    let mut result = MoveToTrashResult::default();
+    let fail = |result: &mut MoveToTrashResult, index: usize, error: String| {
+        result.failed.push(FileDeleteError {
+            name: files[index].name.clone(),
+            error,
+        });
+    };
+    // Group by drive; an explicitly named drive must exist (never the
+    // default drive in its place, as `delete_files`).
+    let mut by_label: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+    for (index, file) in files.iter().enumerate() {
+        let label = file.label.clone().unwrap_or_else(|| "default".to_string());
+        if label_to_path.contains_key(&label) {
+            by_label.entry(label).or_default().push(index);
+        } else {
+            fail(&mut result, index, "This item's drive isn't synced on this computer.".into());
+        }
+    }
+
+    let token = hold::new_token(now_millis());
+    let mut held_all = Vec::new();
+    let mut folder_labels = Vec::new();
+    let progress = Progress {
+        app,
+        job_id: job_id.to_string(),
+        action: "trash",
+        total: 0,
+    };
+    for (label, indexes) in by_label {
+        let root_str = label_to_path[&label].clone();
+        let root = PathBuf::from(&root_str);
+        match trash_in_drive(state, account_id, &label, &root, &root_str, files, &indexes, &token, &progress).await {
+            Ok(outcome) => {
+                result.trashed += outcome.trashed;
+                for (index, error) in outcome.failed {
+                    fail(&mut result, index, error);
+                }
+                if outcome.held.iter().any(|h| h.held.is_dir()) {
+                    folder_labels.push(label.clone());
+                }
+                held_all.extend(outcome.held);
+            }
+            Err(e) => {
+                warn!(error = %e, "Move to Trash: a drive could not be read");
+                for index in indexes {
+                    fail(&mut result, index, e.to_string());
+                }
+            }
+        }
+    }
+
+    if !held_all.is_empty() {
+        result.undoable = result.trashed as usize == held_all.len() && held_all.iter().all(|h| !h.item_ids.is_empty());
+        result.hold = Some(token.clone());
+        state.trash_holds.put(&token, held_all);
+    }
+    info!(trashed = result.trashed, failed = result.failed.len(), "Move to Trash completed");
+    Ok((result, folder_labels))
+}
+
+#[derive(Default)]
+struct DriveOutcome {
+    trashed: u32,
+    failed: Vec<(usize, String)>,
+    held: Vec<HeldItem>,
+}
+
+/// Move one drive's rows to Trash: read them, trash them on the server with
+/// the drive's sync lock held, then hold the local copies.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn trash_in_drive(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    root: &Path,
+    root_str: &str,
+    files: &[TrashFileRequest],
+    indexes: &[usize],
+    token: &str,
+    progress_base: &Progress,
+) -> Result<DriveOutcome> {
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let (side, _) = resolve_side(state, account_id, label, &mnemonic).await?;
+    drop(mnemonic);
+    let api = trash_api(state, account_id).await?;
+    let (ss58, fh) = (side.identity.wire_ss58.clone(), side.identity.wire_folder_hash.clone());
+    let swept = hold::sweep_stale(root, now_millis());
+    if swept > 0 {
+        info!(swept, "Move to Trash: stale holds removed");
+    }
+
+    let mut out = DriveOutcome::default();
+    let mut targets = Vec::new();
+    let mut parents: HashMap<String, Vec<hcfs_shared::network::RemoteFileEntry>> = HashMap::new();
+    for &index in indexes {
+        let file = &files[index];
+        let rel = crate::sync::files::pathops::derive_relative_name(root_str, file.source.as_deref(), &file.name)
+            .replace('\\', "/")
+            .trim_matches('/')
+            .to_string();
+        let name = basename_of(&rel).to_string();
+        if rel.is_empty() || crate::sync::files::pathops::ensure_within(root, &root.join(&rel)).is_err() {
+            out.failed.push((index, "This item isn't inside its drive's folder.".into()));
+            continue;
+        }
+        let abs = root.join(&rel);
+        let Ok(meta) = abs.symlink_metadata() else {
+            out.failed.push((index, format!("\"{name}\" is no longer in this folder.")));
+            continue;
+        };
+        let wire = join_path(side.wire_root.trim_matches('/'), &rel);
+        if meta.is_dir() {
+            let tree = crate::sync::remote_rename::collect_folder_tree(&side.client, &ss58, &fh, &wire, &side.key).await?;
+            if unsettled_folder(root, &rel, &tree) {
+                out.failed.push((
+                    index,
+                    format!("\"{name}\" has changes that are still syncing. Try again when sync finishes."),
+                ));
+                continue;
+            }
+            targets.push(Target {
+                index,
+                rel,
+                is_dir: true,
+                size: tree.files.iter().map(|f| f.size_bytes).sum(),
+                files: tree
+                    .files
+                    .iter()
+                    .map(|f| FileToTrash {
+                        path_hash: f.path_hash,
+                        revision_id: f.revision_id,
+                    })
+                    .collect(),
+            });
+            continue;
+        }
+        let parent = parent_of(&wire).to_string();
+        if !parents.contains_key(&parent) {
+            let (_, listed) = crate::sync::remote_rename::browse_directory(&side.client, &ss58, &fh, &parent).await?;
+            parents.insert(parent.clone(), listed);
+        }
+        let found = parents[&parent]
+            .iter()
+            .find(|entry| entry_path(entry, &side.key).as_deref() == Some(wire.as_str()));
+        match found {
+            Some(entry) => targets.push(Target {
+                index,
+                rel,
+                is_dir: false,
+                size: entry.size_bytes,
+                files: vec![FileToTrash {
+                    path_hash: entry.path_hash,
+                    revision_id: entry.revision_id,
+                }],
+            }),
+            None => out.failed.push((index, format!("\"{name}\" hasn't finished uploading yet."))),
+        }
+    }
+    if targets.is_empty() {
+        return Ok(out);
+    }
+
+    let total: u64 = targets.iter().map(|t| t.files.len().max(1) as u64).sum();
+    let progress = Progress {
+        app: progress_base.app.clone(),
+        job_id: progress_base.job_id.clone(),
+        action: progress_base.action,
+        total,
+    };
+    progress.report(0);
+    let mut done_before = 0u64;
+
+    // No cycle runs between the server's answer and the hold, so the engine
+    // never sees the item gone on one side only.
+    let lock = lock_drive(state, label).await;
+    let mut trashed: Vec<(&Target, Vec<String>)> = Vec::new();
+
+    let loose: Vec<&Target> = targets.iter().filter(|t| !t.is_dir).collect();
+    if !loose.is_empty() {
+        let batch: Vec<FileToTrash> = loose.iter().flat_map(|t| t.files.clone()).collect();
+        let sent = run::trash_in_batches(&api, &ss58, &fh, &batch, None, |_| {}, |n| progress.report(done_before + n as u64)).await;
+        done_before += batch.len() as u64;
+        match sent {
+            Ok(outcome) => {
+                let kept: HashMap<&str, &str> = outcome.kept.iter().map(|(id, code)| (id.as_str(), code.as_str())).collect();
+                for target in loose {
+                    let id = wire::file_id(&target.files[0].path_hash);
+                    match kept.get(id.as_str()) {
+                        Some(code) => out.failed.push((target.index, kept_sentence(&target.rel, code))),
+                        None => trashed.push((target, outcome.item_of_file.get(&id).cloned().into_iter().collect())),
+                    }
+                }
+            }
+            Err(r) => {
+                for target in loose {
+                    out.failed.push((target.index, r.sentence()));
+                }
+            }
+        }
+    }
+
+    for target in targets.iter().filter(|t| t.is_dir) {
+        let resume = hold::resumed_item(root, &target.rel);
+        let wire_rel = join_path(side.wire_root.trim_matches('/'), &target.rel);
+        let base = done_before;
+        let sent = run::trash_in_batches(
+            &api,
+            &ss58,
+            &fh,
+            &target.files,
+            Some((wire_rel.as_str(), resume)),
+            |item| {
+                if let Err(e) = hold::remember_item(root, &target.rel, item) {
+                    warn!(error = %e, "Move to Trash: the resume journal could not be written");
+                }
+            },
+            |n| progress.report(base + n as u64),
+        )
+        .await;
+        done_before += target.files.len().max(1) as u64;
+        match sent {
+            Ok(outcome) => {
+                hold::forget_item(root, &target.rel);
+                if let Some((_, code)) = outcome.kept.first() {
+                    // Part of the folder stayed live: leave the folder to the
+                    // engine, which removes what was trashed and keeps the rest.
+                    out.failed.push((target.index, kept_sentence(&target.rel, code)));
+                } else {
+                    trashed.push((target, outcome.folder_item.into_iter().collect()));
+                }
+            }
+            // The journal keeps the item: trashing the folder again resumes it.
+            Err(r) => out.failed.push((target.index, r.sentence())),
+        }
+    }
+    progress.report(total);
+
+    let can_hold = !matches!(lock, DriveLock::Busy);
+    for (target, item_ids) in trashed {
+        out.trashed += 1;
+        crate::sync::files::invalidate_dir_stats_for_change(root, &root.join(&target.rel));
+        state.sync.update_state(label, |st| {
+            st.add_activity(SyncActivityItem {
+                file_name: std::sync::Arc::from(target.rel.as_str()),
+                action: SyncActivityAction::Deleted,
+                timestamp: chrono::Utc::now().timestamp(),
+                size_bytes: target.size,
+                label: std::sync::Arc::from(label),
+            });
+        });
+        if !can_hold {
+            // A cycle held the lock past the wait: it removes the local copy
+            // itself once it sees the item gone from Hippius.
+            continue;
+        }
+        match hold::hold(root, &target.rel, token) {
+            Ok(held) => out.held.push(HeldItem {
+                label: label.to_string(),
+                root: root.to_path_buf(),
+                rel: target.rel.clone(),
+                held,
+                item_ids,
+            }),
+            Err(e) => warn!(error = %e, "Move to Trash: the local copy could not be held; sync removes it"),
+        }
+    }
+    drop(lock);
+    Ok(out)
+}
+
+/// Why the server kept a file, in words.
+fn kept_sentence(rel: &str, code: &str) -> String {
+    let name = basename_of(rel);
+    match code {
+        "conflict" => format!("\"{name}\" changed on another device, so it was kept."),
+        _ => format!("Hippius couldn't move \"{name}\" to Trash."),
+    }
+}
+
+/// What Undo brought back.
+#[derive(Serialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct UndoTrashResult {
+    pub restored: u32,
+    /// Items that stayed in Trash (their name was taken meanwhile).
+    pub left_in_trash: u32,
+}
+
+/// Undo a Move to Trash: restore the items on the server and put the held
+/// copies back, so sync downloads nothing.
+#[tauri::command]
+pub async fn undo_move_to_trash(state: tauri::State<'_, AppState>, account_id: String, hold: String) -> Result<UndoTrashResult> {
+    let account_id = state.require_session_account(&account_id)?;
+    let Some(items) = state.trash_holds.take(&hold) else {
+        return Ok(UndoTrashResult::default());
+    };
+    let outcome = undo_inner(&state, &account_id, &items).await;
+    let roots: HashSet<PathBuf> = items.iter().map(|i| i.root.clone()).collect();
+    for root in roots {
+        hold::release(&root, &hold);
+    }
+    let _ = hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    outcome
+}
+
+async fn undo_inner(state: &AppState, account_id: &str, items: &[HeldItem]) -> Result<UndoTrashResult> {
+    let pool = state.pool()?;
+    let api = trash_api(state, account_id).await?;
+    let mut by_label: BTreeMap<&str, Vec<&HeldItem>> = BTreeMap::new();
+    for item in items {
+        by_label.entry(item.label.as_str()).or_default().push(item);
+    }
+    let mut result = UndoTrashResult::default();
+    for (label, held) in by_label {
+        let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
+        let ids: Vec<String> = held.iter().flat_map(|h| h.item_ids.clone()).collect();
+        let lock = lock_drive(state, label).await;
+        let statuses = if ids.is_empty() {
+            HashMap::new()
+        } else {
+            run::restore_in_place(&api, &identity.wire_ss58, &identity.wire_folder_hash, &ids, |_| {})
+                .await
+                .map_err(refusal)?
+        };
+        for item in held {
+            let back = !item.item_ids.is_empty() && item.item_ids.iter().all(|id| statuses.get(id).map(String::as_str) == Some("restored"));
+            if !back {
+                result.left_in_trash += 1;
+                continue;
+            }
+            result.restored += 1;
+            if matches!(lock, DriveLock::Busy) {
+                continue;
+            }
+            match hold::put_back(&item.root, &item.rel, &item.held) {
+                Ok(true) => crate::sync::files::invalidate_dir_stats_for_change(&item.root, &item.root.join(&item.rel)),
+                // Taken meanwhile, or the rename failed: sync downloads the
+                // restored item instead.
+                Ok(false) => {}
+                Err(e) => warn!(error = %e, "Undo: a held copy could not be put back; sync downloads it"),
+            }
+        }
+        drop(lock);
+    }
+    Ok(result)
+}
+
+/// The Undo toast closed: the held copies are no longer needed (the items
+/// are in Hippius Trash).
+#[tauri::command]
+pub async fn release_trash_hold(state: tauri::State<'_, AppState>, hold: String) -> Result<()> {
+    if let Some(items) = state.trash_holds.take(&hold) {
+        let roots: HashSet<PathBuf> = items.into_iter().map(|i| i.root).collect();
+        tokio::task::spawn_blocking(move || {
+            for root in roots {
+                hold::release(&root, &hold);
+            }
+        })
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?;
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The Trash page
+// ---------------------------------------------------------------------------
+
+/// One row of the Trash page.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashRow {
+    pub label: String,
+    pub drive_name: String,
+    pub shared: bool,
+    /// The drive is synced on this computer.
+    pub synced: bool,
+    pub can_delete_forever: bool,
+    pub item_id: String,
+    pub is_folder: bool,
+    pub name: String,
+    /// Where it was, relative to the drive; empty for the drive's top.
+    pub parent_path: String,
+    pub path: String,
+    pub file_count: u64,
+    pub total_bytes: u64,
+    /// Unix seconds.
+    pub trashed_at: i64,
+    pub trashed_by: Option<String>,
+    pub name_taken: bool,
+}
+
+/// A drive the Trash page can filter by or empty.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashDrive {
+    pub label: String,
+    pub name: String,
+    pub shared: bool,
+    pub can_delete_forever: bool,
+}
+
+#[derive(Serialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashListing {
+    pub items: Vec<TrashRow>,
+    pub drives: Vec<TrashDrive>,
+    /// Some drive's Trash could not be read; the list is partial.
+    pub incomplete: bool,
+}
+
+/// Every item in Trash across this account's drives and the drives shared
+/// with it as an Editor or Manager, newest first.
+#[tauri::command]
+pub async fn list_trash(state: tauri::State<'_, AppState>, account_id: String) -> Result<TrashListing> {
+    let account_id = state.require_session_account(&account_id)?;
+    require_trash(&state, &account_id).await?;
+    list_trash_inner(&state, &account_id).await
+}
+
+async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashListing> {
+    let pool = state.pool()?;
+    let api = trash_api(state, account_id).await?;
+    let drives = list_move_destinations_inner(state, account_id).await?;
+    let reads = drives.iter().map(|drive| async {
+        let identity = resolve_drive_identity_or_own(pool, account_id, &drive.label).await.ok()?;
+        Some(list_drive(state, account_id, &api, &drive.label, &identity).await)
+    });
+    let answers = futures_util::future::join_all(reads).await;
+
+    let mut listing = TrashListing::default();
+    for (drive, answer) in drives.iter().zip(answers) {
+        listing.drives.push(TrashDrive {
+            label: drive.label.clone(),
+            name: drive.name.clone(),
+            shared: drive.shared,
+            can_delete_forever: drive.manager,
+        });
+        let items = match answer {
+            Some(Ok(items)) => items,
+            Some(Err(r)) if r.is_unavailable() => continue,
+            Some(Err(r)) => {
+                warn!(status = r.status, code = ?r.code, "Trash: a drive's Trash could not be read");
+                listing.incomplete = true;
+                continue;
+            }
+            None => {
+                listing.incomplete = true;
+                continue;
+            }
+        };
+        listing.items.extend(items.into_iter().map(|(item, path)| TrashRow {
+            label: drive.label.clone(),
+            drive_name: drive.name.clone(),
+            shared: drive.shared,
+            synced: drive.sync_path.is_some(),
+            can_delete_forever: drive.manager,
+            item_id: item.item_id,
+            is_folder: item.kind == TrashItemKind::Folder,
+            name: basename_of(&path).to_string(),
+            parent_path: parent_of(&path).to_string(),
+            path,
+            file_count: item.file_count,
+            total_bytes: item.total_bytes,
+            trashed_at: item.trashed_at,
+            trashed_by: item.trashed_by,
+            name_taken: item.name_taken,
+        }));
+    }
+    listing
+        .items
+        .sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at).then_with(|| a.name.cmp(&b.name)));
+    Ok(listing)
+}
+
+/// Every page of one drive's Trash, each row with its plaintext path.
+async fn list_drive(
+    state: &AppState,
+    account_id: &str,
+    api: &TrashApi,
+    label: &str,
+    identity: &DriveIdentity,
+) -> std::result::Result<Vec<(wire::TrashItem, String)>, TrashRefusal> {
+    let mut rows = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = api.list(&identity.wire_ss58, &identity.wire_folder_hash, cursor.as_ref()).await?;
+        cursor = page.next_cursor();
+        rows.extend(page.items);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    // A row with no plaintext path is opened with the drive key, read once
+    // and only when a row needs it.
+    let mut key: Option<Option<hcfs_crypto::FileKey>> = None;
+    let mut named = Vec::with_capacity(rows.len());
+    for item in rows {
+        let mut path = item.relative_path.clone().filter(|p| !p.trim_matches('/').is_empty());
+        if path.is_none()
+            && let Some(sealed) = &item.encrypted_path
+        {
+            if key.is_none() {
+                key = Some(drive_key(state, account_id, label, identity).await);
+            }
+            if let Some(Some(k)) = &key {
+                path = hcfs_crypto::decrypt_small(sealed, k).ok().and_then(|b| String::from_utf8(b).ok());
+            }
+        }
+        let path = path
+            .or_else(|| item.file_name.clone())
+            .unwrap_or_else(|| "Untitled".to_string())
+            .replace('\\', "/")
+            .trim_matches('/')
+            .to_string();
+        named.push((item, path));
+    }
+    Ok(named)
+}
+
+async fn drive_key(state: &AppState, account_id: &str, label: &str, identity: &DriveIdentity) -> Option<hcfs_crypto::FileKey> {
+    let mnemonic = crate::sync::remote::session_mnemonic(state).ok()?;
+    let keys = crate::sync::remote::drive_key_material_for_label(state, account_id, label, &mnemonic, identity)
+        .await
+        .ok()?;
+    keys.encryption_key().ok()
+}
+
+/// One item to restore, and what to do when its name is taken.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreItemRequest {
+    pub label: String,
+    pub item_id: String,
+    /// Its original path, as listed.
+    pub path: String,
+    pub is_folder: bool,
+    /// For progress only.
+    #[serde(default)]
+    pub file_count: u64,
+    /// `ask` (report a clash), `keepBoth` or `skip`.
+    #[serde(default = "ask")]
+    pub on_clash: String,
+}
+
+fn ask() -> String {
+    "ask".into()
+}
+
+/// How one restore went.
+#[derive(Serialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreItemResult {
+    pub label: String,
+    pub item_id: String,
+    /// `restored`, `clash` (name taken, nothing restored), `skipped`,
+    /// `notFound` or `failed`.
+    pub status: String,
+    pub error: Option<String>,
+    /// Where it is now, relative to its drive.
+    pub path: String,
+}
+
+/// Restore items from Trash to where they were.
+#[tauri::command]
+pub async fn restore_trash_items(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    job_id: String,
+    items: Vec<RestoreItemRequest>,
+) -> Result<Vec<RestoreItemResult>> {
+    let account_id = state.require_session_account(&account_id)?;
+    require_trash(&state, &account_id).await?;
+    let progress = Progress {
+        app: Some(app),
+        job_id,
+        action: "restore",
+        total: items.iter().map(|i| i.file_count.max(1)).sum(),
+    };
+    let results = restore_inner(&state, &account_id, &items, &progress).await?;
+    if results.iter().any(|r| r.status == "restored") {
+        let _ = hcfs_client::engine::runner::trigger_sync(&state.sync).await;
+    }
+    Ok(results)
+}
+
+async fn restore_inner(state: &AppState, account_id: &str, items: &[RestoreItemRequest], progress: &Progress) -> Result<Vec<RestoreItemResult>> {
+    let pool = state.pool()?;
+    let api = trash_api(state, account_id).await?;
+    let mut by_label: BTreeMap<&str, Vec<&RestoreItemRequest>> = BTreeMap::new();
+    for item in items {
+        by_label.entry(item.label.as_str()).or_default().push(item);
+    }
+    let mut results = Vec::with_capacity(items.len());
+    let mut done = 0u64;
+    let answer = |item: &RestoreItemRequest, status: &str, error: Option<String>, path: String| RestoreItemResult {
+        label: item.label.clone(),
+        item_id: item.item_id.clone(),
+        status: status.to_string(),
+        error,
+        path,
+    };
+    for (label, list) in by_label {
+        let identity = resolve_drive_identity_or_own(pool, account_id, label).await?;
+        let (ss58, fh) = (identity.wire_ss58.as_str(), identity.wire_folder_hash.as_str());
+
+        let in_place: Vec<&RestoreItemRequest> = list.iter().copied().filter(|i| i.on_clash == "ask").collect();
+        if !in_place.is_empty() {
+            let ids: Vec<String> = in_place.iter().map(|i| i.item_id.clone()).collect();
+            let base = done;
+            match run::restore_in_place(&api, ss58, fh, &ids, |n| progress.report(base + n)).await {
+                Ok(statuses) => {
+                    for item in in_place {
+                        let status = match statuses.get(&item.item_id).map(String::as_str) {
+                            Some("restored") => "restored",
+                            Some("name_taken") => "clash",
+                            Some("not_found") => "notFound",
+                            _ => "failed",
+                        };
+                        let error = (status == "failed").then(|| "Hippius couldn't restore it.".to_string());
+                        results.push(answer(item, status, error, item.path.clone()));
+                    }
+                }
+                Err(r) => {
+                    for item in in_place {
+                        results.push(answer(item, "failed", Some(r.sentence()), item.path.clone()));
+                    }
+                }
+            }
+            done += ids.len() as u64;
+        }
+
+        for item in list.iter().copied().filter(|i| i.on_clash == "skip") {
+            results.push(answer(item, "skipped", None, item.path.clone()));
+        }
+
+        for item in list.iter().copied().filter(|i| i.on_clash == "keepBoth") {
+            let base = done;
+            match restore_keep_both(state, account_id, &api, label, item, |n| progress.report(base + n)).await {
+                Ok((status, path)) => {
+                    let status = match status.as_str() {
+                        "restored" => "restored",
+                        "name_taken" => "clash",
+                        "not_found" => "notFound",
+                        _ => "failed",
+                    };
+                    let error = (status == "failed").then(|| "Hippius couldn't restore it.".to_string());
+                    results.push(answer(item, status, error, path));
+                }
+                Err(e) => results.push(answer(item, "failed", Some(e.to_string()), item.path.clone())),
+            }
+            done += item.file_count.max(1);
+        }
+    }
+    progress.report(progress.total);
+    Ok(results)
+}
+
+/// "Keep both": the first free "name (N)" beside where it was, and every
+/// file of the item renamed under it.
+async fn restore_keep_both(
+    state: &AppState,
+    account_id: &str,
+    api: &TrashApi,
+    label: &str,
+    item: &RestoreItemRequest,
+    progress: impl FnMut(u64),
+) -> Result<(String, String)> {
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let (side, keys) = resolve_side(state, account_id, label, &mnemonic).await?;
+    drop(mnemonic);
+    let signing_key = keys.signing_key()?;
+    let (ss58, fh) = (side.identity.wire_ss58.as_str(), side.identity.wire_folder_hash.as_str());
+    let old_path = item.path.trim_matches('/').to_string();
+    let parent = parent_of(&old_path).to_string();
+
+    let (folders, listed) = crate::sync::remote_rename::browse_directory(&side.client, ss58, fh, &parent).await?;
+    let mut taken: HashSet<String> = folders.iter().map(|f| basename_of(f).to_lowercase()).collect();
+    for entry in &listed {
+        if let Some(path) = entry_path(entry, &side.key).or_else(|| entry.file_name.clone()) {
+            taken.insert(basename_of(&path).to_lowercase());
+        }
+    }
+    if let Some(root) = &side.root
+        && let Ok(entries) = std::fs::read_dir(root.join(&parent))
+    {
+        taken.extend(entries.flatten().map(|e| e.file_name().to_string_lossy().to_lowercase()));
+    }
+    let new_name = keep_both_name(basename_of(&old_path), item.is_folder, |c| taken.contains(&c.to_lowercase()))
+        .ok_or_else(|| AppError::Validation("No free name was found for it.".into()))?;
+    let new_path = join_path(&parent, &new_name);
+
+    let mut files = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let page = api.item_files(ss58, fh, &item.item_id, offset).await.map_err(refusal)?;
+        offset += page.files.len() as u64;
+        for file in &page.files {
+            let path = entry_path(file, &side.key).ok_or_else(|| AppError::Validation("A file in it could not be read.".into()))?;
+            files.push((path, file.path_hash, file.revision_id));
+        }
+        if !page.has_more || page.files.is_empty() {
+            break;
+        }
+    }
+    let renames = run::plan_restore_renames(&files, &old_path, &new_path, &side.key).map_err(AppError::Validation)?;
+    let status = run::restore_renamed(api, ss58, fh, &item.item_id, &new_path, &renames, &signing_key, progress)
+        .await
+        .map_err(refusal)?;
+    Ok((status, new_path))
+}
+
+/// One Trash item, by drive.
+#[derive(Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashItemRef {
+    pub label: String,
+    pub item_id: String,
+}
+
+/// What delete forever or empty did.
+#[derive(Serialize, Default, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashDeleteResult {
+    pub deleted: u32,
+    /// One sentence per drive that refused.
+    pub failed: Vec<String>,
+}
+
+/// Delete Trash items forever.
+#[tauri::command]
+pub async fn delete_trash_items_forever(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    job_id: String,
+    items: Vec<TrashItemRef>,
+) -> Result<TrashDeleteResult> {
+    let account_id = state.require_session_account(&account_id)?;
+    require_trash(&state, &account_id).await?;
+    let pool = state.pool()?;
+    let api = trash_api(&state, &account_id).await?;
+    let progress = Progress {
+        app: Some(app),
+        job_id,
+        action: "delete",
+        total: items.len() as u64,
+    };
+    let mut by_label: BTreeMap<&str, Vec<String>> = BTreeMap::new();
+    for item in &items {
+        by_label.entry(item.label.as_str()).or_default().push(item.item_id.clone());
+    }
+    let mut result = TrashDeleteResult::default();
+    let mut done = 0u64;
+    for (label, ids) in by_label {
+        let identity = resolve_drive_identity_or_own(pool, &account_id, label).await?;
+        let base = done;
+        match run::delete_forever_in_batches(&api, &identity.wire_ss58, &identity.wire_folder_hash, &ids, |n| {
+            progress.report(base + n as u64);
+        })
+        .await
+        {
+            Ok(()) => result.deleted += ids.len() as u32,
+            Err(r) => result.failed.push(r.sentence()),
+        }
+        done += ids.len() as u64;
+    }
+    Ok(result)
+}
+
+/// Empty Trash: every drive given, or every drive this account may empty.
+#[tauri::command]
+pub async fn empty_trash(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    account_id: String,
+    job_id: String,
+    labels: Option<Vec<String>>,
+) -> Result<TrashDeleteResult> {
+    let account_id = state.require_session_account(&account_id)?;
+    require_trash(&state, &account_id).await?;
+    let pool = state.pool()?;
+    let api = trash_api(&state, &account_id).await?;
+    let drives: Vec<String> = match labels {
+        Some(labels) => labels,
+        None => list_move_destinations_inner(&state, &account_id)
+            .await?
+            .into_iter()
+            .filter(|d| d.manager)
+            .map(|d| d.label)
+            .collect(),
+    };
+    let progress = Progress {
+        app: Some(app),
+        job_id,
+        action: "empty",
+        total: drives.len() as u64,
+    };
+    let mut result = TrashDeleteResult::default();
+    for (index, label) in drives.iter().enumerate() {
+        let identity = resolve_drive_identity_or_own(pool, &account_id, label).await?;
+        match run::empty_until_done(&api, &identity.wire_ss58, &identity.wire_folder_hash).await {
+            Ok(n) => result.deleted += n as u32,
+            Err(r) if r.is_unavailable() => {}
+            Err(r) => result.failed.push(r.sentence()),
+        }
+        progress.report(index as u64 + 1);
+    }
+    Ok(result)
+}

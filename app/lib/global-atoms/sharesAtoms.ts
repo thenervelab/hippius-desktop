@@ -314,3 +314,10 @@ export const inviteKeyDeliveredVersionAtom = atom(0);
  * to… shows no drive picker; `null` (not yet known) reads as off.
  */
 export const driveMovesEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.drive_moves === true);
+
+/**
+ * Whether the server keeps a Trash (`drive_trash`). Off, Delete is today's
+ * permanent delete and the Trash page is hidden; `null` (not yet known)
+ * reads as off.
+ */
+export const driveTrashEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.drive_trash === true);

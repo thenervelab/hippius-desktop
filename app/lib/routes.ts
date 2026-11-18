@@ -49,6 +49,9 @@ export function driveFolderRoute(label: string, remote: boolean, subfolder?: str
 /** The Captures page, which shows the captures drive. */
 export const CAPTURES_ROUTE = "/captures";
 
+/** Drive Trash: deleted items until they are restored or deleted forever. */
+export const TRASH_ROUTE = "/trash";
+
 /**
  * The Captures page pointing out one capture ("Show in folder" on a capture's
  * card). The same params as `driveFolderRoute`, read by the same Drive

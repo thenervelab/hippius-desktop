@@ -75,6 +75,11 @@ pub const MAIN_WINDOW_ONLY: &[&str] = &[
     "start_drive_card_checkout",
     // Deletes, revokes and leaving shared drives.
     "delete_files",
+    "move_to_trash",
+    "undo_move_to_trash",
+    "restore_trash_items",
+    "delete_trash_items_forever",
+    "empty_trash",
     "delete_remote_folder",
     "confirm_mass_delete",
     "confirm_empty_remote",
@@ -154,6 +159,8 @@ mod tests {
                 "chat_derive_secret_storage_key",
                 "local_wallet_export_backup_zip",
                 "delete_files",
+                "move_to_trash",
+                "empty_trash",
                 "export_file",
                 "transfer_balance",
             ] {

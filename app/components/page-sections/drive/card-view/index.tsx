@@ -53,6 +53,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
+import { TrashRequestRunner, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
@@ -140,7 +141,7 @@ const CardView: FC<CardViewProps> = ({
 
   // Handle file deletion with captured files from confirmation dialog
   const handleDeleteSelectedFiles = useCallback(
-    (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][]) => {
+    (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][], mode?: DeleteMode) => {
       if (capturedFiles.length === 0) return;
       // Each file's links to turn off ("Also turn off its links").
       const links = turnOffLinks
@@ -151,7 +152,7 @@ const CardView: FC<CardViewProps> = ({
 
       // Use setTimeout to ensure the delete hook reinitializes with new files
       setTimeout(() => {
-        deleteFiles({ turnOffLinks: links }, {
+        deleteFiles({ turnOffLinks: links, mode }, {
           onSuccess: () => {
             setFilesToDelete([]);
           },
@@ -163,6 +164,13 @@ const CardView: FC<CardViewProps> = ({
     },
     [deleteFiles],
   );
+
+  // Move to Trash from a menu or the viewer, without the selection bar.
+  const runTrashRequest = useCallback(
+    (files: FormattedUserFile[]) => handleDeleteSelectedFiles(files, undefined, "trash"),
+    [handleDeleteSelectedFiles],
+  );
+  const deleteMenu = useDeleteMenuAction();
 
   const localHandleShowFileDetails = useCallback(
     (file: FormattedUserFile) => {
@@ -501,7 +509,7 @@ const CardView: FC<CardViewProps> = ({
                                   icon: <Icons.Trash className="size-4" />,
                                   itemTitle: !file.isAssigned
                                     ? "Delete (Syncing in progress...)"
-                                    : "Delete",
+                                    : deleteMenu.label,
                                   disabled: !file.isAssigned,
                                   className: !file.isAssigned
                                     ? "cursor-not-allowed opacity-60"
@@ -525,8 +533,10 @@ const CardView: FC<CardViewProps> = ({
 
                                     // Close the menu
                                     setOpenMenuIndex(null);
-                                    // Enter selection mode and select file
-                                    enterSelectionModeAndSelectFile(file);
+                                    // Move to Trash runs at once; Delete and
+                                    // Delete forever select the card for the
+                                    // bar's confirmation.
+                                    deleteMenu.run(file, () => enterSelectionModeAndSelectFile(file));
                                   },
                                   variant: "destructive" as const,
                                 },
@@ -566,6 +576,7 @@ const CardView: FC<CardViewProps> = ({
           isDeleting={isDeleting}
         />
       )}
+      <TrashRequestRunner onTrash={runTrashRequest} />
 
     </div>
   );

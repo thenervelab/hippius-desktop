@@ -130,6 +130,11 @@ pub struct ServerCapabilities {
     /// Absent on older servers and off in production until it is turned
     /// on: Move to… shows no drive picker, and no move is sent.
     pub drive_moves: bool,
+    /// Drive Trash (`/v1/trash/...`, `HCFS_FEATURE_DRIVE_TRASH`). Absent on
+    /// older servers and off in production until it is turned on: Delete
+    /// stays a permanent delete, the Trash page is hidden, and no trash
+    /// request is sent.
+    pub drive_trash: bool,
     /// Whether the response carried a `folder_grants` key AT ALL, true or
     /// false. Not a server field: set by [`parse_capabilities`].
     ///
@@ -255,7 +260,7 @@ mod tests {
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"#,
-            r#""drive_moves":true}"#,
+            r#""drive_moves":true,"drive_trash":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -280,6 +285,7 @@ mod tests {
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
+        assert!(caps.drive_trash);
 
         // The IPC serializes this struct straight to the FE, which reads the
         // snake_case keys — pin them so a stray rename_all cannot drift the
@@ -291,6 +297,7 @@ mod tests {
             [
                 "drive_invite_link_envelopes",
                 "drive_moves",
+                "drive_trash",
                 "folder_grant_writes",
                 "folder_grants",
                 "folder_share_link_envelopes",
@@ -340,6 +347,7 @@ mod tests {
             "a server without link envelopes keeps every folder mint on #k= / #p="
         );
         assert!(!old.drive_moves, "a server without drive moves shows no drive picker");
+        assert!(!old.drive_trash, "a server without Trash keeps Delete permanent and hides the Trash page");
         assert!(
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="

@@ -237,7 +237,7 @@ pub struct FolderRenamePlan {
 ///
 /// The child test is `old_prefix` plus a separator, never a bare
 /// `starts_with`: `Trip` must not match `Trip Photos`.
-fn replace_path_prefix(path: &str, old_prefix: &str, new_prefix: &str) -> Option<String> {
+pub(crate) fn replace_path_prefix(path: &str, old_prefix: &str, new_prefix: &str) -> Option<String> {
     if path == old_prefix {
         return Some(new_prefix.to_string());
     }

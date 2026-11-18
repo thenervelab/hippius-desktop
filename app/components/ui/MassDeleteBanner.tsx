@@ -28,6 +28,10 @@ import {
   removeLabel,
 } from "@/app/lib/massDelete/copy";
 import { isMacPlatform } from "@/app/lib/capture/shortcutLabel";
+import Link from "next/link";
+import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { ENGINE_SENDS_DELETES_TO_TRASH } from "@/app/lib/trash/engine";
+import { TRASH_ROUTE } from "@/app/lib/routes";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 /** The attribute marking each banner's section (`data-mass-delete-banner`),
@@ -107,7 +111,12 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
     dialogOpen: confirmCount !== null,
   });
   const { busy, answer, decideLater } = useMassDeleteAnswer(holdKey, hold, focus);
-  const confirm = removeConfirmCopy({ ...hold, count: confirmCount ?? hold.count }, device);
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
+  const confirm = removeConfirmCopy(
+    { ...hold, count: confirmCount ?? hold.count },
+    device,
+    trashEnabled && ENGINE_SENDS_DELETES_TO_TRASH,
+  );
 
   return (
     <>
@@ -145,6 +154,9 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
               onRestore={() => void answer("restore", hold.count)}
               onRemove={() => setConfirmCount(hold.count)}
               onLater={decideLater}
+              // Files missing from Hippius may be in its Trash: someone
+              // deleted them by mistake on another device.
+              openTrash={trashEnabled && hold.side === "local"}
             />
           )}
         </div>
@@ -213,12 +225,13 @@ interface BannerActionsProps {
   onRestore: () => void;
   onRemove: () => void;
   onLater: () => void;
+  openTrash?: boolean;
 }
 
 /** Restore (the safe answer, first and only when allowed), Remove, and
- *  Decide later. */
+ *  Decide later; with Trash on, Open Trash for files missing from Hippius. */
 function BannerActions(props: BannerActionsProps) {
-  const { hold, busy, removeText, restoreRef, laterRef, onRestore, onRemove, onLater } = props;
+  const { hold, busy, removeText, restoreRef, laterRef, onRestore, onRemove, onLater, openTrash } = props;
   const size = "h-[30px] rounded-[6px] px-3 font-geist text-[14px]";
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -254,6 +267,7 @@ function BannerActions(props: BannerActionsProps) {
       >
         Decide later
       </Button>
+      {openTrash && <OpenTrashLink />}
     </div>
   );
 }
@@ -465,4 +479,16 @@ function useBannerFocus({ holdKey, count, canRestore, answerable, dialogOpen }: 
 function focusIsFree(section: HTMLElement | null): boolean {
   const active = document.activeElement;
   return active === null || active === document.body || (section?.contains(active) ?? false);
+}
+
+/** "Open Trash", a quiet link styled as the banner's buttons. */
+export function OpenTrashLink() {
+  return (
+    <Link
+      href={TRASH_ROUTE}
+      className="inline-flex h-[30px] items-center rounded-[6px] px-3 font-geist text-[14px] text-primary-50 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 dark:text-primary-brand-dark"
+    >
+      Open Trash
+    </Link>
+  );
 }

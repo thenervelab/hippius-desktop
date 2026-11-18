@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { deleteLabel, useDeleteMode } from "@/app/lib/trash/deleteMode";
 import { createPortal } from "react-dom";
 import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput, FolderSymlink } from "lucide-react";
 import { Icons } from "@/components/ui";
@@ -111,6 +112,9 @@ export default function FileContextMenu({
   basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
+  // "Delete", or with Trash on "Move to Trash" ("Delete forever" while
+  // Option is held or Trash is skipped).
+  const deleteMode = useDeleteMode();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const driveRoute = useDriveRoute();
@@ -470,7 +474,7 @@ export default function FileContextMenu({
                 "opacity-60 cursor-not-allowed !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
               })}
               disabled={!file.isAssigned}
-              title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}
+              title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : deleteMode === "legacy" ? "Delete this file" : deleteLabel(deleteMode)}
               onClick={() => {
                 if (file.isAssigned && onDelete) {
                   onDelete(file);
@@ -479,7 +483,7 @@ export default function FileContextMenu({
               }}
             >
               <Trash2 className="size-4" />
-              <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : "Delete"}</span>
+              <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : deleteLabel(deleteMode)}</span>
             </button>
           )}
         </div>

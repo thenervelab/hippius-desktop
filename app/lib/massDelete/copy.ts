@@ -26,11 +26,24 @@ export function removeLabel(side: MassDeleteSide, device: string): string {
   return side === "server" ? "Remove from Hippius" : `Remove from ${device}`;
 }
 
-/** The Remove confirmation's title and description. */
+/**
+ * The Remove confirmation's title and description. `toTrash`: the engine
+ * moves a released server-side delete to Hippius Trash (Trash on, and an
+ * engine that trashes, `ENGINE_SENDS_DELETES_TO_TRASH`); the files can then
+ * be restored, and the words say so.
+ */
 export function removeConfirmCopy(
   hold: MassDeleteHoldView,
   device: string,
+  toTrash = false,
 ): { title: string; description: string; confirm: string } {
+  if (toTrash && hold.side === "server") {
+    return {
+      title: `Move ${files(hold.count)} to Trash?`,
+      description: `${files(hold.count)} will be moved to Hippius Trash, on every device that syncs “${hold.label}”. You can restore them from Trash.`,
+      confirm: `Move ${files(hold.count)} to Trash`,
+    };
+  }
   const where = hold.side === "server" ? "Hippius" : device;
   const lines = [
     hold.side === "server"
