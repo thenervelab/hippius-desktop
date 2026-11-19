@@ -129,17 +129,24 @@ const InsightsButtonForLink: FC<CaptureInsightsButtonProps> = ({ label, actualNa
  * its tests).
  */
 export const InsightsButton: FC<{
-  share: ShareSummary | null;
+  share: Pick<ShareSummary, "shareToken" | "views" | "insightsOn" | "newSinceSeen"> | null;
   capture?: CaptureLinkSource;
   fileName: string;
   file?: FormattedUserFile;
   className?: string;
   collapsible?: boolean;
-}> = ({ share, capture, fileName, file, className, collapsible = false }) => {
+  /**
+   * Opens something other than the file link's sheet (a folder link's
+   * panel on Shared Links). Its link then has no cached settings to read.
+   */
+  onOpen?: () => void;
+  /** Off where a Views column already says it: the button keeps "Insights". */
+  showCount?: boolean;
+}> = ({ share, capture, fileName, file, className, collapsible = false, onOpen, showCount = true }) => {
   const open = useSetAtom(insightsSheetAtom);
   const listingCounts = useAtomValue(shareListingCountsEnabledAtom);
   const insightsSeen = useAtomValue(shareInsightsSeenEnabledAtom);
-  const shareToken = share?.shareToken ?? null;
+  const shareToken = onOpen ? null : (share?.shareToken ?? null);
   // The switch as the sheet (or the share dialog) last read it. Never
   // fetched from here: the listing does not carry it, and one request per
   // row is what this must not do.
@@ -149,17 +156,21 @@ export const InsightsButton: FC<{
     enabled: false,
   });
   const insightsOff = share !== null && cached.data?.offered.insights === true && cached.data.on.insights === false;
-  const view: InsightsButtonView = share
-    ? insightsButtonView(share, { listingCounts, insightsSeen, insightsOff })
+  // The listing's own switch counts too, where the row has it (Shared Links
+  // reads it with the link activity).
+  const shown: InsightsButtonView = share
+    ? insightsButtonView(share, { listingCounts, insightsSeen, insightsOff: insightsOff || share.insightsOn === false })
     : { label: "Insights", off: false, newSinceSeen: false };
-  const noLink = share === null;
+  const view: InsightsButtonView = !showCount && !shown.off ? { ...shown, label: "Insights" } : shown;
+  const noLink = share === null && !onOpen;
 
   // The row's own click opens the file, so this stops it from getting there.
   // preventDefault guards against sitting inside the row's preview button.
   const activate = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    open({ shareToken, fileName, file, ...(capture ? { capture } : {}) });
+    if (onOpen) onOpen();
+    else open({ shareToken, fileName, file, ...(capture ? { capture } : {}) });
   };
 
   const tooltip = noLink ? NO_LINK_TOOLTIP : view.off ? "Insights are off for this link" : VIEW_INSIGHTS_LABEL;

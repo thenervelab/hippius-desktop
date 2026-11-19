@@ -277,6 +277,9 @@ impl Claimed {
     pub(crate) fn claim(&mut self, name: &str) {
         self.0.insert(name.to_lowercase());
     }
+    pub(crate) fn release(&mut self, name: &str) {
+        self.0.remove(&name.to_lowercase());
+    }
 }
 
 /// The checked target name for an item: its own, or the one Undo asked for.

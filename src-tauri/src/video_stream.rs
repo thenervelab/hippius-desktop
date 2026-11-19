@@ -72,7 +72,7 @@ pub const START_WITHIN: Duration = Duration::from_secs(8);
 /// What the viewer says when the player did not start.
 pub const START_FAILED: &str = "This video didn't start in Hippius. Open it in your video player, or download it.";
 /// What the viewer says when the stream itself could not start.
-pub const STREAM_UNAVAILABLE: &str = "Hippius couldn't get this video ready to play. Open it in your video player, or download it.";
+pub const STREAM_UNAVAILABLE: &str = "Hippius Drive couldn't get this video ready to play. Open it in your video player, or download it.";
 /// The only window that may mint a stream: the one with the file viewer.
 const MAIN_WINDOW: &str = "main";
 

@@ -308,3 +308,9 @@ export const driveInvitesVersionAtom = atom(0);
  * invitation moves from "Opened" to "Approved" without a reopen.
  */
 export const inviteKeyDeliveredVersionAtom = atom(0);
+
+/**
+ * Whether the server moves files between drives (`drive_moves`). Off, Move
+ * to… shows no drive picker; `null` (not yet known) reads as off.
+ */
+export const driveMovesEnabledAtom = atom((get) => get(serverCapabilitiesAtom)?.drive_moves === true);

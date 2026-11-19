@@ -447,6 +447,9 @@ fn main() {
             delete_files,
             rename_entry,
             move_entries,
+            crate::sync::drive_move::list_move_destinations,
+            crate::sync::drive_move::move_between_drives,
+            crate::sync::drive_move::cancel_drive_move,
             create_sync_folder,
             list_sync_folder,
             list_sync_folder_grouped,
@@ -553,6 +556,13 @@ fn main() {
             crate::shares::commands::hcfs_share_preview_default,
             crate::shares::insights::share_engagement_features,
             crate::shares::insights::share_get_insights,
+            crate::shares::insights_csv::share_insights_csv_name,
+            crate::shares::insights_csv::share_export_insights_csv,
+            crate::shares::folder_insights::folder_share_get_insights,
+            crate::shares::folder_insights::folder_share_set_insights,
+            crate::shares::folder_insights::folder_share_insights_csv_name,
+            crate::shares::folder_insights::folder_share_export_insights_csv,
+            crate::shares::link_activity::share_link_activity,
             crate::shares::insights::share_list_comments,
             crate::shares::insights::share_delete_comment,
             crate::shares::insights::share_block_commenter,
@@ -563,10 +573,19 @@ fn main() {
             crate::shares::gate::share_get_gate,
             crate::shares::gate::share_set_gate,
             crate::shares::gate::share_remove_gate,
+            crate::shares::nda::share_get_nda,
+            crate::shares::nda::share_set_nda,
+            crate::shares::nda::share_remove_nda,
+            crate::shares::nda::share_nda_accepts,
+            crate::shares::recipients::share_recipient_links,
+            crate::shares::recipients::share_add_recipient_links,
+            crate::shares::recipients::share_revoke_recipient_link,
+            crate::shares::recipients::share_group_insights,
             crate::shares::insights::share_link_settings_default,
             crate::shares::insights::share_switches_in_plan,
             crate::shares::insights::share_get_notification_preferences,
             crate::shares::insights::share_set_notification_preferences,
+            crate::shares::insights::share_can_receive_link_emails,
             crate::shares::commands::hcfs_update_share_expiry,
             crate::shares::commands::hcfs_list_folder_shares,
             crate::shares::commands::hcfs_reshare_folder_link,
@@ -949,6 +968,11 @@ fn main() {
     } else {
         builder
     };
+
+    // The app menu names the app "Hippius Drive"; Tauri's default would say
+    // "Hippius", its bundle name (see utils::app_name).
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(crate::utils::app_name::macos_menu);
 
     info!("Running Tauri application...");
     let app = builder.build(tauri::generate_context!()).expect("error while building tauri application");

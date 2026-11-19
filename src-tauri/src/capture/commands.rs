@@ -4720,7 +4720,7 @@ async fn refuse_a_synced_temp(state: &AppState, tmp_root: &Path) -> Result<()> {
     } else {
         tracing::error!("the capture temp folder is inside a synced drive; not recording");
         Err(AppError::Validation(
-            "Hippius can't record right now: its temporary folder is inside a synced folder.".into(),
+            "Hippius Drive can't record right now: its temporary folder is inside a synced folder.".into(),
         ))
     }
 }

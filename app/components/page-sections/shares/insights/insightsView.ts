@@ -90,8 +90,11 @@ export const VIEWERS_PAGE = 20;
 /** Reaction chips in the summary before the rest fold into "+N". */
 export const SUMMARY_REACTIONS = 4;
 
-/** The panel's tabs, in the order they are shown. */
-export type InsightsTab = "comments" | "viewers" | "pages" | "reactions";
+/**
+ * The panel's tabs, in the order they are shown. `nda` is a slot: drawn only
+ * when the panel is handed one (`NdaTabSlot` in `ShareInsightsSheet`).
+ */
+export type InsightsTab = "comments" | "viewers" | "people" | "pages" | "reactions" | "nda";
 
 /**
  * The files whose links count page by page views: PDF, Word and PowerPoint,
@@ -127,13 +130,43 @@ export function biggestPageDrop(reach: readonly number[]): { afterPage: number; 
 }
 const MIN_PAGE_DROP_POINTS = 2;
 
+/** The page people spent longest on, 1-based, or null when no time was counted. */
+export function longestPage(medianMs: readonly number[]): number | null {
+  let at = -1;
+  medianMs.forEach((ms, i) => {
+    if (ms > 0 && (at < 0 || ms > medianMs[at])) at = i;
+  });
+  return at < 0 ? null : at + 1;
+}
+
+/** Each page's time as a share of the longest, 0 to 100, for the time chart. */
+export function timeShares(medianMs: readonly number[]): number[] {
+  const max = Math.max(0, ...medianMs);
+  return medianMs.map((ms) => (max > 0 ? (Math.max(0, ms) / max) * 100 : 0));
+}
+
+/** The reach chart's name: how many reached the last page, and where most left. */
+export function pageReachSummary(reach: readonly number[]): string {
+  const last = reach.length;
+  const drop = biggestPageDrop(reach);
+  return `Where people stopped: ${Math.round(reach[last - 1] ?? 0)}% reached page ${last}.${
+    drop ? ` Most left after page ${drop.afterPage}.` : ""
+  }`;
+}
+
+/** The time chart's name: the page people spent longest on. */
+export function pageTimeSummary(medianMs: readonly number[]): string {
+  const at = longestPage(medianMs);
+  return at === null
+    ? "Time per page: none counted yet."
+    : `Time per page: longest on page ${at}, ${formatWatched(medianMs[at - 1])}.`;
+}
+
 /** A viewer's pages: `5 of 12 pages`, or `1 of 1 page`. */
 export function pagesSeenLabel(seen: number, count: number): string {
   return `${seen} of ${count} ${count === 1 ? "page" : "pages"}`;
 }
 
-/** Pages listed before "Show more pages", and how many each press adds. */
-export const PAGES_PAGE = 20;
 
 /**
  * The tab the panel opens on: Comments when there are any (that is what an

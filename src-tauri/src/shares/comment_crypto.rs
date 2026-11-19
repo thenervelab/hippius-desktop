@@ -54,6 +54,9 @@ pub enum Purpose {
     /// The email a viewer proved on a link that asks for one, sealed by the
     /// share page with its first view.
     ViewerEmail,
+    /// The text a link's viewers accept before it opens, sealed by the
+    /// owner's device (`shares::nda`).
+    NdaText,
 }
 
 impl Purpose {
@@ -62,6 +65,7 @@ impl Purpose {
             Self::Comment => "comment",
             Self::ViewerName => "viewer-name",
             Self::ViewerEmail => "viewer-email",
+            Self::NdaText => "nda-text",
         }
     }
 }
@@ -142,9 +146,10 @@ pub fn open(key: &CommentKey, token: &str, purpose: Purpose, nonce: &[u8], ciphe
     Ok(buf)
 }
 
-/// Seal `plaintext` with a given nonce. Only the tests use it (the desktop
-/// never writes comments; viewers do, on the console's share page), to prove
-/// the scheme byte for byte against the shared vectors.
+/// Seal `plaintext` with a given nonce. The desktop never writes comments
+/// (viewers do, on the console's share page); it seals only a link's NDA
+/// text (`shares::nda`, with a fresh random nonce), and the tests use it to
+/// prove the scheme byte for byte against the shared vectors.
 ///
 /// # Errors
 ///

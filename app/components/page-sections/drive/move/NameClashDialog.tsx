@@ -9,7 +9,7 @@ import type { Clash, ClashAnswers } from "@/app/lib/drive-move/runMove";
 /**
  * Asks, one clash at a time, what to do with an item whose name is
  * already taken at the destination: Keep both, Replace (files only, never
- * over a folder) or Skip. With more than one clash, "Do this for all"
+ * over a folder, and never into another drive: `noReplace`) or Skip. With more than one clash, "Do this for all"
  * answers the rest with the same choice. Closing the dialog skips what is
  * left.
  */
@@ -17,7 +17,7 @@ export default function NameClashDialog({
   request,
   onDone,
 }: {
-  request: { clashes: Clash[]; destinationName: string } | null;
+  request: { clashes: Clash[]; destinationName: string; noReplace?: boolean } | null;
   onDone: (answers: ClashAnswers | null) => void;
 }) {
   const [index, setIndex] = useState(0);
@@ -32,7 +32,7 @@ export default function NameClashDialog({
 
   const clash = request?.clashes[index] ?? null;
   const remaining = request ? request.clashes.length - index : 0;
-  const canReplace = clash ? !clash.item.isFolder && !clash.takenByFolder : false;
+  const canReplace = clash && !request?.noReplace ? !clash.item.isFolder && !clash.takenByFolder : false;
 
   const answer = (choice: "keepBoth" | "replace" | "skip") => {
     if (!request || !clash) return;

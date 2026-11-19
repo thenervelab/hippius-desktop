@@ -17,6 +17,8 @@ import {
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings from "./EmailGateSettings";
+import NdaSettings from "./NdaSettings";
+import RecipientLinks from "./RecipientLinks";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
@@ -150,16 +152,16 @@ export function LinkSettingsPopover({
       aria-labelledby={titleId}
       data-testid="link-settings"
       style={{ top, maxHeight: `calc(100% - ${top + 12}px)` }}
+      // Focusable itself, so a click inside lands focus here. WebKit (the
+      // macOS webview) never focuses a clicked button: it focuses the nearest
+      // focusable ancestor instead, which without this was the panel around
+      // the popover, so pressing a switch read as focus leaving and closed it.
+      tabIndex={-1}
       onBlur={(e) => {
-        // Tabbing out of it closes it, like any popover. A switch that turns
-        // disabled while it saves blurs with nowhere to go: that stays open.
-        const next = e.relatedTarget;
-        if (next instanceof Node && !e.currentTarget.contains(next) && !(next instanceof Element && next.closest(`[${SETTINGS_TRIGGER_ATTR}]`))) {
-          onCloseRef.current();
-        }
+        if (leftPopover(e.currentTarget, e.relatedTarget)) onCloseRef.current();
       }}
       className={cn(
-        "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3",
+        "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3 outline-none",
         FLOATING,
       )}
     >
@@ -201,11 +203,39 @@ export function LinkSettingsPopover({
           }}
         />
       </div>
+      {/* Drawn only where Rust offers it: never on a password link without a text. */}
+      <div className="mt-2.5 empty:hidden">
+        <NdaSettings
+          layout="list"
+          shareToken={shareToken}
+          onUpgrade={() => {
+            onLeave();
+            router.push(BILLING_ROUTE);
+          }}
+        />
+      </div>
+      {/* Drawn only where Rust offers it: a server with links per person. */}
+      <div className="mt-2.5 empty:hidden">
+        <RecipientLinks layout="list" shareToken={shareToken} />
+      </div>
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />
       </div>
     </div>
   );
+}
+
+/**
+ * Whether focus moving to `next` means it left the popover: tabbing out
+ * does, like any popover. Focus going nowhere (a switch that turns disabled
+ * while it saves), to the gear, or to something that holds the popover (the
+ * panel or the sheet, where WebKit puts focus on a click it gives no
+ * element) does not: a press outside closes it through its own listener.
+ */
+export function leftPopover(popover: Element, next: EventTarget | null): boolean {
+  if (!(next instanceof Node)) return false;
+  if (popover.contains(next) || next.contains(popover)) return false;
+  return !(next instanceof Element && next.closest(`[${SETTINGS_TRIGGER_ATTR}]`));
 }
 
 /** What each number means, opened in place: there is no help page for it yet. */

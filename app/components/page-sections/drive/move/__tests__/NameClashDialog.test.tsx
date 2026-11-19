@@ -70,4 +70,16 @@ describe("NameClashDialog", () => {
       ]),
     );
   });
+
+  it("offers only Keep both and Skip for a move into another drive", () => {
+    render(
+      <NameClashDialog
+        request={{ clashes: [fileClash("a.txt")], destinationName: "Team", noReplace: true }}
+        onDone={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Replace" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Keep both" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeTruthy();
+  });
 });

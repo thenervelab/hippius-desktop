@@ -113,7 +113,7 @@ impl Desktop {
                     .inhibit(
                         None,
                         InhibitFlags::Idle.into(),
-                        InhibitOptions::default().set_reason("Hippius is recording the screen"),
+                        InhibitOptions::default().set_reason("Hippius Drive is recording the screen"),
                     )
                     .await
             })

@@ -48,12 +48,12 @@ pub const CHAT_UNREAD_CHANGED_EVENT: &str = "chat_unread_changed";
 /// The main window's title as configured in `tauri.conf.json`
 /// (`app.windows[0].title`). Pinned against the config file in tests so a
 /// rename there cannot leave the unread-count title stale.
-pub const APP_WINDOW_TITLE: &str = "Hippius";
+pub const APP_WINDOW_TITLE: &str = crate::utils::app_name::APP_DISPLAY_NAME;
 
 /// Label of the main window (`tauri.conf.json` `app.windows[0].label`).
 const MAIN_WINDOW_LABEL: &str = "main";
 
-/// The window title for an unread count: `Hippius` at zero, `(N) Hippius`
+/// The window title for an unread count: `Hippius Drive` at zero, `(N) Hippius Drive`
 /// otherwise — the convention Slack, Discord and Element desktop share, so
 /// the count is read the same way in every taskbar and window switcher.
 pub fn window_title(unread: u32) -> String {
@@ -320,9 +320,9 @@ mod tests {
 
     #[test]
     fn window_title_carries_the_count_and_resets_at_zero() {
-        assert_eq!(window_title(0), "Hippius");
-        assert_eq!(window_title(1), "(1) Hippius");
-        assert_eq!(window_title(42), "(42) Hippius");
+        assert_eq!(window_title(0), "Hippius Drive");
+        assert_eq!(window_title(1), "(1) Hippius Drive");
+        assert_eq!(window_title(42), "(42) Hippius Drive");
     }
 
     // A rename in tauri.conf.json must reach the unread title too, or the
