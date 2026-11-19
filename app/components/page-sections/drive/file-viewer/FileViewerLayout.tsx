@@ -1,5 +1,6 @@
 "use client";
 
+import { useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
 import React, {
   ReactNode,
   useEffect,
@@ -234,6 +235,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     }).catch((error) => toast.error(tauriErrorMessage(error)));
   }, [file, onClose]);
 
+  const deleteMenu = useDeleteMenuAction();
   const handleDelete = useCallback(() => {
     onClose();
     // A direct handler (sidebar search preview) deletes straight away via its
@@ -242,9 +244,11 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     if (onDelete) {
       onDelete(file);
     } else {
-      enterSelectionModeAndSelectFile(file);
+      // Move to Trash runs at once; Delete and Delete forever select the
+      // row for the bar's confirmation.
+      deleteMenu.run(file, () => enterSelectionModeAndSelectFile(file));
     }
-  }, [onDelete, enterSelectionModeAndSelectFile, file, onClose]);
+  }, [onDelete, enterSelectionModeAndSelectFile, file, onClose, deleteMenu]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -362,7 +366,10 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                     <Download className="size-[17px]" strokeWidth={1.8} />
                   </ActionButton>
                   {file.isAssigned && (
-                    <ActionButton onClick={handleDelete} ariaLabel="Delete file">
+                    <ActionButton
+                      onClick={handleDelete}
+                      ariaLabel={deleteMenu.mode === "legacy" ? "Delete file" : deleteMenu.label}
+                    >
                       <Trash2 className="size-[17px]" strokeWidth={1.8} />
                     </ActionButton>
                   )}

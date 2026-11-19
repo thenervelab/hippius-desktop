@@ -107,6 +107,7 @@ import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { FolderSymlink } from "lucide-react";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
+import { TrashRequestRunner, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
@@ -973,6 +974,10 @@ const FilesTable: FC<FilesTableProps> = memo(
       [setSelectedFile],
     );
 
+    // Delete in the row menu: Move to Trash runs at once (Undo in its
+    // toast); Delete, and Delete forever, select the row for the bar's
+    // confirmation as before.
+    const { run: runDeleteMenu, label: deleteMenuLabel } = useDeleteMenuAction();
     const handleDeleteFile = useCallback(
       (file: FormattedUserFile) => {
         // Don't allow re-entering delete flow for a row that's already
@@ -981,23 +986,25 @@ const FilesTable: FC<FilesTableProps> = memo(
         if (isItemDeleting(file, normalizedSubfolderPath)) return;
         // Annotate the row with its parent path so the selection
         // context can build a unique key for folders sharing a name.
-        enterSelectionModeAndSelectFile({
+        const annotated = {
           ...file,
           parentRelativePath: file.isFolder
             ? normalizedSubfolderPath
             : file.parentRelativePath,
-        });
+        };
+        runDeleteMenu(annotated, () => enterSelectionModeAndSelectFile(annotated));
       },
       [
         enterSelectionModeAndSelectFile,
         isItemDeleting,
         normalizedSubfolderPath,
+        runDeleteMenu,
       ],
     );
 
     // Handle file deletion with captured files from confirmation dialog
     const handleDeleteSelectedFiles = useCallback(
-      (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][]) => {
+      (capturedFiles: FormattedUserFile[], turnOffLinks?: string[][], mode?: DeleteMode) => {
         if (capturedFiles.length === 0) return;
         // Each file's links to turn off ("Also turn off its links"), kept
         // with the file through the filtering below.
@@ -1034,7 +1041,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         // useDeleteFile hook re-initialise with `filesToDelete`
         // before `deleteFiles` reads its mutation function.
         setTimeout(() => {
-          deleteFiles({ turnOffLinks: links }, {
+          deleteFiles({ turnOffLinks: links, mode }, {
             onSettled: () => {
               fresh.forEach((f) => {
                 const parentPath = f.isFolder
@@ -1048,6 +1055,12 @@ const FilesTable: FC<FilesTableProps> = memo(
         }, 100);
       },
       [deleteFiles, addDeletingItems, removeDeletingItems],
+    );
+
+    // Move to Trash from a menu or the viewer, without the selection bar.
+    const runTrashRequest = useCallback(
+      (files: FormattedUserFile[]) => handleDeleteSelectedFiles(files, undefined, "trash"),
+      [handleDeleteSelectedFiles],
     );
 
     const createTableItems = useCallback(
@@ -1459,7 +1472,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ? "Delete (Syncing in progress...)"
                     : itemDeleting
                       ? "Deleting..."
-                      : "Delete",
+                      : deleteMenuLabel,
                   disabled: !file.isAssigned || itemDeleting,
                   tooltip: !file.isAssigned
                     ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
@@ -1481,6 +1494,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleSetSelectedFile,
         localHandleShowFileDetails,
         handleDeleteFile,
+        deleteMenuLabel,
         getParam,
         drivePagePath,
         router,
@@ -2490,6 +2504,7 @@ const FilesTable: FC<FilesTableProps> = memo(
             isDeleting={isDeleting}
           />
         )}
+        <TrashRequestRunner onTrash={runTrashRequest} />
 
         {dialogComponent}
       </div>

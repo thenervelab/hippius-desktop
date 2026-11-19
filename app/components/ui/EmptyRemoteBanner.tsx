@@ -28,6 +28,8 @@ import {
 import { deviceName } from "@/app/lib/massDelete/copy";
 import { isMacPlatform } from "@/app/lib/capture/shortcutLabel";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
+import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { OpenTrashLink } from "./MassDeleteBanner";
 
 /** The attribute marking each banner's section, so "Keep my files" can
  *  find the next one. */
@@ -168,6 +170,8 @@ interface BannerActionsProps {
  *  step towards removing the copies here. */
 function BannerActions({ canConfirm, busy, onKeep, onConfirm }: BannerActionsProps) {
   const size = "h-[30px] rounded-[6px] px-3 font-geist text-[14px]";
+  // The drive's files may be in Hippius Trash: deleted by mistake elsewhere.
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Button variant="primary" size="auto" className={size} onClick={onKeep} disabled={busy}>
@@ -185,6 +189,7 @@ function BannerActions({ canConfirm, busy, onKeep, onConfirm }: BannerActionsPro
           {CONFIRM_LABEL}
         </Button>
       )}
+      {trashEnabled && <OpenTrashLink />}
     </div>
   );
 }

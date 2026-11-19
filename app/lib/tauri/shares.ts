@@ -107,6 +107,13 @@ export interface ServerCapabilities {
   drive_invite_link_envelopes?: boolean;
   /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
   drive_moves?: boolean;
+  /**
+   * Drive Trash (`/v1/trash/...`): Delete moves to Trash and the Trash page
+   * shows. Absent or false, Delete stays a permanent delete.
+   */
+  drive_trash?: boolean;
+  /** Days an item stays in Trash before the server deletes it forever; 30 when absent. */
+  trash_retention_days?: number | null;
   /** Insights for folder links: which files were opened, and by whom. */
   folder_share_insights?: boolean;
 }

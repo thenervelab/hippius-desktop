@@ -89,6 +89,9 @@ pub struct MoveDestination {
     pub sync_path: Option<String>,
     /// Somebody else's drive, shared with this account.
     pub shared: bool,
+    /// The account owns the drive or manages it: it may delete forever
+    /// and empty Trash there, which an Editor may not.
+    pub manager: bool,
 }
 
 /// One move, as the webview asks for it.
@@ -161,7 +164,7 @@ pub async fn list_move_destinations(
     Ok(drives)
 }
 
-async fn list_move_destinations_inner(state: &AppState, account_id: &str) -> Result<Vec<MoveDestination>> {
+pub(crate) async fn list_move_destinations_inner(state: &AppState, account_id: &str) -> Result<Vec<MoveDestination>> {
     let pool = state.pool()?;
     let rows = crate::sync::folders::get_all_sync_paths_or_warn(pool, account_id, "list_move_destinations").await;
     let mut own = Vec::new();
@@ -180,6 +183,7 @@ async fn list_move_destinations_inner(state: &AppState, account_id: &str) -> Res
                 remote: false,
                 sync_path: Some(row.path.clone()),
                 shared: false,
+                manager: true,
             });
         }
     }
@@ -193,6 +197,7 @@ async fn list_move_destinations_inner(state: &AppState, account_id: &str) -> Res
                         remote: true,
                         sync_path: None,
                         shared: false,
+                        manager: true,
                     });
                 }
             }
@@ -218,6 +223,7 @@ async fn list_move_destinations_inner(state: &AppState, account_id: &str) -> Res
                         remote: local.is_none(),
                         sync_path,
                         shared: true,
+                        manager: role == "manager",
                     });
                 }
             }
@@ -264,18 +270,23 @@ pub async fn move_between_drives_for_tests(state: &AppState, account_id: &str, r
 }
 
 /// One drive of a move, resolved once.
-struct Side {
-    label: String,
-    identity: DriveIdentity,
+pub(crate) struct Side {
+    pub(crate) label: String,
+    pub(crate) identity: DriveIdentity,
     /// The local folder, when this drive is synced here.
-    root: Option<PathBuf>,
+    pub(crate) root: Option<PathBuf>,
     /// The wire path the view's paths are relative to.
-    wire_root: String,
-    key: FileKey,
-    client: hcfs_client::client::HcfsClient,
+    pub(crate) wire_root: String,
+    pub(crate) key: FileKey,
+    pub(crate) client: hcfs_client::client::HcfsClient,
 }
 
-async fn resolve_side(state: &AppState, account_id: &str, label: &str, mnemonic: &str) -> Result<(Side, crate::sync::remote::DriveKeyMaterial)> {
+pub(crate) async fn resolve_side(
+    state: &AppState,
+    account_id: &str,
+    label: &str,
+    mnemonic: &str,
+) -> Result<(Side, crate::sync::remote::DriveKeyMaterial)> {
     let pool = state.pool()?;
     let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await?;
     let root = if shared_drive_browse_identity(label).is_some() {
@@ -304,7 +315,7 @@ async fn resolve_side(state: &AppState, account_id: &str, label: &str, mnemonic:
 }
 
 /// The plaintext path a listed row names, as `collect_folder_tree` reads it.
-fn entry_path(file: &hcfs_shared::network::RemoteFileEntry, key: &FileKey) -> Option<String> {
+pub(crate) fn entry_path(file: &hcfs_shared::network::RemoteFileEntry, key: &FileKey) -> Option<String> {
     file.relative_path
         .as_deref()
         .map(str::to_string)
@@ -383,7 +394,7 @@ async fn read_destination(side: &Side, destination: &str) -> Result<HashMap<Stri
 /// A folder of a synced source must hold nothing the server does not: a
 /// file not uploaded yet would stay behind, alone, in a folder the person
 /// saw move. Hidden and excluded files never upload, so they do not count.
-fn unsettled_folder(root: &Path, folder_wire: &str, tree: &RemoteFolderTree) -> bool {
+pub(crate) fn unsettled_folder(root: &Path, folder_wire: &str, tree: &RemoteFolderTree) -> bool {
     let known: std::collections::HashSet<&str> = tree.files.iter().map(|f| f.path.as_str()).collect();
     let rules = hcfs_client::drive::ExcludeRules::load(&root.join(".hippius"));
     let mut stack = vec![PathBuf::from(folder_wire)];
@@ -782,7 +793,7 @@ impl Rows {
 
 /// A synced drive's sync lock, held while the move commits and brings its
 /// folder in line.
-enum DriveLock {
+pub(crate) enum DriveLock {
     /// No sync loop runs for it (paused, or not started): nothing to wait for.
     Idle,
     Held(tokio::sync::OwnedMutexGuard<hcfs_client::engine::manager::DriveManager>),
@@ -790,7 +801,7 @@ enum DriveLock {
     Busy,
 }
 
-async fn lock_drive(state: &AppState, label: &str) -> DriveLock {
+pub(crate) async fn lock_drive(state: &AppState, label: &str) -> DriveLock {
     let Some(manager) = state.sync.drive_manager(label).await else {
         return DriveLock::Idle;
     };

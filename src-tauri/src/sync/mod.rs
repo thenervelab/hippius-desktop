@@ -26,7 +26,7 @@ pub use failure::{
 };
 pub use fileops::{
     cloud_drive, drive_move, drive_summaries, files, folders, listing_cache, recent_uploads, rekey_probe, remote, remote_move, remote_rename,
-    remote_upload,
+    remote_upload, trash,
 };
 pub use migrate::{
     folder_entries_backfill, folder_entries_materialize, folder_entries_reconcile, migration, relative_path_backfill, relative_path_backfill_reset,

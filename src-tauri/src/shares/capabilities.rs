@@ -144,6 +144,16 @@ pub struct ServerCapabilities {
     /// Absent on older servers and off in production until it is turned
     /// on: Move to… shows no drive picker, and no move is sent.
     pub drive_moves: bool,
+    /// Drive Trash (`/v1/trash/...`, `HCFS_FEATURE_DRIVE_TRASH`). Absent on
+    /// older servers and off in production until it is turned on: Delete
+    /// stays a permanent delete, the Trash page is hidden, and no trash
+    /// request is sent.
+    pub drive_trash: bool,
+    /// Days an item stays in Trash before the server deletes it forever
+    /// (`HCFS_TRASH_RETENTION_DAYS`). Absent on older servers; read through
+    /// [`crate::sync::fileops::trash::wire::retention_days`], which falls
+    /// back to 30.
+    pub trash_retention_days: Option<u32>,
     /// Insights for folder links (`/v1/folder-shares/by-hash/{h}/insights`
     /// and `/settings`). Absent on older servers: no folder link Insights.
     pub folder_share_insights: bool,
@@ -264,6 +274,18 @@ mod tests {
     }
 
     #[test]
+    fn trash_retention_is_read_when_sent() {
+        let caps = parse_capabilities(r#"{"drive_trash":true,"trash_retention_days":14}"#).expect("parse");
+        assert_eq!(caps.trash_retention_days, Some(14));
+        let old = parse_capabilities(r#"{"drive_trash":true}"#).expect("parse");
+        assert_eq!(
+            old.trash_retention_days, None,
+            "a server that names no retention leaves the 30 day default"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one flat list of every capability, read top to bottom
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(concat!(
             r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
@@ -273,7 +295,7 @@ mod tests {
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
             r#""share_recipient_links":true,"share_group_insights":true,"#,
-            r#""drive_moves":true,"folder_share_insights":true}"#,
+            r#""drive_moves":true,"folder_share_insights":true,"drive_trash":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -299,6 +321,7 @@ mod tests {
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
+        assert!(caps.drive_trash);
         assert!(caps.folder_share_insights);
 
         // The IPC serializes this struct straight to the FE, which reads the
@@ -311,6 +334,7 @@ mod tests {
             [
                 "drive_invite_link_envelopes",
                 "drive_moves",
+                "drive_trash",
                 "folder_grant_writes",
                 "folder_grants",
                 "folder_share_insights",
@@ -334,6 +358,7 @@ mod tests {
                 "share_reaction_moments",
                 "share_recipient_links",
                 "shares",
+                "trash_retention_days",
                 "upload_folder_shares"
             ]
             .into_iter()
@@ -365,6 +390,7 @@ mod tests {
             "a server without link envelopes keeps every folder mint on #k= / #p="
         );
         assert!(!old.drive_moves, "a server without drive moves shows no drive picker");
+        assert!(!old.drive_trash, "a server without Trash keeps Delete permanent and hides the Trash page");
         assert!(
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="
