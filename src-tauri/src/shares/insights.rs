@@ -43,6 +43,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
 
 use super::SqliteShareKeystore;
 use super::capabilities::{ServerCapabilities, fetch_capabilities};
@@ -50,7 +51,7 @@ use super::comment_crypto::{self, CommentKey, CommentMention, MentionKind};
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
-use hcfs_client::client::share::{ShareKeystore, ShareSecret};
+use hcfs_client::client::share::{ShareError, ShareKeystore, ShareSecret};
 
 /// How long one request may take. These back an open sheet, not a transfer.
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -595,6 +596,11 @@ pub enum KeyUnavailable {
     Password,
     /// The link's key is not on this computer and no owner wrap brought it.
     NotOnDevice,
+    /// A `#s=` link whose share key was never kept here and the server no
+    /// longer hands out: it asks for an email, or it has ended.
+    NotFetchable,
+    /// A `#s=` link's share key could not be fetched: no answer, or an error.
+    Unreachable,
 }
 
 impl KeyUnavailable {
@@ -602,6 +608,10 @@ impl KeyUnavailable {
         match self {
             Self::Password => "This link has a password, so its comments can only be read on the link's page.",
             Self::NotOnDevice => "Comments can't be read on this computer because the link's key isn't here.",
+            Self::NotFetchable => {
+                "Comments can't be read on this computer: this link's key can no longer be fetched, because it asks for an email or has ended."
+            }
+            Self::Unreachable => "Couldn't reach Hippius to open this link's comments. Try again.",
         }
     }
 }
@@ -1118,6 +1128,30 @@ fn parse_preferences(body: &str) -> Result<NotificationPreferences> {
     })
 }
 
+/// Whether the share-link emails can reach this account at all.
+///
+/// The server sends them to the address the sign-in provider has for the
+/// account. An account that signs in with an access key (a wallet) has none:
+/// the server gives it a placeholder on `hippius.local`, which nobody can
+/// write to. The rule, the same in every Hippius app:
+///
+/// - a real address on the session: yes;
+/// - a placeholder address: no;
+/// - no address stored: no for an access-key sign-in (`mnemonic`, or no
+///   provider at all), yes for Google, Apple or GitHub, whose session row may
+///   predate the email column but whose provider always gave the server one.
+pub fn can_receive_link_emails(identity: &crate::auth::auth_session_repo::SessionIdentity) -> bool {
+    let email = identity.email.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    if let Some(email) = email {
+        return !crate::utils::display_email::is_placeholder_email(email);
+    }
+    identity
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|p| !p.is_empty() && p != "mnemonic")
+}
+
 fn preferences_body(prefs: NotificationPreferences) -> serde_json::Value {
     serde_json::json!({
         "first_views": prefs.first_views,
@@ -1152,6 +1186,11 @@ impl Api {
             .await?
             .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
         Ok(Self { base, bearer })
+    }
+
+    /// `GET /v1/shares`, the owner listing.
+    pub(super) fn listing_url(&self) -> String {
+        format!("{}/v1/shares", self.base)
     }
 
     pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
@@ -1319,7 +1358,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
     read_ok(resp).await
 }
 
-async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
+pub(super) async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
     let resp = http
         .patch(api.share_url(token, "/settings")?)
         .bearer_auth(&api.bearer)
@@ -1375,8 +1414,17 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 // ─── The link's key ────────────────────────────────────────────────────────
 
 /// The comment key for `token`: from the share key this device holds, or the
-/// one its owner wrap brings back (the same hydration Shared Links runs).
-async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+/// one its owner wrap brings back (the same hydration Shared Links runs). A
+/// `#s=` link's share key is the one kept at its mint, else fetched once
+/// (`shares::file_link_key`).
+pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+    share_key_for(state, account_id, token).await.map(|key| CommentKey::derive(&key))
+}
+
+/// The share key of file link `token`: from this device's keystore, or the
+/// one its owner wrap brings back. A recipient link is made over it, and the
+/// comment key comes from it.
+pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
     let Ok(pool) = state.pool() else {
         return Err(KeyUnavailable::NotOnDevice);
     };
@@ -1388,11 +1436,47 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
         super::owner_wrap::sync_file_wraps(state, account_id, &keystore, &mut keys, &[token]).await;
     }
     match keys.remove(token) {
-        Some(ShareSecret::Public(share_key)) => Ok(CommentKey::derive(&share_key)),
-        Some(ShareSecret::Private(_)) => Err(KeyUnavailable::Password),
+        Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
+        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(pool, account_id, token, &link_secret).await,
+        Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
         Some(ShareSecret::FolderLink(_) | ShareSecret::FolderLinkPrivate(_)) | None => Err(KeyUnavailable::NotOnDevice),
+    }
+}
+
+/// The share key of a `#s=` link: the one kept at its mint, else fetched once.
+async fn file_link_share_key(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    token: &str,
+    link_secret: &[u8; 32],
+) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
+    let keys = super::file_link_key::FileLinkKeys::new(pool.clone());
+    // A kept key needs no client: building one reads the bearer, which a
+    // local decrypt does not need.
+    if let Ok(Some(kept)) = keys.get(token).await {
+        return Ok(Zeroizing::new(kept));
+    }
+    let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
+        debug!(error = %e, "no client to fetch the file link's key");
+        KeyUnavailable::Unreachable
+    })?;
+    match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
+        Ok(share_key) => Ok(Zeroizing::new(share_key)),
+        Err(e) => Err(file_link_key_refusal(&e)),
+    }
+}
+
+/// Why a `#s=` link's share key could not be had. The route's bodiless 404
+/// is the server refusing the envelope (an email gate, an ended link); a
+/// keystore failure is the key not being here; anything else did not reach a
+/// verdict.
+fn file_link_key_refusal(error: &ShareError) -> KeyUnavailable {
+    match error {
+        ShareError::NotFound => KeyUnavailable::NotFetchable,
+        ShareError::Keystore(_) => KeyUnavailable::NotOnDevice,
+        _ => KeyUnavailable::Unreachable,
     }
 }
 
@@ -1797,6 +1881,22 @@ pub async fn share_get_notification_preferences(state: tauri::State<'_, AppState
     }
     let api = Api::for_account(&state, &account_id).await?;
     get_preferences(&state.api_client, &api).await
+}
+
+/// Whether the share-link emails can reach the signed-in account
+/// ([`can_receive_link_emails`]). The UI hides the email switches when this
+/// is `false` and says how to get them instead. An error (no session row, or
+/// a server without these emails) means unknown: the UI shows nothing.
+#[tauri::command]
+pub async fn share_can_receive_link_emails(state: tauri::State<'_, AppState>) -> Result<bool> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_or_none(&state, &account_id).await.share_notifications {
+        return Err(AppError::Validation("Email updates about your links aren't available yet.".into()));
+    }
+    let identity = crate::auth::auth_session_repo::get_identity(state.pool()?, &account_id)
+        .await?
+        .ok_or_else(|| AppError::Validation("No signed-in account.".into()))?;
+    Ok(can_receive_link_emails(&identity))
 }
 
 /// Save the share-link emails this account gets.
@@ -2720,6 +2820,30 @@ pub(super) mod tests {
         assert_ne!(UNREACHABLE, INSIGHTS_UNAVAILABLE);
     }
 
+    /// Link emails go to the sign-in provider's address. An access-key
+    /// account has none (or only the `hippius.local` placeholder), so its
+    /// switches must give way to the "sign in with Google or Apple" line.
+    #[test]
+    fn only_an_account_with_a_real_address_can_receive_link_emails() {
+        use crate::auth::auth_session_repo::SessionIdentity;
+        let id = |provider: Option<&str>, email: Option<&str>| SessionIdentity {
+            provider: provider.map(str::to_string),
+            username: None,
+            email: email.map(str::to_string),
+        };
+        // Google or Apple: their address.
+        assert!(can_receive_link_emails(&id(Some("google"), Some("ann@example.com"))));
+        assert!(can_receive_link_emails(&id(Some("apple"), Some("ann@privaterelay.appleid.com"))));
+        // A session row from before the email was stored still has a provider that gave one.
+        assert!(can_receive_link_emails(&id(Some("google"), None)));
+        assert!(can_receive_link_emails(&id(Some("oauth"), Some("  "))));
+        // An access key: no address, or only the placeholder, whatever the row says.
+        assert!(!can_receive_link_emails(&id(Some("mnemonic"), None)));
+        assert!(!can_receive_link_emails(&id(None, None)));
+        assert!(!can_receive_link_emails(&id(Some("mnemonic"), Some("user_5abc@hippius.local"))));
+        assert!(!can_receive_link_emails(&id(Some("google"), Some("user_5abc@HIPPIUS.LOCAL"))));
+    }
+
     #[test]
     fn notification_preferences_read_leniently_and_write_snake_case() {
         assert_eq!(
@@ -3121,5 +3245,35 @@ pub(super) mod tests {
             serde_json::from_str::<serde_json::Value>(&s.body).unwrap(),
             serde_json::json!({"first_views": true, "comments": false, "digest": "daily"})
         );
+    }
+
+    /// A `#s=` link's share key that could not be had says why: the server
+    /// refusing the envelope (an email gate or an ended link) is not the
+    /// network failing, and neither is the password sentence.
+    #[test]
+    fn a_file_links_unfetchable_key_says_why() {
+        assert_eq!(file_link_key_refusal(&ShareError::NotFound), KeyUnavailable::NotFetchable);
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Network("timed out".into())),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Server {
+                status: 503,
+                message: String::new()
+            }),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(file_link_key_refusal(&ShareError::Keystore("sqlite".into())), KeyUnavailable::NotOnDevice);
+        let sentences: HashSet<&str> = [
+            KeyUnavailable::Password,
+            KeyUnavailable::NotOnDevice,
+            KeyUnavailable::NotFetchable,
+            KeyUnavailable::Unreachable,
+        ]
+        .into_iter()
+        .map(KeyUnavailable::sentence)
+        .collect();
+        assert_eq!(sentences.len(), 4, "each reason has its own sentence");
     }
 }

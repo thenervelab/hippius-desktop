@@ -55,7 +55,7 @@ export function removeConfirmCopy(
       "This is a shared drive you are a member of: once removed, you cannot put these files back yourself.",
     );
   }
-  lines.push("This cannot be undone from Hippius Desktop.");
+  lines.push("This cannot be undone from Hippius Drive.");
   return {
     title: `Remove ${files(hold.count)} from ${where}?`,
     description: lines.join(" "),
@@ -83,7 +83,7 @@ export function refusalCopy(refusal: MassDeleteRefusal): string {
       refusal.neededBytes !== null ? ` (${formatBytes(refusal.neededBytes)} needed)` : "";
     return `There is not enough free space on the disk that holds your Hippius folder to restore these files${needed}. Free up space; the restore continues once they fit.`;
   }
-  return "Hippius could not restore these files yet. Nothing has been deleted.";
+  return "Hippius Drive could not restore these files yet. Nothing has been deleted.";
 }
 
 /** "1 file is" / "3 files are", and the like. */

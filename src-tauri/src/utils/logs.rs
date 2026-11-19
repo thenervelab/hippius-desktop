@@ -243,8 +243,9 @@ static SHARE_PATH_TOKEN: LazyLock<Regex> =
 /// the server's correlation handle, loggable like `token_hash`.
 const SHARE_ROUTE_WORDS: &[&str] = &["owner-wraps", "by-hash", "uploads", "folder"];
 
-/// The key in a link's fragment: `#k=…`, or `#p=…` on a password link.
-static SHARE_LINK_FRAGMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"#([kp])=[^\s&"'<>)]+"#).expect("share fragment regex"));
+/// The secret in a link's fragment: `#k=…` (the key) or `#s=…` (a link
+/// secret), `#p=…` / `#sp=…` on a password link.
+static SHARE_LINK_FRAGMENT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"#(sp|[kps])=[^\s&"'<>)]+"#).expect("share fragment regex"));
 
 /// Mask share tokens in URL paths and the key in a link's fragment. Runs
 /// before the table, so the file-name rule never half-eats a token that
@@ -607,6 +608,9 @@ mod tests {
         for line in [
             "INFO copied https://console.hippius.com/share/tok#k=SecretKeyMaterial123",
             "INFO copied https://console.hippius.com/share/tok#p=SaltAndWrappedKey456 next=1",
+            // Link-secret links (hcfs#665 folders, #1253 files).
+            "INFO copied https://console.hippius.com/share/tok#s=SecretKeyMaterial123",
+            "INFO copied https://console.hippius.com/share/folder/tok#sp=SaltAndWrappedKey456",
         ] {
             let out = redact_log_line(line);
             assert!(

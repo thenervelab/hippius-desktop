@@ -8,7 +8,8 @@ import type { ShareSummary } from "@/app/lib/tauri/shares";
 /**
  * What the panel can do with its link.
  *
- * The full link, with the key in its `#k=` or `#p=` part, is the listing's
+ * The full link, with its secret in the `#s=` / `#sp=` part (`#k=` / `#p=`
+ * on older links), is the listing's
  * `shareUrl`: Rust rebuilds it from this computer's keystore or, for a link
  * made in the browser, the extension or on another computer, from the owner
  * wrap, which needs the account's recovery phrase. While Hippius is locked on
@@ -56,7 +57,7 @@ export const COPY_FAILED = "Couldn't copy the link.";
 export const SHOW_LINK = "Show full link";
 export const HIDE_LINK = "Hide full link";
 export const UNLOCK_TO_COPY = "Unlock to copy";
-export const LINK_LOCKED_NOTE = "Unlock Hippius on this computer to see and copy this link.";
+export const LINK_LOCKED_NOTE = "Unlock Hippius Drive on this computer to see and copy this link.";
 export const LINK_UNAVAILABLE_NOTE =
   "This link was made somewhere else and its key isn't on this computer, so it can't be copied here.";
 export const LINK_NEEDS_PASSWORD = "People also need the link's password to open it.";

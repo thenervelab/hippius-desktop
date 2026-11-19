@@ -63,12 +63,12 @@ const SECTION_META: Record<
     description:
       "Shortcuts, where captures are saved, and what happens after you take one.",
     tooltip:
-      "These apply on this computer. The shortcuts work from any app while Hippius is running, and pressing either one during a recording stops it.",
+      "These apply on this computer. The shortcuts work from any app while Hippius Drive is running, and pressing either one during a recording stops it.",
     showDescription: true,
   },
   appearance: {
     title: "Appearance",
-    description: "Personalize how Hippius looks on this device.",
+    description: "Personalize how Hippius Drive looks on this device.",
     tooltip:
       "Your theme choice is stored locally and applies right away. It only affects this device, so other devices and the web console keep their own setting.",
     showDescription: true,
@@ -94,7 +94,7 @@ const SECTION_META: Record<
     description:
       "Choose which updates you'd like to receive in your inbox. You're in control—check only the notifications that matter to you.",
     tooltip:
-      "Two independent channels: in app notifications appear inside Hippius for activity like file syncs and account credits, while email notifications are sent to the inbox of your linked email account for things like low-balance alerts and marketing updates. Toggle each one separately.",
+      "Two independent channels: in app notifications appear inside Hippius Drive for activity like file syncs and account credits, while email notifications are sent to the inbox of your linked email account for things like low-balance alerts and marketing updates. Toggle each one separately.",
     showDescription: true,
   },
   "api-key": {

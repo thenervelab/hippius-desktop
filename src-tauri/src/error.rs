@@ -198,11 +198,17 @@ pub enum NotReadyKind {
     /// to. Raised by `capture::commands::capture_start` so the FE opens the
     /// destination picker and retries, rather than guessing a drive.
     CaptureDestinationUnset,
-    /// A recording was refused before it started: a known Free plan already
-    /// has its 25 recordings in the captures drive
-    /// (`capture::recording_allowance`). The FE shows the limit dialog
-    /// (Upgrade / Not now); screenshots are never refused with it.
+    /// A recording was refused because a known Free plan already has its 25
+    /// recordings: before it started (`capture::recording_allowance`, where
+    /// the FE shows the limit dialog, Upgrade / Not now), or by the server on
+    /// a direct upload (`remote_upload::upload_failure`). Screenshots are
+    /// never refused with it.
     RecordingLimitReached,
+    /// The server refused a recording on a direct upload because it is
+    /// longer than the Free plan allows (`remote_upload::upload_failure`).
+    /// The capture card offers Upgrade for it, as for
+    /// [`Self::RecordingLimitReached`].
+    RecordingTooLong,
     /// A capture was refused because the account's plan could not be read
     /// (offline, an API error, too slow). Captures are decided only on a
     /// plan the API returned (`capture::allowance`), so the FE offers Retry.
@@ -286,6 +292,7 @@ impl NotReadyKind {
             Self::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
             Self::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
             Self::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
+            Self::RecordingTooLong => "RECORDING_TOO_LONG",
             Self::CapturePlanUnavailable => "CAPTURE_PLAN_UNAVAILABLE",
             Self::CaptureNoDrivePlan => "CAPTURE_NO_DRIVE_PLAN",
             Self::RecordingCountUnavailable => "RECORDING_COUNT_UNAVAILABLE",
@@ -372,7 +379,7 @@ impl std::fmt::Display for NotReadyKind {
                 )
             }
             Self::ScreenRecordingPermission => {
-                write!(f, "Hippius needs permission to record your screen before it can take a capture.")
+                write!(f, "Hippius Drive needs permission to record your screen before it can take a capture.")
             }
             Self::CaptureDestinationUnset => {
                 write!(f, "Choose where your captures should be saved first.")
@@ -383,6 +390,7 @@ impl std::fmt::Display for NotReadyKind {
                 crate::capture::recording_allowance::LIMIT_TITLE,
                 crate::capture::recording_allowance::LIMIT_BODY
             ),
+            Self::RecordingTooLong => f.write_str(&crate::sync::events::recording_too_long_copy()),
             Self::CapturePlanUnavailable => f.write_str(crate::capture::allowance::PLAN_UNAVAILABLE),
             Self::CaptureNoDrivePlan => f.write_str(crate::capture::allowance::NO_DRIVE_PLAN),
             Self::RecordingCountUnavailable => f.write_str(crate::capture::recording_allowance::COUNT_UNAVAILABLE),
@@ -887,6 +895,7 @@ mod tests {
                 NotReadyKind::ScreenRecordingPermission => "SCREEN_RECORDING_PERMISSION",
                 NotReadyKind::CaptureDestinationUnset => "CAPTURE_DESTINATION_UNSET",
                 NotReadyKind::RecordingLimitReached => "RECORDING_LIMIT_REACHED",
+                NotReadyKind::RecordingTooLong => "RECORDING_TOO_LONG",
                 NotReadyKind::CapturePlanUnavailable => "CAPTURE_PLAN_UNAVAILABLE",
                 NotReadyKind::CaptureNoDrivePlan => "CAPTURE_NO_DRIVE_PLAN",
                 NotReadyKind::RecordingCountUnavailable => "RECORDING_COUNT_UNAVAILABLE",
@@ -926,6 +935,7 @@ mod tests {
             NotReadyKind::ScreenRecordingPermission,
             NotReadyKind::CaptureDestinationUnset,
             NotReadyKind::RecordingLimitReached,
+            NotReadyKind::RecordingTooLong,
             NotReadyKind::CapturePlanUnavailable,
             NotReadyKind::CaptureNoDrivePlan,
             NotReadyKind::RecordingCountUnavailable,

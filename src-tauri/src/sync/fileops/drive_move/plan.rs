@@ -9,6 +9,7 @@ use crate::sync::files::move_entries::{
     Claimed, ClashChoice, Decision, Existing, MoveItem, MoveItemResult, basename_of, decide, join_path, normalize_drive_path, target_name,
 };
 use crate::sync::remote_rename::{RemoteEntry, RemoteFolderTree};
+use hcfs_shared::revision_id::RevisionId;
 use std::collections::HashMap;
 
 /// What one selected item is on the source drive, as the server lists it.
@@ -33,7 +34,7 @@ pub struct PlannedCopy {
 pub struct RemoteEntryKey {
     pub path: String,
     pub path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
     pub salted_hash: [u8; 32],
     pub size_bytes: u64,
 }
@@ -246,7 +247,7 @@ mod tests {
         RemoteEntry {
             path: path.into(),
             path_hash: [seed; 32],
-            revision_id: [seed; 32],
+            revision_id: RevisionId::from_bytes([seed; 32]),
             salted_hash: [seed; 32],
             size_bytes: 10,
         }

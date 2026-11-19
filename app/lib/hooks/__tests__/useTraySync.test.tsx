@@ -249,10 +249,10 @@ describe("useTrayInit — tray creation", () => {
     const attachedMenu = mocks.trayNewCalls[0].menu;
     const texts = (attachedMenu?.items ?? []).map((i) => i.text);
     expect(texts).toContain("Open Drive");
-    expect(texts).toContain("Quit Hippius");
+    expect(texts).toContain("Quit Hippius Drive");
     // The popover owns "Open Hippius" on macOS/Windows, so the context menu
     // must NOT carry its own (Linux is the only platform that adds it).
-    expect(texts).not.toContain("Open Hippius");
+    expect(texts).not.toContain("Open Hippius Drive");
   });
 
   it("drives the tray icon from the seeded sync snapshot", async () => {
@@ -322,8 +322,8 @@ describe("useTrayInit: after a recording's mark", () => {
     mocks.getReleasedListener()!({ payload: null });
     await waitFor(() => expect(mocks.setMenuCalls.length).toBe(1));
     const texts = (mocks.setMenuCalls[0].items ?? []).map((i) => i.text);
-    expect(texts[0]).toBe("Open Hippius");
-    expect(texts).toContain("Quit Hippius");
+    expect(texts[0]).toBe("Open Hippius Drive");
+    expect(texts).toContain("Quit Hippius Drive");
     // Reported like every attach, so a recording started meanwhile gets its
     // own menu back from Rust.
     await waitFor(() =>
@@ -349,7 +349,7 @@ describe("useTrayInit — icon update resilience", () => {
     // The recreated icon still carries the right-click context menu.
     const recreated = mocks.trayNewCalls[mocks.trayNewCalls.length - 1];
     const texts = (recreated.menu?.items ?? []).map((i) => i.text);
-    expect(texts).toContain("Quit Hippius");
+    expect(texts).toContain("Quit Hippius Drive");
   });
 });
 
@@ -428,7 +428,7 @@ describe("useTrayInit: a reload under a live icon", () => {
     expect(mocks.trayCloseCalls.length).toBe(1);
     expect(mocks.trayNewCalls[0].action).toBeUndefined();
     const texts = (mocks.trayNewCalls[0].menu?.items ?? []).map((i) => i.text);
-    expect(texts).toContain("Quit Hippius");
+    expect(texts).toContain("Quit Hippius Drive");
     await waitFor(() =>
       expect(mocks.invokeCmds.filter((c) => c === "tray_menu_attached").length).toBe(1),
     );
@@ -450,7 +450,7 @@ describe("useTrayInit — Linux context menu", () => {
     await waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
 
     const texts = (mocks.trayNewCalls[0].menu?.items ?? []).map((i) => i.text);
-    expect(texts[0]).toBe("Open Hippius");
+    expect(texts[0]).toBe("Open Hippius Drive");
     // On Linux the menu shows on left-click.
     expect(
       (mocks.trayNewCalls[0] as { showMenuOnLeftClick?: boolean })

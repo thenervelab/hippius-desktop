@@ -24,11 +24,11 @@ import {
 } from "@/app/lib/tray/trayHeaderMenu";
 import { openCapturesFolder, openMainPage, openMainWindow, quitFromTray } from "./trayMainWindow";
 
-export const OPEN_HIPPIUS_LABEL = "Open Hippius";
+export const OPEN_HIPPIUS_LABEL = "Open Hippius Drive";
 export const CAPTURES_FOLDER_LABEL = "Open captures folder";
 export const SETTINGS_LABEL = "Settings";
 export const HELP_LABEL = "Help & Support";
-export const QUIT_LABEL = "Quit Hippius";
+export const QUIT_LABEL = "Quit Hippius Drive";
 
 /** The header's own button look (the bell's), so ⋮ reads as one of them. */
 const TRIGGER =

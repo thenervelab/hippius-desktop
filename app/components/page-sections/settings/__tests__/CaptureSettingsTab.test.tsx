@@ -225,7 +225,7 @@ describe("the recording shortcut", () => {
 
   // Wayland: the desktop holds it; the card gives the command to bind.
   it("gives the command to bind where the desktop holds the shortcut", async () => {
-    const line = "Hippius can't set this shortcut on your desktop. Add one in your desktop's keyboard settings that runs this command:";
+    const line = "Hippius Drive can't set this shortcut on your desktop. Add one in your desktop's keyboard settings that runs this command:";
     setup({
       surfaces: {
         ...MAC,

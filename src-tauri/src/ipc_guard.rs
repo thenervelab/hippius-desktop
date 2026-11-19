@@ -103,6 +103,8 @@ pub const MAIN_WINDOW_ONLY: &[&str] = &[
     "export_file",
     "export_folder_zip",
     "chat_save_attachment",
+    "share_export_insights_csv",
+    "folder_share_export_insights_csv",
     "attach_logs_to_ticket",
     "allow_asset_scope",
     "set_sync_path",
