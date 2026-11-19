@@ -10,8 +10,46 @@
 
 pub use hcfs_shared::network::{
     CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest, CreateDriveMoveResult, CreateSessionResult, DriveRef,
-    MAX_DRIVE_MOVE_FILES, MoveFolder, MoveRevoked, StageMoveSessionRequest,
+    ListDriveMovesResult, MAX_DRIVE_MOVE_FILES, MoveFolder, MoveRevoked, OpenDriveMove, StageMoveSessionRequest,
 };
+
+/// One row of `GET /v1/folder-shares`, the fields a move's warning reads.
+/// hcfs-client's listing has no `?include=managed`, so the move asks for
+/// it itself (`MoveApi::list_drive_links`).
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+pub struct DriveLink {
+    pub token_hash: String,
+    /// Whose drive the link is on. Absent on older servers.
+    #[serde(default)]
+    pub owner_ss58: Option<String>,
+    #[serde(default)]
+    pub folder_hash: Option<String>,
+    #[serde(default)]
+    pub path_prefix: Option<String>,
+    #[serde(default)]
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// `drive` or `upload`; absent (an older server) means `drive`.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+impl DriveLink {
+    /// Whether this link opens a folder at or under one of `folders` on the
+    /// drive `(owner, folder_hash)` right now: a drive link, not revoked,
+    /// not expired. An expired link the commit also revokes opens nothing,
+    /// so the warning does not count it.
+    pub fn is_live_under(&self, owner: &str, folder_hash: &str, folders: &[MoveFolder], now: chrono::DateTime<chrono::Utc>) -> bool {
+        let on_drive = self.source.as_deref().is_none_or(|s| s == "drive")
+            && self.folder_hash.as_deref() == Some(folder_hash)
+            && self.owner_ss58.as_deref().is_none_or(|o| o == owner);
+        let live = self.revoked_at.is_none() && self.expires_at.is_none_or(|at| at > now);
+        let path = self.path_prefix.as_deref().unwrap_or_default().trim_matches('/');
+        let under = !path.is_empty() && folders.iter().any(|f| path == f.from || path.starts_with(&format!("{}/", f.from)));
+        on_drive && live && under
+    }
+}
 
 /// Most folders one commit moves whole (`MAX_COMMIT_FOLDERS`).
 pub const MAX_COMMIT_FOLDERS: usize = 100;
@@ -133,8 +171,14 @@ impl MoveRefusal {
             "recording_too_long" => "A recording is longer than the destination's plan allows.",
             "move_not_found" | "move_closed" | "move_aborted" | "move_expired" => "The move was stopped before it finished.",
             "move_incomplete" => "Not every file was copied.",
-            "revision_mismatch" | "folder_changed" => "Some files changed while they were being moved.",
-            "target_exists" | "already_staged" | "session_exists" => "An item with this name is already in that folder.",
+            "revision_mismatch" => "Some files changed while they were being moved.",
+            // Also `folder_missing` on the server: a moved folder no longer
+            // has a file or folder at or under it.
+            "folder_changed" => "A folder changed while it was being moved, or it's no longer there.",
+            "staged_conflict" => "Two copies in this move were headed for the same place. Try again.",
+            // `already_staged` is a success (`MoveApi::finalize`) and never
+            // reaches here.
+            "target_exists" | "session_exists" => "An item with this name is already in that folder.",
             "target_shared" => "That folder is shared on its own, so items can't move into it. Pick another folder.",
             "paths_unregistered" => "Some files in this folder can't be moved from this device yet.",
             "upload_in_progress" => "Files in this folder are still uploading. Try again when they finish.",
@@ -301,7 +345,8 @@ mod tests {
             "revision_mismatch",
             "folder_changed",
             "target_exists",
-            "already_staged",
+            "session_exists",
+            "staged_conflict",
             "target_shared",
             "paths_unregistered",
             "upload_in_progress",

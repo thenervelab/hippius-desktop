@@ -1710,6 +1710,10 @@ mod tests {
             backup_hint: None,
             source_taken_at: None,
             source_modified_at: None,
+            // A recording's kind and the caller's favorite mark (hcfs #1368,
+            // #1378); the browse mapper reads neither.
+            capture_kind: None,
+            favorite: None,
             // Set only on `/get_state` after a move between drives; `/browse` never sends it.
             moved_from: None,
         }

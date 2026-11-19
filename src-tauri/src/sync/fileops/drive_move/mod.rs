@@ -18,6 +18,7 @@
 
 pub mod api;
 pub mod copy;
+pub mod ledger;
 pub mod local;
 pub mod plan;
 pub mod wire;
@@ -46,32 +47,51 @@ use wire::{CommitDriveMoveRequest, CommitDriveMoveResult, CreateDriveMoveRequest
 /// engines then do it, by download and delete).
 const DRIVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// The cancel flags of the moves running now, by the id the webview gave.
+/// The moves running now: their cancel flags by the id the webview gave,
+/// and the server's ids of the moves this process opened and has not seen
+/// end (`ledger`).
 #[derive(Default)]
-pub struct DriveMoveJobs(std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>);
+pub struct DriveMoveJobs {
+    cancels: std::sync::Mutex<HashMap<String, Arc<AtomicBool>>>,
+    running: ledger::RunningMoves,
+    /// Accounts whose left-behind moves this process has swept.
+    swept: std::sync::Mutex<std::collections::HashSet<String>>,
+}
 
 impl DriveMoveJobs {
     fn register(&self, job_id: &str) -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(false));
-        if let Ok(mut jobs) = self.0.lock() {
+        if let Ok(mut jobs) = self.cancels.lock() {
             jobs.insert(job_id.to_string(), flag.clone());
         }
         flag
     }
 
     fn finish(&self, job_id: &str) {
-        if let Ok(mut jobs) = self.0.lock() {
+        if let Ok(mut jobs) = self.cancels.lock() {
             jobs.remove(job_id);
         }
     }
 
     /// Ask a running move to stop. False when no such move is running.
     pub fn cancel(&self, job_id: &str) -> bool {
-        self.0
+        self.cancels
             .lock()
             .ok()
             .and_then(|jobs| jobs.get(job_id).map(|flag| flag.store(true, Ordering::SeqCst)))
             .is_some()
+    }
+
+    /// Claim the one sweep of `owner`'s left-behind moves for this process.
+    fn claim_sweep(&self, owner: &str) -> bool {
+        self.swept.lock().is_ok_and(|mut swept| swept.insert(owner.to_string()))
+    }
+
+    /// Give the claim back: the sweep could not list the moves.
+    fn release_sweep(&self, owner: &str) {
+        if let Ok(mut swept) = self.swept.lock() {
+            swept.remove(owner);
+        }
     }
 }
 
@@ -451,17 +471,38 @@ async fn sharing_notice(state: &AppState, account_id: &str, source: &Side, folde
                 .count();
         }
     }
-    let mut links = 0usize;
-    if let Ok(pool) = state.pool()
-        && let Ok(client) = crate::shares::client::build_account_client(pool, account_id).await
-        && let Ok(rows) = client.list_folder_shares().await
-    {
-        links = rows
-            .iter()
-            .filter(|r| r.folder_hash == source.identity.wire_folder_hash && r.revoked_at.is_none() && under(&r.path_prefix))
-            .count();
-    }
+    let links = match state.pool() {
+        Ok(pool) => match move_api(state, pool, account_id).await {
+            Ok(api) => count_links(&api, &source.identity, folders).await,
+            Err(_) => 0,
+        },
+        Err(_) => 0,
+    };
     compose_sharing_notice(folders.len(), links, people.len(), invites)
+}
+
+/// The live links a move of `folders` turns off. The owner's plain listing
+/// holds every link on its drive, whoever minted it; anyone else (a
+/// manager) lists with `?include=managed` to see the links others minted
+/// there too, and falls back to the plain listing (its own links) on a
+/// server that refuses that.
+pub async fn count_links(api: &MoveApi, source: &DriveIdentity, folders: &[MoveFolder]) -> usize {
+    let rows = if source.is_member {
+        match api.list_drive_links(true).await {
+            Ok(rows) => Ok(rows),
+            Err(_) => api.list_drive_links(false).await,
+        }
+    } else {
+        api.list_drive_links(false).await
+    };
+    let Ok(rows) = rows else { return 0 };
+    let now = chrono::Utc::now();
+    let live: std::collections::HashSet<&str> = rows
+        .iter()
+        .filter(|r| r.is_live_under(&source.wire_ss58, &source.wire_folder_hash, folders, now))
+        .map(|r| r.token_hash.as_str())
+        .collect();
+    live.len()
 }
 
 /// "Moving it turns off its share link and removes access for 2 people."
@@ -870,7 +911,8 @@ async fn prepare(state: &AppState, account_id: &str, request: &DriveMoveRequest)
     let plan: MovePlan = plan_move(&request.items, &sources, &source.wire_root, &dest.wire_root, &destination, &listed);
 
     let mut outcome = DriveMoveOutcome::default();
-    if plan.has_clashes() || plan.copies.is_empty() {
+    // Folders of only empty folders move with no copy (`"files": []`).
+    if plan.has_clashes() || (plan.copies.is_empty() && plan.folders.is_empty()) {
         if !plan.has_clashes()
             && let Some(refusal) = plan.over_caps()
         {
@@ -905,15 +947,18 @@ async fn prepare(state: &AppState, account_id: &str, request: &DriveMoveRequest)
     }
 
     // A move is an upload into the destination: gated the way every Drive
-    // write is, on the destination owner's room, never on credits.
-    crate::billing::eligibility::require_eligible_for_drive(
-        state,
-        account_id,
-        crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
-        plan.total_bytes(),
-        Some(&dest.identity),
-    )
-    .await?;
+    // write is, on the destination owner's room, never on credits. A move
+    // of empty folders uploads nothing, so it has nothing to gate.
+    if !plan.copies.is_empty() {
+        crate::billing::eligibility::require_eligible_for_drive(
+            state,
+            account_id,
+            crate::billing::eligibility::InsufficientCreditsAction::FileUpload,
+            plan.total_bytes(),
+            Some(&dest.identity),
+        )
+        .await?;
+    }
     if request.preflight {
         outcome.ready = true;
         return Ok(Prepared::Answer(outcome));
@@ -1095,7 +1140,71 @@ async fn move_api(state: &AppState, pool: &sqlx::SqlitePool, account_id: &str) -
         http: state.api_client.clone(),
         base_url: crate::sync::region::resolve_base_url(&server_url).to_string(),
         bearer,
+        ledger: Some(ledger::MoveLedger {
+            pool: Some(pool.clone()),
+            owner: crate::auth::account_key::account_key(account_id),
+            running: state.drive_moves.running.clone(),
+        }),
     })
+}
+
+/// Abort the moves this computer left open (a crash, a quit mid-move), once
+/// per account per launch, so their room comes back now instead of when
+/// they expire. Which moves qualify is `ledger::left_behind`'s rule: only
+/// one this install opened and is not running, never one it did not open.
+/// Best effort and quiet: a failure leaves the moves to expire.
+pub async fn abort_left_behind_moves(state: &AppState, account_id: &str) {
+    let owner = crate::auth::account_key::account_key(account_id);
+    if !state.drive_moves.claim_sweep(&owner) {
+        return;
+    }
+    match sweep_left_behind(state, account_id).await {
+        Ok((aborted, kept)) if aborted + kept > 0 => info!(aborted, kept, "Drive move: moves left open were aborted"),
+        Ok(_) => {}
+        Err(e) => {
+            state.drive_moves.release_sweep(&owner);
+            tracing::debug!(error = %e, "Drive move: left-behind moves not swept");
+        }
+    }
+}
+
+/// The sweep: `(aborted, not aborted)` of the moves it meant to abort.
+async fn sweep_left_behind(state: &AppState, account_id: &str) -> Result<(usize, usize)> {
+    let caps = crate::shares::capabilities::fetch_capabilities(state, account_id).await?;
+    if !caps.drive_moves {
+        return Ok((0, 0));
+    }
+    let pool = state.pool()?;
+    let api = move_api(state, pool, account_id).await?;
+    sweep_with(&api, pool).await
+}
+
+/// [`sweep_left_behind`] against a [`MoveApi`] whose ledger names the
+/// account, for the mock-server tests.
+pub async fn sweep_with(api: &MoveApi, pool: &sqlx::SqlitePool) -> Result<(usize, usize)> {
+    let Some(ledger) = &api.ledger else {
+        return Ok((0, 0));
+    };
+    let listed = api
+        .list_open()
+        .await
+        .map_err(|r| AppError::Hcfs(format!("open moves not listed ({})", r.status)))?;
+    // Noted first, running second: see `ledger::left_behind`.
+    let noted = ledger::noted(pool, &ledger.owner).await?;
+    let running = ledger.running_now();
+    let sweep = ledger::left_behind(&listed.moves, &noted, &running);
+    for move_id in &sweep.forget {
+        let _ = ledger::forget(pool, &ledger.owner, move_id).await;
+    }
+    let mut aborted = 0;
+    for move_id in &sweep.abort {
+        // `abort` drops the note when the server confirms it.
+        match api.abort(move_id).await {
+            Ok(()) => aborted += 1,
+            Err(e) => warn!(status = e.status, code = ?e.code, "Drive move: a move left open was not aborted"),
+        }
+    }
+    Ok((aborted, sweep.abort.len() - aborted))
 }
 
 #[cfg(test)]
@@ -1113,6 +1222,16 @@ mod tests {
             compose_sharing_notice(2, 3, 1, 1).as_deref(),
             Some("Moving them to another drive turns off their 3 share links, removes access for 1 person and cancels their open invite.")
         );
+    }
+
+    #[test]
+    fn a_launch_sweeps_each_account_once_unless_it_could_not_list() {
+        let jobs = DriveMoveJobs::default();
+        assert!(jobs.claim_sweep("a"));
+        assert!(!jobs.claim_sweep("a"), "once per launch");
+        assert!(jobs.claim_sweep("b"), "per account");
+        jobs.release_sweep("a");
+        assert!(jobs.claim_sweep("a"), "a sweep that failed is tried again");
     }
 
     #[test]
