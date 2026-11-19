@@ -72,7 +72,12 @@ unmaintained = "workspace"
 #      `-wal` file from a download, a share or another user. Writing a crafted
 #      pair into the app's data folder already needs local access as the user.
 # Re-check and remove once sqlx accepts libsqlite3-sys >= 0.39.
-ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0459"]
+# chrono (all versions): RUSTSEC-2026-0543 marks it unmaintained. Not a
+# vulnerability, and no maintained release exists to move to. chrono is a
+# direct dependency here and of hcfs-client, so leaving the advisory active
+# fails every branch. Replacing it (jiff or time) is a separate change that
+# hcfs-client has to make too. Remove this entry once both have moved off chrono.
+ignore = ["RUSTSEC-2026-0194", "RUSTSEC-2026-0195", "RUSTSEC-2026-0459", "RUSTSEC-2026-0543"]
 
 [bans]
 # Lenient on purpose for the first gate. The graph has many legitimately
