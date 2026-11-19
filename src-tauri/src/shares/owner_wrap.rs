@@ -86,6 +86,107 @@ fn open_folder_secret(key: &WrapKey, owner_ss58: &str, token_hash: &str, wrap: &
     Ok((token, opened.secret))
 }
 
+/// A file link's link secret (`#s=`), sealed as the console seals it: flag
+/// [`FLAG_LINK_SECRET`] with no folder token, then the 32-byte secret. Every
+/// recipient link is this kind (see `shares::recipients`). Kept apart from
+/// [`seal_file_secret_with_key`] because `ShareSecret` has no file link
+/// variant at this hcfs pin, and [`decode_plaintext`] goes on refusing the
+/// shape, so the Shared Links hydration never mistakes one for a share key.
+pub(crate) fn seal_file_link_secret_with_key(
+    key: &WrapKey,
+    owner_ss58: &str,
+    share_token: &str,
+    link_secret: &[u8; 32],
+) -> std::result::Result<Vec<u8>, String> {
+    let mut nonce = [0u8; NONCE_LEN];
+    OsRng.fill_bytes(&mut nonce);
+    seal_file_link_secret_with_nonce(key, owner_ss58, share_token, link_secret, &nonce)
+}
+
+fn seal_file_link_secret_with_nonce(
+    key: &WrapKey,
+    owner_ss58: &str,
+    share_token: &str,
+    link_secret: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+) -> std::result::Result<Vec<u8>, String> {
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(33));
+    plaintext.push(FLAG_LINK_SECRET);
+    plaintext.extend_from_slice(link_secret);
+    let aad = bind_aad(owner_ss58, share_token);
+    let cipher = XChaCha20Poly1305::new((&**key).into());
+    let ciphertext = cipher
+        .encrypt(XNonce::from_slice(nonce), Payload { msg: &plaintext, aad: &aad })
+        .map_err(|_| "aead seal failed".to_string())?;
+    let mut wrap = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());
+    wrap.push(VERSION);
+    wrap.extend_from_slice(nonce);
+    wrap.extend_from_slice(&ciphertext);
+    Ok(wrap)
+}
+
+/// Open a file link's wrap that carries a link secret, the twin of
+/// [`seal_file_link_secret_with_key`]. Anything else (a share key, a
+/// password blob, a folder wrap) is refused.
+pub(crate) fn open_file_link_secret(
+    key: &WrapKey,
+    owner_ss58: &str,
+    share_token: &str,
+    wrap: &[u8],
+) -> std::result::Result<Zeroizing<[u8; 32]>, String> {
+    if wrap.len() < 1 + NONCE_LEN + 16 {
+        return Err("owner wrap is truncated".into());
+    }
+    if wrap[0] != VERSION {
+        return Err("unsupported owner wrap version".into());
+    }
+    let aad = bind_aad(owner_ss58, share_token);
+    let cipher = XChaCha20Poly1305::new((&**key).into());
+    let plaintext = Zeroizing::new(
+        cipher
+            .decrypt(
+                XNonce::from_slice(&wrap[1..=NONCE_LEN]),
+                Payload {
+                    msg: &wrap[(1 + NONCE_LEN)..],
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| "owner wrap did not open".to_string())?,
+    );
+    match plaintext.split_first() {
+        Some((&FLAG_LINK_SECRET, secret)) if secret.len() == 32 => {
+            let mut out = Zeroizing::new([0u8; 32]);
+            out.copy_from_slice(secret);
+            Ok(out)
+        }
+        _ => Err("owner wrap is not a file link secret".into()),
+    }
+}
+
+/// Mint-time push of recipient links' wraps: each token with its link secret,
+/// sealed with an already derived wrap key. Best effort, like every push here.
+pub(crate) async fn push_file_link_secrets(
+    state: &crate::app_state::AppState,
+    account_id: &str,
+    key: &WrapKey,
+    entries: &[(String, Zeroizing<[u8; 32]>)],
+) {
+    if entries.is_empty() {
+        return;
+    }
+    let Some(t) = transport_for(state, account_id).await else {
+        return;
+    };
+    let mut wraps = Vec::new();
+    for (token, secret) in entries {
+        match seal_file_link_secret_with_key(key, account_id, token, secret) {
+            Ok(wrap) => wraps.push(serde_json::json!({ "token": token, "wrap": STANDARD.encode(wrap) })),
+            Err(e) => debug!(error = %e, "recipient link owner-wrap seal skipped"),
+        }
+    }
+    put_wrap_chunks(&state.api_client, &t.base_url.join(FILE_WRAPS_PATH), &t.bearer, wraps).await;
+}
+
 struct Opened {
     secret: ShareSecret,
     folder_token: Option<String>,
@@ -547,6 +648,42 @@ mod tests {
     /// random Argon2id salt and could not be frozen. The point is the
     /// `FLAG_PRIVATE` bit and the 89-vs-32 length branch.
     const PRIVATE_BLOB: [u8; PRIVATE_BLOB_LEN] = [0x33u8; PRIVATE_BLOB_LEN];
+
+    /// A recipient link's wrap, sealed by the console (flag 0x04, no folder
+    /// token): it opens here to the same link secret, a fixed-nonce seal here
+    /// gives the console's bytes, and the share-key decoder still refuses it.
+    #[test]
+    fn a_file_link_secret_wrap_matches_the_consoles_bytes() {
+        let f: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/share_recipient_vectors.json"
+        )))
+        .unwrap();
+        let w = &f["file_link_wrap"];
+        let token = w["share_token"].as_str().unwrap();
+        let secret: [u8; 32] = hex::decode(w["link_secret_hex"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let nonce: [u8; NONCE_LEN] = hex::decode(w["nonce_hex"].as_str().unwrap()).unwrap().try_into().unwrap();
+        let wrap = STANDARD.decode(w["wrap_b64"].as_str().unwrap()).unwrap();
+        let key = derive_wrap_key(f["mnemonic"].as_str().unwrap()).unwrap();
+        let owner = f["owner_ss58"].as_str().unwrap();
+
+        assert_eq!(*open_file_link_secret(&key, owner, token, &wrap).unwrap(), secret);
+        assert_eq!(seal_file_link_secret_with_nonce(&key, owner, token, &secret, &nonce).unwrap(), wrap);
+        assert!(
+            open_file_secret(&key, owner, token, &wrap).is_err(),
+            "a link secret must never read as a share key"
+        );
+        assert!(open_file_link_secret(&key, owner, "another-token", &wrap).is_err(), "bound to its token");
+    }
+
+    #[test]
+    fn a_share_key_wrap_is_not_a_file_link_secret() {
+        let key = derive_wrap_key(MNEMONIC).unwrap();
+        let wrap = seal_file_secret_with_key(&key, SS58, FILE_TOKEN, &ShareSecret::Public([5u8; 32])).unwrap();
+        assert!(open_file_link_secret(&key, SS58, FILE_TOKEN, &wrap).is_err());
+        let sealed = seal_file_link_secret_with_key(&key, SS58, FILE_TOKEN, &[6u8; 32]).unwrap();
+        assert_eq!(*open_file_link_secret(&key, SS58, FILE_TOKEN, &sealed).unwrap(), [6u8; 32]);
+    }
 
     fn key() -> WrapKey {
         derive_wrap_key(MNEMONIC).unwrap()

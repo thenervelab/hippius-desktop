@@ -43,6 +43,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tracing::{debug, info, warn};
+use zeroize::Zeroizing;
 
 use super::SqliteShareKeystore;
 use super::capabilities::{ServerCapabilities, fetch_capabilities};
@@ -1118,6 +1119,30 @@ fn parse_preferences(body: &str) -> Result<NotificationPreferences> {
     })
 }
 
+/// Whether the share-link emails can reach this account at all.
+///
+/// The server sends them to the address the sign-in provider has for the
+/// account. An account that signs in with an access key (a wallet) has none:
+/// the server gives it a placeholder on `hippius.local`, which nobody can
+/// write to. The rule, the same in every Hippius app:
+///
+/// - a real address on the session: yes;
+/// - a placeholder address: no;
+/// - no address stored: no for an access-key sign-in (`mnemonic`, or no
+///   provider at all), yes for Google, Apple or GitHub, whose session row may
+///   predate the email column but whose provider always gave the server one.
+pub fn can_receive_link_emails(identity: &crate::auth::auth_session_repo::SessionIdentity) -> bool {
+    let email = identity.email.as_deref().map(str::trim).filter(|e| !e.is_empty());
+    if let Some(email) = email {
+        return !crate::utils::display_email::is_placeholder_email(email);
+    }
+    identity
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|p| !p.is_empty() && p != "mnemonic")
+}
+
 fn preferences_body(prefs: NotificationPreferences) -> serde_json::Value {
     serde_json::json!({
         "first_views": prefs.first_views,
@@ -1152,6 +1177,11 @@ impl Api {
             .await?
             .ok_or_else(|| AppError::Auth("No authentication token found. Please log in again.".into()))?;
         Ok(Self { base, bearer })
+    }
+
+    /// `GET /v1/shares`, the owner listing.
+    pub(super) fn listing_url(&self) -> String {
+        format!("{}/v1/shares", self.base)
     }
 
     pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
@@ -1319,7 +1349,7 @@ async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result
     read_ok(resp).await
 }
 
-async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
+pub(super) async fn patch_settings(http: &reqwest::Client, api: &Api, token: &str, patch: &SettingsPatch) -> Result<()> {
     let resp = http
         .patch(api.share_url(token, "/settings")?)
         .bearer_auth(&api.bearer)
@@ -1376,7 +1406,14 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 
 /// The comment key for `token`: from the share key this device holds, or the
 /// one its owner wrap brings back (the same hydration Shared Links runs).
-async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
+    share_key_for(state, account_id, token).await.map(|key| CommentKey::derive(&key))
+}
+
+/// The share key of file link `token`: from this device's keystore, or the
+/// one its owner wrap brings back. A recipient link is made over it, and the
+/// comment key comes from it.
+pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
     let Ok(pool) = state.pool() else {
         return Err(KeyUnavailable::NotOnDevice);
     };
@@ -1388,7 +1425,7 @@ async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std
         super::owner_wrap::sync_file_wraps(state, account_id, &keystore, &mut keys, &[token]).await;
     }
     match keys.remove(token) {
-        Some(ShareSecret::Public(share_key)) => Ok(CommentKey::derive(&share_key)),
+        Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
         Some(ShareSecret::Private(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
@@ -1797,6 +1834,22 @@ pub async fn share_get_notification_preferences(state: tauri::State<'_, AppState
     }
     let api = Api::for_account(&state, &account_id).await?;
     get_preferences(&state.api_client, &api).await
+}
+
+/// Whether the share-link emails can reach the signed-in account
+/// ([`can_receive_link_emails`]). The UI hides the email switches when this
+/// is `false` and says how to get them instead. An error (no session row, or
+/// a server without these emails) means unknown: the UI shows nothing.
+#[tauri::command]
+pub async fn share_can_receive_link_emails(state: tauri::State<'_, AppState>) -> Result<bool> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_or_none(&state, &account_id).await.share_notifications {
+        return Err(AppError::Validation("Email updates about your links aren't available yet.".into()));
+    }
+    let identity = crate::auth::auth_session_repo::get_identity(state.pool()?, &account_id)
+        .await?
+        .ok_or_else(|| AppError::Validation("No signed-in account.".into()))?;
+    Ok(can_receive_link_emails(&identity))
 }
 
 /// Save the share-link emails this account gets.
@@ -2718,6 +2771,30 @@ pub(super) mod tests {
             );
         }
         assert_ne!(UNREACHABLE, INSIGHTS_UNAVAILABLE);
+    }
+
+    /// Link emails go to the sign-in provider's address. An access-key
+    /// account has none (or only the `hippius.local` placeholder), so its
+    /// switches must give way to the "sign in with Google or Apple" line.
+    #[test]
+    fn only_an_account_with_a_real_address_can_receive_link_emails() {
+        use crate::auth::auth_session_repo::SessionIdentity;
+        let id = |provider: Option<&str>, email: Option<&str>| SessionIdentity {
+            provider: provider.map(str::to_string),
+            username: None,
+            email: email.map(str::to_string),
+        };
+        // Google or Apple: their address.
+        assert!(can_receive_link_emails(&id(Some("google"), Some("ann@example.com"))));
+        assert!(can_receive_link_emails(&id(Some("apple"), Some("ann@privaterelay.appleid.com"))));
+        // A session row from before the email was stored still has a provider that gave one.
+        assert!(can_receive_link_emails(&id(Some("google"), None)));
+        assert!(can_receive_link_emails(&id(Some("oauth"), Some("  "))));
+        // An access key: no address, or only the placeholder, whatever the row says.
+        assert!(!can_receive_link_emails(&id(Some("mnemonic"), None)));
+        assert!(!can_receive_link_emails(&id(None, None)));
+        assert!(!can_receive_link_emails(&id(Some("mnemonic"), Some("user_5abc@hippius.local"))));
+        assert!(!can_receive_link_emails(&id(Some("google"), Some("user_5abc@HIPPIUS.LOCAL"))));
     }
 
     #[test]

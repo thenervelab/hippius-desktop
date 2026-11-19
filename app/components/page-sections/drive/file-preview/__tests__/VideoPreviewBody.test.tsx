@@ -345,7 +345,7 @@ describe("VideoPreviewBody conversion", () => {
   });
 
   it("says beside the player when the video plays without its sound", async () => {
-    const NOTICE = "Playing without sound: Hippius can't play this video's audio track.";
+    const NOTICE = "Playing without sound: Hippius Drive can't play this video's audio track.";
     tauri.onInvoke("video_preview_open", () => ({
       kind: "file",
       path: "/home/.hippius/preview-cache/converted/s.mp4",

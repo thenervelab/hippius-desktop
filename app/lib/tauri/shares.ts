@@ -91,6 +91,10 @@ export interface ServerCapabilities {
    * matches the wire.
    */
   share_gates?: boolean;
+  /** Links per person. Read by Rust only; listed so the type matches the wire. */
+  share_recipient_links?: boolean;
+  /** Insights grouped by person. Read by Rust only; listed so the type matches the wire. */
+  share_group_insights?: boolean;
   /**
    * Link-secret folder links (`#s=` / `#sp=`, hcfs#665). Read by Rust only;
    * listed so the type matches the wire.
@@ -101,6 +105,10 @@ export interface ServerCapabilities {
    * so the type matches the wire.
    */
   drive_invite_link_envelopes?: boolean;
+  /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
+  drive_moves?: boolean;
+  /** Insights for folder links: which files were opened, and by whom. */
+  folder_share_insights?: boolean;
 }
 
 /**

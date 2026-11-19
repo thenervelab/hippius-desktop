@@ -3,7 +3,7 @@ import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 import { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Hippius Console - Support",
+  title: "Hippius Drive - Support",
   description: "View and manage your support tickets",
 };
 

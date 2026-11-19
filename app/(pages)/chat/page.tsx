@@ -4,7 +4,7 @@ import ChatRoute from "@/components/chat/ChatRoute";
 import DashboardTitleWrapper from "@/components/dashboard-title-wrapper";
 
 export const metadata: Metadata = {
-  title: "Hippius Console - Chat",
+  title: "Hippius Drive - Chat",
   description: "End-to-end encrypted team chat",
 };
 

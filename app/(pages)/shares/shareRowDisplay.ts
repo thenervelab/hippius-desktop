@@ -22,6 +22,7 @@
 // always carry a real filename.
 
 import type { FolderShareSummary, ShareSummary } from "@/app/lib/tauri/shares";
+import type { LinkActivity } from "@/app/lib/tauri/folderInsights";
 import {
   fileShareRowId,
   folderShareRowId,
@@ -54,7 +55,12 @@ export function pickHistoryRowDisplay(filename: string | null): ShareRowDisplay 
 /** One row of the merged Active Shares table. */
 export type ActiveShareRow =
   | { kind: "file"; file: ShareSummary }
-  | { kind: "folder"; folder: FolderShareSummary };
+  | {
+      kind: "folder";
+      folder: FolderShareSummary;
+      /** The link's Insights switch from the listing, once it is known. */
+      insightsOn?: boolean | null;
+    };
 
 /** Stable table row id: file tokens and folder token-hashes can't collide
  *  across the kind prefix, and a foreign folder row has no token at all. */
@@ -82,6 +88,36 @@ export function mergeActiveShareRows(
     const createdA = Date.parse(a.kind === "file" ? a.file.createdAt : a.folder.createdAt);
     const createdB = Date.parse(b.kind === "file" ? b.file.createdAt : b.folder.createdAt);
     return (Number.isNaN(createdB) ? 0 : createdB) - (Number.isNaN(createdA) ? 0 : createdA);
+  });
+}
+
+/**
+ * Rust's per-link activity (`share_link_activity`) laid onto the rows: a
+ * file link's views, comments, switch and "new since you last looked", a
+ * folder link's switch. A row the activity does not name is left as it is,
+ * so the table never waits on it.
+ */
+export function withLinkActivity(rows: ActiveShareRow[], activity: LinkActivity | undefined): ActiveShareRow[] {
+  if (!activity) return rows;
+  const files = new Map(activity.files.map((f) => [f.shareToken, f]));
+  const folders = new Map(activity.folders.map((f) => [f.tokenHash, f]));
+  return rows.map((row) => {
+    if (row.kind === "folder") {
+      const found = folders.get(row.folder.tokenHash);
+      return found ? { ...row, insightsOn: found.insightsOn } : row;
+    }
+    const found = files.get(row.file.shareToken);
+    if (!found) return row;
+    return {
+      kind: "file",
+      file: {
+        ...row.file,
+        ...(found.insightsOn !== null ? { insightsOn: found.insightsOn } : {}),
+        ...(found.counts
+          ? { views: found.counts.views, comments: found.counts.comments, newSinceSeen: found.counts.newSinceSeen }
+          : {}),
+      },
+    };
   });
 }
 

@@ -24,7 +24,8 @@ import {
   type DragStartEvent,
   type Modifier,
 } from "@dnd-kit/core";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { useFileSelection, selectionKey } from "@/app/contexts/FileSelectionContext";
@@ -50,6 +51,15 @@ import {
 import { dropVerdict, type DropVerdict } from "@/app/lib/drive-move/dropTarget";
 import { moveEntries, runMove, type Clash, type ClashAnswers } from "@/app/lib/drive-move/runMove";
 import { setInAppDragActive, suppressNextClick } from "@/app/lib/drive-move/inAppDrag";
+import {
+  cancelDriveMove,
+  listMoveDestinations,
+  movedToDriveMessage,
+  runDriveMove,
+  type MoveDestination,
+} from "@/app/lib/drive-move/driveMoves";
+import { driveMovesEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import MoveDialog from "./MoveDialog";
 import NameClashDialog from "./NameClashDialog";
@@ -170,8 +180,16 @@ const followPointer: Modifier = ({ activatorEvent, draggingNodeRect, transform }
 interface ClashRequest {
   clashes: Clash[];
   destinationName: string;
+  /** Into another drive: Replace is not offered (the commit cannot replace). */
+  noReplace?: boolean;
   resolve: (answers: ClashAnswers | null) => void;
 }
+
+interface ConfirmRequest {
+  sentence: string;
+  resolve: (ok: boolean) => void;
+}
+
 
 /**
  * Moving within a drive: the Move to… picker, drag and drop, the name
@@ -194,7 +212,19 @@ export default function DriveMoveProvider({
   const [drag, setDrag] = useState<DragState | null>(null);
   const [dialogItems, setDialogItems] = useState<MoveItem[] | null>(null);
   const [clashRequest, setClashRequest] = useState<ClashRequest | null>(null);
+  const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
+  const drivesEnabled = useAtomValue(driveMovesEnabledAtom);
+  const destinationsQuery = useQuery({
+    queryKey: ["move-destinations", polkadotAddress, target?.label],
+    queryFn: () => listMoveDestinations(polkadotAddress as string, target?.label ?? ""),
+    enabled: drivesEnabled && dialogItems !== null && Boolean(polkadotAddress && target),
+    staleTime: 30_000,
+    retry: false,
+  });
+  // Null hides the picker: the server does not move between drives (yet).
+  const destinations: MoveDestination[] | null = drivesEnabled ? (destinationsQuery.data ?? []) : null;
   const busy = useRef(false);
+  const driveMoveBusy = useRef(false);
   const [hintSeen, setHintSeen] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -290,6 +320,79 @@ export default function DriveMoveProvider({
       }
     },
     [target, polkadotAddress, askClashes, queryClient, clearSelection, dismissHint],
+  );
+
+  // A move into another drive: a background job (the widget shows each
+  // file; the toast carries Cancel), no Undo, and nothing changes on a
+  // failure or a cancel. Closing the dialog does not stop it.
+  const moveToDrive = useCallback(
+    async (items: MoveItem[], drive: MoveDestination, destination: string, destinationName: string) => {
+      if (!target || !polkadotAddress || items.length === 0) return;
+      // One move between drives at a time; moves inside a drive stay free.
+      if (driveMoveBusy.current) {
+        toast.message("Another move to a drive is still running");
+        return;
+      }
+      driveMoveBusy.current = true;
+      const jobId = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+      let toastId: string | number | undefined;
+      try {
+        const outcome = await runDriveMove(
+          polkadotAddress,
+          { jobId, sourceLabel: target.label, destLabel: drive.label, destination, destName: drive.name },
+          items,
+          {
+            askClashes: (clashes) =>
+              new Promise<ClashAnswers | null>((resolve) => {
+                setClashRequest({ clashes, destinationName, noReplace: true, resolve });
+              }),
+            confirmSharing: (sentence) =>
+              new Promise<boolean>((resolve) => {
+                setConfirmRequest({ sentence, resolve });
+              }),
+            onStart: () => {
+              toastId = toast.loading(
+                items.length === 1 ? `Moving "${items[0].name}" to ${drive.name}…` : `Moving ${items.length} items to ${drive.name}…`,
+                {
+                  duration: Infinity,
+                  action: {
+                    label: "Cancel",
+                    onClick: (event) => {
+                      event.preventDefault();
+                      void cancelDriveMove(jobId);
+                      toast.loading("Cancelling…", { id: toastId, duration: Infinity });
+                    },
+                  },
+                },
+              );
+            },
+          },
+        );
+        if (outcome.cancelled) {
+          if (toastId !== undefined) toast.message("Move cancelled", { id: toastId, duration: 4000, action: undefined });
+          return;
+        }
+        const moved = outcome.results.filter((r) => r.status === "moved").length;
+        const success = movedToDriveMessage(moved, destination, destinationName, drive.name);
+        const failure = failedMessage(outcome.results);
+        if (success) {
+          const description = [outcome.revoked, failure].filter(Boolean).join(" ") || undefined;
+          toast.success(success, { id: toastId, description, duration: 6000, action: undefined });
+          dismissHint();
+          clearSelection();
+          await notifyFilesMutated(queryClient, polkadotAddress);
+        } else if (failure) {
+          toast.error(failure, { id: toastId, duration: 6000, action: undefined });
+        } else if (toastId !== undefined) {
+          toast.dismiss(toastId);
+        }
+      } catch (error) {
+        toast.error(errorMessage(error), { id: toastId, duration: 8000, action: undefined });
+      } finally {
+        driveMoveBusy.current = false;
+      }
+    },
+    [target, polkadotAddress, queryClient, clearSelection, dismissHint],
   );
 
   const offersMove = useCallback(
@@ -408,10 +511,15 @@ export default function DriveMoveProvider({
         items={dialogItems}
         target={target}
         onClose={() => setDialogItems(null)}
-        onMove={(destination, destinationName) => {
+        destinations={destinations}
+        onMove={(destination, destinationName, drive) => {
           const items = dialogItems ?? [];
           setDialogItems(null);
-          void moveTo(items, destination, destinationName);
+          if (drive && drive.label !== target.label) {
+            void moveToDrive(items, drive, destination, destinationName);
+          } else {
+            void moveTo(items, destination, destinationName);
+          }
         }}
       />
       <NameClashDialog
@@ -419,6 +527,23 @@ export default function DriveMoveProvider({
         onDone={(answers) => {
           clashRequest?.resolve(answers);
           setClashRequest(null);
+        }}
+      />
+      <ConfirmDialog
+        open={confirmRequest !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            confirmRequest?.resolve(false);
+            setConfirmRequest(null);
+          }
+        }}
+        title="Move a shared folder?"
+        description={confirmRequest?.sentence ?? ""}
+        confirmText="Move"
+        variant="warning"
+        onConfirm={() => {
+          confirmRequest?.resolve(true);
+          setConfirmRequest(null);
         }}
       />
     </DriveMoveContext.Provider>

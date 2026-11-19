@@ -2,6 +2,7 @@
 
 pub mod app_id;
 pub mod app_location;
+pub mod app_name;
 pub mod bookmarks;
 pub mod desktop_copy;
 pub mod display_backend;

@@ -76,7 +76,7 @@ export function AccessKeyLoginForm({ onBack }: AccessKeyLoginFormProps) {
         <div className="flex flex-col gap-[min(0.75rem,12px)] items-center w-full">
           <LogoMark />
           <h1 className="w-full text-center text-grey-10 dark:text-grey-light-100 font-medium text-[min(1.5rem,24px)] leading-[min(2rem,32px)]">
-            Log In to Hippius
+            Log In to Hippius Drive
           </h1>
         </div>
 
