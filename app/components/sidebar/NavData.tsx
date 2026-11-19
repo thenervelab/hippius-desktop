@@ -95,8 +95,8 @@ export const navSections: NavSection[] = [
         icon: <Camera className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "capture",
       },
-      // Last under Drive: where deleted items wait until they are restored
-      // or deleted forever.
+      // Last under Drive: where deleted items wait 30 days (the server's
+      // retention) before they are deleted forever.
       {
         label: "Trash",
         path: TRASH_ROUTE,

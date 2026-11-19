@@ -9,6 +9,7 @@
 //! tests at the bottom pin the JSON both sides exchange.
 
 use hcfs_shared::network::SingleRename;
+use hcfs_shared::revision_id::RevisionId;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
 
@@ -21,6 +22,15 @@ pub const MAX_DELETE_ITEMS: usize = 100;
 pub const MAX_RESTORE_RENAMES: usize = 2_000;
 /// Largest page the listing serves.
 pub const LIST_PAGE: u32 = 200;
+/// Days an item stays in Trash when the server names none.
+pub const DEFAULT_RETENTION_DAYS: u32 = 30;
+
+/// The days an item stays in Trash before the server deletes it forever:
+/// what the server said (`trash_retention_days`), else 30. The server
+/// purges; the desktop only says when.
+pub fn retention_days(server: Option<u32>) -> u32 {
+    server.filter(|d| *d > 0).unwrap_or(DEFAULT_RETENTION_DAYS)
+}
 
 /// `POST /v1/trash/{ss58}/{folder_hash}/files`.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -30,7 +40,7 @@ pub struct TrashFilesRequest {
     /// Per file id, the revision the caller means to trash. A file that has
     /// moved on since it was listed stays put and answers `conflict`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expected_revision_ids: Option<BTreeMap<String, [u8; 32]>>,
+    pub expected_revision_ids: Option<BTreeMap<String, RevisionId>>,
     /// Groups the files into one folder item (with its empty folders), so a
     /// folder comes back whole from Trash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,6 +114,11 @@ pub struct TrashItem {
     /// Unix seconds.
     #[serde(deserialize_with = "unix_seconds")]
     pub trashed_at: i64,
+    /// Unix seconds: when the server deletes the item forever
+    /// (`trashed_at` plus the retention). Absent on a server that predates
+    /// it; the webview then counts from `trashed_at`.
+    #[serde(default, deserialize_with = "optional_unix_seconds")]
+    pub purge_at: Option<i64>,
     #[serde(default)]
     pub trashed_by: Option<String>,
     /// A live item holds the original path now, so restore in place clashes.
@@ -118,6 +133,18 @@ pub struct TrashListPage {
     pub items: Vec<TrashItem>,
     #[serde(default)]
     pub has_more: bool,
+    /// The retention, at the top level or in the drive `totals`.
+    #[serde(default)]
+    pub trash_retention_days: Option<u32>,
+    #[serde(default)]
+    pub totals: Option<TrashTotals>,
+}
+
+/// The drive totals beside a listing page; only the retention is read.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub struct TrashTotals {
+    #[serde(default)]
+    pub trash_retention_days: Option<u32>,
 }
 
 /// Where the next page starts: the last row of this one.
@@ -128,6 +155,12 @@ pub struct ListCursor {
 }
 
 impl TrashListPage {
+    /// The retention this page names, if any.
+    pub fn retention_days(&self) -> Option<u32> {
+        self.trash_retention_days
+            .or_else(|| self.totals.as_ref().and_then(|t| t.trash_retention_days))
+    }
+
     pub fn next_cursor(&self) -> Option<ListCursor> {
         if !self.has_more {
             return None;
@@ -246,6 +279,13 @@ fn unix_seconds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Er
     }
 }
 
+/// [`unix_seconds`] for a field that may be absent or null.
+fn optional_unix_seconds<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<i64>, D::Error> {
+    #[derive(Deserialize)]
+    struct Wrapped(#[serde(deserialize_with = "unix_seconds")] i64);
+    Ok(Option::<Wrapped>::deserialize(deserializer)?.map(|w| w.0))
+}
+
 /// A refusal from any Trash route, or a failure to reach one.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrashRefusal {
@@ -318,7 +358,7 @@ mod tests {
         assert_eq!(json, serde_json::json!({ "file_ids": ["ab".repeat(32)] }));
 
         let mut expected = BTreeMap::new();
-        expected.insert("ab".repeat(32), [7u8; 32]);
+        expected.insert("ab".repeat(32), RevisionId::from_bytes([7u8; 32]));
         let grouped = TrashFilesRequest {
             file_ids: vec!["ab".repeat(32)],
             expected_revision_ids: Some(expected),
@@ -359,14 +399,15 @@ mod tests {
                   "purge_at": "2026-12-18T10:00:00Z", "trashed_by": "5Member", "name_taken": true, "unknown_field": 1 }
             ],
             "has_more": true,
-            "retention_days": 30
+            "totals": { "trash_files": 4, "trash_retention_days": 30 }
         }))
         .unwrap();
         assert_eq!(page.items[0].kind, TrashItemKind::Folder);
         assert_eq!(page.items[1].trashed_at, 1_794_996_000);
         assert!(page.items[1].name_taken);
-        // `purge_at` and `retention_days` are read past: items stay until
-        // the person deletes them.
+        assert_eq!(page.items[0].purge_at, Some(1_702_592_000));
+        assert_eq!(page.items[1].purge_at, Some(1_797_588_000));
+        assert_eq!(page.retention_days(), Some(30));
         assert_eq!(
             page.next_cursor(),
             Some(ListCursor {
@@ -376,6 +417,26 @@ mod tests {
         );
         let last = TrashListPage { has_more: false, ..page };
         assert_eq!(last.next_cursor(), None);
+    }
+
+    #[test]
+    fn purge_at_and_the_retention_may_be_absent() {
+        let page: TrashListPage = serde_json::from_value(serde_json::json!({
+            "items": [
+                { "item_id": "a", "kind": "file", "trashed_at": 1_700_000_000 },
+                { "item_id": "b", "kind": "file", "trashed_at": 1_700_000_000, "purge_at": null }
+            ],
+            "trash_retention_days": 14
+        }))
+        .unwrap();
+        assert_eq!(page.items[0].purge_at, None);
+        assert_eq!(page.items[1].purge_at, None);
+        assert_eq!(page.retention_days(), Some(14));
+        assert_eq!(TrashListPage::default().retention_days(), None);
+
+        assert_eq!(retention_days(Some(14)), 14);
+        assert_eq!(retention_days(None), 30);
+        assert_eq!(retention_days(Some(0)), 30, "a zero retention is not a rule anyone can read");
     }
 
     #[test]
@@ -406,7 +467,7 @@ mod tests {
                     new_encrypted_path: vec![3],
                     new_file_name: Some("a (1).txt".into()),
                     new_relative_path: Some("a (1).txt".into()),
-                    base_revision_id: [4; 32],
+                    base_revision_id: RevisionId::from_bytes([4; 32]),
                 }],
                 signature: vec![5; 64],
                 signing_key: [6; 32],

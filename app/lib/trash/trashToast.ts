@@ -5,7 +5,7 @@
 import { toast } from "sonner";
 import { releaseTrashHold, undoMoveToTrash, type MoveToTrashResult } from "@/app/lib/tauri/trash";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
-import { movedToTrashMessage, undoneMessage } from "./copy";
+import { movedToTrashMessage, retentionDays, retentionNotice, undoneMessage } from "./copy";
 
 /** How long Undo stays offered. */
 export const UNDO_TOAST_MS = 8000;
@@ -55,7 +55,7 @@ export function showMovedToTrashToast({
   toast.success(movedToTrashMessage(names, result.trashed), {
     id: toastId,
     duration: UNDO_TOAST_MS,
-    description: failedNote(result.failed),
+    description: [failedNote(result.failed), retentionNotice(retentionDays(result.retentionDays))].filter(Boolean).join(" "),
     action: result.undoable && hold ? { label: "Undo", onClick: () => void undo() } : undefined,
     onAutoClose: release,
     onDismiss: release,

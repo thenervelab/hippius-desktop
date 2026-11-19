@@ -149,6 +149,11 @@ pub struct ServerCapabilities {
     /// stays a permanent delete, the Trash page is hidden, and no trash
     /// request is sent.
     pub drive_trash: bool,
+    /// Days an item stays in Trash before the server deletes it forever
+    /// (`HCFS_TRASH_RETENTION_DAYS`). Absent on older servers; read through
+    /// [`crate::sync::fileops::trash::wire::retention_days`], which falls
+    /// back to 30.
+    pub trash_retention_days: Option<u32>,
     /// Insights for folder links (`/v1/folder-shares/by-hash/{h}/insights`
     /// and `/settings`). Absent on older servers: no folder link Insights.
     pub folder_share_insights: bool,
@@ -269,6 +274,18 @@ mod tests {
     }
 
     #[test]
+    fn trash_retention_is_read_when_sent() {
+        let caps = parse_capabilities(r#"{"drive_trash":true,"trash_retention_days":14}"#).expect("parse");
+        assert_eq!(caps.trash_retention_days, Some(14));
+        let old = parse_capabilities(r#"{"drive_trash":true}"#).expect("parse");
+        assert_eq!(
+            old.trash_retention_days, None,
+            "a server that names no retention leaves the 30 day default"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one flat list of every capability, read top to bottom
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(concat!(
             r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
@@ -341,6 +358,7 @@ mod tests {
                 "share_reaction_moments",
                 "share_recipient_links",
                 "shares",
+                "trash_retention_days",
                 "upload_folder_shares"
             ]
             .into_iter()

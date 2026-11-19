@@ -127,6 +127,8 @@ pub struct MoveToTrashResult {
     pub hold: Option<String>,
     /// Every trashed item can be brought back by Undo.
     pub undoable: bool,
+    /// Days until the server deletes the items forever, for the toast.
+    pub retention_days: u32,
 }
 
 fn now_millis() -> u128 {
@@ -136,12 +138,13 @@ fn now_millis() -> u128 {
         .unwrap_or_default()
 }
 
-async fn require_trash(state: &AppState, account_id: &str) -> Result<()> {
+/// Refuse unless the server keeps a Trash; answers its retention in days.
+async fn require_trash(state: &AppState, account_id: &str) -> Result<u32> {
     let caps = crate::shares::capabilities::fetch_capabilities(state, account_id).await?;
     if !caps.drive_trash {
         return Err(AppError::Validation(UNAVAILABLE.into()));
     }
-    Ok(())
+    Ok(wire::retention_days(caps.trash_retention_days))
 }
 
 /// The Trash calls' HTTP context: one concrete base URL for every call.
@@ -178,8 +181,9 @@ pub async fn move_to_trash(
     files: Vec<TrashFileRequest>,
 ) -> Result<MoveToTrashResult> {
     let account_id = state.require_session_account(&account_id)?;
-    require_trash(&state, &account_id).await?;
-    let (result, folder_labels) = move_to_trash_inner(&state, Some(app.clone()), &account_id, &job_id, &files).await?;
+    let retention_days = require_trash(&state, &account_id).await?;
+    let (mut result, folder_labels) = move_to_trash_inner(&state, Some(app.clone()), &account_id, &job_id, &files).await?;
+    result.retention_days = retention_days;
     let _ = hcfs_client::engine::runner::trigger_sync(&state.sync).await;
     // A held folder is a removed directory: its folder entities need the
     // forced reconcile `delete_files` runs for the same reason.
@@ -605,6 +609,9 @@ pub struct TrashRow {
     pub total_bytes: u64,
     /// Unix seconds.
     pub trashed_at: i64,
+    /// Unix seconds: when the server deletes it forever. `None` from a
+    /// server that predates it; the webview counts from `trashed_at`.
+    pub purge_at: Option<i64>,
     pub trashed_by: Option<String>,
     pub name_taken: bool,
 }
@@ -626,6 +633,8 @@ pub struct TrashListing {
     pub drives: Vec<TrashDrive>,
     /// Some drive's Trash could not be read; the list is partial.
     pub incomplete: bool,
+    /// Days an item stays in Trash before the server deletes it forever.
+    pub retention_days: u32,
 }
 
 /// Every item in Trash across this account's drives and the drives shared
@@ -633,11 +642,13 @@ pub struct TrashListing {
 #[tauri::command]
 pub async fn list_trash(state: tauri::State<'_, AppState>, account_id: String) -> Result<TrashListing> {
     let account_id = state.require_session_account(&account_id)?;
-    require_trash(&state, &account_id).await?;
-    list_trash_inner(&state, &account_id).await
+    let retention_days = require_trash(&state, &account_id).await?;
+    list_trash_inner(&state, &account_id, retention_days).await
 }
 
-async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashListing> {
+/// `retention_days`: the capabilities' answer, used when no listing names
+/// one.
+async fn list_trash_inner(state: &AppState, account_id: &str, retention_days: u32) -> Result<TrashListing> {
     let pool = state.pool()?;
     let api = trash_api(state, account_id).await?;
     let drives = list_move_destinations_inner(state, account_id).await?;
@@ -647,7 +658,11 @@ async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashLis
     });
     let answers = futures_util::future::join_all(reads).await;
 
-    let mut listing = TrashListing::default();
+    let mut listing = TrashListing {
+        retention_days,
+        ..TrashListing::default()
+    };
+    let mut listed_retention = None;
     for (drive, answer) in drives.iter().zip(answers) {
         listing.drives.push(TrashDrive {
             label: drive.label.clone(),
@@ -656,7 +671,10 @@ async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashLis
             can_delete_forever: drive.manager,
         });
         let items = match answer {
-            Some(Ok(items)) => items,
+            Some(Ok((items, retention))) => {
+                listed_retention = listed_retention.or(retention);
+                items
+            }
             Some(Err(r)) if r.is_unavailable() => continue,
             Some(Err(r)) => {
                 warn!(status = r.status, code = ?r.code, "Trash: a drive's Trash could not be read");
@@ -682,6 +700,7 @@ async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashLis
             file_count: item.file_count,
             total_bytes: item.total_bytes,
             trashed_at: item.trashed_at,
+            purge_at: item.purge_at,
             trashed_by: item.trashed_by,
             name_taken: item.name_taken,
         }));
@@ -689,21 +708,27 @@ async fn list_trash_inner(state: &AppState, account_id: &str) -> Result<TrashLis
     listing
         .items
         .sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at).then_with(|| a.name.cmp(&b.name)));
+    if listed_retention.is_some() {
+        listing.retention_days = wire::retention_days(listed_retention);
+    }
     Ok(listing)
 }
 
-/// Every page of one drive's Trash, each row with its plaintext path.
+/// Every page of one drive's Trash, each row with its plaintext path, and
+/// the retention the listing named.
 async fn list_drive(
     state: &AppState,
     account_id: &str,
     api: &TrashApi,
     label: &str,
     identity: &DriveIdentity,
-) -> std::result::Result<Vec<(wire::TrashItem, String)>, TrashRefusal> {
+) -> std::result::Result<(Vec<(wire::TrashItem, String)>, Option<u32>), TrashRefusal> {
     let mut rows = Vec::new();
     let mut cursor = None;
+    let mut retention = None;
     loop {
         let page = api.list(&identity.wire_ss58, &identity.wire_folder_hash, cursor.as_ref()).await?;
+        retention = retention.or(page.retention_days());
         cursor = page.next_cursor();
         rows.extend(page.items);
         if cursor.is_none() {
@@ -734,7 +759,7 @@ async fn list_drive(
             .to_string();
         named.push((item, path));
     }
-    Ok(named)
+    Ok((named, retention))
 }
 
 async fn drive_key(state: &AppState, account_id: &str, label: &str, identity: &DriveIdentity) -> Option<hcfs_crypto::FileKey> {

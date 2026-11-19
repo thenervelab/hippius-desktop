@@ -66,7 +66,7 @@ describe("useDeleteFile in trash mode", () => {
   beforeEach(() => {
     invokeCalls.length = 0;
     vi.clearAllMocks();
-    moveResult = { trashed: 1, failed: [], hold: "123-abc", undoable: true };
+    moveResult = { trashed: 1, failed: [], hold: "123-abc", undoable: true, retentionDays: 30 };
   });
 
   it("moves to Trash, never calls the permanent delete, and offers Undo", async () => {
@@ -84,8 +84,12 @@ describe("useDeleteFile in trash mode", () => {
     expect(String(args.jobId)).toMatch(/^trash-/);
     expect(args.files).toEqual([{ name: "Docs/report.pdf", source: FILE.source, label: "hippius" }]);
 
-    const [title, options] = vi.mocked(toast.success).mock.calls[0] as [string, { action?: { label: string; onClick: () => void }; onDismiss?: () => void }];
+    const [title, options] = vi.mocked(toast.success).mock.calls[0] as [
+      string,
+      { description?: string; action?: { label: string; onClick: () => void }; onDismiss?: () => void },
+    ];
     expect(title).toBe("Moved “report.pdf” to Trash");
+    expect(options.description).toBe("Items in Trash are deleted forever after 30 days.");
     expect(options.action?.label).toBe("Undo");
 
     await act(async () => {

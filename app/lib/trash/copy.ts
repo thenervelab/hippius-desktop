@@ -1,6 +1,8 @@
 // The words around Drive Trash that are the webview's own: toasts, the
 // confirm dialogs and the Trash page's dates. Presentation only; every fact
-// in them comes from Rust.
+// in them comes from Rust. Items in Trash are deleted forever by the server
+// after its retention (`trash_retention_days`, 30 when absent); the app
+// only says when.
 
 /** "1 item" / "1,234 items". */
 export function itemCount(count: number): string {
@@ -77,23 +79,63 @@ export function emptyTrashText(count: number): string {
 
 const DAY = 86_400_000;
 
-/**
- * When an item was deleted, as the Trash page says it: "Today",
- * "Yesterday", "5 days ago", then a date. `trashedAt` is unix seconds.
- */
-export function deletedWhen(trashedAt: number, now: number = Date.now()): string {
-  const then = new Date(trashedAt * 1000);
-  const today = new Date(now);
-  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const days = Math.round((startOf(today) - startOf(then)) / DAY);
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days} days ago`;
-  const sameYear = then.getFullYear() === today.getFullYear();
-  return then.toLocaleDateString("en-US", sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+/** Days an item stays in Trash when the server names none. */
+export const DEFAULT_RETENTION_DAYS = 30;
+
+/** The server's retention, or 30 when it sent none. */
+export function retentionDays(days: number | null | undefined): number {
+  return typeof days === "number" && days > 0 ? days : DEFAULT_RETENTION_DAYS;
 }
 
-/** The full date and time, for the deleted date's tooltip. */
+function dayCount(days: number): string {
+  return `${days.toLocaleString("en-US")} ${days === 1 ? "day" : "days"}`;
+}
+
+/** The line at the top of Trash, and under the Move to Trash toast. */
+export function retentionNotice(days: number): string {
+  return `Items in Trash are deleted forever after ${dayCount(days)}.`;
+}
+
+/** The line under "Trash is empty". */
+export function emptyTrashNote(days: number): string {
+  return `Items moved to Trash are deleted forever after ${dayCount(days)}.`;
+}
+
+/**
+ * Whole days until the server deletes an item forever, by the calendar:
+ * 0 when that is today, `null` once the time has passed. `purgeAt` and
+ * `trashedAt` are unix seconds; with no `purgeAt` it is counted from
+ * `trashedAt` and the retention.
+ */
+export function daysUntilDeleted(
+  item: { purgeAt?: number | null; trashedAt: number },
+  retention: number,
+  now: number = Date.now(),
+): number | null {
+  const purgeAt = typeof item.purgeAt === "number" ? item.purgeAt * 1000 : (item.trashedAt + retention * 86_400) * 1000;
+  if (purgeAt <= now) return null;
+  const startOf = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  return Math.max(0, Math.round((startOf(purgeAt) - startOf(now)) / DAY));
+}
+
+/** The Trash column under "Deleted forever": "In 12 days", "Today", "Soon". */
+export function deletedForeverIn(days: number | null): string {
+  if (days === null) return "Soon";
+  if (days === 0) return "Today";
+  return `In ${dayCount(days)}`;
+}
+
+/** The same as one phrase, for the row's line on narrow screens. */
+export function deletedForeverPhrase(days: number | null): string {
+  if (days === null) return "Deleting soon";
+  if (days === 0) return "Deleted today";
+  return `Deleted in ${dayCount(days)}`;
+}
+
+/** The full date and time it was moved to Trash, for a tooltip. */
 export function deletedExact(trashedAt: number): string {
   return new Date(trashedAt * 1000).toLocaleString("en-US", {
     month: "short",

@@ -18,6 +18,8 @@ export interface MoveToTrashResult {
   hold: string | null;
   /** Every trashed item can be brought back by Undo. */
   undoable: boolean;
+  /** Days until the server deletes the items forever. */
+  retentionDays?: number;
 }
 
 export interface TrashRow {
@@ -35,6 +37,8 @@ export interface TrashRow {
   totalBytes: number;
   /** Unix seconds. */
   trashedAt: number;
+  /** Unix seconds: when the server deletes it forever. `null` from an older server. */
+  purgeAt: number | null;
   trashedBy: string | null;
   nameTaken: boolean;
 }
@@ -50,6 +54,8 @@ export interface TrashListing {
   items: TrashRow[];
   drives: TrashDrive[];
   incomplete: boolean;
+  /** Days an item stays in Trash before the server deletes it forever. */
+  retentionDays: number;
 }
 
 export type RestoreChoice = "ask" | "keepBoth" | "skip";

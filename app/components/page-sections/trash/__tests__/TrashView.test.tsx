@@ -53,6 +53,7 @@ const row = (overrides: Partial<TrashRow> = {}): TrashRow => ({
   fileCount: 1,
   totalBytes: 2048,
   trashedAt: Math.floor(Date.now() / 1000),
+  purgeAt: Math.floor(Date.now() / 1000) + 12 * 86_400 + 60,
   trashedBy: null,
   nameTaken: false,
   ...overrides,
@@ -82,6 +83,7 @@ describe("TrashView", () => {
       items: [row()],
       drives: [{ label: "hippius", name: "My Drive", shared: false, canDeleteForever: true }],
       incomplete: false,
+      retentionDays: 30,
     };
   });
 
@@ -89,16 +91,26 @@ describe("TrashView", () => {
     listing.items = [];
     renderView();
     expect(await screen.findByText("Trash is empty")).toBeTruthy();
+    expect(screen.getByText("Items moved to Trash are deleted forever after 30 days.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Empty trash" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("lists an item with where it was, when, and its size, and no time limit", async () => {
+  it("lists an item with where it was, when it is deleted forever, and its size", async () => {
     renderView();
     expect(await screen.findByText("report.pdf")).toBeTruthy();
+    expect(screen.getByText("Items in Trash are deleted forever after 30 days.")).toBeTruthy();
     expect(screen.getAllByText(/My Drive \/ Legal/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Today/).length).toBeGreaterThan(0);
+    expect(screen.getByText("In 12 days")).toBeTruthy();
+    expect(screen.getByText(/Deleted in 12 days/)).toBeTruthy();
     expect(screen.getByText("2.05 KB")).toBeTruthy();
-    expect(document.body.textContent).not.toMatch(/days left|Deletes in|retention|30 days/i);
+  });
+
+  it("uses the server's retention, and counts from the trash time when no purge time came", async () => {
+    listing.retentionDays = 7;
+    listing.items = [row({ purgeAt: null, trashedAt: Math.floor(Date.now() / 1000) - 2 * 86_400 })];
+    renderView();
+    expect(await screen.findByText("Items in Trash are deleted forever after 7 days.")).toBeTruthy();
+    expect(screen.getByText("In 5 days")).toBeTruthy();
   });
 
   it("restores in place and offers Show", async () => {

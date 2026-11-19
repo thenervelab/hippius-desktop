@@ -1,12 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
+  daysUntilDeleted,
   deleteForeverText,
-  deletedWhen,
+  deletedForeverIn,
+  deletedForeverPhrase,
+  emptyTrashNote,
   emptyTrashText,
   locationOf,
   movedToTrashMessage,
   movingToTrashMessage,
   progressMessage,
+  retentionDays,
+  retentionNotice,
   undoneMessage,
 } from "../copy";
 import { deleteLabel, resolveDeleteMode, skipTrashKey } from "../deleteMode";
@@ -57,9 +62,19 @@ describe("Trash copy", () => {
     expect(emptyTrashText(4)).toBe("All 4 items in Trash will be deleted. This can't be undone.");
   });
 
-  it("never mentions a time limit", () => {
-    for (const text of [deleteForeverText(["a"]), emptyTrashText(3), movedToTrashMessage(["a"], 1)]) {
-      expect(text).not.toMatch(/days?|purge|automatic/i);
+  it("says items are deleted forever after the server's retention, 30 when it names none", () => {
+    expect(retentionDays(undefined)).toBe(30);
+    expect(retentionDays(null)).toBe(30);
+    expect(retentionDays(0)).toBe(30);
+    expect(retentionDays(14)).toBe(14);
+    expect(retentionNotice(30)).toBe("Items in Trash are deleted forever after 30 days.");
+    expect(retentionNotice(1)).toBe("Items in Trash are deleted forever after 1 day.");
+    expect(emptyTrashNote(30)).toBe("Items moved to Trash are deleted forever after 30 days.");
+  });
+
+  it("never says an item stays until someone deletes it", () => {
+    for (const text of [deleteForeverText(["a"]), emptyTrashText(3), movedToTrashMessage(["a"], 1), retentionNotice(30)]) {
+      expect(text).not.toMatch(/until/i);
     }
   });
 
@@ -71,14 +86,36 @@ describe("Trash copy", () => {
     expect(failedNote([{ name: "a", error: "x" }, { name: "b", error: "y" }])).toBe("2 items couldn't be moved to Trash.");
   });
 
-  it("dates a deletion by days, then by date", () => {
+  it("says when an item is deleted forever: today, in 1 day, in many, never negative", () => {
     const now = new Date(2026, 10, 18, 12).getTime();
     const at = (d: Date) => Math.floor(d.getTime() / 1000);
-    expect(deletedWhen(at(new Date(2026, 10, 18, 1)), now)).toBe("Today");
-    expect(deletedWhen(at(new Date(2026, 10, 17, 23)), now)).toBe("Yesterday");
-    expect(deletedWhen(at(new Date(2026, 10, 13, 9)), now)).toBe("5 days ago");
-    expect(deletedWhen(at(new Date(2026, 9, 3, 9)), now)).toBe("Oct 3");
-    expect(deletedWhen(at(new Date(2025, 9, 3, 9)), now)).toBe("Oct 3, 2025");
+    const trashedAt = at(new Date(2026, 9, 20, 9));
+    const left = (purgeAt: Date | null) => daysUntilDeleted({ trashedAt, purgeAt: purgeAt ? at(purgeAt) : null }, 30, now);
+
+    expect(left(new Date(2026, 10, 18, 20))).toBe(0);
+    expect(deletedForeverIn(0)).toBe("Today");
+    expect(deletedForeverPhrase(0)).toBe("Deleted today");
+
+    expect(left(new Date(2026, 10, 19, 1))).toBe(1);
+    expect(deletedForeverIn(1)).toBe("In 1 day");
+    expect(deletedForeverPhrase(1)).toBe("Deleted in 1 day");
+
+    expect(left(new Date(2026, 10, 30, 9))).toBe(12);
+    expect(deletedForeverIn(12)).toBe("In 12 days");
+    expect(deletedForeverPhrase(12)).toBe("Deleted in 12 days");
+
+    // The time has passed and the server has not got to it yet.
+    expect(left(new Date(2026, 10, 18, 11))).toBeNull();
+    expect(deletedForeverIn(null)).toBe("Soon");
+    expect(deletedForeverPhrase(null)).toBe("Deleting soon");
+  });
+
+  it("counts from when it was trashed when the server sends no purge time", () => {
+    const now = new Date(2026, 10, 18, 12).getTime();
+    const trashedAt = Math.floor(new Date(2026, 10, 8, 9).getTime() / 1000);
+    expect(daysUntilDeleted({ trashedAt }, 30, now)).toBe(20);
+    expect(daysUntilDeleted({ trashedAt, purgeAt: null }, 14, now)).toBe(4);
+    expect(daysUntilDeleted({ trashedAt }, 7, now)).toBeNull();
   });
 });
 

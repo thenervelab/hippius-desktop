@@ -82,7 +82,12 @@ async fn list(State(m): State<Mock>, Query(q): Query<HashMap<String, String>>) -
     m.list_queries.lock().unwrap().push(q);
     (
         StatusCode::OK,
-        axum::Json(serde_json::json!({ "Success": { "items": [], "has_more": false } })),
+        axum::Json(serde_json::json!({ "Success": {
+            "items": [{ "item_id": "i1", "kind": "file", "relative_path": "a.txt", "trashed_at": "2026-11-18T10:00:00Z",
+                        "purge_at": "2026-12-18T10:00:00Z" }],
+            "has_more": false,
+            "totals": { "trash_retention_days": 30 }
+        } })),
     )
 }
 
@@ -161,7 +166,7 @@ fn files(n: usize, first: u8) -> Vec<FileToTrash> {
             hash[31] = i as u8;
             FileToTrash {
                 path_hash: hash,
-                revision_id: [7; 32],
+                revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([7; 32]),
             }
         })
         .collect()
@@ -278,7 +283,15 @@ async fn keep_both_sends_signed_renames_in_batches() {
     let mock = Mock::default();
     let api = start(mock.clone()).await;
     let key = hcfs_crypto::FileKey::from_bytes([3; 32]);
-    let listed: Vec<(String, [u8; 32], [u8; 32])> = (0..4_500u32).map(|i| (format!("Trip/{i}.jpg"), [(i % 250) as u8; 32], [1; 32])).collect();
+    let listed: Vec<(String, [u8; 32], hcfs_shared::revision_id::RevisionId)> = (0..4_500u32)
+        .map(|i| {
+            (
+                format!("Trip/{i}.jpg"),
+                [(i % 250) as u8; 32],
+                hcfs_shared::revision_id::RevisionId::from_bytes([1; 32]),
+            )
+        })
+        .collect();
     let renames = plan_restore_renames(&listed, "Trip", "Trip (1)", &key).unwrap();
     let signing = ed25519_dalek::SigningKey::from_bytes(&[4; 32]);
     let status = restore_renamed(&api, OWNER, HASH, "item-9", "Trip (1)", &renames, &signing, |_| {})
@@ -329,7 +342,13 @@ async fn the_listing_pages_by_keyset() {
         after_trashed_at: 1_700_000_000,
         after_item_id: "a b/c".into(),
     };
-    api.list(OWNER, HASH, Some(&cursor)).await.unwrap();
+    let page = api.list(OWNER, HASH, Some(&cursor)).await.unwrap();
+    assert_eq!(
+        page.items[0].purge_at,
+        Some(page.items[0].trashed_at + 30 * 86_400),
+        "each item says when it is deleted forever"
+    );
+    assert_eq!(page.retention_days(), Some(30));
     let query = mock.list_queries.lock().unwrap()[0].clone();
     assert_eq!(query["limit"], "200");
     assert_eq!(query["after_trashed_at"], "1700000000");

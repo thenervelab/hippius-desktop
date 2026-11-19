@@ -39,13 +39,18 @@ import {
   EMPTY_TRASH_BUTTON,
   EMPTY_TRASH_TITLE,
   deleteForeverText,
+  daysUntilDeleted,
   deletedExact,
-  deletedWhen,
+  deletedForeverIn,
+  deletedForeverPhrase,
+  emptyTrashNote,
   emptyTrashText,
   itemCount,
   locationOf,
   progressMessage,
   restoredMessage,
+  retentionDays,
+  retentionNotice,
 } from "@/app/lib/trash/copy";
 import { clashDestinationName, rowKey, sizeLabel } from "./trashRows";
 
@@ -59,7 +64,9 @@ const GRID =
 
 /**
  * Drive Trash: every item deleted from this account's drives and the drives
- * shared with it, until it is restored or deleted forever. Rust lists,
+ * shared with it. The server deletes each one forever after the retention
+ * (`retentionDays`, 30 by default) unless it is restored or deleted forever
+ * sooner; the app never purges. Rust lists,
  * restores and deletes (`src-tauri/src/sync/fileops/trash`); this page is
  * the list, the selection and the questions.
  */
@@ -106,6 +113,7 @@ export default function TrashView() {
   }, [rows]);
 
   const emptiable = rows.filter((r) => r.canDeleteForever);
+  const retention = retentionDays(listing?.retentionDays);
   const allSelected = rows.length > 0 && selectedRows.length === rows.length;
 
   const refresh = useCallback(async () => {
@@ -368,6 +376,8 @@ export default function TrashView() {
           </div>
         )}
 
+        {rows.length > 0 && <p className="text-sm text-grey-50 dark:text-grey-dark-600">{retentionNotice(retention)}</p>}
+
         {query.isLoading ? (
           <TrashSkeleton />
         ) : query.isError ? (
@@ -380,7 +390,7 @@ export default function TrashView() {
             }
           />
         ) : rows.length === 0 ? (
-          <StateCard icon title="Trash is empty" />
+          <StateCard icon title="Trash is empty" note={emptyTrashNote(retention)} />
         ) : (
           <div
             role="table"
@@ -411,7 +421,7 @@ export default function TrashView() {
                 Location
               </span>
               <span role="columnheader" className="hidden lg:block">
-                Deleted
+                Deleted forever
               </span>
               <span role="columnheader" className="hidden text-right lg:block">
                 Size
@@ -422,6 +432,7 @@ export default function TrashView() {
               <TrashListRow
                 key={rowKey(row)}
                 row={row}
+                retention={retention}
                 selected={selected.has(rowKey(row))}
                 busy={busy}
                 onToggle={toggle}
@@ -509,6 +520,7 @@ export default function TrashView() {
 
 function TrashListRow({
   row,
+  retention,
   selected,
   busy,
   onToggle,
@@ -516,6 +528,7 @@ function TrashListRow({
   onDeleteForever,
 }: {
   row: TrashRow;
+  retention: number;
   selected: boolean;
   busy: boolean;
   onToggle: (row: TrashRow) => void;
@@ -523,8 +536,8 @@ function TrashListRow({
   onDeleteForever: (row: TrashRow) => void;
 }) {
   const location = locationOf(row.driveName, row.parentPath);
-  const when = deletedWhen(row.trashedAt);
-  const exact = deletedExact(row.trashedAt);
+  const days = daysUntilDeleted(row, retention);
+  const exact = `Moved to Trash ${deletedExact(row.trashedAt)}`;
   const type = row.isFolder ? undefined : getFileTypeFromExtension(row.name.includes(".") ? (row.name.split(".").pop() ?? null) : null);
   const { icon: Icon, color } = getFileIcon(type ?? undefined, row.isFolder);
   const items: ActionItem[] = [
@@ -575,7 +588,7 @@ function TrashListRow({
           </span>
           {/* Below `lg` the other columns fold into one muted line. */}
           <span className="truncate text-xs text-grey-50 dark:text-grey-dark-600 lg:hidden" title={`${location} · ${exact}`}>
-            {location} · {when}
+            {location} · {deletedForeverPhrase(days)}
           </span>
         </span>
       </span>
@@ -583,7 +596,7 @@ function TrashListRow({
         {location}
       </span>
       <span role="cell" className="hidden truncate text-grey-50 dark:text-grey-dark-600 lg:block" title={exact}>
-        {when}
+        {deletedForeverIn(days)}
       </span>
       <span role="cell" className="hidden text-right tabular-nums text-grey-50 dark:text-grey-dark-600 lg:block">
         {sizeLabel(row, formatBytes)}
@@ -638,7 +651,7 @@ function TrashSkeleton() {
   );
 }
 
-function StateCard({ title, icon = false, action }: { title: string; icon?: boolean; action?: React.ReactNode }) {
+function StateCard({ title, note, icon = false, action }: { title: string; note?: string; icon?: boolean; action?: React.ReactNode }) {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-grey-80 px-4 py-16 text-center dark:border-[#2c2c2c]">
       {icon && (
@@ -647,6 +660,7 @@ function StateCard({ title, icon = false, action }: { title: string; icon?: bool
         </span>
       )}
       <p className="text-base font-medium text-grey-10 dark:text-grey-light-100">{title}</p>
+      {note && <p className="-mt-2 text-sm text-grey-50 dark:text-grey-dark-600">{note}</p>}
       {action}
     </div>
   );

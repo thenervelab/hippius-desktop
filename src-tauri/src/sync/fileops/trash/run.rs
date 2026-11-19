@@ -17,6 +17,7 @@ use super::wire::{
     MAX_DELETE_ITEMS, MAX_RESTORE_RENAMES, MAX_TRASH_FILES, OnConflict, RestoreRename, RestoreRequest, TrashFilesRequest, TrashRefusal, file_id,
 };
 use hcfs_shared::network::{BatchRenameRequest, SingleRename};
+use hcfs_shared::revision_id::RevisionId;
 use std::collections::{BTreeMap, HashMap};
 
 /// A server answer the loops never stop for on their own: the server
@@ -28,7 +29,7 @@ const MAX_STEPS_WITHOUT_PROGRESS: u32 = 20;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileToTrash {
     pub path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
 }
 
 /// What a trash run did, by file id.
@@ -70,7 +71,7 @@ pub async fn trash_in_batches(
     let mut done = 0usize;
     for batch in batches {
         let ids: Vec<String> = batch.iter().map(|f| file_id(&f.path_hash)).collect();
-        let expected: BTreeMap<String, [u8; 32]> = batch.iter().zip(&ids).map(|(f, id)| (id.clone(), f.revision_id)).collect();
+        let expected: BTreeMap<String, RevisionId> = batch.iter().zip(&ids).map(|(f, id)| (id.clone(), f.revision_id)).collect();
         let request = TrashFilesRequest {
             file_ids: ids,
             expected_revision_ids: (!expected.is_empty()).then_some(expected),
@@ -190,7 +191,7 @@ pub async fn restore_renamed(
 /// sealed with the drive key. A file outside the prefix is refused: the
 /// listing did not match what was asked.
 pub fn plan_restore_renames(
-    files: &[(String, [u8; 32], [u8; 32])],
+    files: &[(String, [u8; 32], RevisionId)],
     old_prefix: &str,
     new_prefix: &str,
     key: &hcfs_crypto::FileKey,
@@ -260,26 +261,36 @@ mod tests {
     fn keep_both_moves_every_file_under_the_new_name_and_seals_it() {
         let key = hcfs_crypto::FileKey::from_bytes([9; 32]);
         let files = vec![
-            ("Trip/a.jpg".to_string(), [1; 32], [2; 32]),
-            ("Trip/day1/b.jpg".to_string(), [3; 32], [4; 32]),
+            ("Trip/a.jpg".to_string(), [1; 32], RevisionId::from_bytes([2; 32])),
+            ("Trip/day1/b.jpg".to_string(), [3; 32], RevisionId::from_bytes([4; 32])),
         ];
         let renames = plan_restore_renames(&files, "Trip", "Trip (1)", &key).unwrap();
         assert_eq!(renames[0].new_relative_path.as_deref(), Some("Trip (1)/a.jpg"));
         assert_eq!(renames[1].new_relative_path.as_deref(), Some("Trip (1)/day1/b.jpg"));
         assert_eq!(renames[1].new_file_name.as_deref(), Some("b.jpg"));
         assert_eq!(renames[1].new_path_hash, hcfs_crypto::compute_path_hash("Trip (1)/day1/b.jpg"));
-        assert_eq!(renames[0].base_revision_id, [2; 32], "the trashed revision is what comes back");
+        assert_eq!(
+            renames[0].base_revision_id,
+            RevisionId::from_bytes([2; 32]),
+            "the trashed revision is what comes back"
+        );
         let opened = hcfs_crypto::decrypt_small(&renames[0].new_encrypted_path, &key).unwrap();
         assert_eq!(opened, b"Trip (1)/a.jpg");
 
-        let single = plan_restore_renames(&[("a.txt".to_string(), [1; 32], [2; 32])], "a.txt", "a (1).txt", &key).unwrap();
+        let single = plan_restore_renames(
+            &[("a.txt".to_string(), [1; 32], RevisionId::from_bytes([2; 32]))],
+            "a.txt",
+            "a (1).txt",
+            &key,
+        )
+        .unwrap();
         assert_eq!(single[0].new_relative_path.as_deref(), Some("a (1).txt"));
     }
 
     #[test]
     fn keep_both_refuses_a_file_outside_the_item() {
         let key = hcfs_crypto::FileKey::from_bytes([9; 32]);
-        let files = vec![("Trip Photos/a.jpg".to_string(), [1; 32], [2; 32])];
+        let files = vec![("Trip Photos/a.jpg".to_string(), [1; 32], RevisionId::from_bytes([2; 32]))];
         assert!(
             plan_restore_renames(&files, "Trip", "Trip (1)", &key).is_err(),
             "a sibling sharing the prefix is not inside it"
