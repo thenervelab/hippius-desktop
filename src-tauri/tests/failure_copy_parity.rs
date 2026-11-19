@@ -64,6 +64,7 @@ fn pinned_reasons() -> Vec<(&'static str, &'static str)> {
         ("GONE_DISPLAY_REASON", "gone"),
         ("SESSION_LIMIT_DISPLAY_REASON", "session-limit 429"),
         ("QUOTA_DENIED_DISPLAY_REASON", "storage-quota 402"),
+        ("RECORDING_LIMIT_FALLBACK_REASON", "recording-limit fallback"),
     ]
 }
 

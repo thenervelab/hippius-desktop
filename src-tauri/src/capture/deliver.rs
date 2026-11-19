@@ -112,12 +112,27 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
         None
     };
 
+    // Read before the move, while the file is still the one recorded.
+    let capture = tokio::task::spawn_blocking({
+        let file = file.to_path_buf();
+        move || super::recording_length::capture_for(&file)
+    })
+    .await
+    .map_err(|e| AppError::Other(format!("capture length task failed: {e}")))?;
+
     let (placed, via_sync) = if let Some(root) = local_root {
         refuse_missing_root(&root)?;
+        let config_dir = crate::sync::mnemonic::config_dir_for_folder(account_id, &destination.label)?;
         let placed = tokio::task::spawn_blocking({
             let file = file.to_path_buf();
             let dir = root.join(&destination.folder);
-            move || place_in_folder(&dir, &file)
+            move || {
+                let placed = place_in_folder(&dir, &file)?;
+                if let Some(capture) = capture {
+                    declare_placed(&root, &config_dir, &placed, capture);
+                }
+                Ok::<_, AppError>(placed)
+            }
         })
         .await
         .map_err(|e| AppError::Other(format!("capture move task failed: {e}")))??;
@@ -143,10 +158,11 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
             &[source],
             destination.owner_ss58.clone(),
             destination.folder_hash.clone(),
+            capture,
         )
         .await?;
         if let Some(failure) = failures.into_iter().next() {
-            return Err(AppError::Other(failure.error));
+            return Err(failure.cause);
         }
         (file.to_path_buf(), false)
     };
@@ -156,6 +172,32 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
         .ok_or_else(|| AppError::Other("Capture file has no name".into()))?
         .to_string();
     Ok(Placed { placed, via_sync, file_name })
+}
+
+/// Declare `capture` for the capture just moved to `placed` in the synced
+/// drive at `root`, so every upload of it tells the server what it is
+/// (`recording_length`).
+///
+/// Right after the move, not before it: the name is only known once the move
+/// has claimed it (`move_into` takes the next free one), and a declaration
+/// for a guessed name would mark whatever file holds that name instead.
+///
+/// hcfs documents "declare before the file enters the sync root". This
+/// relies instead on where hcfs reads the declaration at the pinned rev:
+/// when it builds the file's upload manifest (`drive/upload.rs`), after the
+/// scan, hash and encryption. Nothing orders the two, but a cycle that found
+/// the file the moment it landed would still have all of that to do before
+/// it looked, against one small file write here. Accepted: losing that race
+/// means one recording uploads uncounted. One that cannot be written is
+/// logged and the capture still syncs; the server then does not count it.
+pub fn declare_placed(root: &Path, config_dir: &Path, placed: &Path, capture: hcfs_shared::network::Capture) {
+    let Ok(relative) = placed.strip_prefix(root) else {
+        tracing::warn!("capture: placed outside its drive's folder; not declared");
+        return;
+    };
+    if let Err(e) = hcfs_client::drive::Drive::with_config_dir(root, config_dir).declare_capture(relative, capture) {
+        tracing::warn!(error = %e, "capture: not declared; it syncs, and the server does not count it");
+    }
 }
 
 /// What minting a placed capture's link came to.
@@ -358,9 +400,11 @@ pub fn failure_reason(e: &AppError) -> FailureReason {
     match e {
         // The free plan's recordings used up reads like a full plan: Upgrade
         // is the way on (Retry once an older recording is deleted).
-        AppError::NotReady(crate::error::NotReadyKind::StorageLimitReached | crate::error::NotReadyKind::RecordingLimitReached) => {
-            FailureReason::StorageFull
-        }
+        AppError::NotReady(
+            crate::error::NotReadyKind::StorageLimitReached
+            | crate::error::NotReadyKind::RecordingLimitReached
+            | crate::error::NotReadyKind::RecordingTooLong,
+        ) => FailureReason::StorageFull,
         other if is_offline_shaped(&other.to_string()) => FailureReason::Offline,
         _ => FailureReason::Other,
     }
@@ -375,6 +419,9 @@ pub fn failure_copy(e: &AppError) -> String {
         FailureReason::Offline => OFFLINE.into(),
         FailureReason::StorageFull if matches!(e, AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached)) => {
             super::recording_allowance::LIMIT_KEPT.into()
+        }
+        FailureReason::StorageFull if matches!(e, AppError::NotReady(crate::error::NotReadyKind::RecordingTooLong)) => {
+            crate::sync::events::recording_too_long_copy()
         }
         FailureReason::StorageFull => STORAGE_FULL.into(),
         FailureReason::NeedsFolder | FailureReason::Other => match e {
@@ -391,6 +438,13 @@ pub fn failure_copy(e: &AppError) -> String {
 pub fn sync_failure_copy(error: Option<&str>) -> (String, FailureReason) {
     let error = error.unwrap_or_default();
     let lower = error.to_ascii_lowercase();
+    // The server's recording refusals, in the words Rust gave the row
+    // (`FileFailureKindPayload::RecordingLimit`). Matched before the needles
+    // below, which they do not contain, so they read as what they are rather
+    // than "the sync queue will try again", which an upgrade alone fixes.
+    if error == crate::sync::events::recording_limit_reached_copy() || error == crate::sync::events::recording_too_long_copy() {
+        return (error.to_string(), FailureReason::StorageFull);
+    }
     if ["returned 402", "status 402", "payment required", "storage limit", "quota"]
         .iter()
         .any(|needle| lower.contains(needle))
@@ -907,6 +961,72 @@ mod tests {
         let (copy, reason) = sync_failure_copy(None);
         assert_eq!(reason, FailureReason::Other);
         assert!(copy.contains("sync queue"), "{copy}");
+    }
+
+    /// The server refusing a recording (its row's text is Rust's copy for
+    /// it) is offered Upgrade on the card, by either path the capture took.
+    #[test]
+    fn a_recording_the_server_refused_is_offered_upgrade() {
+        let limit = crate::sync::events::recording_limit_reached_copy();
+        let too_long = crate::sync::events::recording_too_long_copy();
+        for copy in [&limit, &too_long] {
+            assert_eq!(sync_failure_copy(Some(copy)), (copy.clone(), FailureReason::StorageFull));
+        }
+
+        // A direct upload hands back the typed refusal
+        // (`remote_upload::upload_failure`, tested there).
+        let limit = AppError::NotReady(crate::error::NotReadyKind::RecordingLimitReached);
+        assert_eq!(failure_reason(&limit), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&limit), crate::capture::recording_allowance::LIMIT_KEPT);
+
+        let long = AppError::NotReady(crate::error::NotReadyKind::RecordingTooLong);
+        assert_eq!(failure_reason(&long), FailureReason::StorageFull);
+        assert_eq!(failure_copy(&long), too_long);
+    }
+
+    /// A recording moved into a synced drive is declared under the name it
+    /// landed with, so hcfs puts it on the upload's manifest. A taken name
+    /// moves it to "name (2)", and the declaration follows the move, not
+    /// the name the recording was made with.
+    ///
+    /// Reads hcfs-client's declaration files (`captures/*.json` in the config
+    /// dir), which it does not publish: hcfs has no reader for them. A pin on
+    /// purpose; an hcfs bump that changes the layout fails it here.
+    #[test]
+    fn a_placed_recording_is_declared_under_the_name_it_landed_with() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("drive");
+        let config_dir = tmp.path().join("config");
+        let folder = root.join("Captures");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("Recording.mp4"), b"an earlier file").unwrap();
+
+        let src = tmp.path().join("Recording.mp4");
+        std::fs::write(&src, b"recorded").unwrap();
+        let placed = place_in_folder(&folder, &src).unwrap();
+        assert_eq!(placed, folder.join("Recording (2).mp4"));
+
+        let capture = hcfs_shared::network::Capture::Recording { duration_ms: 61_000 };
+        declare_placed(&root, &config_dir, &placed, capture);
+
+        let declarations: Vec<String> = std::fs::read_dir(config_dir.join("captures"))
+            .unwrap()
+            .map(|entry| std::fs::read_to_string(entry.unwrap().path()).unwrap())
+            .collect();
+        assert_eq!(declarations.len(), 1, "{declarations:?}");
+        assert!(declarations[0].contains("Captures/Recording (2).mp4"), "{}", declarations[0]);
+        assert!(declarations[0].contains("61000"), "{}", declarations[0]);
+    }
+
+    /// A file outside the drive's folder is not declared, and nothing fails:
+    /// the capture still syncs.
+    #[test]
+    fn a_capture_outside_its_drive_is_not_declared() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("config");
+        let capture = hcfs_shared::network::Capture::Recording { duration_ms: 1 };
+        declare_placed(&tmp.path().join("drive"), &config_dir, &tmp.path().join("elsewhere.mp4"), capture);
+        assert!(!config_dir.join("captures").exists());
     }
 
     #[test]

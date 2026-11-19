@@ -309,9 +309,8 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
 /// down* and a single "Sync Failed" notification is surfaced.
 ///
 /// Counted PER-LABEL by `crate::sync::error_notify::ErrorNotifyState` — NOT
-/// read from the `SyncError` payload's `consecutive_failures`, which is a
-/// runner-global counter any healthy drive resets every cycle (see that
-/// module's header). `3` matches the project's existing per-file
+/// read from the `SyncError` payload's `consecutive_failures`, which a stop
+/// or an account reset does not clear (see that module's header). `3` matches the project's existing per-file
 /// repeated-failure threshold (`sync::failure_tracking::FAILURE_THRESHOLD`)
 /// and sits above hcfs-client's own `HEALTH_FAILURE_THRESHOLD = 2`
 /// connectivity flip, so a notification means "still failing after the engine
@@ -465,8 +464,8 @@ pub(crate) fn handle_sync_error(app: &AppHandle, payload: events::SyncErrorPaylo
     // Decide BEFORE emitting whether this failure should surface a persisted
     // "Sync Failed" notification. For the auto-retry loop, `record_failure`
     // counts THIS label's consecutive failed cycles (not the payload's
-    // runner-global `consecutive_failures`, which any healthy drive resets —
-    // see `error_notify`) and fires once when the count first reaches the
+    // `consecutive_failures`, which a stop or reset does not clear — see
+    // `error_notify`) and fires once when the count first reaches the
     // threshold, suppressing every later cycle until `handle_sync_completed`
     // clears it on recovery. A reviewed one-shot always notifies.
     let should_notify = match notify {
@@ -1460,7 +1459,12 @@ impl SyncEventHandler for TauriSyncBridge {
             SyncEvent::UploadProgress { .. }
             | SyncEvent::DownloadProgress { .. }
             | SyncEvent::ScanProgress { .. }
-            | SyncEvent::FetchProgress { .. } => {}
+            | SyncEvent::FetchProgress { .. }
+            // hcfs logs a long token-refresh hold at `warn` itself. The
+            // desktop's only guard is the one `refresh_auth_token_internal`
+            // holds across a single token exchange, so a long hold is a slow
+            // exchange, not a leaked guard, and the user has nothing to act on.
+            | SyncEvent::TokenRefreshHeld { .. } => {}
             SyncEvent::FileTransferComplete { label } => {
                 let _ = app.emit(events::FILE_TRANSFER_COMPLETE, events::LabelPayload { label });
             }

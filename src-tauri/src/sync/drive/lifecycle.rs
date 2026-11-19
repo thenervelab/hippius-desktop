@@ -1306,9 +1306,10 @@ pub(crate) async fn initialize_sync_inner(
         // peer drive's sync: the reported "app freezes when a second folder is
         // added while one is already syncing". hcfs now reads the paths from the
         // drive slots, but hot-add still watches each root (a tree walk on
-        // Linux). The new drive is already registered (just above), so the
-        // running loop picks it up on its next cycle regardless; spawn the
-        // hot-add so init can commit its status and return immediately.
+        // Linux). The new drive is already registered (just above), and
+        // `add_drive` schedules a full first cycle of it in the running loop at
+        // once; the hot-add only adds the watch, so spawn it and let init
+        // commit its status and return immediately.
         //
         // When no loop is running yet, keep awaiting: creation is cheap (there
         // is no busy peer manager to wait on) and awaiting keeps the first

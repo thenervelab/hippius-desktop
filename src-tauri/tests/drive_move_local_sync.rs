@@ -202,7 +202,7 @@ async fn a_placed_copy_is_already_synced_in_the_destination() {
     let state = manager.load_sync_state().await.unwrap();
     let id = hcfs_crypto::compute_path_hash("In/a.txt");
     let base = state.synced.files.get(&id).expect("the moved file is synced");
-    assert_eq!(base.revision_id, COPY_REVISION, "the merge base is the server's revision");
+    assert_eq!(base.revision_id.as_bytes(), &COPY_REVISION, "the merge base is the server's revision");
 }
 
 /// The control: the same commit without the placement is a download, so the
@@ -252,7 +252,12 @@ async fn a_removed_source_is_settled_in_the_source_drive() {
     let base = |path: &str| state.synced.files.get(&hcfs_crypto::compute_path_hash(path)).expect("synced").clone();
     let keep = base("keep.txt");
     // The commit landed: only keep.txt is left on the server.
-    server.serve(vec![row("keep.txt", *keep.salted_hash.as_bytes(), keep.size_bytes, keep.revision_id)]);
+    server.serve(vec![row(
+        "keep.txt",
+        *keep.salted_hash.as_bytes(),
+        keep.size_bytes,
+        *keep.revision_id.as_bytes(),
+    )]);
 
     let stamp = FileStamp::of(&root.path().join("F/a.txt")).unwrap();
     let report = place_after_commit(
@@ -306,7 +311,7 @@ async fn synced_to_synced_moves_the_file_and_neither_engine_transfers() {
     let stamp = FileStamp::of(&a_path).unwrap();
     let (salted, size) = sealed(&a_path);
 
-    src_server.serve(vec![row("b.txt", *b.salted_hash.as_bytes(), b.size_bytes, b.revision_id)]);
+    src_server.serve(vec![row("b.txt", *b.salted_hash.as_bytes(), b.size_bytes, *b.revision_id.as_bytes())]);
     dst_server.serve(vec![row("Moved/a.txt", salted, size, COPY_REVISION)]);
     let report = place_after_commit(
         Some(src_root.path()),

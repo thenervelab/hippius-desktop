@@ -219,7 +219,6 @@ struct TransferContext {
 /// no frontend code listens to them, so firing on every chunk would just flood
 /// the webview for no consumer.
 fn handle_transfer_progress(ctx: &TransferContext, bytes: u64, total: u64, path: Option<&str>) {
-    ctx.sync.touch_progress_time();
     note_engine_activity(&ctx.app, &ctx.sync, &ctx.label, ActivityPhase::PostPlan);
     let (dir_name, file_action) = match ctx.direction {
         TransferDirection::Upload => ("Upload", crate::sync::progress::FileAction::Upload),
@@ -397,7 +396,6 @@ fn build_plan_ready_callback<R: tauri::Runtime>(app: &AppHandle<R>, label: Arc<s
     let app = app.clone();
     let sync = sync.clone();
     Arc::new(move |uploads, downloads, local_deletes, remote_deletes, renames| {
-        sync.touch_progress_time();
         end_root_not_mounted_episode(&app, &label);
         // hcfs plans only after it accepted the server listing, so a refused
         // empty listing is over too: the files came back, or the owner's
@@ -537,7 +535,6 @@ fn build_crypto_callback(
     direction_name: &'static str,
 ) -> hcfs_client::sync::SyncProgressFn {
     Arc::new(move |b, t, p| {
-        sync.touch_progress_time();
         note_engine_activity(&app, &sync, &label, ActivityPhase::PostPlan);
         if b == 0 {
             info!("{direction_name} starting [{label}]: {p:?} ({t} bytes)");
@@ -560,7 +557,6 @@ fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -
     let log_throttle = LogThrottle::new(SCAN_LOG_INTERVAL);
 
     Arc::new(move |n, p| {
-        sync.touch_progress_time();
         note_engine_activity(
             &app,
             &sync,
@@ -589,7 +585,6 @@ fn build_scan_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -
 /// times for an 80k-file account), not once per entry.
 fn build_fetch_callback(sync: Arc<SyncRunner>, app: AppHandle, label: Arc<str>) -> hcfs_client::sync::FetchProgressFn {
     Arc::new(move |f, t| {
-        sync.touch_progress_time();
         note_engine_activity(
             &app,
             &sync,

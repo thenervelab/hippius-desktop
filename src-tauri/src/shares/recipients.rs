@@ -83,6 +83,10 @@ const GATE_REQUIRED: &str = "This link asks people for their email, so links per
 const SOURCE_GONE: &str = "This link has expired or was revoked. Make a new link first.";
 const PASSWORD_LINK: &str = "A link with a password can't have links per person.";
 const KEY_NOT_HERE: &str = "This link's key isn't on this computer, so people can't be added here.";
+/// A `#s=` link whose share key was never kept here and that the server no
+/// longer hands out (it asks for an email, or it has ended).
+const KEY_NOT_FETCHABLE: &str = "This link's key can no longer be fetched on this computer, so people can't be added here.";
+const KEY_UNREACHABLE: &str = "Couldn't reach Hippius to get this link ready. Try again.";
 const NAME_TOO_LONG: &str = "A name is too long. Use a shorter one.";
 const COULDNT_MAKE: &str = "Couldn't make the link. Try again.";
 
@@ -814,15 +818,9 @@ pub async fn share_add_recipient_links(state: tauri::State<'_, AppState>, share_
     let (Some(label_key), wrap_key) = account_keys(&state, &account_id).await else {
         return Err(AppError::Validation(KEY_NOT_HERE.into()));
     };
-    let share_key = share_key_for(&state, &account_id, &share_token).await.map_err(|e| {
-        AppError::Validation(
-            match e {
-                KeyUnavailable::Password => PASSWORD_LINK,
-                KeyUnavailable::NotOnDevice => KEY_NOT_HERE,
-            }
-            .into(),
-        )
-    })?;
+    let share_key = share_key_for(&state, &account_id, &share_token)
+        .await
+        .map_err(|e| AppError::Validation(key_refusal(e).into()))?;
     let existing: Vec<String> = recipient_rows(&rows, &source, now)
         .into_iter()
         .filter_map(|row| open_label_b64(Some(&label_key), &account_id, row.link_label.as_deref()))
@@ -922,8 +920,35 @@ async fn comment_key_for_group(state: &AppState, account_id: &str, token: &str, 
     None
 }
 
+/// Why people can't be added to a link whose share key could not be had.
+fn key_refusal(reason: KeyUnavailable) -> &'static str {
+    match reason {
+        KeyUnavailable::Password => PASSWORD_LINK,
+        KeyUnavailable::NotOnDevice => KEY_NOT_HERE,
+        KeyUnavailable::NotFetchable => KEY_NOT_FETCHABLE,
+        KeyUnavailable::Unreachable => KEY_UNREACHABLE,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// A `#s=` link's share key that could not be fetched says why, apart
+    /// from a password link and a key that is not here.
+    #[test]
+    fn each_unavailable_key_has_its_own_sentence() {
+        let sentences: std::collections::HashSet<&str> = [
+            KeyUnavailable::Password,
+            KeyUnavailable::NotOnDevice,
+            KeyUnavailable::NotFetchable,
+            KeyUnavailable::Unreachable,
+        ]
+        .into_iter()
+        .map(key_refusal)
+        .collect();
+        assert_eq!(sentences.len(), 4);
+        assert_eq!(key_refusal(KeyUnavailable::Password), PASSWORD_LINK);
+    }
+
     use super::super::insights::tests::mock;
     use super::*;
     use hcfs_client::client::folder_link::open_folder_link_envelope;

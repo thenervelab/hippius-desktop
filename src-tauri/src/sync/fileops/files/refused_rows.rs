@@ -156,7 +156,7 @@ mod tests {
                 salted_hash: hcfs_shared::salted_hash::SaltedHash::default(),
                 size_bytes: 0,
                 revision_seq: 0,
-                revision_id: [0; 32],
+                revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([0; 32]),
                 encryption_nonce: [0; 24],
             },
         );

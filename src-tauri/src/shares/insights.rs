@@ -51,7 +51,7 @@ use super::comment_crypto::{self, CommentKey, CommentMention, MentionKind};
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
-use hcfs_client::client::share::{ShareKeystore, ShareSecret};
+use hcfs_client::client::share::{ShareError, ShareKeystore, ShareSecret};
 
 /// How long one request may take. These back an open sheet, not a transfer.
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -596,6 +596,11 @@ pub enum KeyUnavailable {
     Password,
     /// The link's key is not on this computer and no owner wrap brought it.
     NotOnDevice,
+    /// A `#s=` link whose share key was never kept here and the server no
+    /// longer hands out: it asks for an email, or it has ended.
+    NotFetchable,
+    /// A `#s=` link's share key could not be fetched: no answer, or an error.
+    Unreachable,
 }
 
 impl KeyUnavailable {
@@ -603,6 +608,10 @@ impl KeyUnavailable {
         match self {
             Self::Password => "This link has a password, so its comments can only be read on the link's page.",
             Self::NotOnDevice => "Comments can't be read on this computer because the link's key isn't here.",
+            Self::NotFetchable => {
+                "Comments can't be read on this computer: this link's key can no longer be fetched, because it asks for an email or has ended."
+            }
+            Self::Unreachable => "Couldn't reach Hippius to open this link's comments. Try again.",
         }
     }
 }
@@ -1405,7 +1414,9 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 // ─── The link's key ────────────────────────────────────────────────────────
 
 /// The comment key for `token`: from the share key this device holds, or the
-/// one its owner wrap brings back (the same hydration Shared Links runs).
+/// one its owner wrap brings back (the same hydration Shared Links runs). A
+/// `#s=` link's share key is the one kept at its mint, else fetched once
+/// (`shares::file_link_key`).
 pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
     share_key_for(state, account_id, token).await.map(|key| CommentKey::derive(&key))
 }
@@ -1426,10 +1437,46 @@ pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &st
     }
     match keys.remove(token) {
         Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
-        Some(ShareSecret::Private(_)) => Err(KeyUnavailable::Password),
+        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(pool, account_id, token, &link_secret).await,
+        Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
         Some(ShareSecret::FolderLink(_) | ShareSecret::FolderLinkPrivate(_)) | None => Err(KeyUnavailable::NotOnDevice),
+    }
+}
+
+/// The share key of a `#s=` link: the one kept at its mint, else fetched once.
+async fn file_link_share_key(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    token: &str,
+    link_secret: &[u8; 32],
+) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
+    let keys = super::file_link_key::FileLinkKeys::new(pool.clone());
+    // A kept key needs no client: building one reads the bearer, which a
+    // local decrypt does not need.
+    if let Ok(Some(kept)) = keys.get(token).await {
+        return Ok(Zeroizing::new(kept));
+    }
+    let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
+        debug!(error = %e, "no client to fetch the file link's key");
+        KeyUnavailable::Unreachable
+    })?;
+    match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
+        Ok(share_key) => Ok(Zeroizing::new(share_key)),
+        Err(e) => Err(file_link_key_refusal(&e)),
+    }
+}
+
+/// Why a `#s=` link's share key could not be had. The route's bodiless 404
+/// is the server refusing the envelope (an email gate, an ended link); a
+/// keystore failure is the key not being here; anything else did not reach a
+/// verdict.
+fn file_link_key_refusal(error: &ShareError) -> KeyUnavailable {
+    match error {
+        ShareError::NotFound => KeyUnavailable::NotFetchable,
+        ShareError::Keystore(_) => KeyUnavailable::NotOnDevice,
+        _ => KeyUnavailable::Unreachable,
     }
 }
 
@@ -3198,5 +3245,35 @@ pub(super) mod tests {
             serde_json::from_str::<serde_json::Value>(&s.body).unwrap(),
             serde_json::json!({"first_views": true, "comments": false, "digest": "daily"})
         );
+    }
+
+    /// A `#s=` link's share key that could not be had says why: the server
+    /// refusing the envelope (an email gate or an ended link) is not the
+    /// network failing, and neither is the password sentence.
+    #[test]
+    fn a_file_links_unfetchable_key_says_why() {
+        assert_eq!(file_link_key_refusal(&ShareError::NotFound), KeyUnavailable::NotFetchable);
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Network("timed out".into())),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Server {
+                status: 503,
+                message: String::new()
+            }),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(file_link_key_refusal(&ShareError::Keystore("sqlite".into())), KeyUnavailable::NotOnDevice);
+        let sentences: HashSet<&str> = [
+            KeyUnavailable::Password,
+            KeyUnavailable::NotOnDevice,
+            KeyUnavailable::NotFetchable,
+            KeyUnavailable::Unreachable,
+        ]
+        .into_iter()
+        .map(KeyUnavailable::sentence)
+        .collect();
+        assert_eq!(sentences.len(), 4, "each reason has its own sentence");
     }
 }
