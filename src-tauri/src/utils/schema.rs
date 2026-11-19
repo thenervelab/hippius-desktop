@@ -38,6 +38,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "share_origin",
     "folder_share_origin",
     "shared_link_history",
+    "drive_moves_open",
     "local_wallets",
     "bridge_transactions",
     "credit_notification_flags",
@@ -168,6 +169,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     step!("bridge_transactions", ensure_bridge_transactions);
     step!("credit_notification_flags", ensure_credit_notification_flags);
     step!("shared_link_history", ensure_shared_link_history);
+    step!("drive_moves_open", ensure_drive_moves_open);
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
     // persisted a full per-account tx-history table, but the FE now mirrors
@@ -1173,6 +1175,23 @@ async fn ensure_credit_notification_flags(conn: &mut SqliteConnection) -> Result
             owner                TEXT PRIMARY KEY,
             is_first_time        INTEGER NOT NULL DEFAULT 1,
             is_above_half_credit INTEGER NOT NULL DEFAULT 0
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `drive_moves_open`: the moves between drives this computer opened and
+/// has not seen end, per account (`owner` is the `account_key`). The launch
+/// sweep aborts the ones a crash left open (`sync::drive_move::ledger`).
+async fn ensure_drive_moves_open(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS drive_moves_open (
+            owner     TEXT    NOT NULL,
+            move_id   TEXT    NOT NULL,
+            opened_at INTEGER NOT NULL,
+            PRIMARY KEY (owner, move_id)
         )",
     )
     .execute(&mut *conn)

@@ -1221,10 +1221,13 @@ camera only), `capture_restart` (before the take is discarded; it notifies,
 the pill has no room) and `capture_check_recording_start` (the bar asks
 before its countdown). Pinned by
 `capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
-count is EVERY video file (`.mp4`/`.webm`/`.mov`, any name, any subfolder:
-`is_video_name`, so a rename never frees a slot) in ALL of the account's own
-captures drives, each read from the server (`list_remote_folder_files_inner`),
-keyed `label/path`. A captures drive is one the server's folder list
+count is every file the server marks `capture_kind: "recording"` (any name,
+any subfolder, so a rename never frees a slot and an ordinary video is not
+one); when no listed file carries the mark (an older server), EVERY video file
+(`.mp4`/`.webm`/`.mov`: `is_video_name`) counts instead (`counts_by_kind`). It
+covers ALL of the account's own captures drives, each read from the server
+(`list_drive_files`: one `get_all_files` walk, since hcfs-client's
+`RemoteFileInfo` drops the kind), keyed `label/path`. A captures drive is one the server's folder list
 (`list_remote_folders_internal`) holds whose FOLDER HASH is the hash of a key
 label `CAPTURES_DIR_NAME` or `CAPTURES_DIR_NAME-2` to `-99`
 (`default_captures_hashes`), or of a drive this machine ever kept captures in

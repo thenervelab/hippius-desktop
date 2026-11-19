@@ -1537,3 +1537,68 @@ fn invite_link_envelope_wire_is_pinned() {
     assert!(resp.stored);
     assert_eq!(hcfs_shared::shares::INVITE_LINK_ENVELOPE_LEN, 73);
 }
+
+/// The Free plan's recording count reads `capture_kind` off every listed
+/// row (`capture::recording_allowance`): `"recording"` for a screen
+/// recording, the key absent for any other file, and absent from an older
+/// server's rows.
+#[test]
+fn remote_file_entry_carries_the_capture_kind() {
+    use hcfs_shared::network::RemoteFileEntry;
+
+    let row = |kind: Option<&str>| {
+        let mut json = serde_json::json!({
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 0,
+            "revision_seq": 0,
+            "revision_id": vec![0u8; 32],
+            "created_at": 0,
+            "updated_at": 0,
+        });
+        if let Some(kind) = kind {
+            json["capture_kind"] = serde_json::json!(kind);
+        }
+        serde_json::from_value::<RemoteFileEntry>(json).expect("a row parses")
+    };
+    let recording: Option<String> = row(Some("recording")).capture_kind;
+    assert_eq!(recording.as_deref(), Some("recording"));
+    assert_eq!(row(None).capture_kind, None, "an older server's row has no kind");
+}
+
+/// The launch sweep of moves a crash left open reads `GET /v1/drive_moves`
+/// through these types (`drive_move::sweep_with`). Exhaustive literal: a
+/// renamed, dropped or added field fails here, in the pin-bump PR.
+#[test]
+fn open_drive_moves_listing_is_pinned() {
+    use hcfs_shared::network::{DriveRef, ListDriveMovesResult, NetworkResponse, OpenDriveMove};
+
+    let body = serde_json::json!({ "Success": { "moves": [{
+        "move_id": "00112233445566778899aabbccddeeff",
+        "source": { "ss58_address": "5Owner", "folder_hash": "0123456789abcdef" },
+        "dest": { "ss58_address": "5Owner", "folder_hash": "fedcba9876543210" },
+        "created_at": 1_794_830_000,
+        "expires_at": 1_794_916_400,
+        "staged_files": 12,
+        "staged_bytes": 48_210_944
+    }]}});
+    let NetworkResponse::Success(listed) = serde_json::from_value::<NetworkResponse<ListDriveMovesResult>>(body).expect("parses") else {
+        panic!("success")
+    };
+    let expected = OpenDriveMove {
+        move_id: "00112233445566778899aabbccddeeff".into(),
+        source: DriveRef {
+            ss58_address: "5Owner".into(),
+            folder_hash: "0123456789abcdef".into(),
+        },
+        dest: DriveRef {
+            ss58_address: "5Owner".into(),
+            folder_hash: "fedcba9876543210".into(),
+        },
+        created_at: 1_794_830_000,
+        expires_at: 1_794_916_400,
+        staged_files: 12,
+        staged_bytes: 48_210_944,
+    };
+    assert_eq!(listed.moves, vec![expected]);
+}

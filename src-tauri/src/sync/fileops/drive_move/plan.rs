@@ -93,9 +93,8 @@ impl MovePlan {
         if self.folders.len() > MAX_COMMIT_FOLDERS {
             return Some("Up to 100 folders can move to another drive at once. Move fewer at a time.".into());
         }
-        if self.copies.is_empty() && !self.folders.is_empty() {
-            return Some("Empty folders can't move to another drive yet. Create the folder there instead.".into());
-        }
+        // A folder of only empty folders is no refusal: it commits with no
+        // copy (`"files": []`).
         None
     }
 }
@@ -290,6 +289,33 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_of_empty_folders_moves_with_no_copy() {
+        let tree = RemoteFolderTree {
+            directory_paths: vec!["Plans".into(), "Plans/2027".into(), "Plans/2027/Q1".into()],
+            files: vec![],
+        };
+        let plan = plan_move(
+            &[item("Plans", true, ClashChoice::Ask)],
+            &[ItemSource::Folder(tree)],
+            "",
+            "",
+            "Archive",
+            &HashMap::new(),
+        );
+        assert!(plan.settled.is_empty());
+        assert!(plan.copies.is_empty());
+        assert_eq!(
+            plan.folders,
+            vec![MoveFolder {
+                from: "Plans".into(),
+                to: "Archive/Plans".into()
+            }]
+        );
+        assert_eq!(plan.going[0].new_view_path, "Archive/Plans");
+        assert_eq!(plan.over_caps(), None);
+    }
+
+    #[test]
     fn a_taken_name_asks_then_keeps_both_or_skips_and_never_replaces() {
         let listed = HashMap::from([("a.txt".to_string(), Existing::File)]);
         let src = || vec![ItemSource::File(entry("a.txt", 1))];
@@ -392,7 +418,7 @@ mod tests {
             from: "a".into(),
             to: "b".into(),
         });
-        assert!(plan.over_caps().unwrap().starts_with("Empty folders"));
+        assert_eq!(plan.over_caps(), None, "a folder of empty folders moves with no copy");
         plan.copies = (0..=MAX_DRIVE_MOVE_FILES)
             .map(|i| PlannedCopy {
                 source: (&entry(&format!("a/{i}"), 1)).into(),

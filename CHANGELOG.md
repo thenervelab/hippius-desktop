@@ -241,6 +241,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
+- **Folders that hold only empty folders can move to another drive.** Before, Hippius refused them.
+- **The free recording count matches Hippius.** Only screen recordings count toward the 25 free recordings, even renamed ones; other videos in the captures folder no longer do.
+- **The warning before moving a shared folder counts every link.** A drive manager now sees the links others made on that folder too.
 - **Link emails are no longer offered to accounts without an email address.** An account that signs in with an access key no longer sees an "email me" switch that could never send anything; the Share dialog and Settings say to sign in with Google or Apple to get these emails.
 - **A shared document's Insights no longer shows a video length.** The line under a PDF, Word or PowerPoint file's name could show a time such as 0:10 as if it were a recording; it now appears only for recordings.
 - **Link settings switches in Insights work on a Mac.** Pressing Insights, Comments, Reactions or Allow download in a link's settings closed the settings instead of changing the switch. Each switch now changes, and the settings stay open until you press Escape, click outside or press the gear again.
