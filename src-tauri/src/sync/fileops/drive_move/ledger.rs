@@ -12,19 +12,16 @@
 //! # Which open moves the launch sweep aborts
 //!
 //! `GET /v1/drive_moves` lists every open move this ACCOUNT opened, on any
-//! device. The sweep ([`left_behind`]) aborts one only when:
+//! device and in the web console. The sweep ([`left_behind`]) aborts one
+//! only when this computer noted opening it and no move in this app is
+//! running it now (a move started after launch is in the running set before
+//! its row is written, so a row the sweep reads is never one of them while
+//! it runs).
 //!
-//! - this computer noted opening it, and no move in this app is running it
-//!   now (a move started after launch is in the running set before its row
-//!   is written, so a row the sweep reads is never one of them while it
-//!   runs); or
-//! - it has expired: the server refuses every stage and commit of it, so
-//!   nothing can still be running it, and aborting only frees its room
-//!   before the hourly sweep would.
-//!
-//! A move another device opened is never aborted while it can still commit:
-//! that device may be running it right now. It frees itself when it
-//! expires.
+//! A move this install did not open is never aborted, whatever its age: a
+//! console tab or a phone may be running it right now, and the server frees
+//! it when it expires. The console and the mobile app follow the same rule
+//! for the moves they open.
 
 use super::wire::OpenDriveMove;
 use std::collections::HashSet;
@@ -126,12 +123,10 @@ pub fn left_behind<S: std::hash::BuildHasher, R: std::hash::BuildHasher>(
     listed: &[OpenDriveMove],
     noted: &HashSet<String, S>,
     running: &HashSet<String, R>,
-    now: i64,
 ) -> Sweep {
     let abort = listed
         .iter()
-        .filter(|m| !running.contains(&m.move_id))
-        .filter(|m| noted.contains(&m.move_id) || m.expires_at <= now)
+        .filter(|m| noted.contains(&m.move_id) && !running.contains(&m.move_id))
         .map(|m| m.move_id.clone())
         .collect();
     let listed_ids: HashSet<&str> = listed.iter().map(|m| m.move_id.as_str()).collect();
@@ -170,35 +165,31 @@ mod tests {
     }
 
     #[test]
-    fn only_a_move_this_computer_left_behind_or_an_expired_one_is_aborted() {
+    fn only_a_move_this_computer_left_behind_is_aborted() {
         let now = 1_000_000;
         let listed = [
             open("mine-crashed", now + 3_600),
             open("mine-running", now + 3_600),
             open("other-device", now + 3_600),
+            // Expired or not, a move this install did not open is not its to abort.
             open("other-device-expired", now - 1),
         ];
-        let sweep = left_behind(
-            &listed,
-            &set(&["mine-crashed", "mine-running", "mine-done"]),
-            &set(&["mine-running"]),
-            now,
-        );
-        assert_eq!(sweep.abort, vec!["mine-crashed".to_string(), "other-device-expired".to_string()]);
+        let sweep = left_behind(&listed, &set(&["mine-crashed", "mine-running", "mine-done"]), &set(&["mine-running"]));
+        assert_eq!(sweep.abort, vec!["mine-crashed".to_string()]);
         assert_eq!(sweep.forget, vec!["mine-done".to_string()], "a note the server no longer lists goes");
     }
 
     #[test]
     fn a_running_move_is_never_aborted_even_when_expired() {
         let now = 1_000_000;
-        let sweep = left_behind(&[open("m", now - 10)], &set(&["m"]), &set(&["m"]), now);
+        let sweep = left_behind(&[open("m", now - 10)], &set(&["m"]), &set(&["m"]));
         assert!(sweep.abort.is_empty());
         assert!(sweep.forget.is_empty());
     }
 
     #[test]
     fn a_running_moves_note_is_kept_while_the_server_does_not_list_it_yet() {
-        let sweep = left_behind(&[], &set(&["new"]), &set(&["new"]), 0);
+        let sweep = left_behind(&[], &set(&["new"]), &set(&["new"]));
         assert_eq!(sweep, Sweep::default());
     }
 

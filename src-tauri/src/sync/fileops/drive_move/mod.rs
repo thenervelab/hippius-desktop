@@ -1139,8 +1139,8 @@ async fn move_api(state: &AppState, pool: &sqlx::SqlitePool, account_id: &str) -
 
 /// Abort the moves this computer left open (a crash, a quit mid-move), once
 /// per account per launch, so their room comes back now instead of when
-/// they expire. Which moves qualify is `ledger::left_behind`'s rule: never
-/// one running in this app, never another device's unexpired move.
+/// they expire. Which moves qualify is `ledger::left_behind`'s rule: only
+/// one this install opened and is not running, never one it did not open.
 /// Best effort and quiet: a failure leaves the moves to expire.
 pub async fn abort_left_behind_moves(state: &AppState, account_id: &str) {
     let owner = crate::auth::account_key::account_key(account_id);
@@ -1181,7 +1181,7 @@ pub async fn sweep_with(api: &MoveApi, pool: &sqlx::SqlitePool) -> Result<(usize
     // Noted first, running second: see `ledger::left_behind`.
     let noted = ledger::noted(pool, &ledger.owner).await?;
     let running = ledger.running_now();
-    let sweep = ledger::left_behind(&listed.moves, &noted, &running, chrono::Utc::now().timestamp());
+    let sweep = ledger::left_behind(&listed.moves, &noted, &running);
     for move_id in &sweep.forget {
         let _ = ledger::forget(pool, &ledger.owner, move_id).await;
     }

@@ -291,9 +291,15 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
     let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        list.contains("remote::list_remote_folder_files_inner("),
-        "the count comes from the server listing the remote-folder browser uses"
+        list.contains("list_drive_files(state, account_id, label)"),
+        "the count comes from each captures drive's server listing"
     );
+    // One `get_state` walk per drive, read with each row's `capture_kind`
+    // (hcfs-client's `RemoteFileInfo` drops it), so the server's recording
+    // mark decides what counts.
+    let listing = fn_body(&allowance, "async fn list_drive_files(");
+    assert!(listing.contains(".get_all_files("), "the server's own listing");
+    assert!(list.contains("counts_by_kind("), "the mark decides when the server sends it");
     assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 

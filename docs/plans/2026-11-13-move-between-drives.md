@@ -101,9 +101,9 @@ Each move is noted when the server names it (in memory and in the
 `drive_moves_open` table) and forgotten when it commits or its abort is
 confirmed. After sign-in and unlock (`auto_init_sync`), once per account per
 launch, the app lists `GET /v1/drive_moves` and aborts a listed move only
-when this computer noted it and no move in this app is running it, or when
-it has already expired. Another device's move is never aborted while it can
-still commit. A commit with no answer stays noted, so the next launch aborts
+when this computer noted it and no move in this app is running it. A move
+this install did not open is never aborted, whatever its age: a console tab
+or a phone may be running it. A commit with no answer stays noted, so the next launch aborts
 it if it is still open. Rule and tests: `drive_move::ledger`.
 
 ## Folders of empty folders

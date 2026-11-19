@@ -577,10 +577,10 @@ async fn an_unconfirmed_commit_stays_noted() {
     );
 }
 
-/// The launch sweep: of the open moves the server lists, it aborts the one
-/// this computer noted and is not running, and an expired one, and leaves
-/// the one running here and another device's live one alone. A note the
-/// server no longer lists is dropped.
+/// The launch sweep: of the open moves the server lists, it aborts only the
+/// one this computer noted and is not running, and leaves the one running
+/// here and every move another device or a console tab opened alone, even
+/// an expired one. A note the server no longer lists is dropped.
 #[tokio::test]
 async fn the_launch_sweep_aborts_only_moves_left_behind() {
     let mut f = fixture(&[]).await;
@@ -605,11 +605,8 @@ async fn the_launch_sweep_aborts_only_moves_left_behind() {
         listed_move("other-device-expired", now - 5),
     ];
     let (aborted, kept) = sweep_with(&f.api, &pool).await.expect("swept");
-    assert_eq!((aborted, kept), (2, 0));
-    assert_eq!(
-        *f.mock.aborted.lock().unwrap(),
-        vec!["crashed".to_string(), "other-device-expired".to_string()]
-    );
+    assert_eq!((aborted, kept), (1, 0));
+    assert_eq!(*f.mock.aborted.lock().unwrap(), vec!["crashed".to_string()]);
     let noted = tauri_project_lib::sync::drive_move::ledger::noted(&pool, "acct").await.unwrap();
     assert_eq!(noted, ["running".to_string()].into_iter().collect(), "aborted and stale notes go");
 }
