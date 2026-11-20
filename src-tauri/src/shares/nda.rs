@@ -477,6 +477,44 @@ pub async fn share_nda_accepts(state: tauri::State<'_, AppState>, share_token: S
     Ok(accepts_view(&page, &share_token, key.as_ref()))
 }
 
+// ─── The whole log, for its export and records ─────────────────────────────
+
+/// The most pages read for one export: 500 accepts each.
+const MAX_LOG_PAGES: usize = 200;
+
+/// Every accept of `token`, oldest first, with its current text, each page
+/// read as the NDA tab reads it (`accepts_view`).
+pub(super) async fn read_whole_log(http: &reqwest::Client, api: &Api, token: &str, key: Option<&CommentKey>) -> Result<NdaAccepts> {
+    let mut log: Option<NdaAccepts> = None;
+    let mut after = 0;
+    for _ in 0..MAX_LOG_PAGES {
+        let page = accepts_view(&get_accepts(http, api, token, after).await?, token, key);
+        let next = page.next_after;
+        match log.as_mut() {
+            None => log = Some(page),
+            Some(l) => l.accepts.extend(page.accepts),
+        }
+        match next {
+            Some(n) if n > after => after = n,
+            _ => break,
+        }
+    }
+    let mut log = log.unwrap_or_default();
+    log.next_after = None;
+    Ok(log)
+}
+
+/// A link's whole accept log, for the owner signed in here.
+pub(super) async fn link_log(state: &AppState, share_token: &str) -> Result<NdaAccepts> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_checked(state, &account_id, UNREACHABLE).await?.share_nda {
+        return Ok(NdaAccepts::default());
+    }
+    let api = Api::for_account(state, &account_id).await?;
+    let key = comment_key_for(state, &account_id, share_token).await.ok();
+    read_whole_log(&state.api_client, &api, share_token, key.as_ref()).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::insights::tests::mock;
@@ -686,6 +724,33 @@ mod tests {
         assert!(matches!(nda_refusal(api(502, r#"{"error":"billing_unavailable"}"#)), AppError::Validation(m) if m == PLAN_UNREADABLE));
         assert!(matches!(nda_refusal(api(400, r#"{"error":"bad_request","message":"text_ct"}"#)), AppError::Validation(m) if m == COULDNT_SAVE));
         assert!(matches!(nda_refusal(api(500, "boom")), AppError::Api { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn the_whole_log_is_read_page_by_page_with_the_text_opened() {
+        let sealed = seal_text(&key(1), "tok_1", "Keep it quiet.").unwrap();
+        let nda = serde_json::json!({ "text_hash": sealed.hash, "text_ct": sealed.ct, "text_nonce": sealed.nonce });
+        let page = move |q: Option<&str>| {
+            let (ids, next) = match q {
+                None => (vec![1, 2], serde_json::json!(2)),
+                Some("after=2") => (vec![3], serde_json::json!("3")),
+                _ => (vec![], serde_json::Value::Null),
+            };
+            let accepts: Vec<_> = ids
+                .iter()
+                .map(|id| serde_json::json!({ "id": id, "text_hash": sealed.hash, "viewer_id": format!("v{id}"), "accepted_at": "2026-11-20T10:00:00Z" }))
+                .collect();
+            serde_json::json!({ "nda": nda, "accepts": accepts, "next_after": next }).to_string()
+        };
+        let (base, seen) = mock(move |s| (200, page(s.query.as_deref()))).await;
+        let log = read_whole_log(&reqwest::Client::new(), &Api::new(&base, "b"), "tok_1", Some(&key(1)))
+            .await
+            .unwrap();
+        assert_eq!(log.accepts.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(log.text.as_deref(), Some("Keep it quiet."));
+        assert_eq!(log.next_after, None);
+        // Stops at the page that names no next one.
+        assert_eq!(seen.lock().unwrap().len(), 3);
     }
 
     #[tokio::test]

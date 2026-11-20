@@ -78,8 +78,7 @@ import {
   type OfferedSwitches,
 } from "@/app/lib/tauri/shareInsights";
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
-import EmailGateSettings from "@/components/page-sections/shares/insights/EmailGateSettings";
-import NdaSettings from "@/components/page-sections/shares/insights/NdaSettings";
+import { LinkRules, TTL_OPTIONS } from "@/components/page-sections/shares/rules/LinkRules";
 import RecipientLinks from "@/components/page-sections/shares/insights/RecipientLinks";
 import { isDownloadNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
 import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
@@ -577,6 +576,7 @@ export default function ShareFileModal() {
       {state.kind === "done" && (
         <DoneBody
           link={state.link}
+          fileName={filename}
           password={state.link.password}
           chatPreview={state.chatPreview}
           engagement={state.engagement}
@@ -667,12 +667,6 @@ function ChatPreviewSwitch({
 }
 
 /** Expiry choices offered in the chooser, in the order they are shown. */
-const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
-  { label: "24 hours", value: "24h" },
-  { label: "7 days", value: "7d" },
-  { label: "30 days", value: "30d" },
-  { label: "Until I revoke it", value: "never" },
-];
 
 /**
  * Minimum password length. Mirrors `SHARE_PASSWORD_MIN_LEN` in hcfs-client —
@@ -1208,6 +1202,7 @@ function ErrorBody({
 
 function DoneBody({
   link,
+  fileName,
   password,
   chatPreview,
   engagement,
@@ -1219,6 +1214,8 @@ function DoneBody({
   onRevoke,
 }: {
   link: ShareLink;
+  /** The shared file's or folder's name: the Watermark card reads it. */
+  fileName: string;
   password?: string;
   /** How long the link was made to last, and how to change it. */
   expiry: ExpiryEdit;
@@ -1249,6 +1246,8 @@ function DoneBody({
   const [ttl, setTtl] = useState<ShareTtl>(expiry.ttl);
   const [expiresAt, setExpiresAt] = useState<string | null>(link.expiresAt);
   const [expirySaving, setExpirySaving] = useState(false);
+  // A rule's editor is open in place of the rest of the dialog.
+  const [rulePushed, setRulePushed] = useState(false);
   const changeExpiry = async (next: ShareTtl) => {
     if (!expiry.by || next === ttl) return;
     const before = ttl;
@@ -1359,7 +1358,6 @@ function DoneBody({
       toast.error(`Could not copy password: ${errorMessage(err)}`);
     }
   };
-  const expiresAtPretty = formatExpiresAt(expiresAt);
   const urlRef = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = urlRef.current;
@@ -1381,6 +1379,8 @@ function DoneBody({
   //       where the inline copy button isn't reachable.
   return (
     <div className="font-geist">
+      {!rulePushed && (
+        <>
       <div
         className={cn(
           "mb-6 flex items-start gap-2 rounded-[8px] border p-3",
@@ -1441,9 +1441,6 @@ function DoneBody({
             switchesInPlan={engagement.switchesInPlan}
             onChange={(next) => void changeSwitches(next)}
             onUpgrade={onUpgrade}
-            download={download}
-            onDownloadChange={(next) => void changeDownload(next)}
-            downloadRefused={downloadRefused}
           />
           {switchesNote && (
             <p role="status" className="mt-2 text-xs leading-[1.45] text-error-50 dark:text-error-70">
@@ -1453,25 +1450,29 @@ function DoneBody({
         </div>
       )}
 
+        </>
+      )}
+
       <SecureLinkSection className="mb-6">
-        {expiry.by && (
-          <Select
-            ariaLabel="Link expires"
-            value={ttl}
-            disabled={expirySaving}
-            onValueChange={(value) => void changeExpiry(value as ShareTtl)}
-            options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
-          />
-        )}
-        {/* State the lifetime either way: silently omitting the line for a
-            never-expiring link reads as "we forgot to say", not as "no expiry". */}
-        <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-          {expiresAt === null
-            ? "This link stays active until you revoke it."
-            : expiresAtPretty
-              ? `Expires ${expiresAtPretty}.`
-              : null}
-        </p>
+        {/* The link's rules as cards; a card's editor opens in place of the
+            dialog's other rows, with a back arrow. Gate and NDA are file
+            links only (Rust leaves the NDA out on a password link). */}
+        <LinkRules
+          shareToken={engagement ? link.shareToken : null}
+          fileName={fileName}
+          download={engagement ? download : null}
+          onDownloadChange={(next) => void changeDownload(next)}
+          downloadRefused={downloadRefused}
+          savingSwitches={switchesSaving}
+          switchesInPlan={engagement?.switchesInPlan ?? null}
+          expiresAt={expiresAt}
+          expiry={expiry.by ? { ttl, saving: expirySaving, onChange: (next) => void changeExpiry(next) } : null}
+          passwordOn={Boolean(password)}
+          onUpgrade={onUpgrade}
+          onPushedChange={setRulePushed}
+        />
+        {!rulePushed && (
+          <>
         {password && (
           <div className="mt-3">
             <p className="mb-1.5 text-xs font-medium text-grey-30 dark:text-grey-dark-700">
@@ -1521,14 +1522,14 @@ function DoneBody({
             </p>
           </div>
         )}
-        {/* File links only: a folder link has no email gate. */}
-        {engagement && <EmailGateSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
-        {/* File links only (folder links have no NDA); Rust leaves it out on a password link. */}
-        {engagement && <NdaSettings shareToken={link.shareToken} onUpgrade={onUpgrade} />}
         {/* File links only; Rust offers it only on a server with links per person. */}
         {engagement && <RecipientLinks shareToken={link.shareToken} />}
         <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
+          </>
+        )}
       </SecureLinkSection>
+
+      {!rulePushed && (
 
       <div className="flex flex-col gap-3">
         <Button
@@ -1566,27 +1567,7 @@ function DoneBody({
           Revoke share
         </button>
       </div>
+      )}
     </div>
   );
-}
-
-/**
- * Convert an RFC 3339 timestamp into a human-friendly relative-time
- * string. Returns `null` if the timestamp is unparseable so the
- * caller can omit the "Expires …" line entirely instead of showing
- * "Expires Invalid Date".
- */
-function formatExpiresAt(rfc3339: string | null): string | null {
-  // A never-expiring link has no countdown to render; the caller drops the
-  // whole "Expires …" line rather than printing a placeholder.
-  if (rfc3339 === null) return null;
-  const ts = Date.parse(rfc3339);
-  if (Number.isNaN(ts)) return null;
-  const diffMs = ts - Date.now();
-  if (diffMs <= 0) return "in the past";
-  const hours = Math.round(diffMs / 36e5);
-  if (hours < 1) return "in less than an hour";
-  if (hours < 24) return `in ${hours}h`;
-  const days = Math.round(hours / 24);
-  return `in ${days}d`;
 }

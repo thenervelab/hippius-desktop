@@ -16,9 +16,11 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
-import EmailGateSettings from "./EmailGateSettings";
-import NdaSettings from "./NdaSettings";
 import RecipientLinks from "./RecipientLinks";
+import { LinkRules } from "@/components/page-sections/shares/rules/LinkRules";
+import type { ShareSummary, ShareTtl } from "@/app/lib/tauri/shares";
+import { updateShareExpiry } from "@/app/lib/tauri/shares";
+import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
@@ -88,6 +90,8 @@ export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
 export function LinkSettingsPopover({
   id,
   shareToken,
+  fileName,
+  share,
   switches,
   top,
   opener,
@@ -97,6 +101,9 @@ export function LinkSettingsPopover({
   id: string;
   /** The link these settings are for. */
   shareToken: string;
+  fileName: string;
+  /** The link's row in the share listing, for its expiry and password. */
+  share: ShareSummary | null;
   switches: LinkSwitches;
   /** Pixels from the panel's top: just under its header. */
   top: number;
@@ -112,6 +119,28 @@ export function LinkSettingsPopover({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const { current, save, downloadRefused } = switches;
   const online = useIsOnline();
+  const queryClient = useQueryClient();
+  // A rule's editor is open in place of everything else.
+  const [pushed, setPushed] = useState(false);
+  const [expirySaving, setExpirySaving] = useState(false);
+  const [ttl, setTtl] = useState<ShareTtl | null>(null);
+  const changeExpiry = (next: ShareTtl) => {
+    if (expirySaving) return;
+    const before = ttl;
+    setTtl(next);
+    setExpirySaving(true);
+    updateShareExpiry(shareToken, next)
+      .then(() => queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] }))
+      .catch((err: unknown) => {
+        setTtl(before);
+        toast.error(actionErrorLine("change the expiry", err, navigator.onLine));
+      })
+      .finally(() => setExpirySaving(false));
+  };
+  const upgrade = () => {
+    onLeave();
+    router.push(BILLING_ROUTE);
+  };
 
   // The panel hands a new `onClose` every render; the listeners read the latest.
   const onCloseRef = useRef(onClose);
@@ -168,7 +197,28 @@ export function LinkSettingsPopover({
       <h3 id={titleId} ref={titleRef} tabIndex={-1} className={cn("text-[13.5px] font-semibold outline-none", STRONG)}>
         Link settings
       </h3>
-      <p className={cn("mb-2.5 mt-0.5 text-xs", MUTED)}>What people who open this link can do.</p>
+      {!pushed && <p className={cn("mb-2.5 mt-0.5 text-xs", MUTED)}>What people who open this link can do.</p>}
+      {pushed && <div className="mb-2" />}
+      {/* The link's rules as cards; a card's editor opens in their place. */}
+      <LinkRules
+        className="mb-2.5"
+        shareToken={shareToken}
+        fileName={fileName}
+        mimeType={share?.mimeType ?? null}
+        download={current.data?.download ?? null}
+        onDownloadChange={(download) => save.mutate({ download })}
+        downloadRefused={downloadRefused}
+        savingSwitches={save.isPending}
+        switchesInPlan={current.data?.switchesInPlan ?? null}
+        expiresAt={share ? share.expiresAt : undefined}
+        expiry={share ? { ttl, saving: expirySaving, onChange: changeExpiry } : null}
+        // Known only where this computer holds the link's key.
+        passwordOn={share?.shareUrl ? share.isPrivate : null}
+        onUpgrade={upgrade}
+        onPushedChange={setPushed}
+      />
+      {!pushed && (
+        <>
       {current.isPending ? (
         <div className={cn(SKELETON, "h-[150px] rounded-[12px]")} />
       ) : current.isError ? (
@@ -181,39 +231,11 @@ export function LinkSettingsPopover({
           disabled={save.isPending}
           switchesInPlan={current.data.switchesInPlan ?? null}
           onChange={(next) => save.mutate(switchChange(current.data.on, next))}
-          download={current.data.download ?? null}
-          onDownloadChange={(download) => save.mutate({ download })}
-          downloadRefused={downloadRefused}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
+          onUpgrade={upgrade}
         />
       ) : (
         <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
       )}
-      {/* Drawn only where Rust says the server has email gates. */}
-      <div className="mt-2.5 empty:hidden">
-        <EmailGateSettings
-          layout="list"
-          shareToken={shareToken}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
-        />
-      </div>
-      {/* Drawn only where Rust offers it: never on a password link without a text. */}
-      <div className="mt-2.5 empty:hidden">
-        <NdaSettings
-          layout="list"
-          shareToken={shareToken}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
-        />
-      </div>
       {/* Drawn only where Rust offers it: a server with links per person. */}
       <div className="mt-2.5 empty:hidden">
         <RecipientLinks layout="list" shareToken={shareToken} />
@@ -221,6 +243,8 @@ export function LinkSettingsPopover({
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />
       </div>
+        </>
+      )}
     </div>
   );
 }
