@@ -42,7 +42,7 @@ pub const PREFERENCE_ID: &str = "link_activity";
 /// `notification_type`, which the center matches on.
 pub const NOTIFICATION_TYPE: &str = "Link activity";
 /// How often the listing is read.
-pub const POLL_EVERY: Duration = Duration::from_secs(120);
+pub const POLL_EVERY: Duration = Duration::from_mins(2);
 /// How long after a notification a return to the app counts as its click.
 pub const CLICK_WINDOW: Duration = Duration::from_secs(90);
 /// Links that each get their own notification in one poll; more make one.
@@ -73,7 +73,15 @@ struct Inner {
     seen: HashMap<String, u64>,
     /// The last notification shown while the app was in the background:
     /// the link to open (`None` for many), and when.
-    pending_open: Option<(Option<String>, Instant)>,
+    pending_open: Option<(PendingOpen, Instant)>,
+}
+
+/// What a notification's click opens: one link's Insights, or Shared Links
+/// for many links (`share_token` `None`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingOpen {
+    share_token: Option<String>,
 }
 
 /// One file link as the poller reads it.
@@ -126,7 +134,7 @@ pub struct NewViews {
 /// What is new since `seen`, which becomes this poll. Before the first poll
 /// (`primed` false) nothing is new. A count that went down (the owner looked)
 /// is only remembered; a link made since the last poll starts from zero.
-pub fn take_new_views(seen: &mut HashMap<String, u64>, primed: bool, rows: &[ListingRow]) -> Vec<NewViews> {
+pub fn take_new_views<S: std::hash::BuildHasher>(seen: &mut HashMap<String, u64, S>, primed: bool, rows: &[ListingRow]) -> Vec<NewViews> {
     let mut out = Vec::new();
     let mut next = HashMap::with_capacity(rows.len());
     for row in rows {
@@ -140,7 +148,8 @@ pub fn take_new_views(seen: &mut HashMap<String, u64>, primed: bool, rows: &[Lis
         }
         next.insert(row.share_token.clone(), row.new_views);
     }
-    *seen = next;
+    seen.clear();
+    seen.extend(next);
     out
 }
 
@@ -245,9 +254,12 @@ pub struct RecentLinkActivity {
     pub at: i64,
 }
 
+/// `id, notification_subtype, title_text, creation_time`.
+type RecentRow = (i64, Option<String>, Option<String>, Option<i64>);
+
 /// The account's newest link activity rows, newest first.
 pub async fn recent(pool: &sqlx::SqlitePool, owner: &str, limit: i64) -> Result<Vec<RecentLinkActivity>> {
-    let rows: Vec<(i64, Option<String>, Option<String>, Option<i64>)> = sqlx::query_as(
+    let rows: Vec<RecentRow> = sqlx::query_as(
         "SELECT id, notification_subtype, title_text, creation_time FROM notifications
           WHERE user_address = ? AND notification_type = ? AND COALESCE(is_deleted, 0) = 0
           ORDER BY creation_time DESC, id DESC LIMIT ?",
@@ -341,7 +353,7 @@ async fn poll_once(app: &AppHandle) -> Result<()> {
     if background && let Ok(mut inner) = state.link_alerts.inner.lock() {
         // The newest one shown is the one a click most likely meant.
         let last = alerts.last().and_then(|a| a.share_token.clone());
-        inner.pending_open = Some((last, Instant::now()));
+        inner.pending_open = Some((PendingOpen { share_token: last }, Instant::now()));
     }
     Ok(())
 }
@@ -360,16 +372,10 @@ pub fn spawn(app: AppHandle) {
 
 /// What a return to the main window opens, if it came within
 /// [`CLICK_WINDOW`] of a notification. Taken once.
-fn take_pending(state: &LinkAlertsState, now: Instant) -> Option<Option<String>> {
+fn take_pending(state: &LinkAlertsState, now: Instant) -> Option<PendingOpen> {
     let mut inner = state.inner.lock().ok()?;
     let (token, at) = inner.pending_open.take()?;
     (now.duration_since(at) <= CLICK_WINDOW).then_some(token)
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenLinkInsights {
-    share_token: Option<String>,
 }
 
 /// The main window came forward: if a link activity notification was just
@@ -377,8 +383,8 @@ struct OpenLinkInsights {
 /// open what it was about.
 pub fn on_main_window_focused(app: &AppHandle) {
     let state = app.state::<AppState>();
-    if let Some(share_token) = take_pending(&state.link_alerts, Instant::now()) {
-        let _ = app.emit_to(MAIN_WINDOW_LABEL, OPEN_LINK_INSIGHTS_EVENT, OpenLinkInsights { share_token });
+    if let Some(open) = take_pending(&state.link_alerts, Instant::now()) {
+        let _ = app.emit_to(MAIN_WINDOW_LABEL, OPEN_LINK_INSIGHTS_EVENT, open);
     }
 }
 
@@ -487,11 +493,16 @@ mod tests {
     fn a_return_to_the_app_soon_after_a_notification_opens_it_once() {
         let state = LinkAlertsState::default();
         let at = Instant::now();
-        state.inner.lock().unwrap().pending_open = Some((Some("a".into()), at));
-        assert_eq!(take_pending(&state, at + Duration::from_secs(5)), Some(Some("a".into())));
+        let link = |t: Option<&str>| PendingOpen {
+            share_token: t.map(str::to_owned),
+        };
+        state.inner.lock().unwrap().pending_open = Some((link(Some("a")), at));
+        assert_eq!(take_pending(&state, at + Duration::from_secs(5)), Some(link(Some("a"))));
         assert_eq!(take_pending(&state, at + Duration::from_secs(6)), None, "taken once");
 
-        state.inner.lock().unwrap().pending_open = Some((None, at));
+        state.inner.lock().unwrap().pending_open = Some((link(None), at));
+        // The event's payload is what the main window parses.
+        assert_eq!(serde_json::to_value(link(Some("a"))).unwrap(), serde_json::json!({ "shareToken": "a" }));
         assert_eq!(
             take_pending(&state, at + CLICK_WINDOW + Duration::from_secs(1)),
             None,
