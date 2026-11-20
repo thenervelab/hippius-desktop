@@ -77,6 +77,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A clearer Free plan watermark.** Free plan screenshots and recordings now carry a small dark pill reading "Recorded with Hippius" with the Hippius logo, so it is easy to read on light screens as well as dark ones. It sits in the same corner as before.
 - **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
 - **Clearer page charts for shared documents.** The Pages tab in a document link's Insights now shows two charts, as on the web: where people stopped reading, with the page after which most left, and the time spent on each page, with the page people spent longest on. Point at a chart, or use the arrow keys, to read any page.

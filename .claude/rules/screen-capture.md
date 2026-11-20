@@ -991,10 +991,17 @@ toast carrying the same action (`useStartCapture`, `planRefusalAction`).
 Pinned by `allowance::tests`, `capture_wiring::every_capture_waits_for_the_plan`,
 `overlayPage.test.tsx` and `CaptureHost.test.tsx`.
 
-**Free plan watermark** (`watermark.rs`): the Hippius mark and "Hippius"
-(master `icons/watermark.png`, only its alpha read), white at 70 % over a
-soft shadow, bottom-right, 3 % of the shorter side tall (18 to 44 px), 2 % in
-(12 to 32 px), drawn once per size and blended over its own rectangle only.
+**Free plan watermark** (`watermark.rs`): a dark pill (rgba(14,16,20,0.62),
+white hairline at 0.14 inside its edge, no shadow) holding the Hippius mark
+and "Recorded with Hippius" in solid white, the same numbers the console and
+the extension draw (`pill_layout`, shares of the height as drawn at 44 px).
+Bottom-right, 4 % of the shorter side tall (26 to 60 px), 2 % in (12 to 32
+px), drawn once per size and blended over its own rectangle only. Masters
+`icons/watermark-logo.png` and `icons/watermark-text.png` (alpha only),
+rendered by Chromium canvas through `scripts/watermark/render-masters.mjs`;
+rerendering the text means updating `TEXT_MASTER_ADVANCE` from its output.
+The pill is not grey, so the macOS atlas is written in BGRA order (the
+helper's frames), never RGBA.
 Free tier only (`watermark::applies`); there is no unknown tier, since a
 capture whose plan was not read is refused first (above). The tier is read
 ONCE per capture: `prefetch_tier` starts it at `capture_start`,
