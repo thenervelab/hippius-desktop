@@ -108,6 +108,7 @@ describe("where the menu goes", () => {
     expect(trayPageRoute("settings")).toBe("/settings");
     expect(trayPageRoute("support")).toBe("/support");
     expect(trayPageRoute("captures")).toBe("/captures");
+    expect(trayPageRoute("shares")).toBe("/shares");
     expect(trayPageRoute("top-up")).toBeNull();
   });
 

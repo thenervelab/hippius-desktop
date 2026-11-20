@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Know when your links are opened.** While Hippius is running it tells you when your shared links get new views, a few at a time ("3 new views on deck.pdf"), and clicking the notification opens that link's Insights. The tray shows your last three link events with See all for Shared Links, and Settings, Notifications has a Link activity switch to turn them off.
 - **A link of its own for each person.** After making a file link, type the names or emails of the people it goes to and each one gets a separate link to the same file, with no second upload. Copy a link, copy them all, or open one in your mail app, and turn off one person's link while the others keep working. Insights gains a People tab showing who opened their link, how often and, for a document, how far they read. Names stay private to you.
 - **Export a link's viewers as a spreadsheet.** Insights has an Export CSV button beside Link settings that saves who viewed, how often, when they last looked, how much they watched and, for a document, how many pages they read, in the same columns as the web. You choose where the file goes, and it opens cleanly in Excel, Numbers or Google Sheets.
 - **Ask viewers to accept an NDA.** A file link can now ask people to accept your terms before the file opens, and its Insights show who accepted and when. On paid Drive plans; the text stays private to you and your viewers.

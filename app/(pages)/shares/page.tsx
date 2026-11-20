@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { SHARES_INSIGHTS_PARAM } from "@/app/lib/linkActivity/linkActivity";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createColumnHelper,
@@ -208,7 +209,11 @@ function MySharesContent() {
   const queryClient = useQueryClient();
   const router = useRouter();
   // Rows the drive's link badge pointed at (`sharesPageHref`).
-  const highlightParam = useSearchParams().get(SHARES_HIGHLIGHT_PARAM);
+  const searchParams = useSearchParams();
+  const highlightParam = searchParams.get(SHARES_HIGHLIGHT_PARAM);
+  // A link activity notification or the tray names a link whose Insights to open.
+  const insightsParam = searchParams.get(SHARES_INSIGHTS_PARAM);
+  const openLinkInsights = useSetAtom(insightsSheetAtom);
   const highlightedRowIds = React.useMemo(
     () => parseSharesHighlight(highlightParam),
     [highlightParam],
@@ -260,6 +265,16 @@ function MySharesContent() {
     refetchOnWindowFocus: true,
     refetchInterval: LIVE_DATA_REFRESH_MS,
   });
+
+  // Open the named link's Insights once the listing has it, then drop the
+  // parameter so a reload or Back does not open it again. A link no longer
+  // listed (revoked since) opens nothing.
+  React.useEffect(() => {
+    if (!insightsParam || !data) return;
+    const row = data.find((r) => r.shareToken === insightsParam);
+    if (row) openLinkInsights({ shareToken: row.shareToken, fileName: row.filename });
+    router.replace("/shares");
+  }, [insightsParam, data, openLinkInsights, router]);
 
   const mergedRows = React.useMemo(
     () => withLinkActivity(mergeActiveShareRows(data, folderData), activity),

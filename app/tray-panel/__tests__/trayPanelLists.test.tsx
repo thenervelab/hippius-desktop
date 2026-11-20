@@ -23,6 +23,9 @@ const data = vi.hoisted(() => ({
 vi.mock("@/app/lib/tray/useTrayShareLinks", () => ({
   useTrayShareLinks: () => ({ linksFor: () => [], reload: () => undefined }),
 }));
+vi.mock("@/app/lib/tray/useTrayLinkActivity", () => ({
+  useTrayLinkActivity: () => [],
+}));
 vi.mock("@/app/lib/tray/useTrayPanelData", () => ({
   useTrayPanelData: () => ({
     menu: {
