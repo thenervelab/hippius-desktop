@@ -8,13 +8,21 @@
 //! Server routes (owner bearer):
 //!
 //! - `POST /v1/shares/{token}/recipients` `{link_envelope, link_fetch_digest,
-//!   label, ttl}` → `201 {share_token, expires_at, link_group}`: a new link
-//!   over the stored copy of the live link `{token}`, which joins its group.
-//!   No second upload, and the group is billed once. `409
-//!   recipient_link_limit` past [`MAX_GROUP_LINKS`] live links, `409
-//!   gate_required` when `{token}` asks for an email (the new link would need
-//!   a gate of its own, which this does not send yet). Behind
-//!   `share_recipient_links`.
+//!   label, ttl}` → `201 {share_token, expires_at, link_group, nda_pending}`:
+//!   a new link over the stored copy of the live link `{token}`, which joins
+//!   its group. No second upload, and the group is billed once. `409
+//!   recipient_link_limit` past [`MAX_GROUP_LINKS`] live links, `403
+//!   paid_plan_required` on a plan without them. Without a `gate` the new
+//!   link gets a copy of the source's. Behind `share_recipient_links`.
+//! - `nda_pending: true` means the source has an NDA text. The server cannot
+//!   copy it (it is sealed under the share key with the source's token as
+//!   additional data), so the new link opens for no one until this computer
+//!   opens the source's text, seals it for the new token and sends `PUT
+//!   .../nda` ([`finish_nda`]). A locked source has no text to read, so the
+//!   text comes from the first link of the group that has one. A link whose
+//!   text could not be set stays listed as `ndaPending`, with Try again
+//!   ([`share_retry_recipient_nda`]), and is found again after a restart
+//!   through its `/meta`, which says `nda_pending` too.
 //! - `GET /v1/shares/{token}/group-insights`: the group's insights over every
 //!   live link, and each link's own counts. Behind `share_group_insights`.
 //! - Revoke is the usual `DELETE /v1/shares/{token}`, one link at a time.
@@ -39,7 +47,7 @@
 //! Pinned against the console's own sealed bytes
 //! (`tests/fixtures/share_recipient_vectors.json`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{LazyLock, Mutex};
 
@@ -58,9 +66,10 @@ use zeroize::Zeroizing;
 use super::capabilities::ServerCapabilities;
 use super::comment_crypto::{self, CommentKey};
 use super::insights::{
-    Api, KeyUnavailable, LINK_GONE, OfferedSwitches, REQUEST_TIMEOUT, SettingsPatch, UNREACHABLE, WireEmail, capabilities_checked, patch_settings,
-    read_ok, share_key_for, transport,
+    Api, KeyUnavailable, LINK_GONE, OfferedSwitches, PLAN_UNREADABLE, REQUEST_TIMEOUT, SettingsPatch, UNREACHABLE, WireEmail, capabilities_checked,
+    get_meta_body, patch_settings, read_ok, share_key_for, transport,
 };
+use super::nda::{read_link_text, set_link_text};
 use super::owner_wrap::{WrapKey, derive_wrap_key, open_file_link_secret, push_file_link_secrets};
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -80,6 +89,14 @@ pub const MAX_GROUP_LINKS: usize = 100;
 const UNAVAILABLE: &str = "Links per person aren't available yet.";
 const LIMIT: &str = "A file can have up to 100 links. Revoke one to add another.";
 const GATE_REQUIRED: &str = "This link asks people for their email, so links per person can't be made from it yet.";
+/// Refused on a plan without links per person (`403 paid_plan_required`).
+pub const RECIPIENTS_NOT_IN_PLAN: &str = "Links per person are available on paid Drive plans.";
+const GATE_QUOTA: &str = "Your account has as many links asking for an email as it can have. Remove one to add another.";
+/// A new link whose NDA text could not be set: it opens for no one yet.
+const NDA_NOT_SET: &str = "The new link was made, but its NDA couldn't be added, so it won't open yet. Try again.";
+/// No link of the group has an NDA text this computer can open.
+const NDA_TEXT_MISSING: &str =
+    "This file's NDA text couldn't be found, so the new link won't open. Revoke it, then set the NDA on the file's link again.";
 const SOURCE_GONE: &str = "This link has expired or was revoked. Make a new link first.";
 const PASSWORD_LINK: &str = "A link with a password can't have links per person.";
 const KEY_NOT_HERE: &str = "This link's key isn't on this computer, so people can't be added here.";
@@ -108,6 +125,27 @@ fn forget(token: &str) {
     if let Ok(mut made) = MADE_THIS_SESSION.lock() {
         made.remove(token);
     }
+    nda_done(token);
+}
+
+/// Recipient links made in this session whose NDA text could not be set, so
+/// the listing marks them without asking each link's `/meta`.
+static NDA_PENDING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn nda_still_pending(token: &str) {
+    if let Ok(mut pending) = NDA_PENDING.lock() {
+        pending.insert(token.to_string());
+    }
+}
+
+fn nda_done(token: &str) {
+    if let Ok(mut pending) = NDA_PENDING.lock() {
+        pending.remove(token);
+    }
+}
+
+fn nda_pending_here() -> HashSet<String> {
+    NDA_PENDING.lock().map(|p| p.clone()).unwrap_or_default()
 }
 
 // ─── Names, sealed ─────────────────────────────────────────────────────────
@@ -391,6 +429,10 @@ pub struct RecipientPerson {
     /// For a name that is an email and a link that is known: opens the
     /// owner's mail app with the link in it.
     pub mailto: Option<String>,
+    /// The link was made from one with an NDA, and its own NDA text is not
+    /// set yet, so it opens for no one. The app offers Try again
+    /// ([`share_retry_recipient_nda`]) instead of the link.
+    pub nda_pending: bool,
 }
 
 /// Links per person for one file link, as the share dialog draws them.
@@ -419,14 +461,24 @@ pub struct AddedRecipients {
     pub error: Option<String>,
 }
 
-fn person(row: &ListingRow, owner: &str, label_key: Option<&LabelKey>, wrap_key: Option<&WrapKey>, origin: &str) -> RecipientPerson {
+fn person(
+    row: &ListingRow,
+    owner: &str,
+    label_key: Option<&LabelKey>,
+    wrap_key: Option<&WrapKey>,
+    origin: &str,
+    nda_pending: bool,
+) -> RecipientPerson {
     let name = open_label_b64(label_key, owner, row.link_label.as_deref());
     let secret = remembered(&row.share_token).or_else(|| {
         let wrap = STANDARD.decode(row.owner_wrap.as_deref()?).ok()?;
         open_file_link_secret(wrap_key?, owner, &row.share_token, &wrap).ok()
     });
     let url = secret.map(|s| file_link_url(origin, &row.share_token, &s));
-    person_with(row.share_token.clone(), name, url, &row.filename)
+    RecipientPerson {
+        nda_pending,
+        ..person_with(row.share_token.clone(), name, url, &row.filename)
+    }
 }
 
 fn person_with(share_token: String, name: Option<String>, url: Option<String>, file_name: &str) -> RecipientPerson {
@@ -439,7 +491,39 @@ fn person_with(share_token: String, name: Option<String>, url: Option<String>, f
         name,
         url,
         mailto,
+        nda_pending: false,
     }
+}
+
+/// Whether a link's `/meta` says it waits for its NDA text.
+fn meta_says_nda_pending(body: &str) -> bool {
+    #[derive(Deserialize)]
+    struct Wire {
+        #[serde(default)]
+        nda_pending: bool,
+    }
+    serde_json::from_str::<Wire>(body).is_ok_and(|w| w.nda_pending)
+}
+
+/// The recipient links among `tokens` that wait for their NDA text: the ones
+/// this session already knows of, and any whose `/meta` says so (a link made
+/// in an earlier session, or whose `201` never arrived). A `/meta` that does
+/// not answer marks nothing.
+async fn nda_pending_links(http: &reqwest::Client, api: &Api, tokens: Vec<String>) -> HashSet<String> {
+    use futures_util::StreamExt as _;
+    let known = nda_pending_here();
+    let ask: Vec<String> = tokens.into_iter().filter(|t| !known.contains(t)).collect();
+    let mut found: HashSet<String> = futures_util::stream::iter(ask)
+        .map(|token| async move {
+            let pending = get_meta_body(http, api, &token).await.is_ok_and(|b| meta_says_nda_pending(&b));
+            pending.then_some(token)
+        })
+        .buffer_unordered(8)
+        .filter_map(|t| async move { t })
+        .collect()
+        .await;
+    found.extend(known);
+    found
 }
 
 // ─── Making links ──────────────────────────────────────────────────────────
@@ -448,19 +532,22 @@ fn person_with(share_token: String, name: Option<String>, url: Option<String>, f
 fn create_refusal(err: AppError) -> AppError {
     match err {
         AppError::NotFound(_) => AppError::NotFound(SOURCE_GONE.into()),
-        AppError::Api { status: 409, body } => {
+        AppError::Api { status, body } => {
             let code = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
                 .unwrap_or_default();
-            if code == "gate_required" {
-                AppError::Validation(GATE_REQUIRED.into())
-            } else {
-                AppError::Validation(LIMIT.into())
+            match (status, code.as_str()) {
+                (409, "gate_required") => AppError::Validation(GATE_REQUIRED.into()),
+                (409, "gate_quota_exceeded") => AppError::Validation(GATE_QUOTA.into()),
+                (409, _) => AppError::Validation(LIMIT.into()),
+                (400, _) => AppError::Validation(COULDNT_MAKE.into()),
+                (403, "paid_plan_required") => AppError::Validation(RECIPIENTS_NOT_IN_PLAN.into()),
+                (502, "billing_unavailable") => AppError::Validation(PLAN_UNREADABLE.into()),
+                (401 | 403, _) => AppError::Auth("Sign in again to add people.".into()),
+                _ => AppError::Api { status, body },
             }
         }
-        AppError::Api { status: 400, .. } => AppError::Validation(COULDNT_MAKE.into()),
-        AppError::Api { status: 401 | 403, .. } => AppError::Auth("Sign in again to add people.".into()),
         other => other,
     }
 }
@@ -490,12 +577,16 @@ struct Minting<'a> {
     patch: Option<SettingsPatch>,
     origin: &'a str,
     file_name: &'a str,
+    /// Where a locked new link's NDA text is read from, in order
+    /// ([`nda_sources`]).
+    nda_from: &'a [String],
 }
 
 /// Make one recipient link: a fresh link secret, the source's share key
 /// sealed under it, the name sealed for the owner, then the POST. Answers the
-/// new token and the secret, which never leaves this computer otherwise.
-async fn mint_one(http: &reqwest::Client, api: &Api, m: &Minting<'_>, name: &str) -> Result<(String, Zeroizing<[u8; 32]>)> {
+/// new token, the secret, which never leaves this computer otherwise, and
+/// whether the link waits for its NDA text (`nda_pending`).
+async fn mint_one(http: &reqwest::Client, api: &Api, m: &Minting<'_>, name: &str) -> Result<(String, Zeroizing<[u8; 32]>, bool)> {
     let secret = Zeroizing::new(generate_folder_link_secret());
     let file_key = hcfs_crypto::FileKey::from_bytes(*m.share_key);
     let envelope = seal_folder_link_envelope(&secret, &file_key).map_err(|e| AppError::Crypto(e.to_string()))?;
@@ -518,9 +609,68 @@ async fn mint_one(http: &reqwest::Client, api: &Api, m: &Minting<'_>, name: &str
     #[derive(Deserialize)]
     struct Created {
         share_token: String,
+        /// A server from before locked links omits it.
+        #[serde(default)]
+        nda_pending: bool,
     }
     let created: Created = serde_json::from_str(&body).map_err(|e| AppError::Hcfs(format!("recipient link response did not parse: {e}")))?;
-    Ok((created.share_token, secret))
+    Ok((created.share_token, secret, created.nda_pending))
+}
+
+/// The links a new link's NDA text can be read from: the source first, then
+/// the other live links of its group, oldest first. A source that is itself
+/// locked has no text, and a group's links all carry the same one.
+fn nda_sources(rows: &[ListingRow], source: &ListingRow, now: DateTime<Utc>) -> Vec<String> {
+    let mut others: Vec<&ListingRow> = match source.link_group.as_deref() {
+        Some(group) => rows
+            .iter()
+            .filter(|row| row.link_group.as_deref() == Some(group) && row.share_token != source.share_token && is_live(row, now))
+            .collect(),
+        None => Vec::new(),
+    };
+    others.sort_by_key(|row| DateTime::parse_from_rfc3339(&row.created_at).map_or(0, |t| t.timestamp_millis()));
+    std::iter::once(source.share_token.clone())
+        .chain(others.into_iter().map(|row| row.share_token.clone()))
+        .collect()
+}
+
+/// The group's NDA text: the first of `from` whose text opens with `key`.
+/// A link that cannot be read is passed over; when no link has a text, the
+/// first such failure is the answer, else [`NDA_TEXT_MISSING`].
+async fn group_nda_text(http: &reqwest::Client, api: &Api, key: &CommentKey, from: &[String]) -> Result<String> {
+    let mut failed = None;
+    for token in from {
+        match read_link_text(http, api, token, key).await {
+            Ok(Some(text)) => return Ok(text),
+            Ok(None) => {}
+            Err(e) => {
+                failed.get_or_insert(e);
+            }
+        }
+    }
+    Err(failed.unwrap_or_else(|| AppError::Validation(NDA_TEXT_MISSING.into())))
+}
+
+/// Unlock a new link: the group's NDA text, read once per call of
+/// [`add_people`] (`text`), sealed for `token` and set on it.
+async fn finish_nda(http: &reqwest::Client, api: &Api, m: &Minting<'_>, token: &str, text: &mut Option<String>) -> Result<()> {
+    let key = CommentKey::derive(m.share_key);
+    if text.is_none() {
+        *text = Some(group_nda_text(http, api, &key, m.nda_from).await?);
+    }
+    let Some(text) = text.as_deref() else {
+        return Err(AppError::Validation(NDA_TEXT_MISSING.into()));
+    };
+    set_link_text(http, api, token, &key, text).await
+}
+
+/// The sentence for a new link left locked: the plan prompt or the missing
+/// text as they are, anything else as [`NDA_NOT_SET`].
+fn nda_sentence(err: &AppError) -> String {
+    match err {
+        AppError::Validation(m) if m == NDA_TEXT_MISSING || m == super::nda::NDA_NOT_IN_PLAN => m.clone(),
+        _ => NDA_NOT_SET.to_string(),
+    }
 }
 
 /// Make a link for each name, in order. A refusal about one name moves on to
@@ -531,9 +681,10 @@ async fn add_people(http: &reqwest::Client, api: &Api, m: &Minting<'_>, names: &
     let mut out = AddedRecipients::default();
     let mut secrets = Vec::new();
     let mut left: Vec<&str> = Vec::new();
+    let mut nda_text: Option<String> = None;
     for (i, name) in names.iter().enumerate() {
         match mint_one(http, api, m, name).await {
-            Ok((token, secret)) => {
+            Ok((token, secret, nda_pending)) => {
                 info!("recipient link created");
                 if let Some(patch) = m.patch
                     && let Err(e) = patch_settings(http, api, &token, &patch).await
@@ -541,8 +692,30 @@ async fn add_people(http: &reqwest::Client, api: &Api, m: &Minting<'_>, names: &
                     debug!(error = %e, "recipient link: switches not sent");
                 }
                 let url = file_link_url(m.origin, &token, &secret);
-                out.people.push(person_with(token.clone(), Some(name.clone()), Some(url), m.file_name));
+                let mut made = person_with(token.clone(), Some(name.clone()), Some(url), m.file_name);
+                // A link made from one with an NDA opens for no one until
+                // its own text is set. When that fails it stays listed as
+                // waiting, with Try again, and the names after it are not
+                // made: they would be locked the same way.
+                let mut locked = None;
+                if nda_pending {
+                    match finish_nda(http, api, m, &token, &mut nda_text).await {
+                        Ok(()) => info!("recipient link: nda set"),
+                        Err(e) => {
+                            debug!(error = %e, "recipient link: nda not set");
+                            nda_still_pending(&token);
+                            made.nda_pending = true;
+                            locked = Some(nda_sentence(&e));
+                        }
+                    }
+                }
+                out.people.push(made);
                 secrets.push((token, secret));
+                if let Some(sentence) = locked {
+                    out.error.get_or_insert(sentence);
+                    left.extend(names[i + 1..].iter().map(String::as_str));
+                    break;
+                }
             }
             Err(e) => {
                 left.push(name);
@@ -775,7 +948,8 @@ fn source_row(rows: &[ListingRow], token: &str) -> Option<ListingRow> {
 #[tauri::command]
 pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_token: String) -> Result<RecipientLinks> {
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_recipient_links {
+    let caps = capabilities_checked(&state, &account_id, UNREACHABLE).await?;
+    if !caps.share_recipient_links {
         return Ok(RecipientLinks::default());
     }
     let api = Api::for_account(&state, &account_id).await?;
@@ -789,9 +963,18 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
     let (label_key, wrap_key) = account_keys(&state, &account_id).await;
     let can_add = label_key.is_some() && share_key_for(&state, &account_id, &share_token).await.is_ok();
     let origin = super::commands::console_base_url();
-    let people: Vec<RecipientPerson> = recipient_rows(&rows, &source, Utc::now())
+    let recipients = recipient_rows(&rows, &source, Utc::now());
+    let pending = if caps.share_nda {
+        nda_pending_links(&state.api_client, &api, recipients.iter().map(|r| r.share_token.clone()).collect()).await
+    } else {
+        HashSet::new()
+    };
+    let people: Vec<RecipientPerson> = recipients
         .into_iter()
-        .map(|row| person(row, &account_id, label_key.as_ref(), wrap_key.as_ref(), &origin))
+        .map(|row| {
+            let locked = pending.contains(&row.share_token);
+            person(row, &account_id, label_key.as_ref(), wrap_key.as_ref(), &origin, locked)
+        })
         .collect();
     Ok(RecipientLinks {
         offered: can_add || !people.is_empty(),
@@ -846,6 +1029,7 @@ pub async fn share_add_recipient_links(state: tauri::State<'_, AppState>, share_
         },
         origin: &origin,
         file_name: &source.filename,
+        nda_from: &nda_sources(&rows, &source, now),
     };
     let (added, secrets) = add_people(&state.api_client, &api, &minting, &names).await;
     for (token, secret) in &secrets {
@@ -867,6 +1051,38 @@ pub async fn share_revoke_recipient_link(state: tauri::State<'_, AppState>, shar
     delete_link(&state.api_client, &api, &share_token).await?;
     forget(&share_token);
     Ok(())
+}
+
+/// Set the NDA text on `recipient_token`, a link made from `share_token` that
+/// still opens for no one (`ndaPending`): the group's text, sealed for it.
+#[tauri::command]
+pub async fn share_retry_recipient_nda(state: tauri::State<'_, AppState>, share_token: String, recipient_token: String) -> Result<()> {
+    let account_id = state.current_account_id()?;
+    let api = Api::for_account(&state, &account_id).await?;
+    let rows = get_listing(&state.api_client, &api).await?;
+    let now = Utc::now();
+    let Some(source) = source_row(&rows, &share_token).filter(|r| is_live(r, now)) else {
+        return Err(AppError::NotFound(SOURCE_GONE.into()));
+    };
+    let share_key = share_key_for(&state, &account_id, &share_token)
+        .await
+        .map_err(|e| AppError::Validation(key_refusal(e).into()))?;
+    retry_nda(&state.api_client, &api, &share_key, &nda_sources(&rows, &source, now), &recipient_token).await?;
+    nda_done(&recipient_token);
+    info!("recipient link: nda set on retry");
+    Ok(())
+}
+
+/// The HTTP half of [`share_retry_recipient_nda`]: never reads the text from
+/// the link being unlocked, which has none.
+async fn retry_nda(http: &reqwest::Client, api: &Api, share_key: &[u8; 32], from: &[String], token: &str) -> Result<()> {
+    let key = CommentKey::derive(share_key);
+    let from: Vec<String> = from.iter().filter(|t| *t != token).cloned().collect();
+    let text = group_nda_text(http, api, &key, &from).await?;
+    set_link_text(http, api, token, &key, &text).await.map_err(|e| match e {
+        AppError::NotFound(_) => AppError::NotFound(LINK_GONE.into()),
+        other => other,
+    })
 }
 
 /// Insights grouped by person for the file link `share_token`: one row per
@@ -1150,8 +1366,11 @@ mod tests {
         assert_eq!(settings_patch(None, &caps), None);
     }
 
+    const NDA_FROM: &[String] = &[];
+
     fn minting<'a>(share_key: &'a [u8; 32], label_key: &'a LabelKey, patch: Option<SettingsPatch>) -> Minting<'a> {
         Minting {
+            nda_from: NDA_FROM,
             owner: OWNER,
             source_token: "src_token",
             share_key,
@@ -1261,6 +1480,13 @@ mod tests {
         assert!(matches!(conflict(r#"{"error":"recipient_link_limit"}"#), AppError::Validation(m) if m == LIMIT));
         assert!(matches!(conflict(""), AppError::Validation(m) if m == LIMIT));
         assert!(matches!(conflict(r#"{"error":"gate_required"}"#), AppError::Validation(m) if m == GATE_REQUIRED));
+        assert!(matches!(conflict(r#"{"error":"gate_quota_exceeded"}"#), AppError::Validation(m) if m == GATE_QUOTA));
+        let api = |status, body: &str| create_refusal(AppError::Api { status, body: body.into() });
+        // A free plan reads as the plan, never as "sign in again".
+        assert!(matches!(api(403, r#"{"error":"paid_plan_required"}"#), AppError::Validation(m) if m == RECIPIENTS_NOT_IN_PLAN));
+        assert!(matches!(api(502, r#"{"error":"billing_unavailable"}"#), AppError::Validation(m) if m == PLAN_UNREADABLE));
+        assert!(matches!(api(403, r#"{"error":"account_suspended"}"#), AppError::Auth(_)));
+        assert!(matches!(api(500, "boom"), AppError::Api { status: 500, .. }));
         assert!(matches!(create_refusal(AppError::NotFound(String::new())), AppError::NotFound(m) if m == SOURCE_GONE));
         assert!(matches!(
             create_refusal(AppError::Api {
@@ -1405,5 +1631,282 @@ mod tests {
         assert_eq!(rows[0].link_group.as_deref(), Some("g"));
         assert_eq!(rows[0].link_label.as_deref(), Some("QQ=="));
         assert!(rows[0].settings.is_some_and(|s| s.insights && s.download));
+    }
+
+    // ─── A new link from a link with an NDA ───────────────────────────────
+
+    const SHARE_KEY: [u8; 32] = [9u8; 32];
+    const NDA: &str = "Keep the plan to yourself.";
+
+    /// `GET .../nda/accepts` for a link whose text is `text`, sealed for
+    /// `token`, or a locked link's (no text) when `text` is `None`.
+    fn accepts_body(token: &str, text: Option<&str>) -> String {
+        let Some(text) = text else {
+            return r#"{"nda":null,"nda_pending":true,"accepts":[],"next_after":null}"#.into();
+        };
+        let key = CommentKey::derive(&SHARE_KEY);
+        let nonce = [5u8; comment_crypto::NONCE_LEN];
+        let ct = comment_crypto::seal_with_nonce(&key, token, comment_crypto::Purpose::NdaText, &nonce, text.as_bytes()).unwrap();
+        serde_json::json!({
+            "nda": { "text_hash": STANDARD.encode(super::super::nda::text_hash(text)), "text_ct": STANDARD.encode(ct),
+                     "text_nonce": STANDARD.encode(nonce), "set_at": "2026-11-19T00:00:00Z" },
+            "accepts": [], "next_after": null
+        })
+        .to_string()
+    }
+
+    /// The text a `PUT .../nda` body carries, opened as the share page opens
+    /// it on `token`; `None` when it does not open there.
+    fn put_text(body: &str, token: &str) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        let key = CommentKey::derive(&SHARE_KEY);
+        let plain = comment_crypto::open(
+            &key,
+            token,
+            comment_crypto::Purpose::NdaText,
+            &STANDARD.decode(v["text_nonce"].as_str()?).ok()?,
+            &STANDARD.decode(v["text_ct"].as_str()?).ok()?,
+        )
+        .ok()?;
+        assert_eq!(
+            v["text_hash"].as_str().unwrap(),
+            STANDARD.encode(super::super::nda::text_hash(std::str::from_utf8(&plain).unwrap()))
+        );
+        String::from_utf8(plain.to_vec()).ok()
+    }
+
+    /// The server locks a link made from one with an NDA (`nda_pending`):
+    /// the source's text is opened here, sealed for the NEW token and set on
+    /// it, so the link opens like any NDA link, and the text never leaves in
+    /// the clear.
+    #[tokio::test]
+    async fn a_locked_new_link_gets_the_sources_nda_sealed_for_its_own_token() {
+        let (base, seen) = mock(|s| match (s.method.as_str(), s.path.as_str()) {
+            ("POST", "/v1/shares/src_token/recipients") => (
+                201,
+                r#"{"share_token":"new_tok","expires_at":null,"link_group":"src_token","nda_pending":true}"#.into(),
+            ),
+            ("GET", "/v1/shares/src_token/nda/accepts") => (200, accepts_body("src_token", Some(NDA))),
+            ("PUT", "/v1/shares/new_tok/nda") => (204, String::new()),
+            _ => (500, String::new()),
+        })
+        .await;
+        let label_key = key();
+        let from = vec!["src_token".to_string()];
+        let m = Minting {
+            nda_from: &from,
+            ..minting(&SHARE_KEY, &label_key, None)
+        };
+        let (added, _) = add_people(&reqwest::Client::new(), &Api::new(&base, "bearer"), &m, &["Ann".into()]).await;
+        assert_eq!(added.error, None);
+        assert!(!added.people[0].nda_pending);
+
+        let seen = seen.lock().unwrap();
+        let put = seen.iter().find(|s| s.method == "PUT").expect("the NDA is set on the new link");
+        assert_eq!(put.path, "/v1/shares/new_tok/nda");
+        assert_eq!(put.auth.as_deref(), Some("Bearer bearer"));
+        assert_eq!(put_text(&put.body, "new_tok").as_deref(), Some(NDA));
+        assert_eq!(put_text(&put.body, "src_token"), None, "sealed for the new token, not the source's");
+        assert!(!put.body.contains("Keep the plan"), "the text never leaves in the clear");
+    }
+
+    /// A link made from a locked link starts locked too: the text comes from
+    /// a link of the group that has one, read once for every name.
+    #[tokio::test]
+    async fn a_locked_source_takes_the_text_from_another_link_of_its_group() {
+        let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let made = n.clone();
+        let (base, seen) = mock(move |s| match (s.method.as_str(), s.path.as_str()) {
+            ("POST", _) => {
+                let i = made.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                (
+                    201,
+                    format!(r#"{{"share_token":"new_{i}","expires_at":null,"link_group":"g","nda_pending":true}}"#),
+                )
+            }
+            ("GET", "/v1/shares/locked_src/nda/accepts") => (200, accepts_body("locked_src", None)),
+            ("GET", "/v1/shares/revoked/nda/accepts") => (404, String::new()),
+            ("GET", "/v1/shares/first/nda/accepts") => (200, accepts_body("first", Some(NDA))),
+            ("PUT", _) => (204, String::new()),
+            _ => (500, String::new()),
+        })
+        .await;
+        let label_key = key();
+        let from: Vec<String> = ["locked_src", "revoked", "first"].map(String::from).to_vec();
+        let m = Minting {
+            source_token: "locked_src",
+            nda_from: &from,
+            ..minting(&SHARE_KEY, &label_key, None)
+        };
+        let (added, _) = add_people(&reqwest::Client::new(), &Api::new(&base, "bearer"), &m, &["Ann".into(), "Ben".into()]).await;
+        assert_eq!(added.error, None);
+        assert_eq!(added.people.len(), 2);
+
+        let seen = seen.lock().unwrap();
+        let reads = seen.iter().filter(|s| s.method == "GET").count();
+        assert_eq!(reads, 3, "the group's text is read once, not per name");
+        for token in ["new_0", "new_1"] {
+            let put = seen
+                .iter()
+                .find(|s| s.method == "PUT" && s.path == format!("/v1/shares/{token}/nda"))
+                .unwrap();
+            assert_eq!(put_text(&put.body, token).as_deref(), Some(NDA));
+        }
+    }
+
+    /// An NDA that could not be set never leaves a link silently locked: it
+    /// is listed as waiting, with Rust's sentence, and the names after it go
+    /// back in the box instead of making more locked links.
+    #[tokio::test]
+    async fn a_new_link_whose_nda_could_not_be_set_says_so_and_stops() {
+        let (base, seen) = mock(|s| match (s.method.as_str(), s.path.as_str()) {
+            ("POST", _) => (
+                201,
+                r#"{"share_token":"stuck_tok","expires_at":null,"link_group":"g","nda_pending":true}"#.into(),
+            ),
+            ("GET", _) => (200, accepts_body("src_token", Some(NDA))),
+            ("PUT", _) => (500, "boom".into()),
+            _ => (500, String::new()),
+        })
+        .await;
+        let label_key = key();
+        let from = vec!["src_token".to_string()];
+        let m = Minting {
+            nda_from: &from,
+            ..minting(&SHARE_KEY, &label_key, None)
+        };
+        let names: Vec<String> = ["Ann", "Ben", "Cat"].map(String::from).to_vec();
+        let (added, secrets) = add_people(&reqwest::Client::new(), &Api::new(&base, "bearer"), &m, &names).await;
+        assert_eq!(added.people.len(), 1);
+        assert!(added.people[0].nda_pending);
+        assert_eq!(secrets.len(), 1, "the link exists, so its secret is still kept");
+        assert_eq!(added.error.as_deref(), Some(NDA_NOT_SET));
+        assert_eq!(added.left, "Ben, Cat");
+        assert!(nda_pending_here().contains("stuck_tok"), "the listing marks it while the app runs");
+        assert_eq!(seen.lock().unwrap().iter().filter(|s| s.method == "POST").count(), 1);
+        forget("stuck_tok");
+        assert!(!nda_pending_here().contains("stuck_tok"));
+    }
+
+    /// With no link of the group holding a text, the link is reported as
+    /// locked with a sentence that says what to do.
+    #[tokio::test]
+    async fn no_text_anywhere_in_the_group_reads_as_missing() {
+        let (base, _) = mock(|s| match (s.method.as_str(), s.path.as_str()) {
+            ("POST", _) => (
+                201,
+                r#"{"share_token":"lone_tok","expires_at":null,"link_group":"g","nda_pending":true}"#.into(),
+            ),
+            ("GET", _) => (200, accepts_body("src_token", None)),
+            _ => (500, String::new()),
+        })
+        .await;
+        let label_key = key();
+        let from = vec!["src_token".to_string()];
+        let m = Minting {
+            nda_from: &from,
+            ..minting(&SHARE_KEY, &label_key, None)
+        };
+        let (added, _) = add_people(&reqwest::Client::new(), &Api::new(&base, "bearer"), &m, &["Ann".into()]).await;
+        assert!(added.people[0].nda_pending);
+        assert_eq!(added.error.as_deref(), Some(NDA_TEXT_MISSING));
+        forget("lone_tok");
+    }
+
+    /// Without `nda_pending` (no NDA, or a server from before locked links)
+    /// nothing is read or set.
+    #[tokio::test]
+    async fn a_link_without_nda_pending_sends_no_nda() {
+        let (base, seen) = mock(|s| match s.method.as_str() {
+            "POST" => (
+                201,
+                r#"{"share_token":"t","expires_at":null,"link_group":"g","nda_pending":false}"#.into(),
+            ),
+            _ => (500, String::new()),
+        })
+        .await;
+        let label_key = key();
+        let from = vec!["src_token".to_string()];
+        let m = Minting {
+            nda_from: &from,
+            ..minting(&SHARE_KEY, &label_key, None)
+        };
+        let (added, _) = add_people(&reqwest::Client::new(), &Api::new(&base, "bearer"), &m, &["Ann".into()]).await;
+        assert_eq!((added.error, added.people[0].nda_pending), (None, false));
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
+
+    /// Try again reads the text from the group, never from the locked link
+    /// itself, and sets it on that link.
+    #[tokio::test]
+    async fn try_again_sets_the_groups_text_on_the_locked_link() {
+        let (base, seen) = mock(|s| match (s.method.as_str(), s.path.as_str()) {
+            ("GET", "/v1/shares/src_token/nda/accepts") => (200, accepts_body("src_token", Some(NDA))),
+            ("PUT", "/v1/shares/stuck/nda") => (204, String::new()),
+            ("PUT", "/v1/shares/gone/nda") => (404, String::new()),
+            _ => (500, String::new()),
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "bearer"));
+        let from: Vec<String> = ["src_token", "stuck"].map(String::from).to_vec();
+        retry_nda(&http, &api, &SHARE_KEY, &from, "stuck").await.unwrap();
+        assert!(matches!(retry_nda(&http, &api, &SHARE_KEY, &from, "gone").await, Err(AppError::NotFound(m)) if m == LINK_GONE));
+
+        let seen = seen.lock().unwrap();
+        assert!(!seen.iter().any(|s| s.path == "/v1/shares/stuck/nda/accepts"));
+        let put = seen.iter().find(|s| s.path == "/v1/shares/stuck/nda").unwrap();
+        assert_eq!(put_text(&put.body, "stuck").as_deref(), Some(NDA));
+    }
+
+    #[test]
+    fn the_text_is_looked_for_on_the_source_then_its_group_oldest_first() {
+        let now = DateTime::parse_from_rfc3339("2026-11-18T12:00:00Z").unwrap().with_timezone(&Utc);
+        let source = row("src", Some("g"), Some("x"), "2026-11-05T00:00:00Z", None);
+        let rows = vec![
+            row("late", Some("g"), Some("l"), "2026-11-04T00:00:00Z", None),
+            source.clone(),
+            row("first", Some("g"), None, "2026-11-01T00:00:00Z", None),
+            row("expired", Some("g"), Some("e"), "2026-11-02T00:00:00Z", Some("2026-11-10T00:00:00Z")),
+            row("other", Some("h"), None, "2026-11-01T00:00:00Z", None),
+        ];
+        assert_eq!(nda_sources(&rows, &source, now), ["src", "first", "late"]);
+        assert_eq!(nda_sources(&rows, &row("lone", None, None, "", None), now), ["lone"]);
+    }
+
+    /// A link found locked through its `/meta` (made in an earlier session,
+    /// or whose `201` was lost) is marked; anything else is not.
+    #[test]
+    fn meta_marks_a_link_waiting_for_its_nda() {
+        assert!(meta_says_nda_pending(r#"{"nda":true,"nda_pending":true}"#));
+        assert!(!meta_says_nda_pending(r#"{"nda":true,"nda_pending":false}"#));
+        assert!(!meta_says_nda_pending(r#"{"nda":true}"#));
+        assert!(!meta_says_nda_pending("not json"));
+    }
+
+    #[tokio::test]
+    async fn the_listing_asks_meta_only_for_links_it_does_not_already_know() {
+        let (base, seen) = mock(|s| match s.path.as_str() {
+            "/v1/shares/locked/meta" => (200, r#"{"nda":true,"nda_pending":true}"#.into()),
+            "/v1/shares/open/meta" => (200, r#"{"nda":true,"nda_pending":false}"#.into()),
+            _ => (500, String::new()),
+        })
+        .await;
+        nda_still_pending("known_locked");
+        let tokens: Vec<String> = ["locked", "open", "down", "known_locked"].map(String::from).to_vec();
+        let found = nda_pending_links(&reqwest::Client::new(), &Api::new(&base, "bearer"), tokens).await;
+        nda_done("known_locked");
+        assert_eq!(found, HashSet::from(["locked".to_string(), "known_locked".to_string()]));
+        let seen = seen.lock().unwrap();
+        assert!(!seen.iter().any(|s| s.path == "/v1/shares/known_locked/meta"));
+        assert!(seen.iter().all(|s| s.auth.is_none()), "/meta is the recipient's route and gets no bearer");
+    }
+
+    #[test]
+    fn a_person_crosses_ipc_with_nda_pending() {
+        let p = person_with("t".into(), Some("Ann".into()), None, "f.pdf");
+        assert_eq!(
+            serde_json::to_value(RecipientPerson { nda_pending: true, ..p }).unwrap(),
+            serde_json::json!({ "shareToken": "t", "name": "Ann", "url": null, "mailto": null, "ndaPending": true })
+        );
     }
 }

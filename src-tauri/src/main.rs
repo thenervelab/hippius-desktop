@@ -587,6 +587,7 @@ fn main() {
             crate::shares::recipients::share_recipient_links,
             crate::shares::recipients::share_add_recipient_links,
             crate::shares::recipients::share_revoke_recipient_link,
+            crate::shares::recipients::share_retry_recipient_nda,
             crate::shares::recipients::share_group_insights,
             crate::shares::insights::share_link_settings_default,
             crate::shares::insights::share_switches_in_plan,

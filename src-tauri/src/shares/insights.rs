@@ -1348,7 +1348,7 @@ async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> R
 
 /// The link's anonymous `/meta`, which carries its switches. No bearer: the
 /// route is the recipient's, and it is the one that reports them per link.
-async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
+pub(super) async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
     let resp = http
         .get(api.share_url(token, "/meta")?)
         .timeout(REQUEST_TIMEOUT)
