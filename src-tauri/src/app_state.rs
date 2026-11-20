@@ -85,6 +85,8 @@ pub struct AppState {
     pub oauth: OAuthState,
     /// Team chat: pending OIDC sign-in flows and the HTTP client they use.
     pub chat: crate::chat::ChatState,
+    /// Link activity: the counts the last poll saw, and a notification's pending open.
+    pub link_alerts: crate::shares::link_alerts::LinkAlertsState,
     /// Screen capture: the one live capture session, if any.
     pub capture: crate::capture::commands::CaptureState,
     /// The file viewer's loopback video stream on Linux (`video_stream.rs`):
@@ -422,6 +424,7 @@ impl AppState {
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
+            link_alerts: crate::shares::link_alerts::LinkAlertsState::default(),
             capture: crate::capture::commands::CaptureState::default(),
             video_stream: crate::video_stream::VideoStreams::default(),
             video_engine: crate::video_engine::VideoEngineState::default(),
