@@ -108,6 +108,10 @@ pub struct NdaAccept {
     pub accepted_at: String,
     /// An accept of a text the owner has since replaced or removed.
     pub earlier: bool,
+    /// The text hash the server stored with the accept, standard base64
+    /// ([`text_hash`]). Only the exports use it.
+    #[serde(skip_serializing)]
+    pub text_hash: String,
 }
 
 // ─── The text ──────────────────────────────────────────────────────────────
@@ -367,6 +371,7 @@ fn accepts_view(page: &WireAcceptsPage, token: &str, key: Option<&CommentKey>) -
                 email,
                 accepted_at: a.accepted_at.clone(),
                 earlier: current.is_none_or(|n| n.hash != a.text_hash),
+                text_hash: a.text_hash.clone(),
             })
         })
         .collect();
@@ -697,6 +702,9 @@ mod tests {
             [(40, "v1", None, true), (41, "v2", Some("alice@acme.com"), false), (42, "v3", None, false),],
             "a row without a viewer is dropped"
         );
+        // Each accept keeps the hash the server stored, for the exports.
+        assert_eq!(view.accepts[0].text_hash, STANDARD.encode(before));
+        assert_eq!(view.accepts[1].text_hash, now.hash);
 
         // Without the key nothing opens, and the rows still list.
         let locked = accepts_view(&page, TOKEN, None);
@@ -812,6 +820,7 @@ mod tests {
                 email: None,
                 accepted_at: "2026-11-10T12:00:00Z".into(),
                 earlier: false,
+                text_hash: "aGFzaA==".into(),
             }],
             next_after: Some(1),
         };

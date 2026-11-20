@@ -67,10 +67,10 @@ export type NdaAcceptsState = ReturnType<typeof useNdaAccepts>;
  * by the name the Viewers tab gives them, else as an anonymous viewer. An
  * accept of a text the owner has since replaced says so.
  *
- * Export saves every accept as CSV, and each accept of the current text has
- * a Record: both built and written by Rust where the owner chooses, through
- * the native save dialog. An accept of an earlier text has no record, since
- * that text is not kept anywhere it could be read back from.
+ * Export saves every accept as CSV, and each accept has a Record: both built
+ * and written by Rust where the owner chooses, through the native save
+ * dialog, in the console's layout. An accept of the current text needs that
+ * text open here; an earlier text's record says the text is not kept.
  */
 export function NdaTab({
   state,
@@ -133,7 +133,7 @@ export function NdaTab({
               className={TEXT_LINK}
               disabled={saving !== null}
               onClick={() =>
-                run("export", "export the accepts", "Accepts saved as CSV", () => saveNdaAcceptsCsv(shareToken, fileName))
+                run("export", "export the accepts", "Accepts saved as CSV", () => saveNdaAcceptsCsv(shareToken, fileName, viewerNames))
               }
             >
               <Download aria-hidden className="size-[13px]" />
@@ -164,7 +164,7 @@ export function NdaTab({
             <tbody>
               {accepts.map((a) => {
                 const name = a.email ?? viewerNames[a.viewerId] ?? null;
-                const recordable = !a.earlier && first?.text != null;
+                const recordable = a.earlier || first?.text != null;
                 return (
                   <tr key={a.id} data-testid="nda-accept" className={cn("border-b last:border-b-0", HAIRLINE)}>
                     <td className="py-2.5 pr-2 align-middle">

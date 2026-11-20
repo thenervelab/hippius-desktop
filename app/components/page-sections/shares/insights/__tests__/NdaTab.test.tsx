@@ -150,7 +150,7 @@ describe("the NDA tab", () => {
     expect(ordered.map((a) => a.id)).toEqual([7, 6, 5]);
   });
 
-  it("is a table with a Record on each accept of the current text, none on an earlier one", async () => {
+  it("is a table with a Record on every accept, an earlier text's included", async () => {
     answer(PAGE);
     renderTab();
     const table = await screen.findByRole("table", { name: "Accepted" });
@@ -158,14 +158,17 @@ describe("the NDA tab", () => {
     const rows = screen.getAllByTestId("nda-accept");
     expect(within(rows[0]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
     expect(within(rows[1]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
-    expect(within(rows[2]).queryByRole("button", { name: /Record/ })).toBeNull();
+    expect(within(rows[2]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
   });
 
-  it("has no Record when the text can't be opened here", async () => {
+  it("keeps the Record only on an earlier text's accept when the current text can't be opened here", async () => {
     answer({ ...PAGE, text: null });
     renderTab();
     await screen.findByRole("table", { name: "Accepted" });
-    expect(screen.queryByRole("button", { name: /Record/ })).toBeNull();
+    const rows = screen.getAllByTestId("nda-accept");
+    expect(within(rows[0]).queryByRole("button", { name: /Record/ })).toBeNull();
+    expect(within(rows[1]).queryByRole("button", { name: /Record/ })).toBeNull();
+    expect(within(rows[2]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
   });
 
   it("saves a record where the owner chooses, through Rust, by the accept's id", async () => {
@@ -187,10 +190,10 @@ describe("the NDA tab", () => {
     );
   });
 
-  it("exports every accept as CSV, and a dismissed dialog writes nothing", async () => {
+  it("exports every accept as CSV with the Viewers tab's names, and a dismissed dialog writes nothing", async () => {
     answer(PAGE);
     saveMock.mockResolvedValueOnce(null).mockResolvedValueOnce("/tmp/a.csv");
-    renderTab();
+    renderTab({ "v-named": "Bob" });
     const exportButton = await screen.findByRole("button", { name: "Export" });
     fireEvent.click(exportButton);
     await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1));
@@ -202,6 +205,7 @@ describe("the NDA tab", () => {
         shareToken: "tok",
         fileName: "Q3 report.pdf",
         destination: "/tmp/a.csv",
+        viewerNames: { "v-named": "Bob" },
       }),
     );
   });
