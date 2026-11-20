@@ -20,6 +20,7 @@ pub mod insights_csv;
 pub mod keystore;
 pub mod link_activity;
 pub mod nda;
+pub mod nda_records;
 pub mod origin;
 pub mod outside_folder;
 pub(crate) mod owner_wrap;

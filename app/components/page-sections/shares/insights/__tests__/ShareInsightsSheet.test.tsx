@@ -184,6 +184,12 @@ async function showTab(start: string) {
 
 const ALL_SWITCHES_ON = { offered: ALL_ON, on: ALL_ON, switchesInPlan: true };
 
+/** Opens a rule card in Link settings: its editor is pushed in its place. */
+async function openRule(settings: HTMLElement, id: string) {
+  const card = await within(settings).findByTestId(`rule-${id}`);
+  fireEvent.click(within(card).getByRole("button"));
+}
+
 describe("ShareInsightsSheet", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -753,8 +759,15 @@ describe("ShareInsightsSheet", () => {
     });
     renderSheet();
     const settings = await openSettings();
+    expect(await within(settings).findByTestId("rule-gate")).toHaveTextContent("On");
+    expect(within(settings).getByTestId("rule-allowList")).toHaveTextContent("Off");
+    await openRule(settings, "gate");
     const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
     expect(ask).toHaveAttribute("aria-checked", "true");
+    // The switch's editor holds no lists; they are the Allow list card's.
+    expect(within(settings).queryByRole("textbox", { name: "Only allow" })).toBeNull();
+    fireEvent.click(within(settings).getByRole("button", { name: "Back" }));
+    await openRule(settings, "allowList");
     expect(within(settings).getByRole("textbox", { name: "Only allow" })).toBeInTheDocument();
   });
 
@@ -781,6 +794,8 @@ describe("ShareInsightsSheet", () => {
     expect(within(panel).getByTestId("nda-accept")).toHaveTextContent("Ahmad");
 
     const settings = await openSettings();
+    expect(await within(settings).findByTestId("rule-nda")).toHaveTextContent("Keep it quiet.");
+    await openRule(settings, "nda");
     expect(await within(settings).findByRole("switch", { name: NDA_LABEL })).toHaveAttribute("aria-checked", "true");
     expect(within(settings).getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it quiet.");
   });
@@ -888,6 +903,7 @@ describe("ShareInsightsSheet", () => {
       renderSheet();
       const settings = await openSettings();
       await within(settings).findByRole("switch", { name: "Insights" });
+      expect(within(settings).queryByTestId("rule-download")).toBeNull();
       expect(within(settings).queryByRole("switch", { name: "Allow download" })).toBeNull();
     });
 
@@ -895,6 +911,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: true, download: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       const allow = await within(settings).findByRole("switch", { name: "Allow download" });
       expect(allow).toHaveAttribute("aria-checked", "true");
       fireEvent.click(allow);
@@ -908,6 +925,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: false, download: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       const allow = await within(settings).findByRole("switch", { name: "Allow download" });
       expect(within(settings).getByText(DOWNLOAD_SWITCH.locked)).toBeInTheDocument();
       fireEvent.click(allow);
@@ -921,6 +939,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: true, download: true, refuse: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       fireEvent.click(await within(settings).findByRole("switch", { name: "Allow download" }));
       expect(await within(settings).findByRole("region", { name: "Upgrade to turn off downloads" })).toBeInTheDocument();
       await waitFor(() => expect(screen.getByRole("switch", { name: "Allow download" })).toHaveAttribute("aria-checked", "true"));

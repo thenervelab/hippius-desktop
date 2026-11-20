@@ -10,6 +10,23 @@ import { ANONYMOUS } from "../insightsView";
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
+const saveMock = vi.fn();
+vi.mock("@tauri-apps/plugin-dialog", () => ({ save: (...args: unknown[]) => saveMock(...args) }));
+vi.mock("@tauri-apps/api/path", () => ({
+  downloadDir: () => Promise.resolve("/Users/me/Downloads"),
+  join: (...parts: string[]) => Promise.resolve(parts.join("/")),
+}));
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+/** Answers the accepts listing with `page` and the save commands as Rust would. */
+function answer(page: NdaAccepts) {
+  invokeMock.mockImplementation((cmd: string, args?: { acceptId?: number }) => {
+    if (cmd === "share_nda_accepts") return Promise.resolve(page);
+    if (cmd === "share_nda_accepts_csv_name") return Promise.resolve("Q3 report NDA accepts 2026-11-20.csv");
+    if (cmd === "share_nda_record_name") return Promise.resolve(`Q3 report NDA record ${args?.acceptId}.txt`);
+    return Promise.resolve(undefined);
+  });
+}
 
 const accept = (id: number, viewerId: string, at: string, more: Partial<NdaAccept> = {}): NdaAccept => ({
   id,
@@ -42,7 +59,7 @@ function wrapper() {
 
 function Tab({ names = {} }: { names?: Record<string, string | null> }) {
   const state = useNdaAccepts("tok");
-  return state.shown ? <NdaTab state={state} viewerNames={names} /> : <p>no tab</p>;
+  return state.shown ? <NdaTab state={state} viewerNames={names} shareToken="tok" fileName="Q3 report.pdf" /> : <p>no tab</p>;
 }
 
 function renderTab(names?: Record<string, string | null>) {
@@ -55,7 +72,10 @@ function renderTab(names?: Record<string, string | null>) {
 }
 
 describe("the NDA tab", () => {
-  beforeEach(() => invokeMock.mockReset());
+  beforeEach(() => {
+    invokeMock.mockReset();
+    saveMock.mockReset();
+  });
 
   it("shows the text, then each accept newest first, named by proven email, then viewer name, else anonymous", async () => {
     invokeMock.mockResolvedValue(PAGE);
@@ -70,7 +90,7 @@ describe("the NDA tab", () => {
       expect.stringContaining(ANONYMOUS),
     ]);
     // Only the accept of an earlier text says so.
-    expect(within(rows[2]).getByText(new RegExp(EARLIER_TEXT))).toBeInTheDocument();
+    expect(within(rows[2]).getAllByText(new RegExp(EARLIER_TEXT)).length).toBeGreaterThan(0);
     expect(within(rows[0]).queryByText(new RegExp(EARLIER_TEXT))).toBeNull();
   });
 
@@ -128,5 +148,72 @@ describe("the NDA tab", () => {
       { ...PAGE, accepts: [accept(7, "c", "2026-11-02T00:00:00Z")] },
     ]);
     expect(ordered.map((a) => a.id)).toEqual([7, 6, 5]);
+  });
+
+  it("is a table with a Record on every accept, an earlier text's included", async () => {
+    answer(PAGE);
+    renderTab();
+    const table = await screen.findByRole("table", { name: "Accepted" });
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent)).toEqual(["Name", "Accepted", "Record"]);
+    const rows = screen.getAllByTestId("nda-accept");
+    expect(within(rows[0]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
+    expect(within(rows[1]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
+    expect(within(rows[2]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
+  });
+
+  it("keeps the Record only on an earlier text's accept when the current text can't be opened here", async () => {
+    answer({ ...PAGE, text: null });
+    renderTab();
+    await screen.findByRole("table", { name: "Accepted" });
+    const rows = screen.getAllByTestId("nda-accept");
+    expect(within(rows[0]).queryByRole("button", { name: /Record/ })).toBeNull();
+    expect(within(rows[1]).queryByRole("button", { name: /Record/ })).toBeNull();
+    expect(within(rows[2]).getByRole("button", { name: /Record/ })).toBeInTheDocument();
+  });
+
+  it("saves a record where the owner chooses, through Rust, by the accept's id", async () => {
+    answer(PAGE);
+    saveMock.mockResolvedValue("/Users/me/Downloads/rec.txt");
+    renderTab();
+    const rows = await screen.findAllByTestId("nda-accept");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: /Record/ }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_save_nda_record", {
+        shareToken: "tok",
+        fileName: "Q3 report.pdf",
+        acceptId: 3,
+        destination: "/Users/me/Downloads/rec.txt",
+      }),
+    );
+    expect(saveMock).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultPath: "/Users/me/Downloads/Q3 report NDA record 3.txt" }),
+    );
+  });
+
+  it("exports every accept as CSV with the Viewers tab's names, and a dismissed dialog writes nothing", async () => {
+    answer(PAGE);
+    saveMock.mockResolvedValueOnce(null).mockResolvedValueOnce("/tmp/a.csv");
+    renderTab({ "v-named": "Bob" });
+    const exportButton = await screen.findByRole("button", { name: "Export" });
+    fireEvent.click(exportButton);
+    await waitFor(() => expect(saveMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(exportButton).not.toBeDisabled());
+    expect(invokeMock).not.toHaveBeenCalledWith("share_export_nda_accepts_csv", expect.anything());
+    fireEvent.click(exportButton);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_export_nda_accepts_csv", {
+        shareToken: "tok",
+        fileName: "Q3 report.pdf",
+        destination: "/tmp/a.csv",
+        viewerNames: { "v-named": "Bob" },
+      }),
+    );
+  });
+
+  it("offers no Export while no one has accepted", async () => {
+    answer({ ...PAGE, accepts: [] });
+    renderTab();
+    await screen.findByText(NO_ACCEPTS);
+    expect(screen.queryByRole("button", { name: "Export" })).toBeNull();
   });
 });

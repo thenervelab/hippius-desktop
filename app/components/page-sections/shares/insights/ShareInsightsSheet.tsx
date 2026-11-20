@@ -627,7 +627,7 @@ function InsightsPanelFor({
     (ndaAccepts.shown
       ? {
           count: ndaAccepts.query.hasNextPage ? null : ndaAccepts.count,
-          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} />,
+          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} shareToken={shareToken} fileName={fileName} />,
         }
       : undefined);
   const tabs: InsightsTabItem[] = [];
@@ -743,6 +743,8 @@ function InsightsPanelFor({
         <LinkSettingsPopover
           id={popoverId}
           shareToken={shareToken}
+          fileName={fileName}
+          share={summary}
           switches={switches}
           top={settingsTop}
           opener={settingsOpener}
