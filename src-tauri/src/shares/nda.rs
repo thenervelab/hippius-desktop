@@ -300,6 +300,27 @@ fn nda_refusal(err: AppError) -> AppError {
     }
 }
 
+// ─── For links per person ──────────────────────────────────────────────────
+
+/// The NDA text of `token`, opened with `key` (every link of a group has the
+/// same share key, so one key opens each link's text under its own token).
+/// `Ok(None)` when the link has no text, has a locked one, does not open
+/// here, or is no longer live.
+pub(super) async fn read_link_text(http: &reqwest::Client, api: &Api, token: &str, key: &CommentKey) -> Result<Option<String>> {
+    match get_accepts(http, api, token, 0).await {
+        Ok(page) => Ok(page.current().and_then(|n| open_text(key, token, &n.ct, &n.nonce))),
+        Err(AppError::NotFound(_)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Seal `text` for `token` (additional data `<token>:nda-text`) and set it,
+/// exactly as the NDA editor sets a text on any link.
+pub(super) async fn set_link_text(http: &reqwest::Client, api: &Api, token: &str, key: &CommentKey, text: &str) -> Result<()> {
+    let sealed = seal_text(key, token, text)?;
+    put_nda(http, api, token, &sealed).await
+}
+
 // ─── What the owner sees ───────────────────────────────────────────────────
 
 /// The setting as drawn, from what the server and this computer know.
