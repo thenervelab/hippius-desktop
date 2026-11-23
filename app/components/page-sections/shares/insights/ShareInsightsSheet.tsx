@@ -5,7 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { BarChart3, Download, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
+import { BarChart3, ChevronDown, Download, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
 import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import {
   insightsSheetAtom,
+  serverCapabilitiesAtom,
   shareCommentsEnabledAtom,
   type CaptureLinkSource,
   type InsightsSheetTarget,
@@ -52,6 +53,7 @@ import { RetentionChart } from "./RetentionChart";
 import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
 import { saveInsightsCsv } from "./exportCsv";
 import { NdaTab, useNdaAccepts } from "./NdaTab";
+import { ViewerVisits } from "./ViewerVisits";
 import { PeopleTab, useGroupInsights } from "./PeopleTab";
 import {
   COMPARE_PLANS,
@@ -92,7 +94,7 @@ import {
   switchesOffLine,
   type InsightsTab,
 } from "./insightsView";
-import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
+import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /**
  * The console's Insights width. Wider than File Details' 305 and Manage
@@ -665,6 +667,7 @@ function InsightsPanelFor({
       case "viewers":
         return insights.data ? (
           <ViewersTab
+            shareToken={shareToken}
             insights={insights.data}
             notCounting={notCounting}
             offLine={switchOffLine(settings, "insights")}
@@ -993,6 +996,7 @@ function KpiStrip({ items }: { items: Array<{ label: string; value: ReactNode }>
  * most recent first. On the free plan, the lock over sample data.
  */
 function ViewersTab({
+  shareToken,
   insights,
   notCounting,
   offLine,
@@ -1002,6 +1006,8 @@ function ViewersTab({
   durationMs,
   comments,
 }: {
+  /** The link, whose real viewers open into their own visits. */
+  shareToken: string;
   insights: ShareInsights;
   /** The link's Insights switch is off, so its view counts are not being kept. */
   notCounting: boolean;
@@ -1070,7 +1076,7 @@ function ViewersTab({
       {viewerRows.length === 0 ? (
         <EmptyLine icon={<Eye />} text="No viewers listed yet" />
       ) : (
-        <ViewerRows viewers={viewerRows} video={video} paged />
+        <ViewerRows viewers={viewerRows} video={video} paged shareToken={shareToken} />
       )}
     </div>
   );
@@ -1284,16 +1290,28 @@ function Locked({
 
 /**
  * Viewer rows; `paged` lists `VIEWERS_PAGE` at a time behind "Show more
- * viewers". Only a recording's rows say how much each viewer watched.
+ * viewers". Only a recording's rows say how much each viewer watched. With
+ * `shareToken` (real viewers, never the locked samples) a row opens into
+ * that viewer's visits.
  */
-function ViewerRows({ viewers, video, paged = false }: { viewers: InsightsViewer[]; video: boolean; paged?: boolean }) {
+function ViewerRows({
+  viewers,
+  video,
+  paged = false,
+  shareToken,
+}: {
+  viewers: InsightsViewer[];
+  video: boolean;
+  paged?: boolean;
+  shareToken?: string;
+}) {
   const [limit, setLimit] = useState(VIEWERS_PAGE);
   const shown = paged ? viewers.slice(0, limit) : viewers;
   return (
     <>
       <ul className={cn("flex flex-col divide-y", DIVIDE)} aria-label="Viewers">
         {shown.map((v) => (
-          <ViewerRow key={v.viewerId} viewer={v} video={video} />
+          <ViewerRow key={v.viewerId} viewer={v} video={video} shareToken={shareToken} />
         ))}
       </ul>
       {shown.length < viewers.length && (
@@ -1318,13 +1336,18 @@ function ViewerRows({ viewers, video, paged = false }: { viewers: InsightsViewer
  * verified, as on the console: Rust drops every email that fails the
  * server's check, so an email on screen is always a proven one.
  */
-function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolean }) {
+function ViewerRow({ viewer: v, video, shareToken }: { viewer: InsightsViewer; video: boolean; shareToken?: string }) {
   const watched = formatWatched(v.watchedMs);
   const email = v.email ?? null;
   const shownName = v.name ?? email;
   const emailLine = v.name !== null && email !== null;
-  return (
-    <li className="flex items-center gap-3 py-3">
+  const caps = useAtomValue(serverCapabilitiesAtom);
+  // Only real viewers on a server with Insights open into their visits.
+  const opens = shareToken !== undefined && caps?.share_insights === true;
+  const [open, setOpen] = useState(false);
+  const detailId = useId();
+  const row = (
+    <div className="flex min-w-0 flex-1 items-center gap-3">
       <InsightsAvatar name={shownName} size="md" />
       <div className="min-w-0 flex-1">
         <p className="flex min-w-0 items-center gap-1.5">
@@ -1355,6 +1378,30 @@ function ViewerRow({ viewer: v, video }: { viewer: InsightsViewer; video: boolea
             <span className="sr-only"> of the recording</span>
           </p>
         </>
+      )}
+    </div>
+  );
+  if (!opens) return <li className="flex items-center gap-3 py-3">{row}</li>;
+  return (
+    <li className="py-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={detailId}
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          "-mx-2 flex w-[calc(100%+16px)] items-center gap-2 rounded-[10px] px-2 py-2 text-left transition-colors",
+          "hover:bg-grey-90/60 dark:hover:bg-white/[0.04]",
+          FOCUS,
+        )}
+      >
+        {row}
+        <ChevronDown aria-hidden className={cn("size-4 shrink-0 transition-transform", MUTED, open && "rotate-180")} />
+      </button>
+      {open && (
+        <div id={detailId} className="pb-2 pl-[44px] pt-1">
+          <ViewerVisits shareToken={shareToken} viewerId={v.viewerId} />
+        </div>
       )}
     </li>
   );

@@ -58,6 +58,7 @@ import {
   revokeShare,
   updateFolderShareExpiry,
   updateShareExpiry,
+  setShareExpiryDate,
   type ShareChoice,
   type ShareLink,
   type ShareProgress,
@@ -80,7 +81,7 @@ import {
 import LinkEngagementSwitches from "./LinkEngagementSwitches";
 import { LinkRules, TTL_OPTIONS } from "@/components/page-sections/shares/rules/LinkRules";
 import RecipientLinks from "@/components/page-sections/shares/insights/RecipientLinks";
-import { isDownloadNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
+import { isDownloadNotInPlan, isWatermarkNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
 import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
@@ -1241,9 +1242,14 @@ function DoneBody({
   // server without the switch (Rust sends none), which draws no row.
   const [download, setDownload] = useState<boolean | null>(null);
   const [downloadRefused, setDownloadRefused] = useState(false);
+  // The watermark, where it is a setting of its own (Rust sends it only on a
+  // server with the switch): `null` until read, and for good otherwise.
+  const [watermark, setWatermark] = useState<boolean | null>(null);
+  const [watermarkRefused, setWatermarkRefused] = useState(false);
   // The expiry as chosen and as the server has it. A change is shown at once
   // and put back if the server refuses, like the switches.
-  const [ttl, setTtl] = useState<ShareTtl>(expiry.ttl);
+  // `null` once the link ends on a chosen date instead of a preset.
+  const [ttl, setTtl] = useState<ShareTtl | null>(expiry.ttl);
   const [expiresAt, setExpiresAt] = useState<string | null>(link.expiresAt);
   const [expirySaving, setExpirySaving] = useState(false);
   // A rule's editor is open in place of the rest of the dialog.
@@ -1282,6 +1288,7 @@ function DoneBody({
       .then((real) => {
         if (!alive) return;
         setDownload(real.download ?? null);
+        setWatermark(real.watermark ?? null);
         if (!askedAny || switchesTouched.current) return;
         setSwitches(real.on);
         const missed = (["insights", "comments", "reactions"] as const).some(
@@ -1324,12 +1331,47 @@ function DoneBody({
     setSwitchesSaving(true);
     try {
       await setLinkSettings(link.shareToken, { download: next });
+      // A watermark the owner never set follows downloads: read it back.
+      if (watermark !== null) {
+        const real = await getLinkSettings(link.shareToken).catch(() => null);
+        if (real) setWatermark(real.watermark ?? null);
+      }
     } catch (err) {
       setDownload(before);
       if (isDownloadNotInPlan(err)) setDownloadRefused(true);
       else toast.error(errorMessage(err));
     } finally {
       setSwitchesSaving(false);
+    }
+  };
+
+  const changeWatermark = async (next: boolean) => {
+    const before = watermark;
+    setWatermark(next);
+    setWatermarkRefused(false);
+    setSwitchesSaving(true);
+    try {
+      await setLinkSettings(link.shareToken, { watermark: next });
+    } catch (err) {
+      setWatermark(before);
+      if (isWatermarkNotInPlan(err)) setWatermarkRefused(true);
+      else toast.error(errorMessage(err));
+    } finally {
+      setSwitchesSaving(false);
+    }
+  };
+
+  // A chosen end date, for a file link on a server that takes one.
+  const changeExpiryDate = async (day: string) => {
+    if (expiry.by !== "file") return;
+    setExpirySaving(true);
+    try {
+      setExpiresAt(await setShareExpiryDate(link.shareToken, day));
+      setTtl(null);
+    } catch (err) {
+      toast.error(`Could not update expiry: ${errorMessage(err)}`);
+    } finally {
+      setExpirySaving(false);
     }
   };
 
@@ -1463,10 +1505,22 @@ function DoneBody({
           download={engagement ? download : null}
           onDownloadChange={(next) => void changeDownload(next)}
           downloadRefused={downloadRefused}
+          watermark={engagement ? watermark : null}
+          onWatermarkChange={(next) => void changeWatermark(next)}
+          watermarkRefused={watermarkRefused}
           savingSwitches={switchesSaving}
           switchesInPlan={engagement?.switchesInPlan ?? null}
           expiresAt={expiresAt}
-          expiry={expiry.by ? { ttl, saving: expirySaving, onChange: (next) => void changeExpiry(next) } : null}
+          expiry={
+            expiry.by
+              ? {
+                  ttl,
+                  saving: expirySaving,
+                  onChange: (next) => void changeExpiry(next),
+                  onDate: expiry.by === "file" ? (day) => void changeExpiryDate(day) : undefined,
+                }
+              : null
+          }
           passwordOn={Boolean(password)}
           onUpgrade={onUpgrade}
           onPushedChange={setRulePushed}

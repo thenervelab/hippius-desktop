@@ -108,7 +108,8 @@ fn newest_first(log: &NdaAccepts) -> Vec<&NdaAccept> {
 
 /// Every accept as CSV, newest first, with the console's columns: File,
 /// Name, Email, Email verified, Accepted (UTC), Version, Accept id, Viewer
-/// id, Text hash (BLAKE3). `names` are the Viewers tab's names by viewer id.
+/// id, Text hash (BLAKE3). Name is the name the signer typed when they
+/// accepted, else the Viewers tab's name for them (`names`, by viewer id).
 /// Refused when there are none.
 pub fn accepts_csv(file_name: &str, log: &NdaAccepts, names: &BTreeMap<String, Option<String>>) -> Result<String> {
     if log.accepts.is_empty() {
@@ -130,7 +131,7 @@ pub fn accepts_csv(file_name: &str, log: &NdaAccepts, names: &BTreeMap<String, O
     for a in newest_first(log) {
         rows.push(vec![
             Cell::Text(file_name.into()),
-            text(names.get(&a.viewer_id).cloned().flatten()),
+            text(a.signer_name.clone().or_else(|| names.get(&a.viewer_id).cloned().flatten())),
             text(a.email.clone()),
             // An email shows here only once it matched the server's check.
             Cell::Text(if a.email.is_some() { "Yes" } else { "" }.into()),
@@ -161,6 +162,10 @@ pub fn record(file_name: &str, log: &NdaAccepts, accept_id: u64) -> Option<Strin
         ))
     };
     let mut lines = vec!["NDA accept record".to_string(), String::new(), format!("File: {file_name}")];
+    // Only what the signer typed, and only when they typed something.
+    if let Some(name) = &accept.signer_name {
+        lines.push(format!("Signer name: {name}"));
+    }
     lines.push(match &accept.email {
         Some(email) => format!("Signer email: {email} (verified with a code)"),
         None => "Signer email: not asked".into(),
@@ -264,6 +269,7 @@ mod tests {
             id,
             viewer_id: format!("v{id}"),
             email: email.map(str::to_string),
+            signer_name: None,
             accepted_at: at.into(),
             earlier,
             text_hash: HASH_B64.into(),
@@ -345,6 +351,30 @@ mod tests {
                 .unwrap()
                 .contains("Signer email: =cmd@x.com (verified with a code)\n")
         );
+    }
+
+    /// The name the signer typed fills the CSV's Name ahead of the Viewers
+    /// tab's, and the record says it right after the file; a record of an
+    /// accept without one has no such line.
+    #[test]
+    fn the_signers_typed_name_fills_the_name_and_the_record() {
+        let mut l = log();
+        l.accepts[1].signer_name = Some("Dana Reyes".into());
+        l.accepts[2].signer_name = Some("@Sam".into());
+        let csv = accepts_csv("Q3 report.pdf", &l, &names()).unwrap();
+        let rows: Vec<&str> = csv.split("\r\n").collect();
+        assert!(rows[1].starts_with("Q3 report.pdf,Dana Reyes,dana@acme.com,"), "{}", rows[1]);
+        assert!(
+            rows[2].starts_with("Q3 report.pdf,'@Sam,"),
+            "a typed name is formula safe too: {}",
+            rows[2]
+        );
+        let r = record("Q3 report.pdf", &l, 7).unwrap();
+        assert!(
+            r.starts_with("NDA accept record\n\nFile: Q3 report.pdf\nSigner name: Dana Reyes\nSigner email: dana@acme.com"),
+            "{r}"
+        );
+        assert!(!record("Q3 report.pdf", &log(), 7).unwrap().contains("Signer name"));
     }
 
     #[test]

@@ -19,11 +19,11 @@ import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagem
 import RecipientLinks from "./RecipientLinks";
 import { LinkRules } from "@/components/page-sections/shares/rules/LinkRules";
 import type { ShareSummary, ShareTtl } from "@/app/lib/tauri/shares";
-import { updateShareExpiry } from "@/app/lib/tauri/shares";
+import { setShareExpiryDate, updateShareExpiry } from "@/app/lib/tauri/shares";
 import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
-import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
+import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, isWatermarkNotInPlan, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
 import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
@@ -42,6 +42,7 @@ export function useLinkSwitches(shareToken: string) {
   const queryClient = useQueryClient();
   const key = linkSettingsQueryKey(shareToken);
   const [downloadRefused, setDownloadRefused] = useState(false);
+  const [watermarkRefused, setWatermarkRefused] = useState(false);
   const current = useQuery({
     queryKey: key,
     queryFn: () => getLinkSettings(shareToken),
@@ -55,14 +56,16 @@ export function useLinkSwitches(shareToken: string) {
       await queryClient.cancelQueries({ queryKey: key });
       const before = queryClient.getQueryData<LinkSettingsDefault>(key);
       if (before) {
-        const { download, ...switches } = change;
+        const { download, watermark, ...switches } = change;
         queryClient.setQueryData<LinkSettingsDefault>(key, {
           ...before,
           on: { ...before.on, ...switches },
           download: download ?? before.download,
+          watermark: watermark ?? before.watermark,
         });
       }
       setDownloadRefused(false);
+      setWatermarkRefused(false);
       return { before };
     },
     onError: (err, _change, ctx) => {
@@ -71,11 +74,15 @@ export function useLinkSwitches(shareToken: string) {
         setDownloadRefused(true);
         return;
       }
+      if (isWatermarkNotInPlan(err)) {
+        setWatermarkRefused(true);
+        return;
+      }
       toast.error(actionErrorLine("change that setting", err, navigator.onLine));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
-  return { current, save, downloadRefused };
+  return { current, save, downloadRefused, watermarkRefused };
 }
 
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
@@ -117,7 +124,7 @@ export function LinkSettingsPopover({
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const { current, save, downloadRefused } = switches;
+  const { current, save, downloadRefused, watermarkRefused } = switches;
   const online = useIsOnline();
   const queryClient = useQueryClient();
   // A rule's editor is open in place of everything else.
@@ -135,6 +142,18 @@ export function LinkSettingsPopover({
         setTtl(before);
         toast.error(actionErrorLine("change the expiry", err, navigator.onLine));
       })
+      .finally(() => setExpirySaving(false));
+  };
+  // A chosen end date in place of a preset.
+  const changeExpiryDate = (day: string) => {
+    if (expirySaving) return;
+    setExpirySaving(true);
+    setShareExpiryDate(shareToken, day)
+      .then(() => {
+        setTtl(null);
+        return queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
+      })
+      .catch((err: unknown) => toast.error(actionErrorLine("change the expiry", err, navigator.onLine)))
       .finally(() => setExpirySaving(false));
   };
   const upgrade = () => {
@@ -208,10 +227,13 @@ export function LinkSettingsPopover({
         download={current.data?.download ?? null}
         onDownloadChange={(download) => save.mutate({ download })}
         downloadRefused={downloadRefused}
+        watermark={current.data?.watermark ?? null}
+        onWatermarkChange={(watermark) => save.mutate({ watermark })}
+        watermarkRefused={watermarkRefused}
         savingSwitches={save.isPending}
         switchesInPlan={current.data?.switchesInPlan ?? null}
         expiresAt={share ? share.expiresAt : undefined}
-        expiry={share ? { ttl, saving: expirySaving, onChange: changeExpiry } : null}
+        expiry={share ? { ttl, saving: expirySaving, onChange: changeExpiry, onDate: changeExpiryDate } : null}
         // Known only where this computer holds the link's key.
         passwordOn={share?.shareUrl ? share.isPrivate : null}
         onUpgrade={upgrade}

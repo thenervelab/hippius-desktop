@@ -80,13 +80,26 @@ export function ndaSummary(nda: Pick<LinkNda, "on" | "text">): RuleSummary {
 
 const PDF = /\.pdf$/i;
 
+export const WATERMARK_OFF_VALUE = "Off";
+
+/** Whether the share page can draw the watermark on this file: PDFs only, as on the console. */
+export function isWatermarkable(fileName: string, mimeType: string | null): boolean {
+  return PDF.test(fileName.trim()) || mimeType === "application/pdf";
+}
+
 /**
- * The watermark as the share page draws it today: on a PDF, while downloads
- * are off. Not a setting of its own yet, so the card only reads it.
+ * The watermark as the share page draws it. `watermark` is the link's own
+ * switch where the server has one; `null` elsewhere, where the page draws it
+ * on a PDF while downloads are off.
  */
-export function watermarkSummary(fileName: string, mimeType: string | null, download: boolean | null): RuleSummary {
-  const pdf = PDF.test(fileName) || mimeType === "application/pdf";
-  if (!pdf) return { on: false, value: WATERMARK_PDF_ONLY };
+export function watermarkSummary(
+  fileName: string,
+  mimeType: string | null,
+  download: boolean | null,
+  watermark: boolean | null = null,
+): RuleSummary {
+  if (!isWatermarkable(fileName, mimeType)) return { on: false, value: WATERMARK_PDF_ONLY };
+  if (watermark !== null) return watermark ? { on: true, value: WATERMARK_VALUE } : { on: false, value: WATERMARK_OFF_VALUE };
   if (download === false) return { on: true, value: WATERMARK_VALUE };
   return { on: false, value: WATERMARK_WHEN_VIEW_ONLY };
 }

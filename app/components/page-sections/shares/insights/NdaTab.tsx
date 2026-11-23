@@ -62,9 +62,10 @@ export type NdaAcceptsState = ReturnType<typeof useNdaAccepts>;
 
 /**
  * The NDA tab: the link's current text, then a table of who accepted and
- * when, newest first. A person shows by the email they proved on a link that
- * asks for one (Rust shows it only when it matches the server's check), else
- * by the name the Viewers tab gives them, else as an anonymous viewer. An
+ * when, newest first. A person shows by the name they typed when they
+ * accepted, else the email they proved on a link that asks for one (Rust
+ * shows it only when it matches the server's check), else by the name the
+ * Viewers tab gives them, else as an anonymous viewer. An
  * accept of a text the owner has since replaced says so.
  *
  * Export saves every accept as CSV, and each accept has a Record: both built
@@ -163,7 +164,7 @@ export function NdaTab({
             </thead>
             <tbody>
               {accepts.map((a) => {
-                const name = a.email ?? viewerNames[a.viewerId] ?? null;
+                const name = a.signerName ?? a.email ?? viewerNames[a.viewerId] ?? null;
                 const recordable = a.earlier || first?.text != null;
                 return (
                   <tr key={a.id} data-testid="nda-accept" className={cn("border-b last:border-b-0", HAIRLINE)}>

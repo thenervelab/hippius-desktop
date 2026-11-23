@@ -1,29 +1,23 @@
 "use client";
 
-import type { ShareTtl } from "@/app/lib/tauri/shares";
-import { Select } from "@/components/ui/select/Select";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings, { useLinkGate } from "@/components/page-sections/shares/insights/EmailGateSettings";
 import NdaSettings, { useLinkNda } from "@/components/page-sections/shares/insights/NdaSettings";
 import { RuleCards, type LinkRule } from "./RuleCards";
+import { ExpiryEditor, TTL_OPTIONS, type ExpiryEdit } from "./ExpiryEditor";
 import {
   allowListSummary,
   downloadSummary,
   expirySummary,
   GATE_VALUE,
+  isWatermarkable,
   ndaSummary,
   passwordSummary,
   RULE_LABELS,
   watermarkSummary,
 } from "./ruleSummaries";
 
-/** How long a link lasts: the four the server takes. */
-export const TTL_OPTIONS: ReadonlyArray<{ label: string; value: ShareTtl }> = [
-  { label: "24 hours", value: "24h" },
-  { label: "7 days", value: "7d" },
-  { label: "30 days", value: "30d" },
-  { label: "Until I revoke it", value: "never" },
-];
+export { TTL_OPTIONS };
 
 const NO_SWITCHES = { insights: false, comments: false, reactions: false } as const;
 
@@ -33,8 +27,10 @@ const NO_SWITCHES = { insights: false, comments: false, reactions: false } as co
  * shows only when its rule exists here: Ask for email and Allow list where
  * Rust says the server has email gates, NDA where Rust offers it, Download
  * where the link has the switch, Expiry and Password where they are known.
- * Watermark only reads today's rule (a PDF while downloads are off), since
- * it is not a setting of its own yet.
+ * Watermark is a switch of its own where the server has one
+ * (`share_watermark_switch`, Rust then sends `watermark`); elsewhere it only
+ * reads the older rule, a PDF while downloads are off. Expiry offers a
+ * chosen date beside the presets where the server takes one.
  */
 export function LinkRules({
   shareToken,
@@ -43,6 +39,9 @@ export function LinkRules({
   download = null,
   onDownloadChange,
   downloadRefused = false,
+  watermark = null,
+  onWatermarkChange,
+  watermarkRefused = false,
   savingSwitches = false,
   switchesInPlan = null,
   expiresAt,
@@ -60,12 +59,16 @@ export function LinkRules({
   download?: boolean | null;
   onDownloadChange?: (on: boolean) => void;
   downloadRefused?: boolean;
+  /** The watermark as the link has it; `null` where it is not a setting of its own. */
+  watermark?: boolean | null;
+  onWatermarkChange?: (on: boolean) => void;
+  watermarkRefused?: boolean;
   savingSwitches?: boolean;
   switchesInPlan?: boolean | null;
   /** RFC 3339, `null` for never; `undefined` while unknown (no card). */
   expiresAt: string | null | undefined;
   /** How to change it; none makes the card read only. */
-  expiry?: { ttl: ShareTtl | null; saving: boolean; onChange: (ttl: ShareTtl) => void } | null;
+  expiry?: ExpiryEdit | null;
   /** Whether the link needs a password; `null` when not known here. */
   passwordOn?: boolean | null;
   onUpgrade: () => void;
@@ -104,7 +107,28 @@ export function LinkRules({
   }
 
   if (shareToken !== null) {
-    rules.push({ id: "watermark", label: RULE_LABELS.watermark, ...watermarkSummary(fileName, mimeType, download) });
+    const summary = watermarkSummary(fileName, mimeType, download, watermark);
+    // A switch only for a PDF, the one file the share page draws it on.
+    const editable = watermark !== null && onWatermarkChange !== undefined && isWatermarkable(fileName, mimeType);
+    rules.push({
+      id: "watermark",
+      label: RULE_LABELS.watermark,
+      ...summary,
+      editor: editable ? (
+        <LinkEngagementSwitches
+          layout="list"
+          offered={NO_SWITCHES}
+          value={NO_SWITCHES}
+          disabled={savingSwitches}
+          switchesInPlan={switchesInPlan}
+          onChange={() => undefined}
+          onUpgrade={onUpgrade}
+          watermark={watermark}
+          onWatermarkChange={onWatermarkChange}
+          watermarkRefused={watermarkRefused}
+        />
+      ) : undefined,
+    });
   }
 
   if (download !== null && onDownloadChange) {
@@ -124,6 +148,7 @@ export function LinkRules({
             download={download}
             onDownloadChange={onDownloadChange}
             downloadRefused={downloadRefused}
+            ownWatermark={watermark !== null}
           />
       ),
     });
@@ -134,16 +159,7 @@ export function LinkRules({
       id: "expiry",
       label: RULE_LABELS.expiry,
       ...expirySummary(expiresAt),
-      editor: expiry ? (
-        <Select
-          ariaLabel="Link expires"
-          value={expiry.ttl ?? undefined}
-          placeholder="Choose how long it lasts"
-          disabled={expiry.saving}
-          onValueChange={(value) => expiry.onChange(value as ShareTtl)}
-          options={TTL_OPTIONS.map(({ label, value }) => ({ label, value }))}
-        />
-      ) : undefined,
+      editor: expiry ? <ExpiryEditor expiry={expiry} expiresAt={expiresAt} /> : undefined,
     });
   }
 

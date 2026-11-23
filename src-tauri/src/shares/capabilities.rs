@@ -118,6 +118,18 @@ pub struct ServerCapabilities {
     /// file opens. Absent on older servers and on one without a gate key: no
     /// "Ask to accept an NDA" switch and no NDA tab, and nothing is sent.
     pub share_nda: bool,
+    /// A file link can end on a chosen date (`expires_at` on the expiry
+    /// `PATCH`, hcfs #1412), not only after a preset. Absent on older
+    /// servers, which refuse the field: only the presets are offered.
+    pub share_expiry_date: bool,
+    /// The watermark is a link setting of its own (`watermark` in
+    /// `PATCH .../settings`, hcfs #1413). Absent on older servers, which
+    /// refuse the key and draw it on a PDF while downloads are off.
+    pub share_watermark_switch: bool,
+    /// An NDA accept carries the signer's typed name, sealed under the link
+    /// key (`name_ct` on `GET .../nda/accepts`, hcfs #1419). Absent on older
+    /// servers, which send no name.
+    pub share_nda_signer_names: bool,
     /// Links per person (`POST /v1/shares/{token}/recipients`, hcfs #1183):
     /// one link for each person over one stored copy, each with its own
     /// name, views and revoke. Absent on older servers and off in production
@@ -295,6 +307,7 @@ mod tests {
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
             r#""share_recipient_links":true,"share_group_insights":true,"#,
+            r#""share_expiry_date":true,"share_watermark_switch":true,"share_nda_signer_names":true,"#,
             r#""drive_moves":true,"folder_share_insights":true,"drive_trash":true}"#,
         ))
         .expect("parse");
@@ -318,6 +331,9 @@ mod tests {
         assert!(caps.share_download_switch);
         assert!(caps.share_gates);
         assert!(caps.share_nda);
+        assert!(caps.share_expiry_date);
+        assert!(caps.share_watermark_switch);
+        assert!(caps.share_nda_signer_names);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
@@ -347,16 +363,19 @@ mod tests {
                 "share_comments",
                 "share_document_views",
                 "share_download_switch",
+                "share_expiry_date",
                 "share_gates",
                 "share_group_insights",
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
                 "share_nda",
+                "share_nda_signer_names",
                 "share_notifications",
                 "share_preview",
                 "share_reaction_moments",
                 "share_recipient_links",
+                "share_watermark_switch",
                 "shares",
                 "trash_retention_days",
                 "upload_folder_shares"
@@ -385,6 +404,9 @@ mod tests {
         assert!(!old.share_download_switch, "a server without the download switch is never sent one");
         assert!(!old.share_gates, "a server without email gates offers no Ask for email");
         assert!(!old.share_nda, "a server without NDA texts offers no NDA switch or tab");
+        assert!(!old.share_expiry_date, "a server without chosen dates offers only the presets");
+        assert!(!old.share_watermark_switch, "a server without the watermark switch is never sent one");
+        assert!(!old.share_nda_signer_names, "a server without signer names sends none");
         assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="

@@ -91,6 +91,14 @@ export interface ServerCapabilities {
    * matches the wire.
    */
   share_gates?: boolean;
+  /** NDA texts on file links. Read by Rust only; listed so the type matches the wire. */
+  share_nda?: boolean;
+  /** A file link can end on a chosen date, not only after a preset. */
+  share_expiry_date?: boolean;
+  /** The watermark is its own link setting. Read by Rust only; listed so the type matches the wire. */
+  share_watermark_switch?: boolean;
+  /** NDA accepts carry the signer's sealed name. Read by Rust only; listed so the type matches the wire. */
+  share_nda_signer_names?: boolean;
   /** Links per person. Read by Rust only; listed so the type matches the wire. */
   share_recipient_links?: boolean;
   /** Insights grouped by person. Read by Rust only; listed so the type matches the wire. */
@@ -651,6 +659,25 @@ export async function updateShareExpiry(
   ttl: ShareTtl,
 ): Promise<string | null> {
   return invoke<string | null>("hcfs_update_share_expiry", { shareToken, ttl });
+}
+
+/** The days the expiry picker offers ("YYYY-MM-DD"), decided by Rust. */
+export interface ExpiryDayRange {
+  min: string;
+  max: string;
+}
+
+export function getExpiryDayRange(): Promise<ExpiryDayRange> {
+  return invoke<ExpiryDayRange>("share_expiry_day_range");
+}
+
+/**
+ * End a file link on a chosen day ("YYYY-MM-DD"): Rust ends it at that
+ * day's last second on this computer and answers the stored end (RFC 3339).
+ * Only on a server with `share_expiry_date`.
+ */
+export function setShareExpiryDate(shareToken: string, day: string): Promise<string> {
+  return invoke<string>("share_set_expiry_date", { shareToken, day });
 }
 
 /**

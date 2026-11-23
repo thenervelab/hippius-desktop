@@ -289,6 +289,29 @@ describe("ShareInsightsSheet", () => {
     expect(within(viewers).getByTitle("Watched 1:18")).toBeInTheDocument();
   });
 
+  it("opens a viewer's row into their own visits, and the locked samples never open", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_viewer_visits: {
+        viewerId: "b",
+        visitsTotal: 2,
+        timeSpentMs: 78_000,
+        pageTimeMs: null,
+        visits: [{ startedAt: "2026-11-20T09:12:00Z", lastSeenAt: "2026-11-20T09:20:00Z", kind: "video", timeSpentMs: 60_000, pagesSeen: null }],
+        nextBefore: null,
+      },
+    });
+    renderSheet();
+    const viewers = await showTab("Viewers");
+    const row = within(viewers).getAllByRole("button", { expanded: false })[0];
+    expect(invokeMock).not.toHaveBeenCalledWith("share_viewer_visits", expect.anything());
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(await within(viewers).findByText("2 visits · 1:18")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("share_viewer_visits", { shareToken: "tok", viewerId: "b", before: null });
+  });
+
   it("gives a picture's numbers as Views, Viewers and Comments, with no watch bars in its rows", async () => {
     answer({ share_get_insights: PAID, share_list_comments: COMMENTS });
     renderSheet(CAPS, undefined, "Screenshot 2026-10-13.png");
@@ -783,7 +806,7 @@ describe("ShareInsightsSheet", () => {
         hasText: true,
         text: "Keep it quiet.",
         // Viewer "b" is "Ahmad" on the Viewers tab.
-        accepts: [{ id: 1, viewerId: "b", email: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
+        accepts: [{ id: 1, viewerId: "b", email: null, signerName: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
         nextAfter: null,
       },
     });

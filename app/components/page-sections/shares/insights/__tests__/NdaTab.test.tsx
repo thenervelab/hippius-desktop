@@ -32,6 +32,7 @@ const accept = (id: number, viewerId: string, at: string, more: Partial<NdaAccep
   id,
   viewerId,
   email: null,
+  signerName: null,
   acceptedAt: at,
   earlier: false,
   ...more,
@@ -92,6 +93,22 @@ describe("the NDA tab", () => {
     // Only the accept of an earlier text says so.
     expect(within(rows[2]).getAllByText(new RegExp(EARLIER_TEXT)).length).toBeGreaterThan(0);
     expect(within(rows[0]).queryByText(new RegExp(EARLIER_TEXT))).toBeNull();
+  });
+
+  it("names a signer by the name they typed first, ahead of their email and the Viewers tab", async () => {
+    invokeMock.mockResolvedValue({
+      ...PAGE,
+      accepts: [
+        accept(3, "v-mail", "2026-11-10T10:00:00Z", { email: "alice@acme.com", signerName: "Alice Moreno" }),
+        accept(2, "v-named", "2026-11-09T10:00:00Z", { signerName: "Dana Reyes" }),
+      ],
+    });
+    renderTab({ "v-named": "Ahmad" });
+    await screen.findByTestId("nda-current-text");
+    const rows = screen.getAllByTestId("nda-accept");
+    expect(rows[0]).toHaveTextContent("Alice Moreno");
+    expect(rows[1]).toHaveTextContent("Dana Reyes");
+    expect(rows[1]).not.toHaveTextContent("Ahmad");
   });
 
   it("has no tab without a text or an accept, or on a server without NDAs", async () => {

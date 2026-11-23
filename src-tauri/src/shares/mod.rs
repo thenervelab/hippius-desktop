@@ -10,6 +10,7 @@ pub mod capabilities;
 pub mod client;
 pub mod commands;
 pub mod comment_crypto;
+pub mod expiry_date;
 pub(crate) mod file_link_key;
 pub mod folder_insights;
 pub(crate) mod folder_scan;
@@ -27,5 +28,6 @@ pub(crate) mod owner_wrap;
 pub mod preview;
 pub mod quick_link;
 pub mod recipients;
+pub mod viewer_visits;
 
 pub use keystore::SqliteShareKeystore;

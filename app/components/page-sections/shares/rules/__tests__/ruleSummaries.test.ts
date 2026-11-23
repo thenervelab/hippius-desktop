@@ -11,6 +11,7 @@ import {
   PASSWORD_VALUE,
   passwordSummary,
   RULE_ORDER,
+  WATERMARK_OFF_VALUE,
   WATERMARK_PDF_ONLY,
   WATERMARK_VALUE,
   WATERMARK_WHEN_VIEW_ONLY,
@@ -65,6 +66,13 @@ describe("rule card words", () => {
     // A server without the download switch always allows downloads.
     expect(watermarkSummary("deck.pdf", null, null)).toEqual({ on: false, value: WATERMARK_WHEN_VIEW_ONLY });
     expect(watermarkSummary("clip.mp4", null, false)).toEqual({ on: false, value: WATERMARK_PDF_ONLY });
+  });
+
+  it("reads the watermark's own switch where the server has one, whatever downloads say", () => {
+    expect(watermarkSummary("deck.pdf", null, true, true)).toEqual({ on: true, value: WATERMARK_VALUE });
+    expect(watermarkSummary("deck.pdf", null, false, false)).toEqual({ on: false, value: WATERMARK_OFF_VALUE });
+    // Still drawn on PDFs only.
+    expect(watermarkSummary("clip.mp4", null, true, true)).toEqual({ on: false, value: WATERMARK_PDF_ONLY });
   });
 
   it("words download, expiry and password", () => {

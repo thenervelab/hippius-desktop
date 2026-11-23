@@ -13,6 +13,8 @@ import {
   LOCKED_ACTION,
   LOCKED_PROMPT,
   SWITCH_UPGRADE_BODY,
+  WATERMARK_LOCKED_PROMPT,
+  WATERMARK_UPGRADE_BODY,
 } from "@/components/page-sections/shares/insights/insightsView";
 
 /**
@@ -64,7 +66,19 @@ export const DOWNLOAD_SWITCH = {
   // with who is looking, which discourages copying but can't prevent it.
   description: "Show a download button. When off, PDFs get a watermark, which discourages copying but can't prevent it.",
   locked: "Show a download button. Only paid Drive plans can turn it off.",
+  /** Where the watermark is a setting of its own, downloads no longer decide it. */
+  ownWatermark: "Show a download button.",
 } as const;
+
+/** The watermark switch, on a PDF link where the server has it. */
+export const WATERMARK_SWITCH = {
+  label: "Watermark",
+  description: "Show each viewer's email and the date on every page.",
+  locked: "Show each viewer's email and the date on every page. On paid Drive plans.",
+} as const;
+
+/** The upgrade card's accessible name for the watermark. */
+export const WATERMARK_UPGRADE_LABEL = "Upgrade to turn on the watermark";
 
 /** The upgrade card's accessible name for Allow download. */
 export const DOWNLOAD_UPGRADE_LABEL = "Upgrade to turn off downloads";
@@ -96,6 +110,10 @@ export default function LinkEngagementSwitches({
   download = null,
   onDownloadChange,
   downloadRefused = false,
+  ownWatermark = false,
+  watermark = null,
+  onWatermarkChange,
+  watermarkRefused = false,
 }: {
   /**
    * `stack` (the share dialog): rows one under another. `list` (the Insights
@@ -114,11 +132,19 @@ export default function LinkEngagementSwitches({
   onDownloadChange?: (on: boolean) => void;
   /** The server refused turning downloads off for the plan. */
   downloadRefused?: boolean;
+  /** The watermark is a setting of its own, so Allow download no longer mentions it. */
+  ownWatermark?: boolean;
+  /** The watermark switch as the link has it; `null` draws no such switch. */
+  watermark?: boolean | null;
+  onWatermarkChange?: (on: boolean) => void;
+  /** The server refused turning the watermark on for the plan. */
+  watermarkRefused?: boolean;
 }) {
-  const [asking, setAsking] = useState<"switches" | "download" | null>(null);
+  const [asking, setAsking] = useState<"switches" | "download" | "watermark" | null>(null);
   const shown = LINK_SWITCHES.filter((s) => offered[s.key]);
   const downloadShown = download !== null && onDownloadChange !== undefined;
-  if (shown.length === 0 && !downloadShown) return null;
+  const watermarkShown = watermark !== null && onWatermarkChange !== undefined;
+  if (shown.length === 0 && !downloadShown && !watermarkShown) return null;
   const locked = switchesInPlan === false;
   const list = layout === "list";
   return (
@@ -174,7 +200,7 @@ export default function LinkEngagementSwitches({
                 {DOWNLOAD_SWITCH.label}
               </p>
               <p className="text-xs text-grey-50 dark:text-grey-dark-600">
-                {locked ? DOWNLOAD_SWITCH.locked : DOWNLOAD_SWITCH.description}
+                {locked ? DOWNLOAD_SWITCH.locked : ownWatermark ? DOWNLOAD_SWITCH.ownWatermark : DOWNLOAD_SWITCH.description}
               </p>
             </div>
             <SettingsToggle
@@ -187,6 +213,35 @@ export default function LinkEngagementSwitches({
                   return;
                 }
                 onDownloadChange?.(on);
+              }}
+            />
+          </div>
+        )}
+        {watermarkShown && (
+          <div className={cn("flex items-center justify-between gap-3", list && "px-3 py-2.5")}>
+            <div className="min-w-0">
+              <p
+                className={cn(
+                  "font-medium",
+                  list ? "text-[13px] text-grey-10 dark:text-white" : "text-xs text-grey-30 dark:text-grey-dark-700",
+                )}
+              >
+                {WATERMARK_SWITCH.label}
+              </p>
+              <p className="text-xs text-grey-50 dark:text-grey-dark-600">
+                {locked ? WATERMARK_SWITCH.locked : WATERMARK_SWITCH.description}
+              </p>
+            </div>
+            <SettingsToggle
+              ariaLabel={WATERMARK_SWITCH.label}
+              checked={watermark === true}
+              disabled={disabled}
+              onCheckedChange={(on) => {
+                if (on && locked) {
+                  setAsking("watermark");
+                  return;
+                }
+                onWatermarkChange?.(on);
               }}
             />
           </div>
@@ -210,6 +265,15 @@ export default function LinkEngagementSwitches({
             label={DOWNLOAD_UPGRADE_LABEL}
             prompt={DOWNLOAD_LOCKED_PROMPT}
             body={DOWNLOAD_UPGRADE_BODY}
+          />
+        )}
+        {watermarkShown && (watermarkRefused || (asking === "watermark" && locked)) && (
+          <SwitchesUpgradeNotice
+            onUpgrade={onUpgrade}
+            className={list ? "mt-3" : undefined}
+            label={WATERMARK_UPGRADE_LABEL}
+            prompt={WATERMARK_LOCKED_PROMPT}
+            body={WATERMARK_UPGRADE_BODY}
           />
         )}
       </div>
