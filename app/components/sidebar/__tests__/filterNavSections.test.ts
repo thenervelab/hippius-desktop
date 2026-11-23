@@ -126,6 +126,18 @@ describe("filterNavSections", () => {
     expect(drive(false)).not.toContain("Captures /captures");
   });
 
+  // Trash is last under Drive, and only while the server keeps one: hidden
+  // while the capability is unknown or false.
+  it("puts Trash last under Drive, behind the server's drive_trash", () => {
+    const drive = (trashEnabled?: boolean) =>
+      filterNavSections(navSections, { shareEnabled: true, captureEnabled: true, trashEnabled })
+        .find((s) => s.key === "drive")
+        ?.items.map((i) => `${i.label} ${i.path}`) ?? [];
+    expect(drive(true).at(-1)).toBe("Trash /trash");
+    expect(drive(undefined)).not.toContain("Trash /trash");
+    expect(drive(false)).not.toContain("Trash /trash");
+  });
+
   // Shared drives have a page of their own, right under My Drive, and follow
   // the shared drives flag.
   it("puts Shared Drives right under My Drive, behind the shared drives flag", () => {

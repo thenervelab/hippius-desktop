@@ -719,8 +719,9 @@ let stageInset: CGFloat = 12
 /// up from the bottom (`liftPermille`), above the share page player's
 /// controls, or at the step's bottom inset when that is higher. The atlas is
 /// little-endian: "HWM2", the lift in thousandths, the marks (width, height,
-/// shadow pad, premultiplied BGRA), then the steps (shorter side from, mark,
-/// inset from the right, inset from the bottom).
+/// pad, 0 now that the pill has no shadow, then premultiplied pixels in BGRA
+/// order, written so because the pill is not grey), then the steps (shorter
+/// side from, mark, inset from the right, inset from the bottom).
 final class Watermark {
     struct Mark {
         let width: Int

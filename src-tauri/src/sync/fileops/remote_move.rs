@@ -13,6 +13,7 @@
 //! server, never from the listing the user is looking at, for the reason
 //! `remote_rename` gives.
 
+use hcfs_shared::revision_id::RevisionId;
 use std::collections::{HashMap, HashSet};
 
 use ed25519_dalek::Signer;
@@ -40,7 +41,7 @@ const RENAME_BATCH: usize = 500;
 #[derive(Clone, Copy, Debug)]
 enum Listed {
     Folder,
-    File { path_hash: [u8; 32], revision_id: [u8; 32] },
+    File { path_hash: [u8; 32], revision_id: RevisionId },
 }
 
 impl Listed {
@@ -58,7 +59,7 @@ struct PlannedFile {
     old_wire: String,
     new_wire: String,
     new_view_path: String,
-    replace: Option<([u8; 32], [u8; 32])>,
+    replace: Option<([u8; 32], RevisionId)>,
 }
 
 /// A server refusal of a folder move, in words for the user.
@@ -97,7 +98,7 @@ async fn current_revisions(
     ss58: &str,
     folder_hash: &str,
     wanted: &HashSet<[u8; 32]>,
-) -> Result<HashMap<[u8; 32], [u8; 32]>> {
+) -> Result<HashMap<[u8; 32], RevisionId>> {
     let mut found = HashMap::with_capacity(wanted.len());
     let mut offset = 0u32;
     for _ in 0..MAX_STATE_PAGES {

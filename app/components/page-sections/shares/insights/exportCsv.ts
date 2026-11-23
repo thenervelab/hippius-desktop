@@ -21,7 +21,7 @@ export async function saveInsightsCsv(shareToken: string, fileName: string): Pro
 }
 
 /** `~/Downloads/<name>` when the platform says where that is, else the name. */
-async function inDownloads(name: string): Promise<string> {
+export async function inDownloads(name: string): Promise<string> {
   try {
     const { downloadDir, join } = await import("@tauri-apps/api/path");
     return await join(await downloadDir(), name);

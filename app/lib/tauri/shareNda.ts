@@ -25,6 +25,8 @@ export interface NdaAccept {
   viewerId: string;
   /** The email they proved on a link that asks for one, checked in Rust. */
   email: string | null;
+  /** The name the signer typed when they accepted, opened in Rust; `null` without one. */
+  signerName: string | null;
   acceptedAt: string;
   /** An accept of a text since replaced or removed. */
   earlier: boolean;

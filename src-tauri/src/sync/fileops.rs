@@ -15,3 +15,4 @@ pub mod remote;
 pub mod remote_move;
 pub mod remote_rename;
 pub mod remote_upload;
+pub mod trash;

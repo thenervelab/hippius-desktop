@@ -148,6 +148,28 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
     }
 }
 
+/// Both ways a capture reaches a drive tell the server what it is, so a Free
+/// plan's recordings are counted and held to their length (#1133): a synced
+/// drive through hcfs's declaration, made after the move picks the name and
+/// before the cycle is nudged, and a drive only on the server on the
+/// manifest of the direct upload. `deliver::tests` covers the declaration
+/// itself; this pins that `place` makes it on both paths.
+#[test]
+fn delivery_declares_the_capture_on_both_paths() {
+    let src = read("src/capture/deliver.rs");
+    let body = fn_body(&src, "pub async fn place(");
+    let length = body.find("capture_for(").expect("the capture is read from the file");
+    let moved = body.find("place_in_folder(").expect("a synced capture is moved");
+    let declared = body.find("declare_placed(").expect("a synced capture is declared");
+    let nudged = body.find("trigger_sync_now(").expect("the cycle is nudged");
+    assert!(length < moved, "read while the file is still the one recorded");
+    assert!(moved < declared && declared < nudged, "declared under its final name, before the nudge");
+
+    let upload = &body[body.find("upload_files_to_remote_folder_inner(").expect("direct upload")..];
+    let call = &upload[..upload.find(".await").expect("awaited")];
+    assert!(call.contains("capture,"), "the direct upload carries the capture: {call}");
+}
+
 /// A failed upload must leave the capture on disk; only a delivered one is
 /// removed, and only through `remove_temp_dir`, which touches nothing but the
 /// capture's own temp folder. A capture sent from the folder it was kept in
@@ -269,9 +291,15 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
     let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        list.contains("remote::list_remote_folder_files_inner("),
-        "the count comes from the server listing the remote-folder browser uses"
+        list.contains("list_drive_files(state, account_id, label)"),
+        "the count comes from each captures drive's server listing"
     );
+    // One `get_state` walk per drive, read with each row's `capture_kind`
+    // (hcfs-client's `RemoteFileInfo` drops it), so the server's recording
+    // mark decides what counts.
+    let listing = fn_body(&allowance, "async fn list_drive_files(");
+    assert!(listing.contains(".get_all_files("), "the server's own listing");
+    assert!(list.contains("counts_by_kind("), "the mark decides when the server sends it");
     assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 
@@ -3364,8 +3392,8 @@ fn no_password_share_sends_a_chat_preview() {
     assert!(confirm.contains("preview::allowed(&choice, chat_preview.unwrap_or(false))"));
     let set = fn_body(&shares, "pub async fn hcfs_set_share_preview(");
     assert!(
-        set.contains("ShareSecret::Public(_)"),
-        "turning it back on checks the link has no password"
+        set.contains("preview::secret_takes_preview("),
+        "turning it back on checks the link has no password (`secret_takes_preview` holds the rule, unit-tested in preview.rs)"
     );
 }
 

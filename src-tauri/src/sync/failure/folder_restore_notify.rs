@@ -21,7 +21,7 @@
 //! 2. **A brand-new folder losing a race.** `initialize_sync_inner` calls
 //!    `register_drive` and starts the sync loop BEFORE its
 //!    `spawn_folder_registration` (a detached `tokio::spawn`) has reached the
-//!    server. The loop's first `trigger_sync` therefore runs the folder check
+//!    server. The loop's first cycle of the drive therefore runs the folder check
 //!    against a listing that does not contain the folder yet, takes the same
 //!    own-drive branch, and reports `Recovered`. Nothing was restored — the
 //!    registration simply had not landed. `spawn_folder_registration` also

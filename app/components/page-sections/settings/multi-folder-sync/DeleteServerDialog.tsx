@@ -7,6 +7,8 @@ import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { deleteShareLinksNote } from "@/app/components/page-sections/drive/deleteShareLinksNote";
+import { useAtomValue } from "jotai";
+import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 
 interface DeleteServerDialogProps {
   open: boolean;
@@ -33,6 +35,7 @@ export function DeleteServerDialog({
   };
 
   const mismatch = confirmInput.length > 0 && confirmInput !== folderName;
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
 
   return (
     <FramedDialog
@@ -50,6 +53,8 @@ export function DeleteServerDialog({
           &quot;{folderName}&quot;
         </span>{" "}
         from the server. This action cannot be undone.
+        {/* With Trash on, say that a whole drive skips it. */}
+        {trashEnabled && " It does not go to Trash."}
       </p>
       <p className="-mt-3 mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
         {deleteShareLinksNote([{ isFolder: true }])}

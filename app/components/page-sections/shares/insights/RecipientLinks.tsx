@@ -12,6 +12,7 @@ import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import {
   addRecipientLinks,
   getRecipientLinks,
+  retryRecipientNda,
   revokeRecipientLink,
   type RecipientLinks as RecipientLinksView,
   type RecipientPerson,
@@ -22,6 +23,7 @@ import { FOCUS } from "./panelStyles";
 export const RECIPIENTS_TITLE = "Links per person";
 export const UNNAMED_LINK = "Unnamed link";
 export const COPY_ALL = "Copy all links";
+export const NDA_PENDING_NOTE = "NDA not added yet, so this link won't open.";
 
 const INPUT = cn(
   "h-[38px] min-w-0 flex-1 rounded-[8px] border px-3 text-[13px] outline-none disabled:opacity-60",
@@ -35,10 +37,10 @@ const ICON_BUTTON = cn(
 );
 const SMALL_BUTTON = cn("rounded px-2 py-1 text-[13px] font-medium", FOCUS);
 
-/** "Name: link" per line, for every person whose link is known here. */
+/** "Name: link" per line, for every person whose link is known here and opens. */
 export function allLinksText(people: readonly RecipientPerson[]): string {
   return people
-    .filter((p) => p.url)
+    .filter((p) => p.url && !p.ndaPending)
     .map((p) => `${p.name ?? UNNAMED_LINK}: ${p.url}`)
     .join("\n");
 }
@@ -47,7 +49,15 @@ export function allLinksText(people: readonly RecipientPerson[]): string {
 export function mergePeople(listed: readonly RecipientPerson[], made: readonly RecipientPerson[]): RecipientPerson[] {
   const out = listed.map((p) => {
     const fresh = made.find((m) => m.shareToken === p.shareToken);
-    return fresh ? { ...p, url: p.url ?? fresh.url, mailto: p.mailto ?? fresh.mailto, name: p.name ?? fresh.name } : p;
+    return fresh
+      ? {
+          ...p,
+          url: p.url ?? fresh.url,
+          mailto: p.mailto ?? fresh.mailto,
+          name: p.name ?? fresh.name,
+          ndaPending: p.ndaPending || fresh.ndaPending,
+        }
+      : p;
   });
   for (const m of made) if (!out.some((p) => p.shareToken === m.shareToken)) out.push(m);
   return out;
@@ -83,6 +93,8 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
   const [view, setView] = useState<RecipientLinksView | null>(null);
   const [made, setMade] = useState<RecipientPerson[]>([]);
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
+  // Links whose NDA was added here since the list was read.
+  const [unlocked, setUnlocked] = useState<ReadonlySet<string>>(new Set());
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,6 +109,7 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
     setView(null);
     setMade([]);
     setGone(new Set());
+    setUnlocked(new Set());
     let alive = true;
     Promise.resolve()
       .then(() => getRecipientLinks(shareToken))
@@ -108,7 +121,9 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
   }, [shareToken]);
 
   if (!view?.offered) return null;
-  const people = mergePeople(view.people, made).filter((p) => !gone.has(p.shareToken));
+  const people = mergePeople(view.people, made)
+    .filter((p) => !gone.has(p.shareToken))
+    .map((p) => (p.ndaPending && unlocked.has(p.shareToken) ? { ...p, ndaPending: false } : p));
   const list = layout === "list";
 
   const refreshElsewhere = () => {
@@ -145,6 +160,16 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
       refreshElsewhere();
     } catch (err) {
       toast.error(actionErrorLine("revoke the link", err, navigator.onLine));
+    }
+  };
+
+  const retryNda = async (person: RecipientPerson) => {
+    try {
+      await retryRecipientNda(shareToken, person.shareToken);
+      setUnlocked((prev) => new Set(prev).add(person.shareToken));
+      toast.success(person.name ? `NDA added to the link for ${person.name}` : "NDA added to the link");
+    } catch (err) {
+      toast.error(actionErrorLine("add the NDA", err, navigator.onLine));
     }
   };
 
@@ -199,7 +224,12 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
       {people.length > 0 && (
         <ul aria-label="People" className="flex flex-col">
           {people.map((person) => (
-            <PersonRow key={person.shareToken} person={person} onRevoke={() => revoke(person)} />
+            <PersonRow
+              key={person.shareToken}
+              person={person}
+              onRevoke={() => revoke(person)}
+              onRetryNda={() => retryNda(person)}
+            />
           ))}
         </ul>
       )}
@@ -222,10 +252,19 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
   );
 }
 
-function PersonRow({ person, onRevoke }: { person: RecipientPerson; onRevoke: () => Promise<void> }) {
+function PersonRow({
+  person,
+  onRevoke,
+  onRetryNda,
+}: {
+  person: RecipientPerson;
+  onRevoke: () => Promise<void>;
+  onRetryNda: () => Promise<void>;
+}) {
   const [copied, setCopied] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 2000);
@@ -264,10 +303,26 @@ function PersonRow({ person, onRevoke }: { person: RecipientPerson; onRevoke: ()
 
   return (
     <li className="flex min-h-10 min-w-0 items-center gap-1 py-1" data-testid="recipient-row">
-      <span className="min-w-0 flex-1 truncate text-[13px] text-grey-10 dark:text-white" title={name}>
-        {name}
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[13px] text-grey-10 dark:text-white" title={name}>
+          {name}
+        </span>
+        {person.ndaPending && <span className="text-xs text-error-50 dark:text-error-70">{NDA_PENDING_NOTE}</span>}
       </span>
-      {person.mailto && (
+      {person.ndaPending && (
+        <button
+          type="button"
+          disabled={retrying}
+          onClick={() => {
+            setRetrying(true);
+            void onRetryNda().finally(() => setRetrying(false));
+          }}
+          className={cn(SMALL_BUTTON, "shrink-0 text-primary-50 hover:bg-grey-90 dark:text-primary-brand-dark dark:hover:bg-white/10")}
+        >
+          {retrying ? <Loader2 className="size-4 animate-spin" aria-label="Adding the NDA" /> : "Try again"}
+        </button>
+      )}
+      {!person.ndaPending && person.mailto && (
         <button
           type="button"
           aria-label={`Email link to ${name}`}
@@ -278,7 +333,7 @@ function PersonRow({ person, onRevoke }: { person: RecipientPerson; onRevoke: ()
           <Mail className="size-4" aria-hidden />
         </button>
       )}
-      {person.url && (
+      {!person.ndaPending && person.url && (
         <button
           type="button"
           aria-label={`Copy link for ${name}`}

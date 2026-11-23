@@ -23,6 +23,16 @@ export const REFUSED_FALLBACK_MESSAGE =
   "Not synced. This file needs your attention before it can sync.";
 
 /**
+ * Copy for a recording-limit row with no reason. Not expected (Rust always
+ * writes one), but a row must never render blank.
+ *
+ * Must stay word-identical to Rust's `RECORDING_LIMIT_FALLBACK_REASON`.
+ * Pinned by `src-tauri/tests/failure_copy_parity.rs`.
+ */
+export const RECORDING_LIMIT_FALLBACK_MESSAGE =
+  "This recording is over your plan's recording limit. Upgrade your plan to upload it.";
+
+/**
  * HTTP 402 / storage-quota denial (not typed credits `insufficientBalance`).
  * Must stay word-identical to Rust's `QUOTA_DENIED_DISPLAY_REASON`.
  */
@@ -91,6 +101,11 @@ export function failureMessage(rec: FileFailureRecord): string {
       // readable, free up space). Rust's `display_reason` passes the same
       // text through, so both paths agree.
       return rec.message?.trim() || REFUSED_FALLBACK_MESSAGE;
+    case "recordingLimit":
+      // Rust's copy for the server's refusal (recordings used up, or one
+      // too long for the plan), persisted as the row's message. Rust's
+      // `display_reason` passes the same text through.
+      return rec.message?.trim() || RECORDING_LIMIT_FALLBACK_MESSAGE;
     case "other":
     default: {
       // `other` carries display text; fall back to a generic line if absent or

@@ -1685,7 +1685,7 @@ mod tests {
             salted_hash: hcfs_shared::salted_hash::SaltedHash::from_bytes([0u8; 32]),
             size_bytes: size,
             revision_seq: 1,
-            revision_id: [0u8; 32],
+            revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([0u8; 32]),
             // New upstream fields (hcfs #455 names beside the ss58); the browse
             // page mapper under test does not read them.
             uploaded_by_name: None,
@@ -1710,6 +1710,12 @@ mod tests {
             backup_hint: None,
             source_taken_at: None,
             source_modified_at: None,
+            // A recording's kind and the caller's favorite mark (hcfs #1368,
+            // #1378); the browse mapper reads neither.
+            capture_kind: None,
+            favorite: None,
+            // Set only on `/get_state` after a move between drives; `/browse` never sends it.
+            moved_from: None,
         }
     }
 
