@@ -12,6 +12,7 @@
 
 use std::path::Path;
 
+use hcfs_client::client::share::ShareProgressFn;
 use serde::Serialize;
 
 use super::destination::CaptureDestination;
@@ -209,39 +210,48 @@ pub struct Minted {
     pub link_error: Option<String>,
 }
 
-/// Mint the public link to a placed capture. A failed LINK is not an error:
-/// the capture is safely in the drive, and the card says the link could not
-/// be made rather than that the capture failed.
-pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureDestination, placed: &Placed) -> Minted {
-    let source = if placed.via_sync {
-        LinkSource::Synced {
-            label: destination.label.clone(),
-            rel_path: destination.rel_path(&placed.file_name),
-        }
-    } else {
-        LinkSource::External(placed.placed.clone())
-    };
-    match mint(state, account_id, &source).await {
-        Ok(link) => {
-            remember_origin(
-                state,
-                account_id,
-                &source,
-                &destination.label,
-                &destination.rel_path(&placed.file_name),
-                &link.share_token,
-            )
-            .await;
-            Minted {
-                share_url: Some(link.share_url),
-                share_token: Some(link.share_token),
-                link_error: None,
-            }
-        }
+/// Mint the public link to a capture from its own file, BEFORE it is placed
+/// (`commands::deliver_and_announce`): the link's upload then has the
+/// connection to itself, where it used to share it with the drive's upload
+/// of the same file (a synced drive) or wait for that upload to finish (a
+/// drive only on the server). The file it records as the link's origin is
+/// only known once placed, so [`remember_placed_origin`] does that after.
+///
+/// A failed LINK is not an error: the capture is still put in the drive, and
+/// the card says the link could not be made rather than that the capture
+/// failed. `progress` follows the link's upload for the card.
+pub async fn link_from_file(state: &AppState, account_id: &str, file: &Path, progress: Option<ShareProgressFn>) -> Minted {
+    match mint(state, account_id, &LinkSource::External(file.to_path_buf()), progress).await {
+        Ok(link) => Minted {
+            share_url: Some(link.share_url),
+            share_token: Some(link.share_token),
+            link_error: None,
+        },
         Err(message) => Minted {
             link_error: Some(message),
             ..Minted::default()
         },
+    }
+}
+
+/// After a link made by [`link_from_file`], once the capture is placed:
+/// record which file in the drive it is the link of (`shares::origin`), and
+/// mark a synced file shared in Finder, as a link minted from the synced
+/// file itself does (`create_share_inner`). That is how Drive, Insights, the
+/// tray's Copy link and deleting the capture find the link by its path.
+pub async fn remember_placed_origin(state: &AppState, account_id: &str, destination: &CaptureDestination, placed: &Placed, share_token: &str) {
+    let rel_path = destination.rel_path(&placed.file_name);
+    remember_origin(
+        state,
+        account_id,
+        &LinkSource::External(placed.placed.clone()),
+        &destination.label,
+        &rel_path,
+        share_token,
+    )
+    .await;
+    if placed.via_sync {
+        crate::finder_bridge::badges::push_from_state(state, &destination.label, &rel_path, crate::finder_bridge::protocol::BadgeState::Shared);
     }
 }
 
@@ -304,17 +314,23 @@ pub enum LinkSource {
 /// # Errors
 ///
 /// The sentence the card shows when no link could be made.
-pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> std::result::Result<crate::shares::commands::ShareLink, String> {
+pub async fn mint(
+    state: &AppState,
+    account_id: &str,
+    source: &LinkSource,
+    progress: Option<ShareProgressFn>,
+) -> std::result::Result<crate::shares::commands::ShareLink, String> {
     use crate::shares::commands::ShareChoice;
     use hcfs_client::client::share::ShareTtl;
     let mut attempt = 0;
     loop {
         let minted = match source {
             LinkSource::Synced { label, rel_path } => {
-                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
+                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, progress.clone())
+                    .await
             }
             LinkSource::External(path) => {
-                crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
+                crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, progress.clone()).await
             }
         };
         let e = match minted {

@@ -277,6 +277,8 @@ pub fn card(id: u64, file: &Path, kept: KeptFailed, remote: bool) -> Option<Prev
             link: super::preview::LinkState::None,
             link_text: None,
             link_note: None,
+            link_progress: None,
+            link_percent: None,
             actions: super::preview::CardActions::default(),
             settled: false,
             notice: None,
