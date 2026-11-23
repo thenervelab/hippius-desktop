@@ -104,10 +104,18 @@ pub struct NdaAccept {
     /// The email the viewer proved on a gated link, shown only when it opens
     /// with the link's key and matches the server's check of it.
     pub email: Option<String>,
+    /// The name the signer typed when they accepted, opened with the link's
+    /// key (additional data `<token>:nda-signer`). The server checks it
+    /// against no one: it is only what they typed.
+    pub signer_name: Option<String>,
     /// RFC 3339.
     pub accepted_at: String,
     /// An accept of a text the owner has since replaced or removed.
     pub earlier: bool,
+    /// The text hash the server stored with the accept, standard base64
+    /// ([`text_hash`]). Only the exports use it.
+    #[serde(skip_serializing)]
+    pub text_hash: String,
 }
 
 // ─── The text ──────────────────────────────────────────────────────────────
@@ -197,6 +205,12 @@ struct WireAccept {
     email_ct: Option<String>,
     #[serde(default)]
     email_nonce: Option<String>,
+    /// The name the signer typed, sealed by the share page (hcfs #1419);
+    /// absent on an older server and `null` when the accept sent none.
+    #[serde(default)]
+    name_ct: Option<String>,
+    #[serde(default)]
+    name_nonce: Option<String>,
     #[serde(default)]
     accepted_at: String,
 }
@@ -361,12 +375,18 @@ fn accepts_view(page: &WireAcceptsPage, token: &str, key: Option<&CommentKey>) -
                 (Some(k), Some(nonce), Some(ct), Some(check)) => comment_crypto::open_viewer_email(k, token, nonce, ct, check),
                 _ => None,
             };
+            let signer_name = match (key, &a.name_nonce, &a.name_ct) {
+                (Some(k), Some(nonce), Some(ct)) => comment_crypto::open_nda_signer_name(k, token, nonce, ct),
+                _ => None,
+            };
             Some(NdaAccept {
                 id,
                 viewer_id: a.viewer_id.clone(),
                 email,
+                signer_name,
                 accepted_at: a.accepted_at.clone(),
                 earlier: current.is_none_or(|n| n.hash != a.text_hash),
+                text_hash: a.text_hash.clone(),
             })
         })
         .collect();
@@ -381,7 +401,7 @@ fn accepts_view(page: &WireAcceptsPage, token: &str, key: Option<&CommentKey>) -
 
 /// Whether a page needs the link's key: a text to open or an email to check.
 fn needs_key(page: &WireAcceptsPage) -> bool {
-    page.current().is_some() || page.accepts.iter().any(|a| a.email_ct.is_some())
+    page.current().is_some() || page.accepts.iter().any(|a| a.email_ct.is_some() || a.name_ct.is_some())
 }
 
 /// Setting a text is refused before anything is sealed or sent on a known
@@ -475,6 +495,44 @@ pub async fn share_nda_accepts(state: tauri::State<'_, AppState>, share_token: S
         None
     };
     Ok(accepts_view(&page, &share_token, key.as_ref()))
+}
+
+// ─── The whole log, for its export and records ─────────────────────────────
+
+/// The most pages read for one export: 500 accepts each.
+const MAX_LOG_PAGES: usize = 200;
+
+/// Every accept of `token`, oldest first, with its current text, each page
+/// read as the NDA tab reads it (`accepts_view`).
+pub(super) async fn read_whole_log(http: &reqwest::Client, api: &Api, token: &str, key: Option<&CommentKey>) -> Result<NdaAccepts> {
+    let mut log: Option<NdaAccepts> = None;
+    let mut after = 0;
+    for _ in 0..MAX_LOG_PAGES {
+        let page = accepts_view(&get_accepts(http, api, token, after).await?, token, key);
+        let next = page.next_after;
+        match log.as_mut() {
+            None => log = Some(page),
+            Some(l) => l.accepts.extend(page.accepts),
+        }
+        match next {
+            Some(n) if n > after => after = n,
+            _ => break,
+        }
+    }
+    let mut log = log.unwrap_or_default();
+    log.next_after = None;
+    Ok(log)
+}
+
+/// A link's whole accept log, for the owner signed in here.
+pub(super) async fn link_log(state: &AppState, share_token: &str) -> Result<NdaAccepts> {
+    let account_id = state.current_account_id()?;
+    if !capabilities_checked(state, &account_id, UNREACHABLE).await?.share_nda {
+        return Ok(NdaAccepts::default());
+    }
+    let api = Api::for_account(state, &account_id).await?;
+    let key = comment_key_for(state, &account_id, share_token).await.ok();
+    read_whole_log(&state.api_client, &api, share_token, key.as_ref()).await
 }
 
 #[cfg(test)]
@@ -659,6 +717,9 @@ mod tests {
             [(40, "v1", None, true), (41, "v2", Some("alice@acme.com"), false), (42, "v3", None, false),],
             "a row without a viewer is dropped"
         );
+        // Each accept keeps the hash the server stored, for the exports.
+        assert_eq!(view.accepts[0].text_hash, STANDARD.encode(before));
+        assert_eq!(view.accepts[1].text_hash, now.hash);
 
         // Without the key nothing opens, and the rows still list.
         let locked = accepts_view(&page, TOKEN, None);
@@ -686,6 +747,33 @@ mod tests {
         assert!(matches!(nda_refusal(api(502, r#"{"error":"billing_unavailable"}"#)), AppError::Validation(m) if m == PLAN_UNREADABLE));
         assert!(matches!(nda_refusal(api(400, r#"{"error":"bad_request","message":"text_ct"}"#)), AppError::Validation(m) if m == COULDNT_SAVE));
         assert!(matches!(nda_refusal(api(500, "boom")), AppError::Api { status: 500, .. }));
+    }
+
+    #[tokio::test]
+    async fn the_whole_log_is_read_page_by_page_with_the_text_opened() {
+        let sealed = seal_text(&key(1), "tok_1", "Keep it quiet.").unwrap();
+        let nda = serde_json::json!({ "text_hash": sealed.hash, "text_ct": sealed.ct, "text_nonce": sealed.nonce });
+        let page = move |q: Option<&str>| {
+            let (ids, next) = match q {
+                None => (vec![1, 2], serde_json::json!(2)),
+                Some("after=2") => (vec![3], serde_json::json!("3")),
+                _ => (vec![], serde_json::Value::Null),
+            };
+            let accepts: Vec<_> = ids
+                .iter()
+                .map(|id| serde_json::json!({ "id": id, "text_hash": sealed.hash, "viewer_id": format!("v{id}"), "accepted_at": "2026-11-20T10:00:00Z" }))
+                .collect();
+            serde_json::json!({ "nda": nda, "accepts": accepts, "next_after": next }).to_string()
+        };
+        let (base, seen) = mock(move |s| (200, page(s.query.as_deref()))).await;
+        let log = read_whole_log(&reqwest::Client::new(), &Api::new(&base, "b"), "tok_1", Some(&key(1)))
+            .await
+            .unwrap();
+        assert_eq!(log.accepts.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 2, 3]);
+        assert_eq!(log.text.as_deref(), Some("Keep it quiet."));
+        assert_eq!(log.next_after, None);
+        // Stops at the page that names no next one.
+        assert_eq!(seen.lock().unwrap().len(), 3);
     }
 
     #[tokio::test]
@@ -745,8 +833,10 @@ mod tests {
                 id: 1,
                 viewer_id: "v".into(),
                 email: None,
+                signer_name: Some("Dana Reyes".into()),
                 accepted_at: "2026-11-10T12:00:00Z".into(),
                 earlier: false,
+                text_hash: "aGFzaA==".into(),
             }],
             next_after: Some(1),
         };
@@ -754,9 +844,38 @@ mod tests {
             serde_json::to_value(view).unwrap(),
             serde_json::json!({
                 "offered": true, "hasText": true, "text": "T", "nextAfter": 1,
-                "accepts": [{ "id": 1, "viewerId": "v", "email": null, "acceptedAt": "2026-11-10T12:00:00Z", "earlier": false }]
+                "accepts": [{ "id": 1, "viewerId": "v", "email": null, "signerName": "Dana Reyes", "acceptedAt": "2026-11-10T12:00:00Z", "earlier": false }]
             })
         );
+    }
+
+    /// An accept's typed name opens with the link's key under its own
+    /// additional data, and only there: a name sealed as a viewer name, or
+    /// for another link, opens as nothing. An accept without one has none.
+    #[test]
+    fn an_accept_carries_the_signers_typed_name_opened_here() {
+        let k = key(1);
+        let now = stored(&k, "Text.");
+        let seal = |token: &str, purpose: Purpose, name: &str| {
+            let ct = comment_crypto::seal_with_nonce(&k, token, purpose, &[6; NONCE_LEN], name.as_bytes()).unwrap();
+            (STANDARD.encode([6; NONCE_LEN]), STANDARD.encode(ct))
+        };
+        let (n1, c1) = seal(TOKEN, Purpose::NdaSigner, "  Dana Reyes ");
+        let (n2, c2) = seal(TOKEN, Purpose::ViewerName, "Dana Reyes");
+        let (n3, c3) = seal("another_token", Purpose::NdaSigner, "Dana Reyes");
+        let row = |id: u64, nonce: Option<&str>, ct: Option<&str>| serde_json::json!({ "id": id, "text_hash": now.hash, "viewer_id": format!("v{id}"), "name_ct": ct, "name_nonce": nonce, "accepted_at": "2026-11-20T10:00:00Z" });
+        let body = serde_json::json!({
+            "nda": { "text_hash": now.hash, "text_ct": now.ct, "text_nonce": now.nonce },
+            "accepts": [row(1, Some(&n1), Some(&c1)), row(2, Some(&n2), Some(&c2)), row(3, Some(&n3), Some(&c3)), row(4, None, None)],
+            "next_after": null
+        });
+        let page = parse_accepts_page(&body.to_string()).unwrap();
+        let names: Vec<_> = accepts_view(&page, TOKEN, Some(&k)).accepts.into_iter().map(|a| a.signer_name).collect();
+        assert_eq!(names, [Some("Dana Reyes".to_string()), None, None, None]);
+        assert!(accepts_view(&page, TOKEN, None).accepts.iter().all(|a| a.signer_name.is_none()));
+        // A name alone needs the key too.
+        let name_only = serde_json::json!({ "nda": null, "accepts": [row(1, Some(&n1), Some(&c1))], "next_after": null });
+        assert!(needs_key(&parse_accepts_page(&name_only.to_string()).unwrap()));
     }
 
     /// Offline, the capabilities read fails: every command must say Hippius

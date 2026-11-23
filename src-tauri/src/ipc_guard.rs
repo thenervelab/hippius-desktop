@@ -105,6 +105,8 @@ pub const MAIN_WINDOW_ONLY: &[&str] = &[
     "chat_save_attachment",
     "share_export_insights_csv",
     "folder_share_export_insights_csv",
+    "share_export_nda_accepts_csv",
+    "share_save_nda_record",
     "attach_logs_to_ticket",
     "allow_asset_scope",
     "set_sync_path",
