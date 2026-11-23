@@ -333,6 +333,10 @@ struct WireSettings {
     reactions: bool,
     #[serde(default = "yes")]
     download: bool,
+    /// Absent on a server without `share_watermark_switch`, where the
+    /// watermark follows `download`.
+    #[serde(default)]
+    watermark: Option<bool>,
 }
 
 const fn yes() -> bool {
@@ -358,6 +362,11 @@ struct ListingRow {
     link_label: Option<String>,
     #[serde(default)]
     settings: Option<WireSettings>,
+    /// A locked recipient link still waiting for its NDA text (hcfs #1418).
+    /// Absent on a server whose listing predates it, where each link's
+    /// `/meta` is asked instead.
+    #[serde(default)]
+    nda_pending: Option<bool>,
 }
 
 fn is_live(row: &ListingRow, now: DateTime<Utc>) -> bool {
@@ -399,6 +408,10 @@ fn settings_patch(source: Option<WireSettings>, caps: &ServerCapabilities) -> Op
         comments: (offered.comments && source.comments).then_some(true),
         reactions: (offered.reactions && source.reactions).then_some(true),
         download: (caps.share_download_switch && !source.download).then_some(false),
+        // A new link's watermark follows its download switch until it is
+        // sent, so only a source whose watermark was set apart from it is
+        // copied; sending it otherwise would stop the new link following.
+        watermark: source.watermark.filter(|w| caps.share_watermark_switch && *w == source.download),
     };
     (patch != SettingsPatch::default()).then_some(patch)
 }
@@ -505,15 +518,24 @@ fn meta_says_nda_pending(body: &str) -> bool {
     serde_json::from_str::<Wire>(body).is_ok_and(|w| w.nda_pending)
 }
 
-/// The recipient links among `tokens` that wait for their NDA text: the ones
-/// this session already knows of, and any whose `/meta` says so (a link made
-/// in an earlier session, or whose `201` never arrived). A `/meta` that does
-/// not answer marks nothing.
-async fn nda_pending_links(http: &reqwest::Client, api: &Api, tokens: Vec<String>) -> HashSet<String> {
+/// The recipient links among `rows` that wait for their NDA text. The
+/// listing says so for each link (`nda_pending`); a server whose listing
+/// predates the field omits it, and for those rows the links this session
+/// already knows of count, and any whose `/meta` says so (a link made in an
+/// earlier session, or whose `201` never arrived). A `/meta` that does not
+/// answer marks nothing.
+async fn nda_pending_links(http: &reqwest::Client, api: &Api, rows: &[&ListingRow]) -> HashSet<String> {
     use futures_util::StreamExt as _;
+    let mut found: HashSet<String> = rows
+        .iter()
+        .filter(|r| r.nda_pending == Some(true))
+        .map(|r| r.share_token.clone())
+        .collect();
     let known = nda_pending_here();
-    let ask: Vec<String> = tokens.into_iter().filter(|t| !known.contains(t)).collect();
-    let mut found: HashSet<String> = futures_util::stream::iter(ask)
+    let unlisted: Vec<String> = rows.iter().filter(|r| r.nda_pending.is_none()).map(|r| r.share_token.clone()).collect();
+    found.extend(unlisted.iter().filter(|t| known.contains(*t)).cloned());
+    let ask: Vec<String> = unlisted.into_iter().filter(|t| !known.contains(t)).collect();
+    let asked: HashSet<String> = futures_util::stream::iter(ask)
         .map(|token| async move {
             let pending = get_meta_body(http, api, &token).await.is_ok_and(|b| meta_says_nda_pending(&b));
             pending.then_some(token)
@@ -522,7 +544,7 @@ async fn nda_pending_links(http: &reqwest::Client, api: &Api, tokens: Vec<String
         .filter_map(|t| async move { t })
         .collect()
         .await;
-    found.extend(known);
+    found.extend(asked);
     found
 }
 
@@ -965,7 +987,7 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
     let origin = super::commands::console_base_url();
     let recipients = recipient_rows(&rows, &source, Utc::now());
     let pending = if caps.share_nda {
-        nda_pending_links(&state.api_client, &api, recipients.iter().map(|r| r.share_token.clone()).collect()).await
+        nda_pending_links(&state.api_client, &api, &recipients).await
     } else {
         HashSet::new()
     };
@@ -1300,6 +1322,7 @@ mod tests {
             link_group: group.map(str::to_string),
             link_label: label.map(str::to_string),
             settings: None,
+            nda_pending: None,
         }
     }
 
@@ -1335,6 +1358,7 @@ mod tests {
             comments: true,
             reactions: false,
             download: false,
+            watermark: Some(true),
         };
         assert_eq!(
             settings_patch(Some(all), &caps),
@@ -1343,6 +1367,7 @@ mod tests {
                 comments: Some(true),
                 reactions: None,
                 download: Some(false),
+                watermark: None,
             })
         );
         let insights_only = ServerCapabilities {
@@ -1361,9 +1386,42 @@ mod tests {
             comments: false,
             reactions: false,
             download: true,
+            watermark: Some(false),
         };
         assert_eq!(settings_patch(Some(off), &caps), None);
         assert_eq!(settings_patch(None, &caps), None);
+    }
+
+    /// The watermark is copied only where the source set it apart from its
+    /// download switch: a value that only follows downloads is left to the
+    /// new link to follow too, and a server without the switch is never
+    /// sent it.
+    #[test]
+    fn a_new_link_gets_its_sources_watermark_only_where_it_was_set_apart() {
+        let caps = ServerCapabilities {
+            share_download_switch: true,
+            share_watermark_switch: true,
+            ..Default::default()
+        };
+        let source = |download: bool, watermark: Option<bool>| WireSettings {
+            insights: false,
+            comments: false,
+            reactions: false,
+            download,
+            watermark,
+        };
+        let watermarked_download = settings_patch(Some(source(true, Some(true))), &caps).unwrap();
+        assert_eq!(watermarked_download.watermark, Some(true));
+        let view_only_plain = settings_patch(Some(source(false, Some(false))), &caps).unwrap();
+        assert_eq!((view_only_plain.download, view_only_plain.watermark), (Some(false), Some(false)));
+        let following = settings_patch(Some(source(false, Some(true))), &caps).unwrap();
+        assert_eq!(following.watermark, None, "a watermark that follows downloads is not sent");
+        assert_eq!(settings_patch(Some(source(true, Some(false))), &caps), None);
+        let old = ServerCapabilities {
+            share_download_switch: true,
+            ..Default::default()
+        };
+        assert_eq!(settings_patch(Some(source(true, Some(true))), &old), None);
     }
 
     const NDA_FROM: &[String] = &[];
@@ -1892,13 +1950,34 @@ mod tests {
         })
         .await;
         nda_still_pending("known_locked");
-        let tokens: Vec<String> = ["locked", "open", "down", "known_locked"].map(String::from).to_vec();
-        let found = nda_pending_links(&reqwest::Client::new(), &Api::new(&base, "bearer"), tokens).await;
+        let rows: Vec<ListingRow> = ["locked", "open", "down", "known_locked"]
+            .map(|t| row(t, Some("g"), Some("l"), "2026-11-01T00:00:00Z", None))
+            .to_vec();
+        let found = nda_pending_links(&reqwest::Client::new(), &Api::new(&base, "bearer"), &rows.iter().collect::<Vec<_>>()).await;
         nda_done("known_locked");
         assert_eq!(found, HashSet::from(["locked".to_string(), "known_locked".to_string()]));
         let seen = seen.lock().unwrap();
         assert!(!seen.iter().any(|s| s.path == "/v1/shares/known_locked/meta"));
         assert!(seen.iter().all(|s| s.auth.is_none()), "/meta is the recipient's route and gets no bearer");
+    }
+
+    /// A listing that reports `nda_pending` is believed as it stands: no
+    /// `/meta` is asked for its rows, and a link the session once marked
+    /// reads as open once the listing says its text is set.
+    #[tokio::test]
+    async fn the_listings_nda_pending_is_read_without_asking_meta() {
+        let (base, seen) = mock(|_| (500, String::new())).await;
+        nda_still_pending("fixed_since");
+        let mut locked = row("locked_l", Some("g"), Some("l"), "2026-11-01T00:00:00Z", None);
+        locked.nda_pending = Some(true);
+        let mut fixed = row("fixed_since", Some("g"), Some("l"), "2026-11-01T00:00:00Z", None);
+        fixed.nda_pending = Some(false);
+        let found = nda_pending_links(&reqwest::Client::new(), &Api::new(&base, "bearer"), &[&locked, &fixed]).await;
+        nda_done("fixed_since");
+        assert_eq!(found, HashSet::from(["locked_l".to_string()]));
+        assert!(seen.lock().unwrap().is_empty(), "no /meta for rows the listing already describes");
+        let listed: ListingRow = serde_json::from_str(r#"{"share_token":"t","nda_pending":true,"email_gate":false,"nda":true}"#).unwrap();
+        assert_eq!(listed.nda_pending, Some(true));
     }
 
     #[test]
