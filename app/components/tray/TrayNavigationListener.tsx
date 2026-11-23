@@ -19,6 +19,10 @@ import {
 } from "@/app/lib/tray/trayHeaderMenu";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import {
+  OPEN_LINK_INSIGHTS_EVENT,
+  routeFromOpenPayload,
+} from "@/app/lib/linkActivity/linkActivity";
+import {
   parkTrayDrop,
   parseTrayDropPayload,
   TRAY_OPEN_FILES_TAURI_EVENT,
@@ -81,7 +85,16 @@ export default function TrayNavigationListener() {
       if (route) goTo(route);
     });
 
+    // A link activity notification's click (Rust) or a tray Link activity
+    // row: Shared Links with that link's Insights open. Only a token is
+    // taken from the other side, never a route.
+    const unlistenInsights = listen(OPEN_LINK_INSIGHTS_EVENT, (event) => {
+      const route = routeFromOpenPayload(event.payload);
+      if (route) goTo(route);
+    });
+
     return () => {
+      void unlistenInsights.then((fn) => fn());
       window.removeEventListener(TRAY_OPEN_FILES_EVENT, handleOpenFiles);
       window.removeEventListener(TRAY_OPEN_VM_EVENT, handleOpenVm);
       window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, handleOpenFolder);

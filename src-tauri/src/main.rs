@@ -570,6 +570,7 @@ fn main() {
             crate::shares::folder_insights::folder_share_insights_csv_name,
             crate::shares::folder_insights::folder_share_export_insights_csv,
             crate::shares::link_activity::share_link_activity,
+            crate::shares::link_alerts::link_activity_recent,
             crate::shares::insights::share_list_comments,
             crate::shares::insights::share_delete_comment,
             crate::shares::insights::share_block_commenter,
@@ -1100,6 +1101,8 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
             && window.label() == "main"
         {
             crate::capture::commands::on_main_window_focused(window.app_handle());
+            // A link activity notification's click brings the app forward.
+            crate::shares::link_alerts::on_main_window_focused(window.app_handle());
         }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1530,6 +1533,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // Startup checks once and the menu checks on demand, so a copy left
             // open for days never heard about a release at all.
             spawn_background_update_checks(app_handle.clone());
+
+            // New views on the owner's links, as OS notifications and rows
+            // in the notification center, for as long as the app runs.
+            crate::shares::link_alerts::spawn(app_handle.clone());
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

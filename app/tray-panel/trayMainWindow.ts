@@ -18,6 +18,7 @@ import {
 } from "@/app/lib/tray/trayRowActions";
 import type { UploadFeedItem } from "@/app/lib/upload-feed/mergeUploadFeed";
 import type { CaptureDriveStatus } from "@/app/lib/tauri/capture";
+import { OPEN_LINK_INSIGHTS_EVENT } from "@/app/lib/linkActivity/linkActivity";
 import {
   capturesFolderTarget,
   TRAY_OPEN_PAGE_EVENT,
@@ -209,6 +210,21 @@ export async function openMainPage(page: TrayPage) {
     await emit(TRAY_OPEN_PAGE_EVENT, { page });
   } catch (error) {
     console.error(`[TrayPanel] Failed to open ${page}:`, error);
+  }
+}
+
+/**
+ * A Link activity row: the main window opens Shared Links with that link's
+ * Insights (`TrayNavigationListener`), or Shared Links alone for an event
+ * about many links.
+ */
+export async function openLinkInsights(shareToken: string | null) {
+  try {
+    await invoke("hide_tray_panel");
+    await revealMain();
+    await emit(OPEN_LINK_INSIGHTS_EVENT, { shareToken });
+  } catch (error) {
+    console.error("[TrayPanel] Failed to open the link's Insights:", error);
   }
 }
 

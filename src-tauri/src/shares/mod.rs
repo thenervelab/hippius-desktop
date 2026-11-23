@@ -20,6 +20,7 @@ pub mod insights;
 pub mod insights_csv;
 pub mod keystore;
 pub mod link_activity;
+pub mod link_alerts;
 pub mod nda;
 pub mod nda_records;
 pub mod origin;
