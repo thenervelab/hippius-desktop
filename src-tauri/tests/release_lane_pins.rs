@@ -548,6 +548,38 @@ fn no_lane_publishes_before_verifying_the_artifacts() {
     }
 }
 
+/// The beta manifest must carry the release notes, written before the rolling
+/// pointer copies it.
+///
+/// The update dialog reads `notes` from latest.json, never the release body.
+/// tauri-action fills it with the platform jobs' placeholder, so without this
+/// step every beta tester saw "**Beta Build**" in place of the notes. Pinned
+/// on the `needs:` graph: the job that republishes `beta-channel` must run
+/// after the job that writes the notes, or it copies the placeholder.
+#[test]
+fn the_beta_manifest_carries_the_release_notes() {
+    let lane = "tauri-beta.yml";
+    let jobs = workflow_jobs(lane);
+    let writer = only_job_running(&jobs, ".notes = ($notes", lane);
+    let script = &jobs[&writer].script;
+
+    assert!(
+        script.contains("--rawfile notes"),
+        "{lane} must pass the notes to jq as a file, so PR text can never become shell or JSON syntax"
+    );
+    assert!(
+        script.contains("\"${work}/latest.json\" --clobber"),
+        "{lane} must upload the manifest with the notes back to the versioned release"
+    );
+
+    let publisher = only_job_running(&jobs, "--draft=false", lane);
+    assert!(
+        dependency_satisfies(&jobs, &publisher, |job| job.script.contains(".notes = ($notes")),
+        "in {lane} the job that republishes the beta manifest ({publisher}) does not run after the \
+         job that writes its notes ({writer}), so testers would get the placeholder again"
+    );
+}
+
 /// Staging has no draft to hold a bad build back, so it must verify BEFORE it
 /// uploads.
 ///

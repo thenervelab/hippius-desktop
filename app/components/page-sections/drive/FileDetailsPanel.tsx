@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback } from "react";
-import * as Tooltip from "@radix-ui/react-tooltip";
 import { useAtom } from "jotai";
 import { X, FolderOpen, ArrowUpRight } from "lucide-react";
 import { toast } from "sonner";
@@ -11,8 +10,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
-import { FormattedTimestamp, Icons } from "@/app/components/ui";
-import * as TableModule from "@/app/components/ui/alt-table";
+import { CopyText, FormattedTimestamp, Icons } from "@/app/components/ui";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
@@ -30,6 +28,9 @@ import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
 import UploaderCell from "@/app/components/page-sections/drive/files-table/UploaderCell";
 import { SidePanel } from "@/app/components/ui/SidePanel";
+import { useFilePartHashes } from "@/app/lib/hooks/useFilePartHashes";
+import ArionHashInfo from "./file-details/ArionHashInfo";
+import ArionHashParts, { HASH_LINK, shortHash } from "./file-details/ArionHashParts";
 import { useFileSourceDetails } from "@/app/lib/hooks/useFileSourceDetails";
 import { formatCompactDate } from "@/app/lib/utils/dateUtils";
 
@@ -78,6 +79,10 @@ interface PanelBodyProps {
 const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const { polkadotAddress } = useWalletAuth();
   const arionCid = arionContentHash(file);
+  // A file over 8 MB is stored in parts, each with its own File Tracker
+  // page; the listing carries only the first, so the rest are asked for.
+  const { partHashes, loading: partsLoading } = useFilePartHashes(file);
+  const inParts = partHashes.length > 1;
   // Date Taken, Date Modified, Camera and Uploaded from: files only, and
   // only once Rust answers. The rows above them paint at once; a failed
   // lookup adds nothing.
@@ -250,41 +255,42 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
       {!file.isFolder && (
         // Arion Hash bottom block — Figma: `flex-col items-start px-[8px] py-[18px] w-full`.
         // Label uses py-[6px] (its own pad), then a 6px gap to the value rows.
-        <div className="w-full flex flex-col items-start px-2 py-[18px]">
-          <div className="flex items-center justify-center py-[6px]">
+        // `relative`: the info popover is placed against this block.
+        <div className="relative w-full flex flex-col items-start px-2 py-[18px]">
+          <div className="flex items-center justify-center gap-[6px] py-[6px]">
             <p className="font-mono font-medium text-[10px] tracking-[-0.2px] uppercase opacity-40 text-black-900 dark:text-white">
-              Arion Hash
+              {inParts ? "Arion Hashes" : "Arion Hash"}
             </p>
+            {arionCid ? <ArionHashInfo inParts={inParts} /> : null}
           </div>
 
-          {arionCid ? (
+          {arionCid && inParts ? (
+            <ArionHashParts partHashes={partHashes} />
+          ) : arionCid ? (
             <div className="flex flex-col gap-[6px] w-full">
-              <Tooltip.Provider delayDuration={200}>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <div className="w-full">
-                      <TableModule.CopyableCell
-                        title="Copy Arion Hash"
-                        toastMessage="Arion Hash Copied Successfully!"
-                        copyAbleText={arionCid}
-                        isTable={true}
-                        textColor="text-grey-20 dark:text-white"
-                        className="max-w-full h-full"
-                      />
-                    </div>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className="z-50 max-w-[18.75rem] bg-white dark:bg-black-600 border border-grey-80 dark:border-black-300 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 dark:text-grey-dark-600 break-all shadow-lg"
-                      side="top"
-                      sideOffset={4}
-                    >
-                      {arionCid}
-                      <Tooltip.Arrow className="fill-white dark:fill-black-600" />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
+              <CopyText
+                text={arionCid}
+                title="Copy Arion Hash"
+                toastMessage="Arion Hash Copied Successfully!"
+                className="w-full"
+              >
+                <button
+                  type="button"
+                  onClick={handleViewOnExplorer}
+                  title={arionCid}
+                  aria-label="Open the Arion Hash on File Tracker"
+                  className={cn("truncate font-mono text-[14px]", HASH_LINK)}
+                >
+                  {shortHash(arionCid)}
+                </button>
+              </CopyText>
+
+              {partsLoading ? (
+                <span
+                  aria-label="Loading the file's parts"
+                  className="h-[14px] w-[120px] animate-pulse rounded bg-black/10 dark:bg-white/10"
+                />
+              ) : null}
 
               <button
                 type="button"

@@ -837,13 +837,24 @@ from a progress row that a capture is done or failed (a "completed" row still
 shows 99% until Rust says `uploaded`).
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
 keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`.
-Delivery tells the card twice (`deliver_and_announce`): `deliver::place`
-puts the file in the drive and `announce_placed` makes the card `syncing`
-(synced) or `uploaded` (direct) with `LinkState::Creating` ("Creating
-link…") at once; only then `deliver::link_for` mints and `announce_link`
-settles the link, keeping whatever status the upload reached. Telling the card
-only after both held it on "Preparing upload" (= `uploading`) through the
-whole upload and mint. A `syncing` card is moved on by Rust
+**The link comes first** (`deliver_and_announce` → `link_first`): it is
+minted from the capture's own temp file (`deliver::link_from_file`,
+`LinkSource::External`) BEFORE `deliver::place`, copied and announced on the
+card (`announce_minted`) the moment it exists, because it used to share the
+connection with the synced drive's upload of the same file, or wait for a
+direct upload to finish. While it is made the card shows its upload in Rust's
+words (`LinkProgress`, `card_link_progress`: "Uploading link 40%, about 30 s
+left", `linkPercent` for the bar), one update per step or percent
+(`link_progress_moved`). The chat preview is read from the same file while
+the link is made and awaited before the file can move. Once placed,
+`remember_placed_origin` records the link as the placed file's
+(`shares::origin`, plus the Finder badge for a synced one), which is what
+`share_synced_file` did when the link was minted after placing.
+`announce_placed` then makes the card `syncing` (synced) or `uploaded`
+(direct), keeping the link, and `announce_link` restates it with whatever
+status the upload reached. A drive copy that fails after the link is out
+keeps the link on the card, and Retry reuses it rather than making a second
+public link and a second upload. A `syncing` card is moved on by Rust
 (`spawn_sync_follow`, started at placement), from `sync_facts`: the live
 session row, `recent_files` (completed rows leave the session) and the
 engine's synced set (`finder_bridge::badges::is_synced`, looked up in NFC
@@ -1204,10 +1215,12 @@ the sync queue. A PAUSED drive counts as remote (`own_local_path` filters
 `is_paused`), or the card waited on sync forever. The move never overwrites
 (the name is claimed with a hard link) and a cross-volume copy goes through a
 hidden `.hippius-incoming-capture-*.part` the engine skips. Other drives
-reuse, never re-implement, `upload_files_to_remote_folder_inner`. The link
-(`deliver::mint`, only when `copyLink`) is `share_synced_file` for a synced
-capture (records the share origin, so Drive shows and can revoke it) and
-`share_external_file` otherwise; `capture_preview_mint_link` /
+reuse, never re-implement, `upload_files_to_remote_folder_inner`. The
+automatic link (only when `copyLink`) is `share_external_file` on the temp
+file before placing, its origin recorded after (above); a link made later
+(`deliver::mint`) is `share_synced_file` for a synced capture (records the
+share origin, so Drive shows and can revoke it) and `share_external_file`
+otherwise; `capture_preview_mint_link` /
 `capture_preview_revoke_link` (`hcfs_revoke_share`) reuse the same paths.
 Pinned by `tests/capture_wiring.rs`. Temp under
 `~/.hippius/capture-tmp/<one dir per capture>`, 0700; removed after the upload
