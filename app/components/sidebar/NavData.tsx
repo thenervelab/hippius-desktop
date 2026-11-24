@@ -1,12 +1,12 @@
 import { Icons } from "@/components/ui";
-import { Camera, MessagesSquare, Share2Icon, Trash2, Users } from "lucide-react";
+import { Camera, MessagesSquare, Share2Icon, Star, Trash2, Users } from "lucide-react";
 import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
   SHARED_DRIVES_ENABLED,
 } from "@/app/lib/featureFlags";
-import { BILLING_ROUTE, TRASH_ROUTE } from "@/app/lib/routes";
+import { BILLING_ROUTE, STARRED_ROUTE, TRASH_ROUTE } from "@/app/lib/routes";
 
 export interface SubMenuItemData {
   label: string;
@@ -19,6 +19,8 @@ export interface NavItemData {
   label: string;
   path: string;
   icon: React.ReactNode;
+  /** Drawn instead of `icon` while this is the page you are on (Starred's filled star). */
+  activeIcon?: React.ReactNode;
   isActive?: boolean;
   comingSoon?: boolean;
   subMenuItems?: SubMenuItemData[];
@@ -86,6 +88,16 @@ export const navSections: NavSection[] = [
         path: "/shared-drives",
         icon: <Users className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "sharedDrives",
+      },
+      // Right after Shared Drives, as on the web Drive and the phone: what
+      // this account starred, in every drive. Ungated: the page itself says
+      // so when the server has no Starred yet.
+      {
+        label: "Starred",
+        path: STARRED_ROUTE,
+        icon: <Star className={ICON_CLASS} strokeWidth={1.5} />,
+        // Filled on its own page, as a starred item's mark is.
+        activeIcon: <Star className={ICON_CLASS} strokeWidth={1.5} fill="currentColor" />,
       },
       // In Drive, as its own row: every capture is a file in a drive, so
       // this reads as a view of Drive.

@@ -30,11 +30,8 @@ export interface SwipeSlide {
 // so LeftCarouselPanel centers them and lets the sides crop — unlike the old
 // PNGs, which were tall compositions nudged upward.
 //
-// durationMs below is a placeholder: replace each with the real one-play length
-// of its GIF (see the field doc above), otherwise auto-advance timing is off.
-//
-// Dark mode currently reuses the light GIF: the design team will supply
-// dedicated dark clips later, at which point gifDark gets its own file.
+// Every slide has its own light and dark clip, each on the panel's flat
+// background colour (#fffdff light, #161416 dark; see LeftCarouselPanel).
 export const SWIPE_CONTENT: SwipeSlide[] = [
   {
     title: "Distributed Storage",
@@ -45,30 +42,41 @@ export const SWIPE_CONTENT: SwipeSlide[] = [
     durationMs: 9333,
     cropX: 0,
   },
+  // Slides 2 to 4 are drawn in docs/plans/signin-visuals/scenes.html and
+  // rendered to GIFs there; each loops in exactly 8 seconds (240 frames at
+  // 30 fps), so durationMs is exact rather than measured.
   {
-    title: "Confidential Computing",
+    title: "Encrypted on Your Device",
     description:
-      "Hardware-encrypted virtual machines. Not even the host can read your code or your data.",
+      "Your files are encrypted before they leave your computer. Only you can open them.",
     gif: "/assets/signin/2-light.gif",
     gifDark: "/assets/signin/2-dark.gif",
-    durationMs: 7100,
-    cropX: -25,
+    durationMs: 8000,
+    cropX: -8,
   },
   {
-    title: "Bridge & Staking",
-    description:
-      "Stake your tokens and earn as the Hippius network grows. Transparent, non-custodial, on-chain.",
+    title: "Screen Recording",
+    description: "Record your screen and get a link to share.",
     gif: "/assets/signin/3-light.gif",
     gifDark: "/assets/signin/3-dark.gif",
-    durationMs: 8949,
-    cropX: -25,
+    durationMs: 8000,
+    cropX: 0,
+  },
+  {
+    title: "Share & Track",
+    description:
+      "Share a file or folder by link and see who opened it, with comments and an optional NDA.",
+    gif: "/assets/signin/4-light.gif",
+    gifDark: "/assets/signin/4-dark.gif",
+    durationMs: 8000,
+    cropX: -6,
   },
   {
     title: "Referrals",
     description:
-      "Invite friends and earn credits every time they use Hippius. Credits apply directly to your storage and compute.",
-    gif: "/assets/signin/4-light.gif",
-    gifDark: "/assets/signin/4-dark.gif",
+      "Invite friends and earn Account Balance every time they use Hippius. Your balance goes straight toward your storage.",
+    gif: "/assets/signin/5-light.gif",
+    gifDark: "/assets/signin/5-dark.gif",
     durationMs: 7100,
     cropX: -10,
   },

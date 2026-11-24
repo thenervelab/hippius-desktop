@@ -229,6 +229,21 @@ pub async fn stop_block_subscription(app: tauri::AppHandle) -> crate::error::Res
     Ok(())
 }
 
+/// The latest block and connection state, for a webview that starts listening
+/// to `block_number_updated` late.
+///
+/// The tray popover listens only while it is shown: on Windows every distinct
+/// event a webview receives leaves its script behind in WebView2, so a hidden
+/// popover taking a block every ~6 s grows for as long as the app runs. It
+/// reads this on show instead, then follows the event until it hides.
+#[tauri::command]
+pub fn get_block_status(state: tauri::State<'_, crate::app_state::AppState>) -> BlockUpdate {
+    BlockUpdate {
+        block_number: state.block_sub.latest_block.load(Ordering::SeqCst),
+        is_connected: state.block_sub.is_connected.load(Ordering::SeqCst),
+    }
+}
+
 /// Run one finalized-block subscription until it ends.
 ///
 /// `blocks_received` is an out-parameter incremented per block delivered, so the

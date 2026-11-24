@@ -1,0 +1,468 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  Sign-in slide animations (slides 2 to 4), drawn in the same isometric style
+  as the existing clips in public/assets/signin. Open with
+  ?scene=enc|rec|share&theme=light|dark and call window.renderAt(seconds).
+  render-gifs.mjs steps this page frame by frame and encodes the GIFs, so a
+  designer can tweak colours, timing or shapes here and re-render.
+-->
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<svg id="stage" width="1620" height="911" viewBox="0 0 1620 911" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+const params = new URLSearchParams(location.search);
+const SCENE = params.get("scene") || "enc";
+const THEME = params.get("theme") || "light";
+const W = 1620, H = 911, CX = 810;
+// Per-scene framing: vertical centre and overall scale.
+const FRAME = { enc: [500, 0.8], rec: [470, 0.9], share: [430, 0.95] }[SCENE] || [430, 1];
+const CY = FRAME[0], S = FRAME[1];
+const LOOP = 8; // seconds, every scene starts and ends on the same frame
+
+const PALETTE = {
+  light: {
+    bg: "#fffdff", grid: "#e7e6ec", dash: "#d3d2da", top: "#ffffff", sideA: "#f2f1f5",
+    sideB: "#e6e5eb", edge: "#c2c1ca", shadow: "#dcdbe2", ink: "#a3a2ab", inkSoft: "#d9d8df",
+    arc: "#55545c", acc: "#8fa8ef", accLight: "#b9cbf7", accSide: "#7b95e3", accEdge: "#3556c0",
+    accInk: "#ffffff", display: "#f6f7fd", red: "#e5484d", text: "#3a3940",
+  },
+  dark: {
+    bg: "#161416", grid: "#252329", dash: "#3a383f", top: "#232126", sideA: "#1d1b20",
+    sideB: "#19171b", edge: "#3b3940", shadow: "#0c0b0d", ink: "#56545d", inkSoft: "#34323a",
+    arc: "#8d8b96", acc: "#a9bdf6", accLight: "#c9d6fa", accSide: "#8ea5ec", accEdge: "#e1e8fd",
+    accInk: "#1a1d2c", display: "#1b1a22", red: "#ff5f63", text: "#e6e5ea",
+  },
+};
+const C = PALETTE[THEME];
+
+const HIPPO = "M259.681 34.3294C294.421 29.8565 313.499 75.7918 313.463 102.602C313.461 103.911 314.644 104.93 315.929 104.675C358.784 96.1666 411.256 95.1143 453.462 107.849C454.975 108.306 456.451 106.922 456.217 105.359C453.977 90.4008 461.399 74.17 469.116 61.9124C483.554 38.9734 509.61 34.6265 530.566 47.2093C552.43 60.3364 542.584 107.18 532.566 123.709C525.851 134.79 519.234 140.116 515.92 142.785C514.63 143.823 513.841 144.459 513.74 144.874C513.694 145.066 513.887 145.208 514.053 145.316C639.697 226.752 635.387 490.533 432.8 508.421C429.322 508.26 425.492 508.353 421.648 508.446C420.357 508.477 419.064 508.508 417.782 508.53C415.726 508.564 414.874 506.074 416.516 504.835C419.934 502.257 423.361 499.834 426.745 497.441C440.052 486.81 445.38 480.889 454.345 464.302C463.114 448.082 457.591 432.252 452.198 416.791C451.35 414.359 450.504 411.935 449.718 409.52C449.299 408.234 446.845 408.797 446.898 410.148C447.4 422.779 445.231 436.226 438.332 447.689C423.032 475.879 398.071 493.414 367.572 502.53C326.24 514.884 274.572 508.53 228.718 506.397C190.554 504.622 151.285 487.88 115.022 477.577C102.296 474.028 97.3767 473.304 93.2138 471.135C87.9147 468.374 83.7133 463.534 79.4736 459.435C78.1193 458.126 78.9101 455.827 80.7832 455.629C92.2347 454.419 105.493 450.689 117.017 451.401C125.159 451.906 133.59 453.158 141.868 454.387C171.908 458.847 201.982 463.694 232.198 466.775C250.819 468.673 270.907 470.702 289.309 469.05C292.056 468.803 301.689 466.291 305.441 464.494C320.131 457.462 330.184 450.832 344.742 443.512C351.314 440.207 357.887 436.903 364.487 433.686C373.837 429.127 387.084 428.32 395.334 422.218C412.493 409.504 393.261 378.906 384.183 368.628C377.219 360.746 359.637 361.774 351.619 367.068C332.997 379.357 320.542 407.168 305.441 423.049C299.955 428.798 287.215 437.696 279.713 440.829C262.31 448.092 231.191 438.428 215.936 435.571C214.536 435.309 213.137 435.047 211.737 434.786C177.986 428.174 144.354 419.352 110.351 414.008C92.1193 411.144 69.9208 415.956 51.4248 416.052C50.4607 416.057 49.6023 415.438 49.3252 414.515C42.1699 390.673 31.3776 353.889 34.5732 329.454C37.5503 306.69 58.525 269.006 81.0762 262.717C100.936 257.178 121.88 254.027 142.257 250.816C151.061 249.428 183.996 245.025 181.496 231.025C180.37 224.72 186.001 219.104 187.022 218.205C192.517 213.369 198.153 208.407 201.579 203.776C204.38 199.989 206.663 194.867 209.009 189.605C212.239 182.359 215.589 174.844 220.576 170.172C233.738 157.843 247.067 145.43 261.346 134.392C262.499 133.5 262.365 131.7 261.129 130.927C254.845 126.995 249.057 121.557 246.313 118.577C222.464 94.2029 216.946 41.3625 259.681 34.3294ZM203.449 283.648C176.496 280.031 121.43 325.229 160.947 350.542C163.643 352.227 165.545 352.385 168.559 351.686C170.036 351.35 171.496 350.94 172.933 350.457C180.938 347.591 191.728 344.623 197.178 338.024C201.411 332.896 203.714 325.525 206.803 319.225C208.255 316.264 211.831 315.095 214.81 316.512C215.669 316.921 216.489 317.361 217.485 317.955C218.703 318.682 220.29 318.011 220.514 316.611C222.872 301.871 221.399 286.057 203.449 283.648ZM97.8867 339.363C109.824 325.825 109.207 281.835 83.4961 285.025C70.0775 288.177 53.1742 313.4 53.6123 327.213C54.0075 332.075 62.0651 342.655 67.4961 349.289C69.5212 351.763 75.7476 349.915 78.8828 349.289C84.4424 348.18 94.4668 343.243 97.8867 339.363ZM409.893 179.332C408.049 179.649 406.427 180.113 404.723 180.886C396.593 184.575 326.934 220.852 325.233 223.001C324.047 224.499 323.777 226.727 324.094 228.552C324.264 229.519 324.747 230.185 325.539 230.772C328.259 232.785 335.176 234.963 339.109 237.427C345.458 241.41 350.668 247.107 357.275 250.635C390.297 266.363 453.841 238.567 436.428 195.071C434.021 189.059 416.067 180.017 409.893 179.332Z";
+
+// ---------- math ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const lerp = (a, b, k) => a + (b - a) * k;
+const COS = 0.866, SIN = 0.5;
+function P(x, y, z = 0) {
+  return [CX + (x - y) * COS * S, CY + ((x + y) * SIN - z) * S];
+}
+const pts = (arr) => arr.map((p) => p.map((n) => n.toFixed(1)).join(",")).join(" ");
+
+// ---------- svg helpers ----------
+let out = [];
+const add = (s) => out.push(s);
+const poly = (points, fill, stroke = "none", sw = 1.4, extra = "") =>
+  add(`<polygon points="${pts(points)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" ${extra}/>`);
+
+// Rounded rectangle in the x/y plane at height z, as a list of world points.
+function roundRect(x0, y0, x1, y1, r, z, seg = 6) {
+  const res = [];
+  const corners = [
+    [x1 - r, y0 + r, -Math.PI / 2, 0],
+    [x1 - r, y1 - r, 0, Math.PI / 2],
+    [x0 + r, y1 - r, Math.PI / 2, Math.PI],
+    [x0 + r, y0 + r, Math.PI, 1.5 * Math.PI],
+  ];
+  for (const [cx, cy, a0, a1] of corners) {
+    for (let i = 0; i <= seg; i++) {
+      const a = a0 + ((a1 - a0) * i) / seg;
+      res.push([cx + r * Math.cos(a), cy + r * Math.sin(a), z]);
+    }
+  }
+  return res;
+}
+
+// A rounded slab: shadow, visible sides, then the top face.
+function slab(x0, y0, x1, y1, r, z0, h, o = {}) {
+  const top = o.top || C.top, sideA = o.sideA || C.sideA, sideB = o.sideB || C.sideB, edge = o.edge || C.edge;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<g opacity="${op.toFixed(3)}">`);
+  if (o.shadow !== false && z0 < 1) {
+    const sh = roundRect(x0 - 6, y0 + 28, x1 - 6, y1 + 34, r, 0).map((p) => P(...p));
+    poly(sh, C.shadow, "none", 0, `filter="url(#soft)" opacity="0.55"`);
+  }
+  const base = roundRect(x0, y0, x1, y1, r, z0);
+  const topPts = roundRect(x0, y0, x1, y1, r, z0 + h);
+  for (let i = 0; i < base.length; i++) {
+    const a = base[i], b = base[(i + 1) % base.length];
+    const nx = b[1] - a[1], ny = -(b[0] - a[0]);
+    if (nx + ny <= 0) continue;
+    const quad = [a, b, [b[0], b[1], z0 + h], [a[0], a[1], z0 + h]].map((p) => P(...p));
+    poly(quad, nx > ny ? sideB : sideA, sideA, 0.6);
+  }
+  // silhouette edge of the lower rim
+  const lower = base.filter((p, i) => {
+    const b = base[(i + 1) % base.length];
+    const nx = b[1] - p[1], ny = -(b[0] - p[0]);
+    return nx + ny > 0;
+  });
+  poly(topPts.map((p) => P(...p)), top, edge, 1.3);
+  add(`</g>`);
+}
+
+// SVG transform that maps local (u, v) onto the top face at height z.
+const planeTop = (x, y, z) => {
+  const [X, Y] = P(x, y, z);
+  return `matrix(${COS * S},${SIN * S},${-COS * S},${SIN * S},${X.toFixed(1)},${Y.toFixed(1)})`;
+};
+
+function cylinder(x, y, r, h, o = {}) {
+  const [bx, by] = P(x, y, 0);
+  const [tx, ty] = P(x, y, h);
+  const rx = r * 1.2247 * S, ry = r * 0.7071 * S;
+  const glow = o.glow || 0;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<g opacity="${op.toFixed(3)}">`);
+  add(`<ellipse cx="${(bx - 10).toFixed(1)}" cy="${(by + 8).toFixed(1)}" rx="${(rx * 1.25).toFixed(1)}" ry="${(ry * 1.3).toFixed(1)}" fill="${C.shadow}" opacity="0.5" filter="url(#soft)"/>`);
+  if (glow > 0) {
+    add(`<ellipse cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" rx="${(rx * 1.9).toFixed(1)}" ry="${(ry * 1.9).toFixed(1)}" fill="${C.acc}" opacity="${(0.28 * glow).toFixed(3)}" filter="url(#soft)"/>`);
+  }
+  const side = glow > 0 ? mix(C.sideA, C.accSide, glow * 0.8) : C.sideA;
+  const topc = glow > 0 ? mix(C.top, C.acc, glow) : C.top;
+  const edge = glow > 0 ? mix(C.edge, C.accEdge, glow) : C.edge;
+  add(`<path d="M${bx - rx},${by} A${rx},${ry} 0 0 0 ${bx + rx},${by} L${tx + rx},${ty} L${tx - rx},${ty} Z" fill="${side}" stroke="${edge}" stroke-width="1.2"/>`);
+  add(`<ellipse cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${topc}" stroke="${edge}" stroke-width="1.2"/>`);
+  add(`<ellipse cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" rx="2.6" ry="1.6" fill="${glow > 0.5 ? C.accInk : C.arc}"/>`);
+  add(`</g>`);
+}
+
+function mix(a, b, k) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (s) => [(s >> 16) & 255, (s >> 8) & 255, s & 255];
+  const A = ch(pa), B = ch(pb);
+  return "#" + A.map((v, i) => Math.round(lerp(v, B[i], clamp(k))).toString(16).padStart(2, "0")).join("");
+}
+
+// A small cube at a screen position (its top centre at sx, sy).
+function cube(sx, sy, s, o = {}) {
+  const op = o.opacity == null ? 1 : o.opacity;
+  const t = [[0, -s * SIN], [s * COS, 0], [0, s * SIN], [-s * COS, 0]];
+  const top = t.map(([dx, dy]) => [sx + dx, sy + dy]);
+  const l = [[sx - s * COS, sy], [sx, sy + s * SIN], [sx, sy + s * SIN + s], [sx - s * COS, sy + s]];
+  const r = [[sx, sy + s * SIN], [sx + s * COS, sy], [sx + s * COS, sy + s], [sx, sy + s * SIN + s]];
+  add(`<g opacity="${op.toFixed(3)}">`);
+  poly(l, C.accSide, C.accEdge, 1);
+  poly(r, mix(C.accSide, C.accEdge, 0.25), C.accEdge, 1);
+  poly(top, C.acc, C.accEdge, 1);
+  // keyhole
+  add(`<circle cx="${(sx + s * COS * 0.5).toFixed(1)}" cy="${(sy + s * 0.75).toFixed(1)}" r="${(s * 0.12).toFixed(1)}" fill="${C.accInk}"/>`);
+  add(`</g>`);
+}
+
+function grid() {
+  const g = [];
+  const R = 560, step = 44;
+  for (let k = -R; k <= R; k += step) {
+    const a = P(k, -R), b = P(k, R), c = P(-R, k), d = P(R, k);
+    g.push(`M${a[0].toFixed(1)},${a[1].toFixed(1)}L${b[0].toFixed(1)},${b[1].toFixed(1)}`);
+    g.push(`M${c[0].toFixed(1)},${c[1].toFixed(1)}L${d[0].toFixed(1)},${d[1].toFixed(1)}`);
+  }
+  add(`<path d="${g.join("")}" stroke="${C.grid}" stroke-width="1" fill="none" mask="url(#fade)"/>`);
+}
+
+function dashedBase(x0, y0, x1, y1) {
+  const p = roundRect(x0, y0, x1, y1, 26, 0).map((q) => P(...q));
+  add(`<polygon points="${pts(p)}" fill="none" stroke="${C.dash}" stroke-width="1.3" stroke-dasharray="5 6"/>`);
+}
+
+function quadPoint(a, c, b, k) {
+  return [
+    (1 - k) * (1 - k) * a[0] + 2 * (1 - k) * k * c[0] + k * k * b[0],
+    (1 - k) * (1 - k) * a[1] + 2 * (1 - k) * k * c[1] + k * k * b[1],
+  ];
+}
+function arc(a, b, lift, progress, o = {}) {
+  const c = [(a[0] + b[0]) / 2, Math.min(a[1], b[1]) - lift];
+  const len = 900;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<path d="M${a[0].toFixed(1)},${a[1].toFixed(1)} Q${c[0].toFixed(1)},${c[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}" fill="none" stroke="${o.color || C.arc}" stroke-width="${o.width || 1.6}" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${(len * (1 - clamp(progress))).toFixed(1)}" opacity="${op.toFixed(3)}"/>`);
+  return c;
+}
+
+// ---------- laptop ----------
+// Base slab x [-150,150] y [-100,100]; display hinged at the back edge.
+function laptop(ox, oy, drawDisplay) {
+  const B = (x, y, z) => [x + ox, y + oy, z];
+  slab(ox - 150, oy - 100, ox + 150, oy + 100, 14, 0, 12);
+  // keyboard and trackpad on the top face
+  add(`<g transform="${planeTop(ox - 128, oy - 88, 12)}">`);
+  add(`<rect x="0" y="0" width="256" height="104" rx="6" fill="${C.sideA}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  for (let row = 0; row < 4; row++) {
+    for (let col = 0; col < 12; col++) {
+      add(`<rect x="${6 + col * 20.6}" y="${7 + row * 24}" width="16" height="18" rx="3" fill="${C.top}" stroke="${C.inkSoft}" stroke-width="0.8"/>`);
+    }
+  }
+  add(`<rect x="88" y="118" width="80" height="54" rx="6" fill="${C.sideA}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  add(`</g>`);
+  // display: back panel then bezel
+  const bl = P(...B(-146, -100, 12)), br = P(...B(146, -100, 12));
+  const tr = P(...B(146, -118, 206)), tl = P(...B(-146, -118, 206));
+  const th = 7; // panel thickness drawn as an offset sliver
+  poly([[bl[0] + th, bl[1] - th * 0.6], [br[0] + th, br[1] - th * 0.6], [tr[0] + th, tr[1] - th * 0.6], [tl[0] + th, tl[1] - th * 0.6]], C.sideB, C.edge, 1.1);
+  poly([bl, br, tr, tl], C.top, C.edge, 1.3);
+  // display surface, mapped to local u (0..272) and v (0..176)
+  const [X, Y] = P(...B(-136, -116.5, 194));
+  const kv = 18 / 192;
+  const m = `matrix(${COS * S},${SIN * S},${(-kv * COS * S).toFixed(4)},${((kv * SIN + 1) * S).toFixed(4)},${X.toFixed(1)},${Y.toFixed(1)})`;
+  add(`<g transform="${m}">`);
+  add(`<rect x="0" y="0" width="272" height="176" rx="4" fill="${C.display}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  drawDisplay && drawDisplay();
+  add(`</g>`);
+  // helper for callers: local display point -> screen
+  return (u, v) => [X + (u * COS + v * (-kv * COS)) * S, Y + (u * SIN + v * (kv * SIN + 1)) * S];
+}
+
+function hippo(x, y, size, fill) {
+  const s = size / 633;
+  add(`<path d="${HIPPO}" transform="translate(${x},${y}) scale(${s})" fill="${fill}"/>`);
+}
+
+function docLines(x, y, w, lines, color, opacityFn) {
+  for (let i = 0; i < lines; i++) {
+    const lw = i % 3 === 2 ? w * 0.6 : w;
+    const op = opacityFn ? opacityFn(i) : 1;
+    add(`<rect x="${x}" y="${y + i * 14}" width="${lw}" height="6" rx="3" fill="${color}" opacity="${op.toFixed(3)}"/>`);
+  }
+}
+
+// ---------- scenes ----------
+function sceneEnc(t) {
+  dashedBase(-330, -250, 420, 250);
+  const nodes = [
+    [250, -190, 22, 70], [340, -90, 18, 46], [395, 40, 24, 88], [300, 130, 20, 58],
+    [175, 190, 16, 40], [430, -210, 15, 34],
+  ];
+  const lock = ease(seg(t, 0.8, 1.6)) * (1 - ease(seg(t, 6.7, 7.4)));
+  const scramble = ease(seg(t, 1.2, 2.0)) * (1 - ease(seg(t, 6.9, 7.6)));
+  const docFade = 1 - ease(seg(t, 1.9, 2.5)) + ease(seg(t, 7.1, 7.9));
+  // nodes behind the arcs, sorted back to front
+  const glowFor = (i) => {
+    const arrive = 3.0 + i * 0.22 + 1.35;
+    return ease(seg(t, arrive - 0.15, arrive + 0.25)) * (1 - ease(seg(t, 6.6, 7.4)));
+  };
+  const order = nodes.map((n, i) => i).sort((a, b) => nodes[a][0] + nodes[a][1] - (nodes[b][0] + nodes[b][1]));
+  for (const i of order) {
+    const [x, y, r, h] = nodes[i];
+    cylinder(x, y, r, h, { glow: glowFor(i) });
+  }
+  const toScreen = laptop(-200, 40, () => {
+    // a document window on the display
+    add(`<g opacity="${clamp(docFade).toFixed(3)}">`);
+    add(`<rect x="70" y="22" width="132" height="134" rx="6" fill="${C.top}" stroke="${C.inkSoft}" stroke-width="1.2"/>`);
+    add(`<rect x="84" y="36" width="44" height="8" rx="4" fill="${C.acc}"/>`);
+    for (let i = 0; i < 6; i++) {
+      const w = i % 3 === 2 ? 60 : 104;
+      const k = clamp(scramble * 1.4 - i * 0.08);
+      // lines turn into blocks of "ciphertext"
+      if (k < 0.5) {
+        add(`<rect x="84" y="${56 + i * 15}" width="${w}" height="6" rx="3" fill="${C.ink}" opacity="${(1 - k).toFixed(3)}"/>`);
+      } else {
+        for (let b = 0; b < Math.floor(w / 13); b++) {
+          add(`<rect x="${84 + b * 13}" y="${55 + i * 15}" width="9" height="8" rx="1.5" fill="${C.acc}" opacity="${(0.35 + 0.65 * ((b * 7 + i * 3) % 5) / 4).toFixed(2)}"/>`);
+        }
+      }
+    }
+    add(`</g>`);
+    // padlock
+    if (lock > 0.01) {
+      const s = 0.6 + 0.4 * easeOut(lock);
+      add(`<g opacity="${lock.toFixed(3)}" transform="translate(136,88) scale(${s.toFixed(3)})">`);
+      add(`<circle r="40" fill="${C.acc}" opacity="0.18"/>`);
+      add(`<path d="M-12,-6 v-10 a12,12 0 0 1 24,0 v10" fill="none" stroke="${C.accEdge}" stroke-width="5" stroke-linecap="round"/>`);
+      add(`<rect x="-20" y="-7" width="40" height="32" rx="6" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="2"/>`);
+      add(`<circle cx="0" cy="6" r="4" fill="${C.accInk}"/><rect x="-1.6" y="7" width="3.2" height="9" rx="1.6" fill="${C.accInk}"/>`);
+      add(`</g>`);
+    }
+  });
+  // encrypted blocks fly from the display to the nodes
+  const src = toScreen(136, 88);
+  nodes.forEach(([x, y, r, h], i) => {
+    const start = 3.0 + i * 0.22;
+    const k = seg(t, start, start + 1.35);
+    const dst = P(x, y, h);
+    const arcIn = ease(seg(t, start - 0.35, start + 0.6));
+    const arcOut = 1 - ease(seg(t, 6.5, 7.3));
+    const c = arc(src, dst, 150 + i * 12, arcIn, { opacity: arcOut * 0.9 });
+    const spawn = ease(seg(t, 2.2 + i * 0.08, 2.7 + i * 0.08));
+    if (t > 2.2 && k < 1) {
+      const p = k > 0 ? quadPoint(src, c, dst, ease(k)) : [src[0] + (i - 2.5) * 13, src[1] - 10 - (i % 2) * 12];
+      cube(p[0], p[1] - 14 * S, 15 * S, { opacity: spawn * (1 - seg(k, 0.85, 1)) });
+    }
+  });
+}
+
+function sceneRec(t) {
+  dashedBase(-300, -250, 380, 250);
+  const sel = ease(seg(t, 0.6, 1.5)) * (1 - ease(seg(t, 6.9, 7.6)));
+  const rec = seg(t, 1.6, 4.6) > 0 && t < 4.7 ? 1 : 0;
+  const recFade = ease(seg(t, 1.5, 1.8)) * (1 - ease(seg(t, 4.6, 4.9)));
+  const cardIn = easeOut(seg(t, 5.0, 5.8)) * (1 - ease(seg(t, 7.0, 7.7)));
+  const copied = ease(seg(t, 6.1, 6.4)) * (1 - ease(seg(t, 7.0, 7.4)));
+  const toScreen = laptop(-60, 40, () => {
+    // app window content
+    add(`<rect x="14" y="14" width="244" height="148" rx="6" fill="${C.top}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+    add(`<rect x="14" y="14" width="244" height="18" rx="6" fill="${C.sideA}"/>`);
+    [0, 1, 2].forEach((i) => add(`<circle cx="${26 + i * 10}" cy="23" r="3" fill="${C.inkSoft}"/>`));
+    add(`<rect x="24" y="44" width="56" height="106" rx="4" fill="${C.sideA}"/>`);
+    for (let i = 0; i < 5; i++) add(`<rect x="32" y="${54 + i * 18}" width="40" height="6" rx="3" fill="${C.inkSoft}"/>`);
+    for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) {
+      add(`<rect x="${92 + c * 54}" y="${46 + r * 52}" width="44" height="40" rx="4" fill="${c === 1 && r === 0 ? C.accLight : C.sideA}" stroke="${C.inkSoft}" stroke-width="0.8"/>`);
+    }
+    // moving pointer while recording
+    const mk = seg(t, 1.8, 4.4);
+    const mx = lerp(120, 205, ease(mk)), my = lerp(120, 70, Math.sin(mk * Math.PI));
+    add(`<path d="M${mx},${my} l0,14 l4,-4 l3,7 l3,-1.4 l-3,-6.6 l6,0 z" fill="${C.text}" stroke="${C.top}" stroke-width="1" opacity="${(0.25 + 0.75 * recFade).toFixed(3)}"/>`);
+    // selection frame
+    if (sel > 0.01) {
+      const w = 236 * sel, h = 140 * sel;
+      add(`<rect x="${136 - w / 2}" y="${88 - h / 2}" width="${w}" height="${h}" rx="5" fill="${C.acc}" fill-opacity="0.08" stroke="${C.accEdge}" stroke-width="2" stroke-dasharray="7 5"/>`);
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([sx, sy]) => {
+        add(`<circle cx="${136 + (sx * w) / 2}" cy="${88 + (sy * h) / 2}" r="3.5" fill="${C.top}" stroke="${C.accEdge}" stroke-width="1.6"/>`);
+      });
+    }
+  });
+  // REC pill floating above the display
+  if (recFade > 0.01) {
+    const pulse = 0.55 + 0.45 * Math.abs(Math.sin(t * Math.PI * 1.6));
+    const secs = Math.min(3, Math.floor(seg(t, 1.7, 4.6) * 4));
+    const [px, py] = toScreen(136, -34);
+    add(`<g opacity="${recFade.toFixed(3)}" transform="translate(${px.toFixed(1)},${py.toFixed(1)}) scale(${S})">`);
+    add(`<rect x="-62" y="-20" width="124" height="40" rx="20" fill="${C.top}" stroke="${C.edge}" stroke-width="1.3"/>`);
+    add(`<circle cx="-36" cy="0" r="8" fill="${C.red}" opacity="${pulse.toFixed(3)}"/>`);
+    add(`<text x="-20" y="6" font-family="Inter, -apple-system, Helvetica, Arial, sans-serif" font-size="17" font-weight="600" fill="${C.text}">0:0${secs}</text>`);
+    add(`<rect x="30" y="-8" width="16" height="16" rx="3" fill="${C.red}" opacity="0.9"/>`);
+    add(`</g>`);
+  }
+  // share link card rises on the right
+  if (cardIn > 0.01) {
+    const lift = lerp(-10, 105, cardIn);
+    slab(170, -70, 360, 20, 16, lift, 10, { opacity: cardIn, shadow: false });
+    const [sx, sy] = P(265, -25, 0);
+    add(`<ellipse cx="${sx - 6}" cy="${sy + 10}" rx="${70 * S * cardIn}" ry="${30 * S * cardIn}" fill="${C.shadow}" opacity="${(0.3 * cardIn).toFixed(3)}" filter="url(#soft)"/>`);
+    add(`<g opacity="${cardIn.toFixed(3)}" transform="${planeTop(186, -56, lift + 10)}">`);
+    add(`<circle cx="20" cy="31" r="16" fill="${C.acc}"/>`);
+    add(`<path d="M13,31 h14 M17,25 h-3 a6,6 0 0 0 0,12 h3 M23,25 h3 a6,6 0 0 1 0,12 h-3" stroke="${C.accInk}" stroke-width="2.4" fill="none" stroke-linecap="round"/>`);
+    add(`<rect x="46" y="22" width="86" height="7" rx="3.5" fill="${C.ink}"/>`);
+    add(`<rect x="46" y="35" width="58" height="7" rx="3.5" fill="${C.inkSoft}"/>`);
+    const btn = mix(C.sideA, C.acc, copied);
+    add(`<rect x="138" y="17" width="26" height="28" rx="6" fill="${btn}" stroke="${copied > 0.5 ? C.accEdge : C.edge}" stroke-width="1"/>`);
+    if (copied > 0.5) {
+      add(`<path d="M144,31 l5,5 l9,-10" stroke="${C.accInk}" stroke-width="2.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+    } else {
+      add(`<rect x="145" y="24" width="10" height="12" rx="2" fill="none" stroke="${C.ink}" stroke-width="1.6"/><rect x="148" y="27" width="10" height="12" rx="2" fill="${btn}" stroke="${C.ink}" stroke-width="1.6"/>`);
+    }
+    add(`</g>`);
+    // the link travels from the display to the card
+    const flow = seg(t, 4.75, 5.5);
+    const a = toScreen(136, 88), b = P(265, -25, lift + 10);
+    arc(a, b, 90, ease(flow), { color: C.accEdge, width: 1.8, opacity: cardIn * (1 - seg(t, 5.9, 6.4)) });
+  }
+}
+
+function sceneShare(t) {
+  dashedBase(-340, -260, 340, 260);
+  const people = [
+    [-250, -150], [210, -200], [270, 90], [-90, 230], [-300, 120], [80, -260],
+  ];
+  const appearAt = (i) => 0.9 + i * 0.62;
+  const outFade = 1 - ease(seg(t, 6.7, 7.5));
+  // arcs behind everything
+  const docCenter = P(0, 0, 14);
+  people.forEach(([x, y], i) => {
+    const k = ease(seg(t, appearAt(i), appearAt(i) + 0.55));
+    if (k > 0) arc(docCenter, P(x, y, 36), 110 + (i % 3) * 30, k, { color: C.acc, width: 1.6, opacity: outFade * 0.9 });
+  });
+  const drawPerson = (i) => {
+    const [x, y] = people[i];
+    const pop = easeOut(seg(t, appearAt(i) + 0.35, appearAt(i) + 0.75)) * outFade;
+    if (pop <= 0.01) return;
+    const [px, py] = P(x, y, 0);
+    const s = (0.7 + 0.3 * pop) * S;
+    add(`<g opacity="${pop.toFixed(3)}" transform="translate(${px.toFixed(1)},${py.toFixed(1)}) scale(${s.toFixed(3)})">`);
+    add(`<ellipse cx="0" cy="2" rx="20" ry="9" fill="${C.acc}" opacity="0.35"/>`);
+    add(`<path d="M-17,0 a17,17 0 0 1 34,0 v-2 a17,19 0 0 0 -34,0 z" fill="${C.accSide}"/>`);
+    add(`<path d="M-17,0 c0,-24 34,-24 34,0 z" fill="${C.accLight}" stroke="${C.accEdge}" stroke-width="1.3"/>`);
+    add(`<circle cx="0" cy="-30" r="11" fill="${C.accLight}" stroke="${C.accEdge}" stroke-width="1.3"/>`);
+    add(`</g>`);
+  };
+  // people behind the document first
+  people.forEach(([x, y], i) => { if (x + y < 0) drawPerson(i); });
+  // the shared document
+  slab(-130, -170, 130, 170, 18, 0, 14);
+  add(`<g transform="${planeTop(-108, -148, 14)}">`);
+  add(`<rect x="0" y="0" width="216" height="296" rx="8" fill="${C.top}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  hippo(16, 16, 44, C.acc);
+  add(`<rect x="70" y="24" width="90" height="9" rx="4.5" fill="${C.ink}"/>`);
+  add(`<rect x="70" y="40" width="54" height="7" rx="3.5" fill="${C.inkSoft}"/>`);
+  docLines(16, 84, 184, 9, C.inkSoft);
+  // the link bar along the bottom of the sheet
+  add(`<rect x="16" y="232" width="184" height="44" rx="10" fill="${C.sideA}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  add(`<circle cx="38" cy="254" r="12" fill="${C.acc}"/>`);
+  add(`<path d="M32,254 h12 M35,249 h-2 a5,5 0 0 0 0,10 h2 M41,249 h2 a5,5 0 0 1 0,10 h-2" stroke="${C.accInk}" stroke-width="2" fill="none" stroke-linecap="round"/>`);
+  add(`<rect x="58" y="250" width="110" height="8" rx="4" fill="${C.ink}"/>`);
+  // NDA seal
+  const nda = easeOut(seg(t, 4.6, 5.2)) * outFade;
+  if (nda > 0.01) {
+    add(`<g opacity="${nda.toFixed(3)}" transform="translate(176,150) scale(${(0.6 + 0.4 * nda).toFixed(3)})">`);
+    add(`<path d="M0,-26 L22,-17 V2 C22,17 11,25 0,30 C-11,25 -22,17 -22,2 V-17 Z" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="1.6"/>`);
+    add(`<path d="M-9,1 l6,6 l12,-13" stroke="${C.accInk}" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+    add(`</g>`);
+  }
+  add(`</g>`);
+  // views counter floating above the document's corner
+  const views = people.filter((p, i) => t >= appearAt(i) + 0.55).length;
+  const counterIn = easeOut(seg(t, 1.2, 1.6)) * outFade;
+  if (counterIn > 0.01) {
+    const z = lerp(14, 60, counterIn);
+    slab(-170, -230, -60, -180, 14, z, 8, { opacity: counterIn, shadow: false });
+    add(`<g opacity="${counterIn.toFixed(3)}" transform="${planeTop(-160, -222, z + 8)}">`);
+    add(`<path d="M6,17 q12,-12 24,0 q-12,12 -24,0 z" fill="none" stroke="${C.accEdge}" stroke-width="2"/><circle cx="18" cy="17" r="4" fill="${C.accEdge}"/>`);
+    add(`<text x="40" y="24" font-family="Inter, -apple-system, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" fill="${C.text}">${views}</text>`);
+    add(`</g>`);
+  }
+  // people in front of the document
+  people.forEach(([x, y], i) => { if (x + y >= 0) drawPerson(i); });
+  // a comment bubble from one viewer
+  const bubble = easeOut(seg(t, 4.0, 4.5)) * outFade;
+  if (bubble > 0.01) {
+    const [bx, by] = P(270, 90, 0);
+    add(`<g opacity="${bubble.toFixed(3)}" transform="translate(${(bx + 34 * S).toFixed(1)},${(by - 86 * S).toFixed(1)}) scale(${((0.7 + 0.3 * bubble) * S).toFixed(3)})">`);
+    add(`<path d="M-34,-20 h68 a10,10 0 0 1 10,10 v22 a10,10 0 0 1 -10,10 h-46 l-12,12 v-12 h-10 a10,10 0 0 1 -10,-10 v-22 a10,10 0 0 1 10,-10 z" fill="${C.top}" stroke="${C.accEdge}" stroke-width="1.5"/>`);
+    [-16, 0, 16].forEach((dx) => add(`<circle cx="${dx}" cy="1" r="4" fill="${C.acc}"/>`));
+    add(`</g>`);
+  }
+}
+
+function renderAt(sec) {
+  const t = ((sec % LOOP) + LOOP) % LOOP;
+  out = [];
+  add(`<defs>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+    <radialGradient id="fadeG" cx="50%" cy="48%" r="55%"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="0.75" stop-color="#fff" stop-opacity="0.55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <mask id="fade"><rect width="${W}" height="${H}" fill="url(#fadeG)"/></mask>
+  </defs>`);
+  add(`<rect width="${W}" height="${H}" fill="${C.bg}"/>`);
+  grid();
+  if (SCENE === "enc") sceneEnc(t);
+  else if (SCENE === "rec") sceneRec(t);
+  else sceneShare(t);
+  document.getElementById("stage").innerHTML = out.join("");
+}
+window.renderAt = renderAt;
+window.LOOP = LOOP;
+// The frame renderer drives the page through the DOM, which works from an
+// isolated script world too: set data-t on <body>, then dispatch "render".
+document.body.dataset.loop = String(LOOP);
+document.addEventListener("render", () => renderAt(Number(document.body.dataset.t || 0)));
+renderAt(Number(params.get("t") || 0));
+</script>
+</body>
+</html>

@@ -66,6 +66,19 @@ describe("a link's rule cards", () => {
     expect(screen.getByTestId("rule-expiry")).toBeInTheDocument();
   });
 
+  it("says why a password link has no NDA instead of leaving the card out", async () => {
+    answer({ ...GATE_OFF, offered: false }, { ...NO_NDA, passwordLink: true });
+    renderRules({ passwordOn: true });
+    const card = await screen.findByTestId("rule-nda");
+    expect(card).toHaveTextContent("Not on password links");
+    expect(card).toHaveTextContent("Off");
+    fireEvent.click(within(card).getByRole("button"));
+    expect(screen.getByTestId("nda-password-reason")).toHaveTextContent(
+      "The NDA is encrypted with the link's key, which needs the link's password.",
+    );
+    expect(screen.queryByRole("switch")).toBeNull();
+  });
+
   it("saving an allow list turns the gate on, and both cards follow", async () => {
     answer(GATE_OFF);
     renderRules();

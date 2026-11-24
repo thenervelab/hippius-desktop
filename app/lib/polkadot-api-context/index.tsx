@@ -4,13 +4,7 @@ import { useEffect, useRef, ReactNode } from "react";
 import { useSetAtom } from "jotai";
 import { polkadotApiAtom } from "@/lib/global-atoms/polkadotApiAtom";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useAtomValue } from "jotai";
-
-interface BlockUpdate {
-  blockNumber: number;
-  isConnected: boolean;
-}
 
 export const usePolkadotApi = () => {
   return useAtomValue(polkadotApiAtom);
@@ -25,25 +19,11 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
     initiatedRef.current = true;
 
     let destroyed = false;
-    let unlisten: (() => void) | null = null;
 
     setState((prev) => ({ ...prev, isConnecting: true }));
 
-    // Start the Rust block subscription. `isConnecting` is also
-    // cleared by:
-    //
-    // - the `.catch` below, if the IPC itself failed
-    // - the `block_number_updated` listener, if at least one finalized
-    //   block has arrived from the subscription
-    //
-    // Neither of those clears triggers when the IPC succeeds (so no
-    // catch) but the subscription stays silent (no blocks for a long
-    // window, e.g. the WS connected but the chain hasn't produced a
-    // new finalized block yet). The UI would then sit on "Connecting"
-    // indefinitely. Clearing `isConnecting` on successful IPC return
-    // collapses the steady "connected, no block yet" state into the
-    // post-connect view; `isConnected` correctly stays false until
-    // the listener flips it.
+    // Start the Rust block subscription; `isConnecting` clears once the IPC
+    // returns, whether or not it succeeded.
     invoke("start_block_subscription")
       .then(() => {
         if (!destroyed) {
@@ -57,25 +37,14 @@ export function PolkadotApiProvider({ children }: { children: ReactNode }) {
         }
       });
 
-    // Listen for block updates from Rust
-    listen<BlockUpdate>("block_number_updated", (e) => {
-      if (destroyed) return;
-      setState({
-        blockNumber: BigInt(e.payload.blockNumber),
-        isConnected: e.payload.isConnected,
-        isConnecting: false,
-      });
-    }).then((u) => {
-      if (destroyed) {
-        u();
-      } else {
-        unlisten = u;
-      }
-    });
+    // No `block_number_updated` listener here. Nothing in this window reads
+    // the block number, and on Windows every distinct event a webview
+    // receives leaves its script in WebView2 for good: a block every ~6 s,
+    // for as long as the app runs. The tray popover, which does show it,
+    // listens only while it is open (`useTrayPanelData`).
 
     return () => {
       destroyed = true;
-      unlisten?.();
     };
   }, [setState]);
 
