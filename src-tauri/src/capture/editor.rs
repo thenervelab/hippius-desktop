@@ -1419,7 +1419,7 @@ async fn replace_link(
     source: &super::deliver::LinkSource,
     old_token: Option<&str>,
 ) -> (LinkResult, Option<(String, String, bool)>) {
-    let minted = super::deliver::mint(state, account_id, source).await;
+    let minted = super::deliver::mint(state, account_id, source, None).await;
     let old_revoked = match old_token {
         Some(token) => match crate::shares::commands::hcfs_revoke_share(state.clone(), token.to_string()).await {
             Ok(()) => true,
