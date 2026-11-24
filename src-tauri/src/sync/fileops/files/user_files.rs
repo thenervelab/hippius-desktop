@@ -161,6 +161,11 @@ pub struct UserFileEntry {
     /// Uploader email beside `uploaded_by` (hcfs #455). Absent when unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploaded_by_email: Option<String>,
+    /// Whether the signed-in account starred this file, as `/search_files`
+    /// says. Absent means unknown (a disk-walk row, or a server that could
+    /// not look it up), never "not starred".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
 }
 
 /// Whether a given `sync_status` value should contribute to per-label
@@ -343,6 +348,7 @@ pub async fn get_user_files(
                 uploaded_by: None,
                 uploaded_by_name: None,
                 uploaded_by_email: None,
+                favorite: None,
             });
         }
     }
@@ -508,6 +514,7 @@ fn walk_disk_files_std(
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: None,
         });
     }
 }
@@ -657,6 +664,7 @@ pub async fn search_user_files_recursive(
                 uploaded_by: None,
                 uploaded_by_name: None,
                 uploaded_by_email: None,
+                favorite: None,
             });
         }
     }
@@ -963,6 +971,7 @@ mod tests {
             uploaded_by: Some("5Member".to_string()),
             uploaded_by_name: Some("Ada".to_string()),
             uploaded_by_email: Some("ada@example.com".to_string()),
+            favorite: None,
         };
         let json = serde_json::to_value(&entry).expect("serialize UserFileEntry");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -1086,6 +1095,7 @@ mod tests {
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: None,
         }
     }
 

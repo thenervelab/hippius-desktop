@@ -50,7 +50,7 @@ import { useSetAtom } from "jotai";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { Folder } from "@/app/components/ui/icons";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
+import { pageFolderHref, useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { TrashRequestRunner, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
@@ -60,6 +60,9 @@ import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
 import { fileManagerLabel } from "@/lib/utils/isMacPlatform";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 import { toast } from "sonner";
+import { rowLabels, useStars } from "@/app/lib/starred/useStars";
+import { canStar } from "@/app/lib/starred/starState";
+import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
 
 const TIME_BEFORE_ERR = 30 * 60 * 1000;
 
@@ -116,11 +119,15 @@ const CardView: FC<CardViewProps> = ({
   const copyLinkItem = useCopyLinkItem();
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
   const { getParam } = useUrlParams();
-  const { basePath } = useDriveRoute();
+  const driveRoute = useDriveRoute();
+  const { basePath } = driveRoute;
   const { isSelectionMode, selectedFiles, enterSelectionModeAndSelectFile } =
     useFileSelection();
   const driveMove = useDriveMove();
   const currentFolder = normalizePath(currentSubfolderPath);
+  // Star / Unstar in every card menu; the drives on screen are fetched once.
+  const starLabels = React.useMemo(() => rowLabels(files), [files]);
+  const stars = useStars(starLabels);
 
   // State for captured files to delete (to handle timing issue with clearSelection)
   const [filesToDelete, setFilesToDelete] = useState<FormattedUserFile[]>([]);
@@ -213,12 +220,20 @@ const CardView: FC<CardViewProps> = ({
                 }
               }
 
-              // Get folder URL if file is a folder
+              // Get folder URL if file is a folder. A page whose rows come
+              // from many drives (Starred) says where a folder opens.
               let folderUrl = "";
               if (file.isFolder) {
-                const { url } = generateFolderUrl(file, getParam, undefined, basePath);
-                folderUrl = url;
+                folderUrl =
+                  pageFolderHref(driveRoute, file) ??
+                  generateFolderUrl(file, getParam, undefined, basePath).url;
               }
+              const cardStar = canStar(file, currentSubfolderPath)
+                ? starMenuItem(stars.isStarred(file, currentSubfolderPath), () => {
+                    setOpenMenuIndex(null);
+                    void stars.toggleRow(file, currentSubfolderPath);
+                  })
+                : null;
 
               return (
                 <MoveCard
@@ -254,7 +269,25 @@ const CardView: FC<CardViewProps> = ({
                         onOpenChange={(open) =>
                           setOpenMenuIndex(open ? index : null)
                         }
-                        items={[
+                        items={file.isDriveRoot
+                          ? // A whole drive's card (Starred): open and star
+                            // only; its source is the drive's sync root.
+                            withStarItem(
+                              folderUrl
+                                ? [
+                                    {
+                                      icon: <Folder className="size-4" />,
+                                      itemTitle: "Open",
+                                      onItemClick: () => {
+                                        setOpenMenuIndex(null);
+                                        router.push(folderUrl);
+                                      },
+                                    },
+                                  ]
+                                : [],
+                              cardStar,
+                            )
+                          : withStarItem([
                           ...(file.isFolder && folderUrl
                             ? [
                                 {
@@ -541,7 +574,7 @@ const CardView: FC<CardViewProps> = ({
                                   variant: "destructive" as const,
                                 },
                               ]),
-                        ]}
+                        ], cardStar)}
                       >
                         <Button
                           variant="ghost"
@@ -574,6 +607,7 @@ const CardView: FC<CardViewProps> = ({
         <SelectionActionBar
           onDelete={handleDeleteSelectedFiles}
           isDeleting={isDeleting}
+          basePath={currentSubfolderPath}
         />
       )}
       <TrashRequestRunner onTrash={runTrashRequest} />

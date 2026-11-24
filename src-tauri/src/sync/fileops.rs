@@ -6,6 +6,7 @@
 pub mod cloud_drive;
 pub mod drive_move;
 pub mod drive_summaries;
+pub mod favorites;
 pub mod files;
 pub mod folders;
 pub mod listing_cache;

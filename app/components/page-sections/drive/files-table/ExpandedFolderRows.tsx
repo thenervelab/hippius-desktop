@@ -21,7 +21,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useInfiniteScroll } from "@/lib/hooks/use-infinite-scroll";
 import { useNestedFolderListing } from "@/app/lib/hooks/use-nested-folder-listing";
-import { resolveFolderExpansion } from "./folderExpansion";
+import { expandedFolderPath, resolveFolderExpansion } from "./folderExpansion";
 import { FILES_MUTATED_EVENT } from "@/app/lib/utils/fileMutationEvents";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
@@ -248,10 +248,10 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     Record<string, boolean>
   >({});
 
-  const folderRelativePath = useMemo(() => {
-    const name = folder.actualFileName || folder.name;
-    return resolveRelativePath(baseSubfolderPath ?? "", name);
-  }, [baseSubfolderPath, folder.actualFileName, folder.name]);
+  const folderRelativePath = useMemo(
+    () => expandedFolderPath(folder, baseSubfolderPath ?? ""),
+    [baseSubfolderPath, folder],
+  );
 
   const {
     enabled: listingEnabled,
@@ -263,6 +263,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
     label,
     syncPath,
     relativePath: folderRelativePath,
+    isDriveRoot: folder.isDriveRoot,
   });
 
   // Background-refresh the child rows when a sync cycle lands or an in-app
@@ -283,7 +284,8 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
   const { data, isLoading } = useNestedFolderListing({
     accountId,
     syncPath,
-    subfolder: listingEnabled ? folderRelativePath : null,
+    // A drive's own row lists the drive's root: no subfolder.
+    subfolder: listingEnabled ? folderRelativePath || null : null,
     label: effectiveLabel ?? null,
     refreshKey,
     enabled: listingEnabled,
@@ -533,6 +535,7 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
             syncStatus={childFile.syncStatus}
             parentSubFolderPath={folderRelativePath}
             onManageShare={(ids) => router.push(sharesPageHref(ids))}
+            file={childFile}
           />
         );
 

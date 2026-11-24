@@ -37,6 +37,8 @@ import UnderlineTabs from "@/components/ui/tabs/UnderlineTabs";
 import { Pagination } from "@/components/ui/table";
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
+import { useDriveStars } from "@/components/page-sections/drive/folder-list/useDriveStars";
+import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
 import { toFolderRows, type FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
 import { resolveFolderListPage } from "@/components/page-sections/drive/folder-list/folderListPaging";
 import { sharingGate } from "@/components/page-sections/drive/share-dialog/shareDialogState";
@@ -250,6 +252,8 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
     end: pageView.end,
   });
   const pageRows = sharedRows.slice(slices.byYou.start, slices.byYou.end);
+  // Star / Unstar an own drive from its row menu.
+  const driveStars = useDriveStars(pageRows);
 
   // Leaving the last drive on the last page (or any drive going away)
   // leaves the page index past the end. The view is already clamped; this
@@ -299,7 +303,7 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
   const manageAccess = (row: FolderRow) =>
     openManageAccess({ label: row.folderName, folderName: row.folderName });
 
-  const buildActions = (row: FolderRow): ActionItem[] => [
+  const buildActions = (row: FolderRow): ActionItem[] => withStarItem([
     {
       icon: <Icons.FolderOpen className="size-4" />,
       itemTitle: "Open",
@@ -315,7 +319,7 @@ export default function SharedDrivesView({ renderHeader }: SharedDrivesViewProps
       itemTitle: "Manage access",
       onItemClick: () => manageAccess(row),
     },
-  ];
+  ], starMenuItem(driveStars.isStarred(row), () => driveStars.onToggle(row)));
 
   const openPicker = () => setPickerOpen(true);
   const upgrade = () => router.push(BILLING_ROUTE);
