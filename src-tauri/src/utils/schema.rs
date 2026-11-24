@@ -39,6 +39,7 @@ const EXPECTED_TABLES: &[&str] = &[
     "folder_share_origin",
     "shared_link_history",
     "drive_moves_open",
+    "device_registration",
     "local_wallets",
     "bridge_transactions",
     "credit_notification_flags",
@@ -170,6 +171,7 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     step!("credit_notification_flags", ensure_credit_notification_flags);
     step!("shared_link_history", ensure_shared_link_history);
     step!("drive_moves_open", ensure_drive_moves_open);
+    step!("device_registration", ensure_device_registration);
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
     // persisted a full per-account tx-history table, but the FE now mirrors
@@ -1196,6 +1198,14 @@ async fn ensure_drive_moves_open(conn: &mut SqliteConnection) -> Result<(), sqlx
     )
     .execute(&mut *conn)
     .await?;
+    Ok(())
+}
+
+/// `device_registration`: this computer's own device on each account it
+/// signed in to (`owner` is the `account_key`), kept across sign-outs so a
+/// sign-in reconnects the same device. See `crate::devices::store`.
+async fn ensure_device_registration(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(crate::devices::store::CREATE_TABLE).execute(&mut *conn).await?;
     Ok(())
 }
 

@@ -1,4 +1,19 @@
 import { remoteLabelFromSource } from "@/app/lib/hooks/use-nested-folder-listing";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
+
+/**
+ * The drive-relative folder an expanded folder row lists. A whole drive's
+ * row (Starred) is its drive's root, "": its name is not a folder in it, and
+ * listing a folder of that name came back as an empty folder.
+ */
+export function expandedFolderPath(
+  folder: Pick<FormattedUserFile, "isDriveRoot" | "actualFileName" | "name">,
+  basePath: string,
+): string {
+  if (folder.isDriveRoot) return "";
+  return resolveRowRelativePath(basePath, folder.actualFileName || folder.name);
+}
 
 export interface FolderExpansionInputs {
   accountId: string | null | undefined;
@@ -10,6 +25,8 @@ export interface FolderExpansionInputs {
   syncPath: string | null | undefined;
   /** Drive-relative path of the folder being expanded. */
   relativePath: string;
+  /** The row is a whole drive (Starred): it expands to the drive's root, whose path is "". */
+  isDriveRoot?: boolean;
 }
 
 export interface FolderExpansion {
@@ -70,9 +87,12 @@ export function resolveFolderExpansion(
 
   return {
     // A remote listing is addressed by label alone; a local one needs the
-    // root to walk.
+    // root to walk. Only a drive's own row may list the root ("" path).
     enabled: Boolean(
-      inputs.accountId && label && inputs.relativePath && (remote || inputs.syncPath),
+      inputs.accountId &&
+        label &&
+        (inputs.relativePath || inputs.isDriveRoot) &&
+        (remote || inputs.syncPath),
     ),
     label,
     remote,

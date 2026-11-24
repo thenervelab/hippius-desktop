@@ -60,6 +60,9 @@ import {
 } from "./sharedWithMeState";
 import { useDriveMemberships, type DriveMemberships } from "./useDriveMemberships";
 import SharedFolderGrantRow from "./SharedFolderGrantRow";
+import { makeSharedDriveLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { useStars } from "@/app/lib/starred/useStars";
+import { DriveStarMark } from "@/components/page-sections/drive/StarMark";
 import { useQueryClient } from "@tanstack/react-query";
 import { refreshSharedWithMe, useMyFolderGrants } from "@/app/lib/hooks/useSharedDriveRoles";
 import type { ShareDriveModalTarget } from "@/app/lib/global-atoms/sharesAtoms";
@@ -165,6 +168,13 @@ export function SharedWithMeSection({
     [data],
   );
   const statsByDrive = useSharedDriveStats(owners);
+  // Star / Unstar a drive shared with this account: its browse label names
+  // the owner's drive whether or not it is synced here.
+  const starLabels = useMemo(
+    () => (data.kind === "ready" ? data.memberships.map((m) => makeSharedDriveLabel(m)) : []),
+    [data],
+  );
+  const { isDriveStarred, toggleDrive } = useStars(starLabels);
 
   /**
    * Leave by WIRE identity, not by local label: a drive listed here may never
@@ -356,6 +366,7 @@ export function SharedWithMeSection({
                 >
                   {membership.displayLabel}
                 </span>
+                <DriveStarMark label={makeSharedDriveLabel(membership)} />
                 {/* The console's role chip, ported verbatim: colour
                     carries the same ordering the roles do, so a list can
                     be read for access at a glance. */}
@@ -454,6 +465,11 @@ export function SharedWithMeSection({
                 onSyncLocally: () => void syncLocally(membership),
                 onManageAccess: manage,
                 onLeave: () => setLeaveTarget(membership),
+                star: {
+                  starred: isDriveStarred(makeSharedDriveLabel(membership)),
+                  onToggle: () =>
+                    void toggleDrive(makeSharedDriveLabel(membership), membership.displayLabel),
+                },
               })}
             >
               <Button
