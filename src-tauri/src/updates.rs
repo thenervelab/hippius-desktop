@@ -205,6 +205,116 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
 /// an interruption is not something to hand out every few minutes.
 pub const BACKGROUND_UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 
+/// Shortest interval [`UPDATE_CHECK_SECONDS_ENV`] may set.
+const MIN_BACKGROUND_CHECK_SECONDS: u64 = 60;
+
+/// Runtime override of [`BACKGROUND_UPDATE_CHECK_INTERVAL`], in seconds, so a
+/// tester can see the background path without waiting an hour.
+const UPDATE_CHECK_SECONDS_ENV: &str = "HIPPIUS_UPDATE_CHECK_SECONDS";
+
+/// How often the background check runs for this build.
+///
+/// The override is honored by dev, staging and beta builds and ignored by
+/// production. Unlike the console override it cannot point anything
+/// elsewhere (only "how often"), so beta testers can use it to try the
+/// update notice; production keeps the fixed hour. Clamped to at least a
+/// minute so a typo cannot turn the check into a request loop.
+pub fn background_check_interval(channel: ReleaseChannel, dev_build: bool, raw: Option<&str>) -> Duration {
+    if !dev_build && channel == ReleaseChannel::Production {
+        return BACKGROUND_UPDATE_CHECK_INTERVAL;
+    }
+    match raw.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(secs) => Duration::from_secs(secs.max(MIN_BACKGROUND_CHECK_SECONDS)),
+        None => BACKGROUND_UPDATE_CHECK_INTERVAL,
+    }
+}
+
+/// Where the main window is, as far as noticing a dialog goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MainWindowPresence {
+    pub visible: bool,
+    pub minimized: bool,
+    pub focused: bool,
+}
+
+/// Whether an update found in the background also needs a system notification.
+///
+/// The dialog opens inside the main window, which is only seen when that
+/// window is on screen and in front. On macOS closing the window hides it to
+/// the tray; on Windows and Linux closing quits, so a long-running copy sits
+/// minimized or behind other windows. In each of those cases the dialog would
+/// open where nobody looks, so the notification is what tells them.
+pub fn needs_system_notice(presence: Option<MainWindowPresence>) -> bool {
+    match presence {
+        Some(p) => !p.visible || p.minimized || !p.focused,
+        None => true,
+    }
+}
+
+/// The newest version known to be available this run, from the background
+/// check or from the dialog having been shown. The tray popover reads it to
+/// show its "Update available" row. Cleared only by the restart an install
+/// performs.
+static AVAILABLE: Mutex<Option<String>> = Mutex::new(None);
+
+fn remember_available(version: &str) {
+    if version.is_empty() {
+        return;
+    }
+    if let Ok(mut available) = AVAILABLE.lock() {
+        *available = Some(version.to_string());
+    }
+}
+
+/// The version an update is available for, if one was found this run.
+#[tauri::command]
+pub fn update_available_version() -> Option<String> {
+    AVAILABLE.lock().ok().and_then(|v| v.clone())
+}
+
+/// The tray popover's "Update available" row: bring the main window forward
+/// and open the update dialog there.
+#[tauri::command]
+pub fn open_update_from_tray(app: AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, UPDATE_AVAILABLE_EVENT, ());
+}
+
+const MAIN_WINDOW_LABEL: &str = "main";
+
+fn main_window_presence(app: &AppHandle) -> Option<MainWindowPresence> {
+    use tauri::Manager;
+    let window = app.get_webview_window(MAIN_WINDOW_LABEL)?;
+    Some(MainWindowPresence {
+        visible: window.is_visible().unwrap_or(false),
+        minimized: window.is_minimized().unwrap_or(false),
+        focused: window.is_focused().unwrap_or(false),
+    })
+}
+
+/// Copy of the system notification for a found update.
+pub fn update_notice_body(version: &str) -> String {
+    format!("Hippius {version} is ready to install.")
+}
+
+fn show_update_notice(app: &AppHandle, version: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("Update available")
+        .body(update_notice_body(version))
+        .show()
+    {
+        warn!(error = %e, "update notification not shown");
+    }
+}
+
 /// The version already put in front of the user this run, by whichever path
 /// got there first.
 ///
@@ -228,6 +338,7 @@ pub fn note_update_prompted(version: String) {
     if version.is_empty() {
         return;
     }
+    remember_available(&version);
     if let Ok(mut announced) = ANNOUNCED.lock() {
         debug!(%version, "user has been shown this version");
         *announced = Some(version);
@@ -265,11 +376,19 @@ pub fn should_announce(version: &str, already_announced: Option<&str>) -> bool {
 /// that runs unattended, and there is nothing the user could usefully do about
 /// it at the moment it happens.
 pub fn spawn_background_update_checks(app: AppHandle) {
+    let interval = background_check_interval(
+        release_channel::current(),
+        cfg!(debug_assertions),
+        std::env::var(UPDATE_CHECK_SECONDS_ENV).ok().as_deref(),
+    );
+    if interval != BACKGROUND_UPDATE_CHECK_INTERVAL {
+        info!(seconds = interval.as_secs(), "background update check interval overridden");
+    }
     tauri::async_runtime::spawn(async move {
         loop {
             // Sleep FIRST: startup has just checked, so an immediate second
             // check would be a duplicate request on every launch.
-            tokio::time::sleep(BACKGROUND_UPDATE_CHECK_INTERVAL).await;
+            tokio::time::sleep(interval).await;
 
             match check_for_update(app.clone()).await {
                 Ok(Some(update)) => {
@@ -287,9 +406,15 @@ pub fn spawn_background_update_checks(app: AppHandle) {
                         // told twice is better than never being told.
                         Err(_) => true,
                     };
+                    remember_available(&update.version);
                     if announce {
                         info!(version = %update.version, "background check found a new version");
-                        let _ = app.emit(UPDATE_AVAILABLE_EVENT, ());
+                        // The dialog opens in the main window either way, so it
+                        // is waiting there when the user comes back to it.
+                        let _ = app.emit_to(MAIN_WINDOW_LABEL, UPDATE_AVAILABLE_EVENT, ());
+                        if needs_system_notice(main_window_presence(&app)) {
+                            show_update_notice(&app, &update.version);
+                        }
                     } else {
                         debug!(version = %update.version, "already shown this version");
                     }
@@ -1026,6 +1151,54 @@ mod tests {
         assert_eq!(super::BACKGROUND_UPDATE_CHECK_INTERVAL.as_secs(), 3600);
     }
 
+    /// Production ignores the test override; the other lanes honor it, never
+    /// below a minute, and fall back to the hour on anything unparseable.
+    #[test]
+    fn the_check_interval_override_is_for_test_lanes_only() {
+        use super::{BACKGROUND_UPDATE_CHECK_INTERVAL, background_check_interval};
+        use crate::release_channel::ReleaseChannel::{Beta, Production, Staging};
+        assert_eq!(background_check_interval(Production, false, Some("90")), BACKGROUND_UPDATE_CHECK_INTERVAL);
+        assert_eq!(background_check_interval(Beta, false, Some("90")).as_secs(), 90);
+        assert_eq!(background_check_interval(Staging, false, Some("5")).as_secs(), 60);
+        assert_eq!(background_check_interval(Production, true, Some("120")).as_secs(), 120);
+        assert_eq!(background_check_interval(Beta, false, Some("soon")), BACKGROUND_UPDATE_CHECK_INTERVAL);
+        assert_eq!(background_check_interval(Beta, false, None), BACKGROUND_UPDATE_CHECK_INTERVAL);
+    }
+
+    /// The notification is for a dialog nobody would see: a hidden (macOS
+    /// tray), minimized, or unfocused main window, or none at all.
+    #[test]
+    fn a_found_update_is_also_a_notification_unless_the_window_is_in_front() {
+        use super::{MainWindowPresence, needs_system_notice};
+        let front = MainWindowPresence {
+            visible: true,
+            minimized: false,
+            focused: true,
+        };
+        assert!(!needs_system_notice(Some(front)));
+        assert!(needs_system_notice(Some(MainWindowPresence { visible: false, ..front })));
+        assert!(needs_system_notice(Some(MainWindowPresence { minimized: true, ..front })));
+        assert!(needs_system_notice(Some(MainWindowPresence { focused: false, ..front })));
+        assert!(needs_system_notice(None));
+    }
+
+    #[test]
+    fn the_update_notice_names_the_version() {
+        assert_eq!(super::update_notice_body("0.6.25"), "Hippius 0.6.25 is ready to install.");
+    }
+
+    /// The tray row reads what either path learned: the dialog being shown
+    /// records the version too.
+    #[test]
+    fn a_shown_dialog_makes_the_version_available_to_the_tray() {
+        with_clean_announced(|| {
+            super::note_update_prompted("9.9.9-test".into());
+            assert_eq!(super::update_available_version().as_deref(), Some("9.9.9-test"));
+            super::note_update_prompted(String::new());
+            assert_eq!(super::update_available_version().as_deref(), Some("9.9.9-test"));
+        });
+    }
+
     use super::*;
 
     /// Wire-shape pins. The frontend reads these keys and there is no codegen
@@ -1267,7 +1440,7 @@ mod tests {
     /// point", a reqwest chain) and the dialog shows `message` verbatim.
     #[test]
     fn failure_copy_never_leaks_the_plugin_error() {
-        let raw = "temp directory is not on the same mount point as the AppImage";
+        let raw = "temp directory is not on the same mount point as the app";
         let err = tauri_plugin_updater::Error::TempDirNotOnSameMountPoint;
         assert_eq!(err.to_string(), raw, "the fixture must be the string this test guards against");
 

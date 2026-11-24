@@ -48,6 +48,7 @@ pub mod video_engine;
 pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
+pub mod webview_refresh;
 
 use crate::auth::contacts::{add_contact, delete_contact, get_contacts, update_contact};
 use crate::auth::login::{login_with_mnemonic, validate_mnemonic};
@@ -84,7 +85,7 @@ use crate::blockchain::queries::{
 };
 use crate::blockchain::runtime::{get_wss_endpoint, test_rpc_endpoint_command, update_wss_endpoint_command};
 use crate::blockchain::staking::{stake_bond, stake_claim_rewards, stake_unbond, stake_withdraw_unbonded};
-use crate::blockchain::subscription::{start_block_subscription, stop_block_subscription};
+use crate::blockchain::subscription::{get_block_status, start_block_subscription, stop_block_subscription};
 use crate::blockchain::transfers::{compute_available_to_bond, compute_max_transferable};
 use crate::blockchain::transfers::{transfer_balance, validate_send_balance};
 use crate::console_access::validate_recovery_password;
@@ -124,6 +125,7 @@ use crate::sync::lifecycle::{
     stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
+use crate::sync::part_hashes::get_file_part_hashes;
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_captures, get_recent_uploads, search_files, search_files_in_drive};
@@ -137,8 +139,8 @@ use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel, tray_set_signed_in};
 use crate::updates::{
-    check_for_update, current_release_channel, install_update, note_update_prompted, release_channel_status, restart_blockers,
-    spawn_background_update_checks, switch_release_channel,
+    check_for_update, current_release_channel, install_update, note_update_prompted, open_update_from_tray, release_channel_status, restart_blockers,
+    spawn_background_update_checks, switch_release_channel, update_available_version,
 };
 use crate::utils::app_location::is_app_translocated;
 use crate::utils::logs::attach_logs_to_ticket;
@@ -535,6 +537,7 @@ fn main() {
             get_file_type_summary,
             get_source_summary,
             rename_remote_file,
+            get_file_part_hashes,
             rename_remote_folder,
             create_remote_folder,
             create_cloud_drive,
@@ -715,6 +718,7 @@ fn main() {
             cancel_account_recovery,
             // Block subscription
             start_block_subscription,
+            get_block_status,
             stop_block_subscription,
             // VM management
             list_vm_flavors,
@@ -796,6 +800,9 @@ fn main() {
             crate::tray::status_menu::tray_menu_attached,
             check_for_update,
             note_update_prompted,
+            update_available_version,
+            open_update_from_tray,
+            crate::webview_refresh::webview_reload_due,
             install_update,
             restart_blockers,
             current_release_channel,

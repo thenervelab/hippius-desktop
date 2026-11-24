@@ -19,6 +19,8 @@ let menuResult: {
 
 let chatUnreadSeed = 0;
 
+let updateSeed: string | null = null;
+
 let capturesResult: unknown = { label: null, files: [] };
 
 // The Captures list is fetched only where capture is on for this computer
@@ -42,6 +44,10 @@ vi.mock("@tauri-apps/api/core", () => ({
         return Promise.resolve(0);
       case "chat_get_unread_count":
         return Promise.resolve(chatUnreadSeed);
+      case "get_block_status":
+        return Promise.resolve({ blockNumber: 1234, isConnected: true });
+      case "update_available_version":
+        return Promise.resolve(updateSeed);
       default:
         return Promise.resolve(undefined);
     }
@@ -61,9 +67,14 @@ vi.mock("@tauri-apps/api/event", () => ({
   ),
 }));
 
+// The popover's own focus, so a test can show and hide it.
+let focusHandler: ((event: { payload: boolean }) => void) | null = null;
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
-    onFocusChanged: () => Promise.resolve(() => {}),
+    onFocusChanged: (handler: (event: { payload: boolean }) => void) => {
+      focusHandler = handler;
+      return Promise.resolve(() => {});
+    },
   }),
 }));
 
@@ -207,5 +218,57 @@ describe("useTrayPanelData captures", () => {
     expect(invoke).not.toHaveBeenCalledWith("get_recent_captures", expect.anything());
     rerender({ on: true });
     await waitFor(() => expect(result.current.captures).toHaveLength(1));
+  });
+});
+
+// The popover lives hidden for the whole run. On Windows every distinct event
+// a webview receives stays in WebView2's memory, so the frequent feeds (the
+// chain block every ~6 s, sync progress, direct uploads) are listened to only
+// while it is on screen, and re-read when it opens.
+describe("useTrayPanelData live feeds follow visibility", () => {
+  const LIVE = ["block_number_updated", "sync_progress_snapshot", "remote_upload_progress"];
+
+  beforeEach(() => {
+    eventHandlers.clear();
+    focusHandler = null;
+    updateSeed = null;
+    menuResult = {
+      loggedIn: true,
+      credits: 5,
+      substrateAddress: "5EZi38SomeAddrLvJs",
+      sessionReady: true,
+    };
+  });
+
+  it("listens to none of them while hidden", async () => {
+    renderHook(() => useTrayPanelData(flags.capture));
+    await waitFor(() => expect(eventHandlers.has("chat_unread_changed")).toBe(true));
+    for (const name of LIVE) expect(eventHandlers.has(name)).toBe(false);
+  });
+
+  it("reads the block on show, follows it while shown, and stops on hide", async () => {
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
+    await waitFor(() => expect(focusHandler).not.toBeNull());
+
+    act(() => focusHandler?.({ payload: true }));
+    await waitFor(() => expect(result.current.blockNumber).toBe(1234));
+    await waitFor(() => {
+      for (const name of LIVE) expect(eventHandlers.has(name)).toBe(true);
+    });
+    act(() => {
+      eventHandlers.get("block_number_updated")?.({ payload: { blockNumber: 1240, isConnected: true } });
+    });
+    expect(result.current.blockNumber).toBe(1240);
+
+    act(() => focusHandler?.({ payload: false }));
+    for (const name of LIVE) expect(eventHandlers.has(name)).toBe(false);
+  });
+
+  it("shows the update Rust found when it opens", async () => {
+    updateSeed = "0.6.30";
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
+    await waitFor(() => expect(focusHandler).not.toBeNull());
+    act(() => focusHandler?.({ payload: true }));
+    await waitFor(() => expect(result.current.updateVersion).toBe("0.6.30"));
   });
 });
