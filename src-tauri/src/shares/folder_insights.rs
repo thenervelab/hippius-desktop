@@ -25,12 +25,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+use hcfs_client::client::folder_share::folder_share_token_hash;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::insights::{
-    Gated, InsightsPages, InsightsPlan, MAX_PAGES, PLAN_UNREADABLE, REQUEST_TIMEOUT, UNREACHABLE, capabilities_checked, read_ok,
-    read_switches_in_plan, transport,
+    Gated, InsightsPages, InsightsPlan, MAX_PAGES, PLAN_UNREADABLE, REQUEST_TIMEOUT, UNREACHABLE, capabilities_checked, capabilities_or_none,
+    read_ok, read_switches_in_plan, transport,
 };
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
@@ -636,6 +637,37 @@ async fn read_insights(state: &AppState, token_hash: &str) -> Result<FolderInsig
     parse_folder_insights(&get_insights_body(&state.api_client, &api, token_hash).await?)
 }
 
+// ─── A new link ────────────────────────────────────────────────────────────
+
+/// Whether a new folder link starts with Insights on: the plan rule file
+/// links follow (on for a paid Drive plan, off on the free plan or when the
+/// plan can't be read), where the server has folder link Insights.
+#[must_use]
+pub(crate) const fn new_link_insights_on(server_has_them: bool, switches_in_plan: Option<bool>) -> bool {
+    server_has_them && matches!(switches_in_plan, Some(true))
+}
+
+/// Turn a new folder link's Insights on where [`new_link_insights_on`] says
+/// so. The server starts every folder link off. Never fails the share: the
+/// link works either way, and a failure is logged.
+pub(crate) async fn apply_new_link_default(state: &AppState, account_id: &str, share_token: &str) {
+    let (caps, in_plan) = tokio::join!(capabilities_or_none(state, account_id), read_switches_in_plan(state, account_id));
+    if !new_link_insights_on(caps.share_insights && caps.folder_share_insights, in_plan) {
+        return;
+    }
+    let api = match OwnerApi::for_account(state, account_id).await {
+        Ok(api) => api,
+        Err(e) => {
+            warn!(error = %e, "new folder link: insights left off");
+            return;
+        }
+    };
+    match patch_insights(&state.api_client, &api, &folder_share_token_hash(share_token), true).await {
+        Ok(outcome) => info!(?outcome, "new folder link: insights default"),
+        Err(e) => warn!(error = %e, "new folder link: insights left off"),
+    }
+}
+
 // ─── Commands ──────────────────────────────────────────────────────────────
 
 /// The owner's Insights for a folder link, by its listing `token_hash`.
@@ -696,6 +728,16 @@ mod tests {
     use crate::shares::insights::tests::mock;
 
     const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// A new folder link follows the plan rule: Insights on for a paid plan
+    /// only, and only where the server has them.
+    #[test]
+    fn a_new_folder_link_starts_with_insights_on_for_a_paid_plan_only() {
+        assert!(new_link_insights_on(true, Some(true)));
+        assert!(!new_link_insights_on(true, Some(false)), "free plan");
+        assert!(!new_link_insights_on(true, None), "a plan that can't be read");
+        assert!(!new_link_insights_on(false, Some(true)), "a server without folder insights");
+    }
 
     const PAID: &str = r#"{
       "plan":"paid","total_views":5,"unique_viewers":2,"completion_rate":null,"retention":[],"pages":null,

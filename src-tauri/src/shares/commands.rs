@@ -1151,7 +1151,9 @@ pub async fn create_folder_share_inner(
     // for a member drive reads the owner's seal or this account's grant: never
     // a key derived from this account's own master.
     if identity.is_member {
-        return create_member_folder_share(state, account_id, folder_label, path_prefix, ttl, choice, &identity).await;
+        let link = create_member_folder_share(state, account_id, folder_label, path_prefix, ttl, choice, &identity).await?;
+        super::folder_insights::apply_new_link_default(state, account_id, &link.share_token).await;
+        return Ok(link);
     }
 
     info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share");
@@ -1199,6 +1201,7 @@ pub async fn create_folder_share_inner(
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_folder_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
+    super::folder_insights::apply_new_link_default(state, account_id, &result.share_token).await;
 
     Ok(ShareLink {
         share_token: result.share_token,

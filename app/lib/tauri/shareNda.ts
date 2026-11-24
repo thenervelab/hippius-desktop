@@ -17,6 +17,8 @@ export interface LinkNda {
   editable: boolean;
   /** `false` on the free plan, `null` when the plan could not be read. */
   inPlan: boolean | null;
+  /** A password link without a text: one can't be sealed, so the app says why. */
+  passwordLink?: boolean;
 }
 
 /** One viewer's accept of one text. */

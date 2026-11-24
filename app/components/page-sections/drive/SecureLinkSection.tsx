@@ -20,7 +20,7 @@ export const SECURE_LINK = "Secure link";
  * The first-view email switch. It is the account's "First views" email from
  * Settings, so it says "a link", not "this link".
  */
-export const FIRST_VIEW_EMAIL = "Email me when a link is first opened";
+export const FIRST_VIEW_EMAIL = "Email me when any link is first opened";
 
 /**
  * Shown in place of the link email switches for an account with no email
@@ -107,8 +107,8 @@ function useNotificationPreferences(enabled: boolean) {
 }
 
 /**
- * "Email me when a link is first opened": the account's first-view email,
- * shown while the link counts views (`viewsCounted`) and the server sends
+ * "Email me when any link is first opened": the account's first-view email,
+ * which covers every link, so the label says so. Shown while the link counts views (`viewsCounted`) and the server sends
  * these emails. An account with no email address gets one line saying how to
  * get them instead, never a switch that cannot do anything.
  */

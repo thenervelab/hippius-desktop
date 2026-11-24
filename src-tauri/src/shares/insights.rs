@@ -898,7 +898,9 @@ pub fn is_document_name(file_name: &str) -> bool {
 /// What a new link is for, as far as where its switches start goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkKind {
-    /// A folder: its links have no insights yet.
+    /// A folder: the share dialog offers no switches for it; its link's
+    /// Insights start by the plan rule once minted
+    /// (`folder_insights::apply_new_link_default`).
     Folder,
     /// A screenshot or recording this app took.
     Capture,
