@@ -139,7 +139,7 @@ use crate::sync::remote_upload::{upload_files_to_remote_folder, upload_folder_to
 use crate::sync::status::{app_close, get_all_drive_statuses, get_sync_activity_rows, get_sync_engine_health};
 use crate::tray::panel::{hide_tray_panel, toggle_tray_panel, tray_set_signed_in};
 use crate::updates::{
-    check_for_update, current_release_channel, install_update, note_update_prompted, open_update_from_tray, release_channel_status,
+    check_for_update, current_release_channel, install_update, note_update_prompted, open_update_from_tray, release_channel_status, restart_blockers,
     spawn_background_update_checks, switch_release_channel, update_available_version,
 };
 use crate::utils::app_location::is_app_translocated;
@@ -804,6 +804,7 @@ fn main() {
             open_update_from_tray,
             crate::webview_refresh::webview_reload_due,
             install_update,
+            restart_blockers,
             current_release_channel,
             release_channel_status,
             switch_release_channel,
