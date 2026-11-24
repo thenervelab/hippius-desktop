@@ -1085,7 +1085,10 @@ pub(crate) fn append_browse_page(
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
             uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             uploaded_by_email: present_email(f.uploaded_by_email.as_deref()),
-            favorite: f.favorite,
+            // This build's hcfs wire types carry no `favorite` on a file, so
+            // the row's star stays unknown and the app takes it from the
+            // Starred list.
+            favorite: None,
         });
     }
 }
@@ -1724,10 +1727,10 @@ mod tests {
     /// field on the floor, so a shared drive could not say who put a file
     /// there. Folders are never attributed, and an empty string is the
     /// server's "unattributed", not a blank name to render.
-    /// The server's star rides every `/browse` row to the webview, folders
-    /// included (the pinned folder type has no such field, which is why the
-    /// desktop reads folders into its own row). An absent `favorite` stays
-    /// unknown rather than becoming "not starred".
+    /// The server's star rides every `/browse` folder row to the webview (the
+    /// desktop reads folders into its own row). This build's file type has no
+    /// `favorite`, so a file's star stays unknown and the app takes it from the
+    /// Starred list. An absent `favorite` stays unknown, never "not starred".
     #[test]
     fn browse_page_carries_the_star_through_and_absent_stays_unknown() {
         let zeros = serde_json::json!(vec![0u8; 32]);
@@ -1758,7 +1761,7 @@ mod tests {
         append_browse_page(&mut folders, &mut files, page.folders, page.files);
         let stars = |rows: &[super::super::files::FileEntry]| rows.iter().map(|r| r.favorite).collect::<Vec<_>>();
         assert_eq!(stars(&folders), vec![Some(true), Some(false), None]);
-        assert_eq!(stars(&files), vec![Some(true), Some(false), None]);
+        assert_eq!(stars(&files), vec![None, None, None]);
         // On the wire to the webview: present as a bool, absent when unknown.
         let wire = serde_json::to_value(&folders).expect("serialize");
         assert_eq!(wire[0]["favorite"], serde_json::json!(true));

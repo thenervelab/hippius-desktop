@@ -220,7 +220,9 @@ fn map_search_hit_to_entry(
         uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
         uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         uploaded_by_email: crate::sync::remote::present_email(hit.file.uploaded_by_email.as_deref()),
-        favorite: hit.file.favorite,
+        // This build's hcfs wire types carry no `favorite`, so the row's star
+        // stays unknown and the app takes it from the Starred list.
+        favorite: None,
     })
 }
 
@@ -930,8 +932,9 @@ mod tests {
         assert_eq!(entry.uploaded_by_email, None, "an absent key means unknown");
     }
 
-    /// A hit's star reaches the row as the server said it, and a hit with no
-    /// `favorite` key stays unknown (absent on the wire), never `false`.
+    /// This build's hit type has no `favorite`, so a star the server sends is
+    /// dropped and the row stays unknown (absent on the wire), never `false`:
+    /// the app then takes the star from the Starred list.
     #[test]
     fn maps_search_hit_star_and_keeps_absent_unknown() {
         let map = drive_map(&[("Docs", "/home/me/Docs")]);
@@ -939,8 +942,8 @@ mod tests {
         value["favorite"] = json!(true);
         let starred: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
         let entry = map_search_hit_to_entry(&starred, &map, &on_disk).expect("maps");
-        assert_eq!(entry.favorite, Some(true));
-        assert_eq!(serde_json::to_value(&entry).expect("serialize")["favorite"], json!(true));
+        assert_eq!(entry.favorite, None);
+        assert!(serde_json::to_value(&entry).expect("serialize").get("favorite").is_none());
 
         let unknown = map_search_hit_to_entry(&hit("Docs", Some("b.pdf"), Some("b.pdf"), 1, 1), &map, &on_disk).expect("maps");
         assert_eq!(unknown.favorite, None);
