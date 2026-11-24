@@ -76,10 +76,10 @@
 //! - [`PreparingState::drain_expired`] — the idle watchdog backstop. The
 //!   normal-path clears above assume every cycle eventually produces a
 //!   terminal event (or a files-populated snapshot). hcfs-client
-//!   violates that on at least one path: if a drive leaves the registry
-//!   between `run_sync_cycle` and `dispatch_sync_result`,
-//!   `trigger_sync_for_drive` early-returns ("Drive removed during
-//!   sync") emitting NO terminal event. Without a backstop the label is
+//!   violates that on at least one path: a drive that leaves the registry
+//!   while its cycle runs gets NO terminal event for that cycle
+//!   (`live_cycle_removed` in hcfs-client's runner, thenervelab/hcfs#1229
+//!   and #1246). Without a backstop the label is
 //!   stranded and the widget/tray show "Preparing sync…" until an
 //!   unrelated later action. The watchdog expires any entry that has
 //!   seen no activity for [`PREPARING_WATCHDOG_IDLE_TIMEOUT`] — idle

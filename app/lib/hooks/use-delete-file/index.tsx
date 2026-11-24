@@ -1,7 +1,7 @@
 import { DRIVE_STORAGE_STATS_QUERY_KEY } from "@/app/lib/hooks/api/useDriveStorageStats";
 import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, type QueryClient } from "@tanstack/react-query";
 import { useWalletAuth } from "@/lib/wallet-auth-context";
 import { queryClientAtom } from "jotai-tanstack-query";
 import { useAtomValue } from "jotai";
@@ -9,6 +9,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { toast } from "sonner";
 import { useRef } from "react";
+import { moveToTrash, newTrashJobId, onTrashProgress, type MoveToTrashResult } from "@/app/lib/tauri/trash";
+import { movingToTrashMessage } from "@/app/lib/trash/copy";
+import { showMovedToTrashToast } from "@/app/lib/trash/trashToast";
+import type { DeleteMode } from "@/app/lib/trash/deleteMode";
 
 export type FileToDelete = FormattedUserFile;
 
@@ -19,14 +23,20 @@ export interface DeleteFilesOptions {
    * deleted. Rust turns them off only after the delete succeeds.
    */
   turnOffLinks?: Map<FormattedUserFile, string[]>;
+  /**
+   * `trash`: Move to Trash, with Undo. Anything else is today's permanent
+   * delete (`forever` only changes the words around it).
+   */
+  mode?: DeleteMode;
 }
 
-/** `delete_files`'s answer. */
+/** `delete_files`'s answer, or `move_to_trash`'s under `trash`. */
 interface DeleteFilesResult {
   deleted: number;
   failed: Array<{ name: string; error: string }>;
   linksTurnedOff?: number;
   linksFailed?: number;
+  trash?: MoveToTrashResult;
 }
 
 /**
@@ -43,6 +53,18 @@ export function linksOutcomeNote(turnedOff: number, failed: number): string | nu
   return null;
 }
 
+function names(files: FileToDelete[]): string[] {
+    return files.map((f) => f.actualFileName?.split("/").pop() || f.name);
+}
+
+/** What every delete refreshes: listings, storage figures. */
+async function refreshAfterDelete(queryClient: QueryClient, address: string) {
+    await Promise.all([
+        notifyFilesMutated(queryClient, address),
+        queryClient.invalidateQueries({ queryKey: [DRIVE_STORAGE_STATS_QUERY_KEY] }),
+    ]);
+}
+
 export const useDeleteFile = ({
     files,
 }: {
@@ -56,7 +78,11 @@ export const useDeleteFile = ({
 
     return useMutation<DeleteFilesResult, Error, DeleteFilesOptions | void>({
         mutationKey: ["delete-files", files.map(f => f.actualFileName || f.name).join(',')],
-        onMutate: () => {
+        onMutate: (options) => {
+            if (options && options.mode === "trash") {
+                loadingToastRef.current = toast.loading(movingToTrashMessage(names(files)));
+                return;
+            }
             const fileCount = files.length;
             const isMultiple = fileCount > 1;
             const firstFileName = files[0]?.actualFileName || files[0]?.name || "file";
@@ -68,6 +94,19 @@ export const useDeleteFile = ({
             loadingToastRef.current = toast.loading(loadingMessage);
         },
         onSuccess: (result) => {
+            if (result.trash && polkadotAddress) {
+                // The loading toast becomes the result, with Undo.
+                const toastId = loadingToastRef.current ?? undefined;
+                loadingToastRef.current = null;
+                showMovedToTrashToast({
+                    toastId,
+                    names: names(files),
+                    result: result.trash,
+                    accountId: polkadotAddress,
+                    onChanged: () => refreshAfterDelete(queryClient, polkadotAddress),
+                });
+                return;
+            }
             if (loadingToastRef.current) {
                 toast.dismiss(loadingToastRef.current);
                 loadingToastRef.current = null;
@@ -90,7 +129,7 @@ export const useDeleteFile = ({
                 toast.success(links ? `${successMessage}. ${links}` : successMessage);
             }
         },
-        onError: (error: Error) => {
+        onError: (error: Error, options) => {
             if (loadingToastRef.current) {
                 toast.dismiss(loadingToastRef.current);
                 loadingToastRef.current = null;
@@ -99,6 +138,14 @@ export const useDeleteFile = ({
             const fileCount = files.length;
             const isMultiple = fileCount > 1;
             const firstFileName = files[0]?.actualFileName || files[0]?.name || "file";
+
+            if (options && options.mode === "trash") {
+                toast.error(
+                    isMultiple ? "Couldn't move these items to Trash" : `Couldn't move “${names(files)[0]}” to Trash`,
+                    { description: error.message },
+                );
+                return;
+            }
 
             const errorMessage = isMultiple
                 ? `Failed to delete ${fileCount} files: ${error.message}`
@@ -115,6 +162,31 @@ export const useDeleteFile = ({
         mutationFn: async (options) => {
             if (files.length === 0) throw new Error("No files to delete");
             if (!polkadotAddress) throw new Error("Wallet not connected");
+
+            if (options && options.mode === "trash") {
+                const jobId = newTrashJobId();
+                const loadingId = loadingToastRef.current;
+                const stop = await onTrashProgress(jobId, (progress) => {
+                    if (loadingId !== null) toast.loading(movingToTrashMessage(names(files), progress), { id: loadingId });
+                }).catch(() => null);
+                let trash: MoveToTrashResult;
+                try {
+                    trash = await moveToTrash(polkadotAddress, jobId, files.map((f) => ({
+                        name: f.actualFileName || f.name,
+                        source: f.source ?? null,
+                        label: f.label ?? null,
+                    })));
+                } finally {
+                    stop?.();
+                }
+                if (trash.trashed === 0) {
+                    const reasons = trash.failed.map((f) => f.error).join(" ");
+                    throw new Error(reasons || "Nothing was moved to Trash.");
+                }
+                window.dispatchEvent(new CustomEvent("sync_progress_update"));
+                await refreshAfterDelete(queryClient, polkadotAddress);
+                return { deleted: trash.trashed, failed: [], trash };
+            }
 
             // Single Rust call handles path resolution, deletion, and sync trigger
             const turnOffLinks = options ? options.turnOffLinks : undefined;

@@ -58,6 +58,18 @@ describe("mass delete copy", () => {
     expect(removeConfirmCopy(view({ side: "local" }), MAC).description).not.toMatch(/member/);
   });
 
+  // Only once the engine moves released deletes to Hippius Trash.
+  it("says a server-side removal goes to Trash only when it does", () => {
+    const trashed = removeConfirmCopy(view(), MAC, true);
+    expect(trashed.title).toBe("Move 150 files to Trash?");
+    expect(trashed.confirm).toBe("Move 150 files to Trash");
+    expect(trashed.description).toMatch(/restore them from Trash/);
+    expect(trashed.description).not.toMatch(/cannot be undone/);
+    expect(removeConfirmCopy(view(), MAC, false)).toEqual(removeConfirmCopy(view(), MAC));
+    // A removal from this Mac never touches Hippius, so never Trash either.
+    expect(removeConfirmCopy(view({ side: "local" }), MAC, true)).toEqual(removeConfirmCopy(view({ side: "local" }), MAC));
+  });
+
   it("shows progress while restoring or after an accepted answer", () => {
     expect(progressCopy(view())).toBeNull();
     expect(progressCopy(view({ state: "restoring" }))).toBe("Restoring 150 files…");

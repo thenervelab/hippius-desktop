@@ -16,6 +16,9 @@ let menu: TrayMenuData | null = null;
 vi.mock("@/app/lib/tray/useTrayShareLinks", () => ({
   useTrayShareLinks: () => ({ linksFor: () => [], reload: () => undefined }),
 }));
+vi.mock("@/app/lib/tray/useTrayLinkActivity", () => ({
+  useTrayLinkActivity: () => [],
+}));
 vi.mock("@/app/lib/tray/useTrayPanelData", () => ({
   useTrayPanelData: () => ({
     menu,

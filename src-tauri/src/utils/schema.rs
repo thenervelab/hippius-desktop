@@ -34,9 +34,12 @@ const EXPECTED_TABLES: &[&str] = &[
     "onboarding",
     "user_preferences",
     "share_keystore",
+    "share_file_link_key",
     "share_origin",
     "folder_share_origin",
     "shared_link_history",
+    "drive_moves_open",
+    "device_registration",
     "local_wallets",
     "bridge_transactions",
     "credit_notification_flags",
@@ -161,11 +164,14 @@ pub async fn ensure_table_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     step!("local_wallets", ensure_local_wallets);
     step!("user_preferences", ensure_user_preferences);
     step!("share_keystore", ensure_share_keystore);
+    step!("share_file_link_key", ensure_share_file_link_key);
     step!("share_origin", ensure_share_origin);
     step!("folder_share_origin", ensure_folder_share_origin);
     step!("bridge_transactions", ensure_bridge_transactions);
     step!("credit_notification_flags", ensure_credit_notification_flags);
     step!("shared_link_history", ensure_shared_link_history);
+    step!("drive_moves_open", ensure_drive_moves_open);
+    step!("device_registration", ensure_device_registration);
 
     // No `bridge_transactions` helper by design: the first cut of the bridge
     // persisted a full per-account tx-history table, but the FE now mirrors
@@ -981,14 +987,14 @@ async fn ensure_user_preferences(conn: &mut SqliteConnection) -> Result<(), sqlx
 
 /// `share_keystore` — per-share AEAD key material for the file-sharing feature.
 ///
-/// The `CHECK (length(share_key) = 32)` is defence-in-depth: a wrong-sized
-/// key would otherwise surface as an opaque AEAD failure several layers up the
-/// stack — see `crate::shares::keystore`.
+/// The length CHECKs in [`share_keystore_ddl`] are defence-in-depth: a
+/// wrong-sized key would otherwise surface as an opaque AEAD failure several
+/// layers up the stack — see `crate::shares::keystore`.
 async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
     sqlx::query(&share_keystore_ddl("share_keystore")).execute(&mut *conn).await?;
 
     // SQLite cannot alter a CHECK in place, so a table created under an
-    // older constraint is rebuilt and copied. Two older shapes exist:
+    // older constraint is rebuilt and copied. Three older shapes exist:
     //
     // - Pre-`secret_kind`: `share_key BLOB CHECK (length = 32)`, which cannot
     //   hold a wrapped blob. Every row is copied as 'public'. Shares that
@@ -999,13 +1005,16 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
     //   Dropping them would break Copy for legitimately public shares.
     // - `secret_kind` limited to 'public' / 'private', from before link-secret
     //   folder links (thenervelab/hcfs#665). Rows keep their kind; the
-    //   rebuild only widens the CHECK so the two folder-link kinds fit.
+    //   rebuild only widens the CHECK so the link kinds fit.
+    // - `secret_kind` with the folder-link kinds but not the file-link ones,
+    //   from before link-secret file links (thenervelab/hcfs#1253). Same:
+    //   rows keep their kind and the CHECK widens.
     let columns = table_columns(&mut *conn, "share_keystore").await?;
     let kind_select = if columns.iter().any(|c| c == "secret_kind") {
         let ddl: String = sqlx::query_scalar("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'share_keystore'")
             .fetch_one(&mut *conn)
             .await?;
-        if ddl.contains("'folder_link'") {
+        if ddl.contains("'file_link'") {
             return Ok(());
         }
         "secret_kind"
@@ -1031,26 +1040,52 @@ async fn ensure_share_keystore(conn: &mut SqliteConnection) -> Result<(), sqlx::
 /// `share_keystore`'s DDL under `name`, shared by the create and the rebuild so
 /// the two can never disagree on the CHECK.
 ///
-/// A 32-byte row is a raw file-share key (`public`) or a folder link secret
-/// (`folder_link`); a password row (`private`, `folder_link_private`) holds the
-/// wrapped blob, which is strictly longer. Checking `> 32` rather than the exact
-/// 89-byte framing keeps the constraint from breaking if hcfs-client ever
-/// versions the wrap format. `ensure_share_keystore` detects an older CHECK by
-/// looking for `'folder_link'` in the stored DDL.
+/// A 32-byte row is a raw file-share key (`public`) or a link secret
+/// (`folder_link`, `file_link`); a password row (`private`,
+/// `folder_link_private`, `file_link_private`) holds the wrapped blob, which is
+/// strictly longer. Checking `> 32` rather than the exact 89-byte framing keeps
+/// the constraint from breaking if hcfs-client ever versions the wrap format.
+/// `ensure_share_keystore` detects an older CHECK by looking for `'file_link'`
+/// (quotes included, so `'file_link_private'` does not match) in the stored DDL.
 pub fn share_keystore_ddl(name: &str) -> String {
     format!(
         "CREATE TABLE IF NOT EXISTS {name} (
             share_token TEXT PRIMARY KEY,
             secret_kind TEXT NOT NULL DEFAULT 'public'
-                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private')),
+                        CHECK (secret_kind IN ('public', 'private', 'folder_link', 'folder_link_private', 'file_link', 'file_link_private')),
             share_key BLOB NOT NULL,
             created_at INTEGER NOT NULL DEFAULT (unixepoch()),
             CHECK (
-                (secret_kind IN ('public', 'folder_link') AND length(share_key) = 32)
-             OR (secret_kind IN ('private', 'folder_link_private') AND length(share_key) > 32)
+                (secret_kind IN ('public', 'folder_link', 'file_link') AND length(share_key) = 32)
+             OR (secret_kind IN ('private', 'folder_link_private', 'file_link_private') AND length(share_key) > 32)
             )
         )"
     )
+}
+
+/// `share_file_link_key` — the share key a link-secret file link's (`#s=`)
+/// server-held envelope opened to, by token (`crate::shares::file_link_key`).
+///
+/// A `#s=` keystore row holds only the link secret, and the server stops
+/// handing out the envelope once the link has an email gate or has ended, which
+/// is when the owner still reads its comments and viewer emails. Kept beside
+/// the keystore rather than in it: `ShareKeystore` maps a token to the secret a
+/// URL is rebuilt from, and this key must never reach a URL. Only a token whose
+/// keystore row is `file_link` gets one (`FileLinkKeys::keep`), and the
+/// keystore's `put` and `forget` delete it.
+async fn ensure_share_file_link_key(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(share_file_link_key_ddl()).execute(&mut *conn).await?;
+    Ok(())
+}
+
+/// `share_file_link_key`'s DDL, shared with the mock-server suite so it never
+/// tests against a copy.
+pub fn share_file_link_key_ddl() -> &'static str {
+    "CREATE TABLE IF NOT EXISTS share_file_link_key (
+        share_token TEXT PRIMARY KEY,
+        share_key BLOB NOT NULL CHECK (length(share_key) = 32),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+    )"
 }
 
 /// `share_origin` — sidecar of `share_keystore` recording which local file each
@@ -1146,6 +1181,31 @@ async fn ensure_credit_notification_flags(conn: &mut SqliteConnection) -> Result
     )
     .execute(&mut *conn)
     .await?;
+    Ok(())
+}
+
+/// `drive_moves_open`: the moves between drives this computer opened and
+/// has not seen end, per account (`owner` is the `account_key`). The launch
+/// sweep aborts the ones a crash left open (`sync::drive_move::ledger`).
+async fn ensure_drive_moves_open(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS drive_moves_open (
+            owner     TEXT    NOT NULL,
+            move_id   TEXT    NOT NULL,
+            opened_at INTEGER NOT NULL,
+            PRIMARY KEY (owner, move_id)
+        )",
+    )
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
+/// `device_registration`: this computer's own device on each account it
+/// signed in to (`owner` is the `account_key`), kept across sign-outs so a
+/// sign-in reconnects the same device. See `crate::devices::store`.
+async fn ensure_device_registration(conn: &mut SqliteConnection) -> Result<(), sqlx::Error> {
+    sqlx::query(crate::devices::store::CREATE_TABLE).execute(&mut *conn).await?;
     Ok(())
 }
 

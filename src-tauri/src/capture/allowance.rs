@@ -40,6 +40,14 @@ use crate::error::{AppError, NotReadyKind, Result};
 /// does not count.
 pub const FREE_MAX_RECORDING: Duration = Duration::from_mins(5);
 
+/// How far past [`FREE_MAX_RECORDING`] a recording the app stopped at the
+/// limit can run. The tick loop (`commands::spawn_tick_loop`) checks once a
+/// second on whole recorded seconds, so it stops between 5:00 and 5:01; it
+/// skips a beat while a pause or resume holds the recorder; and the recorder
+/// then finishes writing. Arbitrary, with room over those, and far under
+/// anything a user could record past the limit on purpose.
+pub const LIMIT_STOP_OVERSHOOT: Duration = Duration::from_secs(5);
+
 /// From how far before the limit the pill shows the time left.
 pub const REMAINING_SHOWN_FROM: Duration = Duration::from_mins(1);
 

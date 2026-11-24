@@ -13,10 +13,12 @@ import type { FolderShareSummary, ServerCapabilities, ShareSummary } from "@/app
 import type { LinkActivity } from "@/app/lib/tauri/folderInsights";
 import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { folderInsightsAtom } from "@/components/page-sections/shares/folder-insights/folderInsightsTarget";
+import { insightsSheetAtom } from "@/app/lib/global-atoms/sharesAtoms";
 
+const nav = vi.hoisted(() => ({ search: "", replace: vi.fn() }));
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(""),
+  useRouter: () => ({ push: vi.fn(), replace: nav.replace }),
+  useSearchParams: () => new URLSearchParams(nav.search),
   usePathname: () => "/shares",
 }));
 vi.mock("@/app/lib/wallet-auth-context", () => ({ useWalletAuth: () => ({ polkadotAddress: "5Account" }) }));
@@ -102,6 +104,9 @@ function rowOf(name: string): HTMLElement {
 }
 
 beforeEach(() => {
+  nav.search = "";
+  nav.replace.mockReset();
+  getDefaultStore().set(insightsSheetAtom, null);
   activityMock.mockReset();
   activityMock.mockResolvedValue(ACTIVITY);
   getDefaultStore().set(folderInsightsAtom, null);
@@ -153,5 +158,23 @@ describe("Shared Links insight columns", () => {
     expect(screen.queryByRole("columnheader", { name: /Views/ })).toBeNull();
     expect(within(rowOf("report.pdf")).getByTestId("capture-insights-button")).toBeInTheDocument();
     expect(within(rowOf("Board room")).queryByTestId("capture-insights-button")).toBeNull();
+  });
+
+  it("opens the link a notification or the tray names, once the listing has it", async () => {
+    nav.search = "insights=tok1";
+    renderPage(ALL_ON);
+    await waitFor(() =>
+      expect(getDefaultStore().get(insightsSheetAtom)).toEqual({ shareToken: "tok1", fileName: "report.pdf" }),
+    );
+    // Dropped, so a reload or Back does not open it again.
+    expect(nav.replace).toHaveBeenCalledWith("/shares");
+  });
+
+  it("opens nothing for a link no longer listed", async () => {
+    nav.search = "insights=gone";
+    renderPage(ALL_ON);
+    await screen.findByText("report.pdf");
+    await waitFor(() => expect(nav.replace).toHaveBeenCalledWith("/shares"));
+    expect(getDefaultStore().get(insightsSheetAtom)).toBeNull();
   });
 });

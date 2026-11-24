@@ -20,6 +20,7 @@ pub mod chat;
 mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod devices;
 pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
@@ -449,6 +450,20 @@ fn main() {
             move_entries,
             crate::sync::drive_move::list_move_destinations,
             crate::sync::drive_move::move_between_drives,
+            crate::sync::trash::move_to_trash,
+            crate::sync::trash::undo_move_to_trash,
+            crate::sync::trash::release_trash_hold,
+            crate::sync::trash::list_trash,
+            crate::sync::trash::restore_trash_items,
+            crate::sync::trash::delete_trash_items_forever,
+            crate::sync::trash::empty_trash,
+            crate::sync::favorites::set_star,
+            crate::sync::favorites::set_stars,
+            crate::sync::favorites::list_starred,
+            crate::sync::favorites::star_scopes,
+            crate::devices::commands::list_account_devices,
+            crate::devices::commands::unlink_account_device,
+            crate::devices::file_details::get_file_source_details,
             crate::sync::drive_move::cancel_drive_move,
             create_sync_folder,
             list_sync_folder,
@@ -563,6 +578,7 @@ fn main() {
             crate::shares::folder_insights::folder_share_insights_csv_name,
             crate::shares::folder_insights::folder_share_export_insights_csv,
             crate::shares::link_activity::share_link_activity,
+            crate::shares::link_alerts::link_activity_recent,
             crate::shares::insights::share_list_comments,
             crate::shares::insights::share_delete_comment,
             crate::shares::insights::share_block_commenter,
@@ -570,6 +586,9 @@ fn main() {
             crate::shares::insights::share_get_reactions,
             crate::shares::insights::share_get_link_settings,
             crate::shares::insights::share_set_link_settings,
+            crate::shares::expiry_date::share_expiry_day_range,
+            crate::shares::expiry_date::share_set_expiry_date,
+            crate::shares::viewer_visits::share_viewer_visits,
             crate::shares::gate::share_get_gate,
             crate::shares::gate::share_set_gate,
             crate::shares::gate::share_remove_gate,
@@ -577,9 +596,14 @@ fn main() {
             crate::shares::nda::share_set_nda,
             crate::shares::nda::share_remove_nda,
             crate::shares::nda::share_nda_accepts,
+            crate::shares::nda_records::share_nda_accepts_csv_name,
+            crate::shares::nda_records::share_nda_record_name,
+            crate::shares::nda_records::share_export_nda_accepts_csv,
+            crate::shares::nda_records::share_save_nda_record,
             crate::shares::recipients::share_recipient_links,
             crate::shares::recipients::share_add_recipient_links,
             crate::shares::recipients::share_revoke_recipient_link,
+            crate::shares::recipients::share_retry_recipient_nda,
             crate::shares::recipients::share_group_insights,
             crate::shares::insights::share_link_settings_default,
             crate::shares::insights::share_switches_in_plan,
@@ -1085,6 +1109,8 @@ pub fn on_window_event(builder: Builder<Wry>) -> Builder<Wry> {
             && window.label() == "main"
         {
             crate::capture::commands::on_main_window_focused(window.app_handle());
+            // A link activity notification's click brings the app forward.
+            crate::shares::link_alerts::on_main_window_focused(window.app_handle());
         }
 
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1515,6 +1541,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
             // Startup checks once and the menu checks on demand, so a copy left
             // open for days never heard about a release at all.
             spawn_background_update_checks(app_handle.clone());
+
+            // New views on the owner's links, as OS notifications and rows
+            // in the notification center, for as long as the app runs.
+            crate::shares::link_alerts::spawn(app_handle.clone());
 
             // Migrate account keys from 8-char to 16-char format
             if let Err(e) = crate::utils::schema::migrate_account_keys(&pool).await {

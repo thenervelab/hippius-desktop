@@ -220,6 +220,7 @@ fn map_search_hit_to_entry(
         uploaded_by: hit.file.uploaded_by.clone().filter(|s| !s.is_empty()),
         uploaded_by_name: hit.file.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         uploaded_by_email: crate::sync::remote::present_email(hit.file.uploaded_by_email.as_deref()),
+        favorite: hit.file.favorite,
     })
 }
 
@@ -927,6 +928,23 @@ mod tests {
         assert_eq!(entry.uploaded_by, None);
         assert_eq!(entry.uploaded_by_name, None);
         assert_eq!(entry.uploaded_by_email, None, "an absent key means unknown");
+    }
+
+    /// A hit's star reaches the row as the server said it, and a hit with no
+    /// `favorite` key stays unknown (absent on the wire), never `false`.
+    #[test]
+    fn maps_search_hit_star_and_keeps_absent_unknown() {
+        let map = drive_map(&[("Docs", "/home/me/Docs")]);
+        let mut value = serde_json::to_value(hit("Docs", Some("a.pdf"), Some("a.pdf"), 1, 1)).expect("hit to json");
+        value["favorite"] = json!(true);
+        let starred: SearchFileHit = serde_json::from_value(value).expect("hit fixture");
+        let entry = map_search_hit_to_entry(&starred, &map, &on_disk).expect("maps");
+        assert_eq!(entry.favorite, Some(true));
+        assert_eq!(serde_json::to_value(&entry).expect("serialize")["favorite"], json!(true));
+
+        let unknown = map_search_hit_to_entry(&hit("Docs", Some("b.pdf"), Some("b.pdf"), 1, 1), &map, &on_disk).expect("maps");
+        assert_eq!(unknown.favorite, None);
+        assert!(serde_json::to_value(&unknown).expect("serialize").get("favorite").is_none());
     }
 
     /// Regression: Added-by filter uses `/search_files`, and UploaderCell

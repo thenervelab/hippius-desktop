@@ -9,6 +9,7 @@ use crate::sync::files::move_entries::{
     Claimed, ClashChoice, Decision, Existing, MoveItem, MoveItemResult, basename_of, decide, join_path, normalize_drive_path, target_name,
 };
 use crate::sync::remote_rename::{RemoteEntry, RemoteFolderTree};
+use hcfs_shared::revision_id::RevisionId;
 use std::collections::HashMap;
 
 /// What one selected item is on the source drive, as the server lists it.
@@ -33,7 +34,7 @@ pub struct PlannedCopy {
 pub struct RemoteEntryKey {
     pub path: String,
     pub path_hash: [u8; 32],
-    pub revision_id: [u8; 32],
+    pub revision_id: RevisionId,
     pub salted_hash: [u8; 32],
     pub size_bytes: u64,
 }
@@ -92,9 +93,8 @@ impl MovePlan {
         if self.folders.len() > MAX_COMMIT_FOLDERS {
             return Some("Up to 100 folders can move to another drive at once. Move fewer at a time.".into());
         }
-        if self.copies.is_empty() && !self.folders.is_empty() {
-            return Some("Empty folders can't move to another drive yet. Create the folder there instead.".into());
-        }
+        // A folder of only empty folders is no refusal: it commits with no
+        // copy (`"files": []`).
         None
     }
 }
@@ -246,7 +246,7 @@ mod tests {
         RemoteEntry {
             path: path.into(),
             path_hash: [seed; 32],
-            revision_id: [seed; 32],
+            revision_id: RevisionId::from_bytes([seed; 32]),
             salted_hash: [seed; 32],
             size_bytes: 10,
         }
@@ -286,6 +286,33 @@ mod tests {
         let dests: Vec<&str> = plan.copies.iter().map(|c| c.dest_path.as_str()).collect();
         assert_eq!(dests, ["Albums/Trip/a.jpg", "Albums/Trip/Day 1/b.jpg"]);
         assert_eq!(plan.going[0].new_view_path, "Albums/Trip");
+    }
+
+    #[test]
+    fn a_folder_of_empty_folders_moves_with_no_copy() {
+        let tree = RemoteFolderTree {
+            directory_paths: vec!["Plans".into(), "Plans/2027".into(), "Plans/2027/Q1".into()],
+            files: vec![],
+        };
+        let plan = plan_move(
+            &[item("Plans", true, ClashChoice::Ask)],
+            &[ItemSource::Folder(tree)],
+            "",
+            "",
+            "Archive",
+            &HashMap::new(),
+        );
+        assert!(plan.settled.is_empty());
+        assert!(plan.copies.is_empty());
+        assert_eq!(
+            plan.folders,
+            vec![MoveFolder {
+                from: "Plans".into(),
+                to: "Archive/Plans".into()
+            }]
+        );
+        assert_eq!(plan.going[0].new_view_path, "Archive/Plans");
+        assert_eq!(plan.over_caps(), None);
     }
 
     #[test]
@@ -391,7 +418,7 @@ mod tests {
             from: "a".into(),
             to: "b".into(),
         });
-        assert!(plan.over_caps().unwrap().starts_with("Empty folders"));
+        assert_eq!(plan.over_caps(), None, "a folder of empty folders moves with no copy");
         plan.copies = (0..=MAX_DRIVE_MOVE_FILES)
             .map(|i| PlannedCopy {
                 source: (&entry(&format!("a/{i}"), 1)).into(),

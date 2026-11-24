@@ -14,6 +14,11 @@ export interface RecipientPerson {
   url: string | null;
   /** For a name that is an email: opens the mail app with the link in it. */
   mailto: string | null;
+  /**
+   * Made from a link with an NDA, and its own NDA isn't set yet, so it opens
+   * for no one. Offer Try again (`retryRecipientNda`) instead of the link.
+   */
+  ndaPending: boolean;
 }
 
 /** Links per person for one file link. */
@@ -65,6 +70,11 @@ export function getRecipientLinks(shareToken: string): Promise<RecipientLinks> {
 /** `names` as typed: Rust splits it on commas, semicolons and new lines. */
 export function addRecipientLinks(shareToken: string, names: string): Promise<AddedRecipients> {
   return invoke<AddedRecipients>("share_add_recipient_links", { shareToken, names });
+}
+
+/** Set the NDA on `recipientToken`, a link made from `shareToken` that is still waiting for it. */
+export function retryRecipientNda(shareToken: string, recipientToken: string): Promise<void> {
+  return invoke<void>("share_retry_recipient_nda", { shareToken, recipientToken });
 }
 
 export function revokeRecipientLink(shareToken: string): Promise<void> {

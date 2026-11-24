@@ -85,6 +85,8 @@ pub struct AppState {
     pub oauth: OAuthState,
     /// Team chat: pending OIDC sign-in flows and the HTTP client they use.
     pub chat: crate::chat::ChatState,
+    /// Link activity: the counts the last poll saw, and a notification's pending open.
+    pub link_alerts: crate::shares::link_alerts::LinkAlertsState,
     /// Screen capture: the one live capture session, if any.
     pub capture: crate::capture::commands::CaptureState,
     /// The file viewer's loopback video stream on Linux (`video_stream.rs`):
@@ -120,8 +122,8 @@ pub struct AppState {
     /// a `SyncError` every retry cycle; this surfaces ONE notification once a
     /// drive has failed `ERROR_NOTIFY_THRESHOLD` consecutive cycles and
     /// suppresses the rest until the drive recovers. Counted per-label here
-    /// rather than read from the payload's runner-global `consecutive_failures`
-    /// (which any healthy drive resets). Cleared on the recovery edge
+    /// rather than read from the payload's `consecutive_failures`, which a
+    /// stop or reset does not clear. Cleared on the recovery edge
     /// (`SyncCompleted`), `SyncStopped`, and globally on `SyncReset`. See
     /// `crate::sync::error_notify`.
     pub error_notify: std::sync::Arc<crate::sync::error_notify::ErrorNotifyState>,
@@ -218,6 +220,12 @@ pub struct AppState {
     /// Cancel flags of the moves between drives running now, by the id the
     /// webview gave each. See `crate::sync::drive_move`.
     pub drive_moves: crate::sync::drive_move::DriveMoveJobs,
+    /// Move to Trash holds whose Undo toast is still up, by token. See
+    /// `crate::sync::trash`.
+    pub trash_holds: crate::sync::trash::TrashHolds,
+    /// This computer's device check, one loop per signed-in account. See
+    /// `crate::devices::registration`.
+    pub device_registration: crate::devices::registration::RegistrationLoops,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -419,6 +427,7 @@ impl AppState {
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
+            link_alerts: crate::shares::link_alerts::LinkAlertsState::default(),
             capture: crate::capture::commands::CaptureState::default(),
             video_stream: crate::video_stream::VideoStreams::default(),
             video_engine: crate::video_engine::VideoEngineState::default(),
@@ -438,6 +447,8 @@ impl AppState {
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             remote_listing_cache: std::sync::Arc::default(),
             drive_moves: crate::sync::drive_move::DriveMoveJobs::default(),
+            trash_holds: crate::sync::trash::TrashHolds::default(),
+            device_registration: crate::devices::registration::RegistrationLoops::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),
