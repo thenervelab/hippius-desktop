@@ -15,6 +15,7 @@ pub mod chat;
 pub mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod devices;
 pub mod diagnostics;
 pub mod error;
 /// File-manager shell-extension bridge. Compiled on macOS, Linux, and Windows

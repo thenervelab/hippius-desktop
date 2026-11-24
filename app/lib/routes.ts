@@ -67,6 +67,9 @@ export function capturesRoute(label: string, remote: boolean, openFile?: string)
 /** The Shared Drives page: drives shared with this account, and the ones it shared. */
 export const SHARED_DRIVES_ROUTE = "/shared-drives";
 
+/** Starred: the files, folders and drives this account starred, across every drive. */
+export const STARRED_ROUTE = "/starred";
+
 /**
  * Open a drive somebody shared with this account, or a folder of one, on the
  * Drive page without syncing it here. `label` is its browse label

@@ -22,6 +22,8 @@ import { SHARED_DRIVES_ENABLED } from "@/app/lib/featureFlags";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
 import type { RemoteFolder, SyncFolder } from "@/app/lib/types/sync-folder";
 
+import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
+
 import type { FolderRow } from "./folderRows";
 
 export interface FolderActionHandlers {
@@ -53,6 +55,14 @@ export interface FolderActionHandlers {
    * folder shapes; both open the same modal.
    */
   onShareRemoteDrive?: (folder: RemoteFolder) => void;
+  /**
+   * Star / Unstar the whole drive, right after Open. Absent where the
+   * surface does not offer it.
+   */
+  star?: {
+    isStarred: (row: FolderRow) => boolean;
+    onToggle: (row: FolderRow) => void;
+  };
 }
 
 /**
@@ -66,6 +76,17 @@ export interface FolderActionHandlers {
  * "Delete from Server", which the backend would key by the wrong identity.
  */
 export function buildFolderActions(
+  row: FolderRow,
+  handlers: FolderActionHandlers,
+): ActionItem[] {
+  const star = handlers.star;
+  return withStarItem(
+    buildFolderActionsWithoutStar(row, handlers),
+    star ? starMenuItem(star.isStarred(row), () => star.onToggle(row)) : null,
+  );
+}
+
+function buildFolderActionsWithoutStar(
   row: FolderRow,
   handlers: FolderActionHandlers,
 ): ActionItem[] {
