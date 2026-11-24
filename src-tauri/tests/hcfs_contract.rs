@@ -789,11 +789,11 @@ fn folder_share_token_hash_is_pinned() {
 #[test]
 fn a_private_folder_share_secret_can_never_produce_a_key_url() {
     let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap share key");
-    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Private(blob));
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Private(blob)).expect("a folder secret");
     assert!(url.contains("#p="), "private secret must yield a #p= URL: {url}");
     assert!(!url.contains("#k="), "private secret must never yield a password-free #k= URL: {url}");
 
-    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Public([7u8; 32]));
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::Public([7u8; 32])).expect("a folder secret");
     assert_eq!(
         url,
         build_folder_share_url("https://console.example.com", "tok", &FileKey::from_bytes([7u8; 32])),
@@ -827,12 +827,12 @@ fn folder_link_url_builders_are_pinned() {
 /// were the drive key: a link that opens nothing.
 #[test]
 fn a_link_secret_folder_share_secret_never_produces_a_key_url() {
-    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLink([7u8; 32]));
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLink([7u8; 32])).expect("a folder secret");
     assert_eq!(url, build_folder_link_url("https://console.example.com", "tok", &[7u8; 32]));
     assert!(!url.contains("#k="), "{url}");
 
     let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
-    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLinkPrivate(blob));
+    let url = build_folder_share_url_for("https://console.example.com", "tok", &ShareSecret::FolderLinkPrivate(blob)).expect("a folder secret");
     assert!(url.contains("#sp=") && !url.contains("#p="), "{url}");
 }
 
@@ -888,6 +888,95 @@ fn a_minted_folder_link_opens_to_the_drive_key() {
     // The recipient-side open the shares page does not use, referenced so a
     // signature change fails here.
     let _ = hcfs_client::client::HcfsClient::open_folder_link;
+}
+
+// ── Link-secret file links (hcfs #1253) ────────────────────────────────────
+//
+// `create_share` stores a `FileLink` / `FileLinkPrivate` secret and hands out
+// `/share/<token>#s=` / `#sp=` once the server keeps the link envelope. The
+// shares page and the tray's Copy link rebuild those URLs from the keystore,
+// and the console's `/share/` page parses exactly these shapes (hcfs#1273).
+
+/// Exact file link URL vectors: the `/share/` path of a file link with the
+/// folder links' `#s=` / `#sp=` fragments, rebuilt from the stored secret.
+#[test]
+fn file_link_url_builders_are_pinned() {
+    use hcfs_client::client::file_link::{build_file_link_url, build_file_link_url_private};
+    use hcfs_client::client::share::build_share_url_for;
+
+    let public = build_file_link_url("https://x.io/", "tok", &[0u8; 32]);
+    assert_eq!(public, format!("https://x.io/share/tok#s={}", "A".repeat(43)), "file link URL drifted");
+    assert_eq!(
+        build_share_url_for("https://x.io", "tok", &ShareSecret::FileLink([0u8; 32])).expect("a file secret"),
+        public
+    );
+
+    let private = build_file_link_url_private("https://x.io/", "tok", &[1, 2, 3]);
+    assert_eq!(private, "https://x.io/share/tok#sp=AQID", "password file link URL drifted");
+    let blob = wrap_share_key("correct horse battery staple", &[7u8; 32]).expect("wrap");
+    let url = build_share_url_for("https://x.io", "tok", &ShareSecret::FileLinkPrivate(blob)).expect("a file secret");
+    assert!(url.starts_with("https://x.io/share/tok#sp="), "{url}");
+}
+
+/// A file link secret never reaches a folder URL, and a folder link secret
+/// never a file URL: each path refuses the other kind with `WrongShareKind`,
+/// which the folder listing and the file listing both rely on.
+#[test]
+fn a_link_secret_only_rebuilds_its_own_kind_of_link() {
+    use hcfs_client::client::share::{ShareError, build_share_url_for};
+
+    for secret in [ShareSecret::FileLink([7u8; 32]), ShareSecret::FileLinkPrivate(vec![7u8; 89])] {
+        assert!(
+            matches!(
+                build_folder_share_url_for("https://x.io", "tok", &secret),
+                Err(ShareError::WrongShareKind)
+            ),
+            "{secret:?}"
+        );
+    }
+    for secret in [ShareSecret::FolderLink([7u8; 32]), ShareSecret::FolderLinkPrivate(vec![7u8; 89])] {
+        assert!(
+            matches!(build_share_url_for("https://x.io", "tok", &secret), Err(ShareError::WrongShareKind)),
+            "{secret:?}"
+        );
+    }
+}
+
+/// The calls `shares::file_link_key` and the owner wraps make: the anonymous
+/// link-key open that recovers a `#s=` link's share key, and the wrap codec
+/// the desktop's own is checked against both ways.
+#[test]
+fn file_link_client_surface_is_reachable() {
+    let _ = hcfs_client::client::HcfsClient::open_file_link;
+    let _ = hcfs_client::client::share_wrap::seal_file_owner_secret;
+    let _ = hcfs_client::client::share_wrap::open_file_owner_secret;
+    assert!(ShareSecret::FileLink([0u8; 32]).is_file_link());
+    assert!(ShareSecret::FileLinkPrivate(vec![0u8; 89]).is_private());
+}
+
+/// A revision id is a 32-number JSON array on the wire, as `[u8; 32]` was:
+/// the desktop's own drive-move wire types (`drive_move::wire`) carry it and
+/// their JSON pins assume that shape.
+#[test]
+fn revision_id_wire_shape_is_pinned() {
+    use hcfs_shared::revision_id::RevisionId;
+
+    let id = RevisionId::from_bytes([9u8; 32]);
+    assert_eq!(serde_json::to_value(id).expect("serialize"), serde_json::json!(vec![9u8; 32]));
+    assert_eq!(serde_json::from_value::<RevisionId>(serde_json::json!(vec![9u8; 32])).expect("parse"), id);
+    assert_eq!(id.to_hex(), "09".repeat(32));
+}
+
+/// The sync event the bridge matches for a long token-refresh hold (hcfs
+/// #1245). `SyncEvent` is not `#[non_exhaustive]`, so the bridge's exhaustive
+/// match already fails on a new variant; this pins the field it ignores.
+#[test]
+fn token_refresh_held_event_is_pinned() {
+    use hcfs_client::engine::SyncEvent;
+
+    let SyncEvent::TokenRefreshHeld { held_secs: _ } = (SyncEvent::TokenRefreshHeld { held_secs: 91 }) else {
+        unreachable!("a TokenRefreshHeld value is that variant");
+    };
 }
 
 /// Compile-time pin of the folder-share structs and owner operations the
@@ -1164,7 +1253,7 @@ fn expected_content_download_surface_is_pinned() {
         salted_hash: hcfs_shared::salted_hash::SaltedHash::from_bytes([2; 32]),
         size_bytes: 3,
         revision_seq: 4,
-        revision_id: [5; 32],
+        revision_id: hcfs_shared::revision_id::RevisionId::from_bytes([5; 32]),
         ..serde_json::from_value(serde_json::json!({
             "path_hash": vec![0u8; 32],
             "salted_hash": vec![0u8; 32],
@@ -1447,4 +1536,69 @@ fn invite_link_envelope_wire_is_pinned() {
     let resp: hcfs_shared::network::SetInviteLinkEnvelopeResponse = serde_json::from_str(r#"{"stored":true}"#).expect("parse");
     assert!(resp.stored);
     assert_eq!(hcfs_shared::shares::INVITE_LINK_ENVELOPE_LEN, 73);
+}
+
+/// The Free plan's recording count reads `capture_kind` off every listed
+/// row (`capture::recording_allowance`): `"recording"` for a screen
+/// recording, the key absent for any other file, and absent from an older
+/// server's rows.
+#[test]
+fn remote_file_entry_carries_the_capture_kind() {
+    use hcfs_shared::network::RemoteFileEntry;
+
+    let row = |kind: Option<&str>| {
+        let mut json = serde_json::json!({
+            "path_hash": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "size_bytes": 0,
+            "revision_seq": 0,
+            "revision_id": vec![0u8; 32],
+            "created_at": 0,
+            "updated_at": 0,
+        });
+        if let Some(kind) = kind {
+            json["capture_kind"] = serde_json::json!(kind);
+        }
+        serde_json::from_value::<RemoteFileEntry>(json).expect("a row parses")
+    };
+    let recording: Option<String> = row(Some("recording")).capture_kind;
+    assert_eq!(recording.as_deref(), Some("recording"));
+    assert_eq!(row(None).capture_kind, None, "an older server's row has no kind");
+}
+
+/// The launch sweep of moves a crash left open reads `GET /v1/drive_moves`
+/// through these types (`drive_move::sweep_with`). Exhaustive literal: a
+/// renamed, dropped or added field fails here, in the pin-bump PR.
+#[test]
+fn open_drive_moves_listing_is_pinned() {
+    use hcfs_shared::network::{DriveRef, ListDriveMovesResult, NetworkResponse, OpenDriveMove};
+
+    let body = serde_json::json!({ "Success": { "moves": [{
+        "move_id": "00112233445566778899aabbccddeeff",
+        "source": { "ss58_address": "5Owner", "folder_hash": "0123456789abcdef" },
+        "dest": { "ss58_address": "5Owner", "folder_hash": "fedcba9876543210" },
+        "created_at": 1_794_830_000,
+        "expires_at": 1_794_916_400,
+        "staged_files": 12,
+        "staged_bytes": 48_210_944
+    }]}});
+    let NetworkResponse::Success(listed) = serde_json::from_value::<NetworkResponse<ListDriveMovesResult>>(body).expect("parses") else {
+        panic!("success")
+    };
+    let expected = OpenDriveMove {
+        move_id: "00112233445566778899aabbccddeeff".into(),
+        source: DriveRef {
+            ss58_address: "5Owner".into(),
+            folder_hash: "0123456789abcdef".into(),
+        },
+        dest: DriveRef {
+            ss58_address: "5Owner".into(),
+            folder_hash: "fedcba9876543210".into(),
+        },
+        created_at: 1_794_830_000,
+        expires_at: 1_794_916_400,
+        staged_files: 12,
+        staged_bytes: 48_210_944,
+    };
+    assert_eq!(listed.moves, vec![expected]);
 }

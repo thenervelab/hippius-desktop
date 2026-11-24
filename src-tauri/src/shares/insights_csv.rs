@@ -126,6 +126,13 @@ pub fn file_link_csv(file_name: &str, insights: &ShareInsights) -> Result<String
 /// the extension off, characters no file system takes turned to spaces, at
 /// most 80 characters of name. The console's `csvFilename`.
 pub fn csv_file_name(name: &str, day: &str) -> String {
+    format!("{} activity {day}.csv", save_stem(name, "Insights"))
+}
+
+/// A file's name as the start of a saved file's name: the extension off,
+/// characters no file system takes turned to spaces, at most 80 characters,
+/// and `fallback` when nothing is left.
+pub fn save_stem(name: &str, fallback: &str) -> String {
     let stem = match name.rfind('.') {
         Some(i) if (1..=8).contains(&(name.len() - i - 1)) && name[i + 1..].chars().all(|c| c.is_ascii_alphanumeric()) => &name[..i],
         _ => name,
@@ -145,15 +152,20 @@ pub fn csv_file_name(name: &str, day: &str) -> String {
         }
     }
     let base = cleaned.trim();
-    let base = if base.is_empty() { "Insights" } else { base };
-    let base: String = base.chars().take(80).collect();
-    format!("{base} activity {day}.csv")
+    let base = if base.is_empty() { fallback } else { base };
+    base.chars().take(80).collect()
 }
 
 /// Writes `csv` to `destination` through a sibling temp file and a rename,
 /// with a byte-order mark so spreadsheet apps read it as UTF-8. Replaces a
 /// file already there: the save dialog asked about that.
 pub fn write_csv(destination: &Path, csv: &str) -> Result<()> {
+    write_file(destination, &["\u{FEFF}".as_bytes(), csv.as_bytes()])
+}
+
+/// Writes `parts` one after another to `destination` through a sibling temp
+/// file and a rename, so a crash mid-write never leaves half a file.
+pub fn write_file(destination: &Path, parts: &[&[u8]]) -> Result<()> {
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -165,8 +177,9 @@ pub fn write_csv(destination: &Path, csv: &str) -> Result<()> {
         .prefix(".hippius-insights-")
         .suffix(".part")
         .tempfile_in(parent)?;
-    std::io::Write::write_all(&mut temp, "\u{FEFF}".as_bytes())?;
-    std::io::Write::write_all(&mut temp, csv.as_bytes())?;
+    for part in parts {
+        std::io::Write::write_all(&mut temp, part)?;
+    }
     temp.as_file().sync_all()?;
     temp.persist(destination).map_err(|e| AppError::Io(e.error))?;
     Ok(())

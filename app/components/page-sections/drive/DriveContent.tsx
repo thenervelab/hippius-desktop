@@ -37,6 +37,7 @@ import { useDriveRoute } from "./driveRoute";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
 import { useDriveMove } from "./move/DriveMoveProvider";
 import MoveHint from "./move/MoveHint";
+import { useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -132,6 +133,7 @@ const DriveContent: FC<DriveContentProps> = ({
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+  const deleteMenu = useDeleteMenuAction();
   // Moving within the drive on screen; null outside a drive folder view.
   const driveMove = useDriveMove();
 
@@ -464,8 +466,9 @@ const DriveContent: FC<DriveContentProps> = ({
           file={contextMenu.file}
           onClose={() => setContextMenu(null)}
           onDelete={(file) => {
-            // Use new selection system instead of old modal system
-            enterSelectionModeAndSelectFile(file);
+            // Move to Trash runs at once; Delete and Delete forever use the
+            // selection bar's confirmation.
+            deleteMenu.run(file, () => enterSelectionModeAndSelectFile(file));
             setContextMenu(null);
           }}
           onFileDownload={handleFileDownload}

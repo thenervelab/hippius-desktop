@@ -39,10 +39,14 @@
 //! found the same way, by the hash of the key label this machine filed the
 //! captures under ([`captures_folders`]).
 //!
-//! A recording is ANY video file ([`is_video_name`]: `.mp4`, `.webm`,
-//! `.mov`), whatever its name and in any folder of the drive, so renaming a
-//! recording does not free a slot. Every other file, screenshots included,
-//! is ignored.
+//! A recording is a file the server marks `capture_kind: "recording"`, the
+//! mark its own recording count and limit read, whatever the file is called
+//! and in any folder of the drive, so renaming a recording does not free a
+//! slot and an ordinary video is not one. A server that marks no file (one
+//! that predates the mark, or captures drives holding no marked recording
+//! yet) is read as before: ANY video file ([`is_video_name`]: `.mp4`,
+//! `.webm`, `.mov`) is a recording. Every other file, screenshots included,
+//! is ignored either way ([`counts_by_kind`]).
 //!
 //! The count is cached per account for [`COUNT_TTL`] so pressing Record does
 //! not wait on a full listing each time. A recording this app has just
@@ -63,8 +67,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-
-use hcfs_client::drive::remote::RemoteFileInfo;
 
 use super::allowance::RecordingTier;
 use crate::app_state::AppState;
@@ -207,13 +209,51 @@ pub fn captures_folders<'a>(
     kept
 }
 
+/// The `capture_kind` the server gives a screen recording.
+pub const RECORDING_KIND: &str = "recording";
+
+/// One file of a drive's server listing, as the count reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedFile {
+    /// The file's path in its drive.
+    pub path: String,
+    /// The server's `capture_kind`; any value but [`RECORDING_KIND`] reads
+    /// as none, as the server's docs ask of a kind added later.
+    pub capture_kind: Option<String>,
+}
+
+impl ListedFile {
+    fn name(&self) -> &str {
+        self.path.rsplit('/').next().unwrap_or(&self.path)
+    }
+
+    fn is_marked(&self) -> bool {
+        self.capture_kind.as_deref() == Some(RECORDING_KIND)
+    }
+
+    /// Whether this file counts: marked a recording when the server marks
+    /// recordings (`by_kind`), else any video.
+    fn is_recording(&self, by_kind: bool) -> bool {
+        if by_kind { self.is_marked() } else { is_video_name(self.name()) }
+    }
+}
+
+/// Whether the server marks recordings in these listings: some file carries
+/// the mark. Then the mark alone decides, as it does for the server's own
+/// count; with no mark anywhere every video counts, as before the mark
+/// existed (a server too old to send it sends it for no file).
+#[must_use]
+pub fn counts_by_kind<'a>(listings: impl IntoIterator<Item = &'a [ListedFile]>) -> bool {
+    listings.into_iter().any(|files| files.iter().any(ListedFile::is_marked))
+}
+
 /// The recordings under `folder` of drive `label`'s server listing only
 /// (a captures folder inside another drive), keyed like [`recording_paths`].
 #[must_use]
-pub fn recording_paths_in(label: &str, folder: &str, files: &[RemoteFileInfo]) -> HashSet<String> {
+pub fn recording_paths_in(label: &str, folder: &str, files: &[ListedFile], by_kind: bool) -> HashSet<String> {
     files
         .iter()
-        .filter(|f| is_video_name(&f.name) && crate::sync::recent_uploads::in_capture_folder(&f.path, folder))
+        .filter(|f| f.is_recording(by_kind) && crate::sync::recent_uploads::in_capture_folder(&f.path, folder))
         .map(|f| counted_path(label, &f.path))
         .collect()
 }
@@ -221,10 +261,10 @@ pub fn recording_paths_in(label: &str, folder: &str, files: &[RemoteFileInfo]) -
 /// The recordings in drive `label`'s server listing, by drive and path, so
 /// the same name in two folders or two drives is two recordings.
 #[must_use]
-pub fn recording_paths(label: &str, files: &[RemoteFileInfo]) -> HashSet<String> {
+pub fn recording_paths(label: &str, files: &[ListedFile], by_kind: bool) -> HashSet<String> {
     files
         .iter()
-        .filter(|f| is_video_name(&f.name))
+        .filter(|f| f.is_recording(by_kind))
         .map(|f| counted_path(label, &f.path))
         .collect()
 }
@@ -366,24 +406,61 @@ async fn list_recordings(state: &AppState, account_id: &str) -> Result<(Vec<Stri
             labels.push(f.label.clone());
         }
     }
-    let listings = futures_util::future::join_all(
-        labels
-            .iter()
-            .map(|label| crate::sync::remote::list_remote_folder_files_inner(state, account_id, label)),
-    )
-    .await;
+    let listings = futures_util::future::join_all(labels.iter().map(|label| list_drive_files(state, account_id, label)))
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()?;
+    let by_kind = counts_by_kind(listings.iter().map(Vec::as_slice));
     let mut recordings = HashSet::new();
-    for (label, listing) in labels.iter().zip(listings) {
-        let listing = listing?;
+    for (label, listing) in labels.iter().zip(&listings) {
         if whole.contains(label) {
-            recordings.extend(recording_paths(label, &listing));
+            recordings.extend(recording_paths(label, listing, by_kind));
         } else {
             for f in folders.iter().filter(|f| &f.label == label) {
-                recordings.extend(recording_paths_in(label, &f.folder, &listing));
+                recordings.extend(recording_paths_in(label, &f.folder, listing, by_kind));
             }
         }
     }
     Ok((labels, recordings))
+}
+
+/// Drive `label`'s files as the server lists them, with each one's
+/// `capture_kind` (hcfs-client's own listing drops it). One `get_state`
+/// walk, as `list_remote_folder_files_inner` makes.
+async fn list_drive_files(state: &AppState, account_id: &str, label: &str) -> Result<Vec<ListedFile>> {
+    let pool = state.pool()?;
+    let mnemonic = crate::sync::remote::session_mnemonic(state)?;
+    let identity = crate::sync::identity::resolve_drive_identity_or_own(pool, account_id, label).await?;
+    let key = crate::sync::remote::encryption_key_for_label(state, account_id, label, &mnemonic, &identity).await?;
+    drop(mnemonic);
+    let client = crate::sync::remote::build_client(pool, account_id, &identity).await?;
+    let entries = client
+        .get_all_files(&identity.wire_ss58, &identity.wire_folder_hash, None::<fn(u64, u64)>)
+        .await
+        .map_err(|e| AppError::Hcfs(e.to_string()))?;
+    Ok(entries.iter().filter_map(|entry| listed_file(entry, &key)).collect())
+}
+
+/// A listed row's path (the stored plaintext path, else its sealed path
+/// opened with the drive's key) and its kind. A row with neither is left
+/// out: no path can be counted or matched to a delivered recording.
+fn listed_file(entry: &hcfs_shared::network::RemoteFileEntry, key: &hcfs_crypto::FileKey) -> Option<ListedFile> {
+    let path = entry
+        .relative_path
+        .clone()
+        .filter(|p| !p.is_empty())
+        .or_else(|| {
+            hcfs_crypto::decrypt_small(&entry.encrypted_path, key)
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+        })?
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_string();
+    (!path.is_empty()).then(|| ListedFile {
+        path,
+        capture_kind: entry.capture_kind.clone(),
+    })
 }
 
 /// The recordings in the account's captures drives: the cached count while
@@ -677,23 +754,98 @@ mod tests {
         assert_eq!(with_waiting(None, 3), None, "an unknown listing stays unknown");
     }
 
-    fn listed(names: &[&str]) -> Vec<RemoteFileInfo> {
+    fn listed(names: &[&str]) -> Vec<ListedFile> {
         names
             .iter()
-            .enumerate()
-            .map(|(i, path)| RemoteFileInfo {
-                file_id: format!("{i:064x}"),
+            .map(|path| ListedFile {
                 path: (*path).to_string(),
-                name: path.rsplit('/').next().unwrap_or(path).to_string(),
-                size_bytes: 1,
-                arion_hash: None,
-                created_at: 0,
-                updated_at: 0,
-                salted_hash: String::new(),
-                revision_seq: 1,
-                revision_id: String::new(),
+                capture_kind: None,
             })
             .collect()
+    }
+
+    fn marked(path: &str) -> ListedFile {
+        ListedFile {
+            path: path.into(),
+            capture_kind: Some(RECORDING_KIND.into()),
+        }
+    }
+
+    /// Once the server marks recordings, the mark decides: a renamed
+    /// recording with no video extension counts, an ordinary video does not,
+    /// and an unknown kind reads as none.
+    #[test]
+    fn the_servers_mark_decides_once_any_file_carries_it() {
+        let mut files = listed(&["holiday.mp4", "Screenshot 1.png"]);
+        files.push(marked("Recording 1.mp4"));
+        files.push(marked("renamed recording"));
+        files.push(ListedFile {
+            path: "later.mp4".into(),
+            capture_kind: Some("something-new".into()),
+        });
+        let by_kind = counts_by_kind([files.as_slice()]);
+        assert!(by_kind);
+        let counted = recording_paths("Hippius Captures", &files, by_kind);
+        assert_eq!(
+            counted,
+            ["Hippius Captures/Recording 1.mp4", "Hippius Captures/renamed recording"]
+                .into_iter()
+                .map(String::from)
+                .collect::<HashSet<_>>()
+        );
+        assert_eq!(recording_paths_in("Main", "Old", &[marked("Old/a"), marked("b")], true).len(), 1);
+    }
+
+    /// No mark anywhere (an older server): every video counts, as before.
+    #[test]
+    fn with_no_mark_every_video_counts() {
+        let files = listed(&["holiday.mp4", "Recording 1.mov", "Screenshot 1.png"]);
+        let unknown = [ListedFile {
+            path: "x.mp4".into(),
+            capture_kind: Some("something-new".into()),
+        }];
+        assert!(!counts_by_kind([files.as_slice(), unknown.as_slice()]));
+        assert_eq!(recording_paths("Hippius Captures", &files, false).len(), 2);
+    }
+
+    /// The mark in one captures drive decides for all of them: they are
+    /// listed by the same server.
+    #[test]
+    fn a_mark_in_one_listing_decides_for_every_listing() {
+        let a = listed(&["holiday.mp4"]);
+        let b = vec![marked("Recording 1.mp4")];
+        assert!(counts_by_kind([a.as_slice(), b.as_slice()]));
+    }
+
+    #[test]
+    fn a_listed_row_reads_its_path_and_kind() {
+        let key = hcfs_crypto::FileKey::from_bytes([3; 32]);
+        let mut entry: hcfs_shared::network::RemoteFileEntry = serde_json::from_value(serde_json::json!({
+            "path_hash": vec![0u8; 32],
+            "encrypted_path": [],
+            "size_bytes": 1,
+            "revision_id": vec![0u8; 32],
+            "salted_hash": vec![0u8; 32],
+            "created_at": 0,
+            "updated_at": 0,
+            "revision_seq": 1,
+            "relative_path": "/Captures/Recording 1.mp4",
+            "capture_kind": "recording"
+        }))
+        .expect("a listed row");
+        assert_eq!(listed_file(&entry, &key), Some(marked("Captures/Recording 1.mp4")));
+        entry.relative_path = None;
+        entry.capture_kind = None;
+        entry.encrypted_path = hcfs_crypto::encrypt_small(b"Old/clip.mov", &key).unwrap();
+        assert_eq!(
+            listed_file(&entry, &key),
+            Some(ListedFile {
+                path: "Old/clip.mov".into(),
+                capture_kind: None
+            })
+        );
+        entry.encrypted_path = Vec::new();
+        assert_eq!(listed_file(&entry, &key), None, "no path, nothing to count");
     }
 
     #[test]
@@ -743,12 +895,12 @@ mod tests {
             "clip.mkv",
             ".mp4",
         ]);
-        assert_eq!(recording_paths("Hippius Captures", &files).len(), 6);
-        assert!(recording_paths("Hippius Captures", &listed(&[])).is_empty());
+        assert_eq!(recording_paths("Hippius Captures", &files, false).len(), 6);
+        assert!(recording_paths("Hippius Captures", &listed(&[]), false).is_empty());
         // The same path in two captures drives is two recordings.
-        let both: HashSet<String> = recording_paths("Hippius Captures", &files)
+        let both: HashSet<String> = recording_paths("Hippius Captures", &files, false)
             .into_iter()
-            .chain(recording_paths("Hippius Captures-2", &files))
+            .chain(recording_paths("Hippius Captures-2", &files, false))
             .collect();
         assert_eq!(both.len(), 12);
     }
@@ -872,7 +1024,7 @@ mod tests {
             "hippius-captures 2/talk.mp4",
             "family.mp4",
         ]);
-        let only = recording_paths_in("Main", "hippius-captures", &files);
+        let only = recording_paths_in("Main", "hippius-captures", &files, false);
         assert_eq!(only.len(), 2, "{only:?}");
         assert!(only.contains("Main/hippius-captures/Old/clip.mov"));
 

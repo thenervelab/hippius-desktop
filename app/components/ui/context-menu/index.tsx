@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { deleteLabel, useDeleteMode } from "@/app/lib/trash/deleteMode";
 import { createPortal } from "react-dom";
 import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput, FolderSymlink } from "lucide-react";
 import { Icons } from "@/components/ui";
@@ -37,7 +38,7 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import Link from "next/link";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
+import { pageFolderHref, useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
@@ -53,6 +54,9 @@ import { useExistingLinks } from "@/app/components/page-sections/drive/useExisti
 import { useCopyExistingLink } from "@/app/components/page-sections/drive/useCopyExistingLink";
 import { useDriveMove } from "@/app/components/page-sections/drive/move/DriveMoveProvider";
 import { useFileInsightsItem } from "@/app/components/page-sections/drive/useCaptureInsightsItem";
+import { useStars } from "@/app/lib/starred/useStars";
+import { canStar, starLabelOf } from "@/app/lib/starred/starState";
+import { StarMenuIcon, starMenuLabel } from "@/app/lib/starred/starMenu";
 
 interface ContextMenuProps {
   x: number;
@@ -111,6 +115,9 @@ export default function FileContextMenu({
   basePath,
 }: ContextMenuProps) {
   const [mounted, setMounted] = useState(false);
+  // "Delete", or with Trash on "Move to Trash" ("Delete forever" while
+  // Option is held or Trash is skipped).
+  const deleteMode = useDeleteMode();
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const driveRoute = useDriveRoute();
@@ -135,6 +142,8 @@ export default function FileContextMenu({
   const driveMove = useDriveMove();
   // View insights for any file, by the same rule as the row menus.
   const fileInsightsItem = useFileInsightsItem();
+  // Star / Unstar, right after Download (after Open where there is none).
+  const stars = useStars(file ? [starLabelOf(file)] : []);
 
   useEffect(() => {
     setMounted(true);
@@ -202,7 +211,9 @@ export default function FileContextMenu({
     }
   };
 
-  const { url: folderUrl } = generateFolderUrl(file, getParam, undefined, driveRoute.basePath);
+  // A page whose rows come from many drives (Starred) says where a folder opens.
+  const folderUrl =
+    pageFolderHref(driveRoute, file) ?? generateFolderUrl(file, getParam, undefined, driveRoute.basePath).url;
   const fileManagerName = fileManagerLabel();
 
   const linkPath = linkPathFor(file, basePath);
@@ -233,8 +244,9 @@ export default function FileContextMenu({
           )}
 
           {/* Cloud-only FOLDER rows: the zip export needs a local sync root.
-              Cloud-only FILE rows still download via download_remote_file. */}
-          {!(isCloudOnlyRow(file) && file.isFolder) && (
+              Cloud-only FILE rows still download via download_remote_file.
+              A whole drive (Starred) offers Open and Star only. */}
+          {!file.isDriveRoot && !(isCloudOnlyRow(file) && file.isFolder) && (
             <button
               className={menuItemClass}
               onClick={() => {
@@ -246,6 +258,27 @@ export default function FileContextMenu({
               <span>Download</span>
             </button>
           )}
+
+          {canStar(file, basePath) && (() => {
+            const starred = stars.isStarred(file, basePath);
+            return (
+              <button
+                className={menuItemClass}
+                onClick={() => {
+                  void stars.toggleRow(file, basePath);
+                  onClose();
+                }}
+              >
+                <StarMenuIcon starred={starred} />
+                <span>{starMenuLabel(starred)}</span>
+              </button>
+            );
+          })()}
+
+          {/* A whole drive's row (Starred): nothing below acts on a drive.
+              Its source is the drive's sync root, so Delete, Rename and the
+              rest would act on the whole drive folder. */}
+          {!file.isDriveRoot && (<>
 
           {!file.isFolder && isPreviewableFileName(file.name) &&
             onSelectFile && (
@@ -470,7 +503,7 @@ export default function FileContextMenu({
                 "opacity-60 cursor-not-allowed !text-grey-30 dark:!text-grey-dark-200": !file.isAssigned
               })}
               disabled={!file.isAssigned}
-              title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : "Delete this file"}
+              title={!file.isAssigned ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete." : deleteMode === "legacy" ? "Delete this file" : deleteLabel(deleteMode)}
               onClick={() => {
                 if (file.isAssigned && onDelete) {
                   onDelete(file);
@@ -479,9 +512,10 @@ export default function FileContextMenu({
               }}
             >
               <Trash2 className="size-4" />
-              <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : "Delete"}</span>
+              <span>{!file.isAssigned ? "Delete (Syncing in progress...)" : deleteLabel(deleteMode)}</span>
             </button>
           )}
+          </>)}
         </div>
       </div>
     </div>,

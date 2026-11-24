@@ -32,6 +32,22 @@ export function isDownloadNotInPlan(err: unknown): boolean {
   const { kind, message } = err as { kind?: unknown; message?: unknown };
   return kind === "Validation" && message === DOWNLOAD_NOT_IN_PLAN;
 }
+/** The upgrade prompt where the watermark is turned on on the free plan. */
+export const WATERMARK_LOCKED_PROMPT = "The watermark is available on paid Drive plans";
+/** The line under it. */
+export const WATERMARK_UPGRADE_BODY = "Upgrade to put each viewer's email and the date on your PDFs.";
+/**
+ * Rust's refusal when the watermark is turned on on the free plan (its
+ * `WATERMARK_NOT_IN_PLAN`, word for word), which shows the prompt above.
+ */
+export const WATERMARK_NOT_IN_PLAN = "The watermark is available on paid Drive plans.";
+
+/** Whether `err` is Rust's refusal to turn the watermark on on the free plan. */
+export function isWatermarkNotInPlan(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  return kind === "Validation" && message === WATERMARK_NOT_IN_PLAN;
+}
 /** Every upgrade button in Insights says this, as the sheet's own does. */
 export const LOCKED_ACTION = "Upgrade plan";
 /** The line under the prompt where a switch was turned on. */

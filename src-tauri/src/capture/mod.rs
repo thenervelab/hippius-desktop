@@ -42,6 +42,7 @@ pub mod privacy;
 pub mod recorder_child;
 pub mod recording;
 pub mod recording_allowance;
+pub mod recording_length;
 pub mod rollout;
 pub mod screencast_token;
 pub mod screenshot;

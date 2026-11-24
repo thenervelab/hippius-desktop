@@ -208,7 +208,7 @@ pub(crate) fn parse_ttl(ttl: &str) -> Result<ShareTtl> {
 /// 2. `revoked_at` omitted because the server only returns
 ///    currently-active shares — a revoked row is reaped before it
 ///    could surface here.
-/// 3. `share_url` re-derived from `(share_token, share_key)` so the
+/// 3. `share_url` re-derived from `(share_token, stored secret)` so the
 ///    "My Shares" page can offer a Copy button without a second IPC
 ///    round-trip per row. `None` when this device has no key and the
 ///    listing wrap did not open (wiped DB, wrap never uploaded).
@@ -516,6 +516,13 @@ async fn create_share_inner(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
@@ -660,7 +667,7 @@ pub async fn hcfs_set_share_preview(app: tauri::AppHandle, state: tauri::State<'
     }
     let pool = state.pool()?;
     let keystore = SqliteShareKeystore::new(pool.clone());
-    if !matches!(keystore.get(&share_token), Ok(Some(ShareSecret::Public(_)))) {
+    if !matches!(keystore.get(&share_token), Ok(Some(secret)) if super::preview::secret_takes_preview(&secret)) {
         return Err(AppError::Validation("Links with a password can't show a preview in chats.".into()));
     }
     let owner = account_key(&account_id);
@@ -794,6 +801,13 @@ pub(crate) async fn share_external_file(
 
     refuse_if_source_moved(&client, &keystore, abs_path, before, &result.share_token).await?;
 
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
@@ -970,6 +984,13 @@ async fn mint_remote_share_at(
     }
     crate::finder_bridge::badges::push_from_state(state, folder_label, relative_path, BadgeState::Shared);
 
+    super::file_link_key::keep_after_mint(
+        &client,
+        &keystore,
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        &result.share_token,
+    )
+    .await;
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
@@ -1411,7 +1432,8 @@ async fn create_member_folder_share(
         return Err(AppError::Other(format!("could not store the share link: {e}")));
     }
 
-    let share_url = build_folder_share_url_for(&console_base_url(), &created.share_token, &secret);
+    let share_url = build_folder_share_url_for(&console_base_url(), &created.share_token, &secret)
+        .expect("a member mint's secret is a folder link secret or the drive key, never a file link secret");
     let owner = account_key(account_id);
     if let Err(e) = origin::record_folder(pool, &created.share_token, &owner, folder_label, path_prefix).await {
         warn!(share_token = %created.share_token, error = %e, "Failed to record folder_share_origin (share itself succeeded)");
@@ -1675,14 +1697,16 @@ fn resolve_folder_share_rows(
 ) -> Vec<FolderShareSummary> {
     rows.into_iter()
         .map(|row| {
-            let resolved = secrets_by_hash.get(&row.token_hash);
+            // A file link secret is never a folder link's, whatever its token
+            // hashes to: `build_folder_share_url_for` refuses it.
+            let resolved = secrets_by_hash.get(&row.token_hash).filter(|(_, secret)| !secret.is_file_link());
             let minted_here = resolved.is_some_and(|(token, _)| reshare.origins.contains(token));
             FolderShareSummary {
                 link_format: row.link_format.into(),
                 reshare_offered: reshare_offered(&row, reshare.envelopes, minted_here, reshare.now),
                 resolvable: resolved.is_some(),
                 share_token: resolved.map(|(token, _)| token.clone()),
-                share_url: resolved.map(|(token, secret)| build_folder_share_url_for(console_base, token, secret)),
+                share_url: resolved.and_then(|(token, secret)| build_folder_share_url_for(console_base, token, secret).ok()),
                 is_private: resolved.map(|(_, secret)| secret.is_private()),
                 token_hash: row.token_hash,
                 folder_hash: row.folder_hash,
@@ -3058,6 +3082,24 @@ mod tests {
         assert!(private_url.contains("#sp=") && !private_url.contains("#p="), "{private_url}");
         assert_eq!(out[1].is_private, Some(true));
         assert_eq!(out[0].link_format, FolderLinkKind::LinkSecret);
+    }
+
+    /// A file link secret never resolves a folder row, even under a token
+    /// whose hash the folder listing names: it would put a file link's secret
+    /// in a `/share/folder/` link (thenervelab/hcfs#1253).
+    #[test]
+    fn a_file_link_secret_never_resolves_a_folder_row() {
+        for secret in [ShareSecret::FileLink([3u8; 32]), ShareSecret::FileLinkPrivate(vec![4u8; 89])] {
+            let secrets: HashMap<String, (String, ShareSecret)> =
+                [(folder_share_token_hash("tok-f"), ("tok-f".to_string(), secret))].into_iter().collect();
+            let row = mk_folder_row(&folder_share_token_hash("tok-f"), "photos");
+
+            let out = resolve_folder_share_rows(vec![row], &secrets, "https://x.io", &no_reshare());
+            assert!(!out[0].resolvable);
+            assert_eq!(out[0].share_token, None);
+            assert_eq!(out[0].share_url, None);
+            assert_eq!(out[0].is_private, None);
+        }
     }
 
     /// The reshare offer: only a live legacy drive link, minted here, on a

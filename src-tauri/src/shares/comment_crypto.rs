@@ -57,6 +57,9 @@ pub enum Purpose {
     /// The text a link's viewers accept before it opens, sealed by the
     /// owner's device (`shares::nda`).
     NdaText,
+    /// The name a viewer typed as a signature on an NDA accept, sealed by
+    /// the share page (hcfs #1419). The bare UTF-8 name, not JSON.
+    NdaSigner,
 }
 
 impl Purpose {
@@ -66,6 +69,7 @@ impl Purpose {
             Self::ViewerName => "viewer-name",
             Self::ViewerEmail => "viewer-email",
             Self::NdaText => "nda-text",
+            Self::NdaSigner => "nda-signer",
         }
     }
 }
@@ -270,6 +274,23 @@ pub fn open_viewer_name(key: &CommentKey, token: &str, nonce_b64: &str, cipherte
     let mut plain = open(key, token, Purpose::ViewerName, &decode_b64(nonce_b64)?, &decode_b64(ciphertext_b64)?)?;
     let parsed: NamePlaintext = parse_plaintext(&mut plain)?;
     Ok(clean_name(Some(&parsed.name)))
+}
+
+/// Open an NDA signer's typed name from its base64 nonce and ciphertext.
+/// `None` when it does not open on this link with this key, is not UTF-8, or
+/// would show as nothing (see [`clean_name`]), as the console's
+/// `openNdaSignerName`.
+#[must_use]
+pub fn open_nda_signer_name(key: &CommentKey, token: &str, nonce_b64: &str, ciphertext_b64: &str) -> Option<String> {
+    let plain = open(
+        key,
+        token,
+        Purpose::NdaSigner,
+        &decode_b64(nonce_b64).ok()?,
+        &decode_b64(ciphertext_b64).ok()?,
+    )
+    .ok()?;
+    clean_name(Some(std::str::from_utf8(&plain).ok()?))
 }
 
 /// The BLAKE3 `derive_key` context of [`email_check`]: hcfs-crypto's

@@ -127,7 +127,7 @@ fn parse_folder_rows(body: &str) -> Result<Vec<FolderLinkActivity>> {
         .collect())
 }
 
-async fn get_listing(http: &reqwest::Client, api: &OwnerApi, rest: &str) -> Result<String> {
+pub(super) async fn get_listing(http: &reqwest::Client, api: &OwnerApi, rest: &str) -> Result<String> {
     let resp = http
         .get(api.url(rest))
         .bearer_auth(api.bearer())

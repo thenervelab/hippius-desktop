@@ -14,9 +14,9 @@ import type { CaptureDriveStatus } from "@/app/lib/tauri/capture";
  */
 export const TRAY_OPEN_PAGE_EVENT = "hippius:tray-open-page";
 
-export type TrayPage = "plans" | "settings" | "support" | "captures" | "top-up";
+export type TrayPage = "plans" | "settings" | "support" | "captures" | "shares" | "top-up";
 
-const PAGES: ReadonlySet<TrayPage> = new Set(["plans", "settings", "support", "captures", "top-up"]);
+const PAGES: ReadonlySet<TrayPage> = new Set(["plans", "settings", "support", "captures", "shares", "top-up"]);
 
 /** The `{ page }` payload, or null when it is not one we know. */
 export function parseTrayPagePayload(payload: unknown): TrayPage | null {
@@ -40,6 +40,8 @@ export function trayPageRoute(page: TrayPage): string | null {
       return "/support";
     case "captures":
       return "/captures";
+    case "shares":
+      return "/shares";
     case "top-up":
       return null;
   }

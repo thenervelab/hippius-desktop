@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode, useMemo, useCallback } from 'react';
 import { FormattedUserFile } from '../lib/hooks/use-user-files';
 import { selectionKey, removeDescendantsFromSelection } from './fileSelectionLogic';
+import { isSelectableRow } from '../lib/utils/selectableRow';
 
 interface FileSelectionContextProps {
     isSelectionMode: boolean;
@@ -53,7 +54,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const toggleFileSelection = useCallback((file: FormattedUserFile) => {
-        if (!file.isAssigned) {
+        if (!isSelectableRow(file)) {
             return;
         }
         const key = selectionKey(file);
@@ -74,7 +75,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
      * Mirrors the console's `toggleFolderSelection`.
      */
     const toggleFolderSelection = useCallback((folder: FormattedUserFile) => {
-        if (!folder.isAssigned) {
+        if (!isSelectableRow(folder)) {
             return;
         }
         const folderKey = selectionKey(folder);
@@ -101,7 +102,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const selectAllFiles = useCallback((files: FormattedUserFile[]) => {
-        const deletableFiles = files.filter(file => file.isAssigned);
+        const deletableFiles = files.filter(isSelectableRow);
         setSelectedFiles(deletableFiles);
     }, []);
 
@@ -110,7 +111,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const enterSelectionModeAndSelectFile = useCallback((file: FormattedUserFile) => {
-        if (!file.isAssigned) {
+        if (!isSelectableRow(file)) {
             return;
         }
         setIsSelectionMode(true);
@@ -118,7 +119,7 @@ export const FileSelectionProvider: React.FC<FileSelectionProviderProps> = ({ ch
     }, []);
 
     const addFilesToSelection = useCallback((files: FormattedUserFile[]) => {
-        const deletableFiles = files.filter(file => file.isAssigned);
+        const deletableFiles = files.filter(isSelectableRow);
         setSelectedFiles(prevSelected => {
             const selectedKeys = new Set(prevSelected.map(selectionKey));
             const newFiles = deletableFiles.filter(file => !selectedKeys.has(selectionKey(file)));

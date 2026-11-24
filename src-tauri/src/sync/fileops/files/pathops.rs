@@ -124,10 +124,12 @@ pub(crate) fn visible_children(dir: &Path, limit: usize) -> std::io::Result<Vec<
 }
 
 /// Engine-owned names that must never appear in Drive: the `.hippius`
-/// config dir and in-flight `.hippius-incoming-*` staging copies.
+/// config dir, in-flight `.hippius-incoming-*` staging copies, and the
+/// Move to Trash hold (`trash::hold::HOLD_DIR`).
 /// User dotfiles (`.env.qa`, `.hidden`) are listed as `hidden`.
 pub(super) fn is_internal_hidden_name(name: &OsStr) -> bool {
-    name.to_str().is_some_and(|n| n == ".hippius" || n.starts_with(".hippius-incoming-"))
+    name.to_str()
+        .is_some_and(|n| n == ".hippius" || n.starts_with(".hippius-incoming-") || n == crate::sync::trash::hold::HOLD_DIR)
 }
 
 /// True when any path component is an engine-hidden name.
@@ -142,7 +144,7 @@ pub(super) fn rel_has_engine_hidden_component(rel: &str) -> bool {
 
 /// Verify that `child` is contained within `parent` after canonicalization.
 /// Delegates to hcfs-client library.
-pub(super) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
+pub(crate) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
     // A containment failure means `child` escapes `parent` — a path-boundary
     // (security) reject → Validation, not the catch-all Other.
     hcfs_client::drive::files::ensure_within(parent, child).map_err(|e| crate::error::AppError::Validation(e.to_string()))
@@ -153,7 +155,7 @@ pub(super) fn ensure_within(parent: &Path, child: &Path) -> Result<PathBuf> {
 /// If `source` starts with `sync_path/`, strips the prefix to get the
 /// relative path (e.g., `/home/user/Hippius/docs/file.txt` → `docs/file.txt`).
 /// Otherwise returns `fallback_name` as-is.
-pub(super) fn derive_relative_name(sync_path: &str, source: Option<&str>, fallback_name: &str) -> String {
+pub(crate) fn derive_relative_name(sync_path: &str, source: Option<&str>, fallback_name: &str) -> String {
     if let Some(src) = source
         && !sync_path.is_empty()
     {
@@ -238,6 +240,10 @@ mod tests {
         assert!(is_engine_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
         assert!(is_internal_hidden_name(OsStr::new(".hippius")));
         assert!(is_internal_hidden_name(OsStr::new(".hippius-incoming-Photos-1")));
+        assert!(
+            is_internal_hidden_name(OsStr::new(".hippius-trash-hold")),
+            "Move to Trash's hold never shows in Drive"
+        );
         assert!(!is_internal_hidden_name(OsStr::new(".env.qa")));
         assert!(!is_internal_hidden_name(OsStr::new(".hidden")));
 

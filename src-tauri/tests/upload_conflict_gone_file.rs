@@ -166,13 +166,13 @@ async fn drive_with_one_synced_file(root: &std::path::Path, config_dir: &std::pa
     let [(id, meta)] = state.synced.files.iter().collect::<Vec<_>>()[..] else {
         panic!("one synced file: {:?}", state.synced.files.keys());
     };
-    assert_eq!(meta.revision_id, STORED_REVISION);
+    assert_eq!(meta.revision_id.as_bytes(), &STORED_REVISION);
     server.serve(vec![serde_json::json!({
         "path_hash": id.to_vec(),
         "salted_hash": meta.salted_hash.as_bytes().to_vec(),
         "size_bytes": meta.size_bytes,
         "revision_seq": meta.revision_seq,
-        "revision_id": meta.revision_id.to_vec(),
+        "revision_id": meta.revision_id.as_bytes().to_vec(),
         "encrypted_path": Vec::<u8>::new(),
         "file_name": "a.txt",
     })]);
@@ -205,7 +205,11 @@ async fn keep_local_does_not_resend_a_file_the_server_no_longer_has() {
     assert_eq!(outcome.conflicts_skipped, 1, "{outcome:?}");
     let state = manager.load_sync_state().await.expect("state");
     let synced = state.synced.files.values().next().expect("baseline kept");
-    assert_eq!(synced.revision_id, STORED_REVISION, "the zero revision never becomes the base");
+    assert_eq!(
+        synced.revision_id.as_bytes(),
+        &STORED_REVISION,
+        "the zero revision never becomes the base"
+    );
 }
 
 /// With no answer for the file (the automatic skip the engine uses), the
