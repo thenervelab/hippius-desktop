@@ -137,7 +137,11 @@ const Sidebar: React.FC = () => {
                       return (
                         <NavItem
                           key={`${section.key}-${item.path}-${item.label}`}
-                          icon={item.icon}
+                          icon={
+                            isActive && item.activeIcon
+                              ? item.activeIcon
+                              : item.icon
+                          }
                           label={item.label}
                           href={item.path}
                           inView={inView}

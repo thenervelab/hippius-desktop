@@ -80,6 +80,7 @@ pub const MAIN_WINDOW_ONLY: &[&str] = &[
     "restore_trash_items",
     "delete_trash_items_forever",
     "empty_trash",
+    "unlink_account_device",
     "delete_remote_folder",
     "confirm_mass_delete",
     "confirm_empty_remote",

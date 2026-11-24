@@ -50,6 +50,14 @@ export interface FolderRow {
   remote?: RemoteFolder;
 }
 
+/**
+ * The label every drive-scoped call takes for this row: a local row's sync
+ * label, a server-only drive's own label (its name).
+ */
+export function folderRowLabel(row: Pick<FolderRow, "local" | "folderName">): string {
+  return row.local?.id ?? row.folderName;
+}
+
 /** Whether this folder needs the cloud mark — i.e. is not on this machine. */
 export function isCloudOnly(presence: FolderPresence): boolean {
   return presence !== "on-this-device";

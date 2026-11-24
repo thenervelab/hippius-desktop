@@ -728,6 +728,12 @@ pub async fn complete_oauth_flow(
     // login flow).
     crate::auth::tokens::save_api_token(pool, &substrate_address, &token).await?;
 
+    // An explicit sign-in: reconnect this computer's device if another
+    // device unlinked it. Best effort; see `devices::registration`.
+    if let Err(e) = crate::devices::store::mark_reconnect_pending(pool, &substrate_address).await {
+        warn!(error = %e, "Could not note the sign-in for this computer's device");
+    }
+
     // Populate AuthInfo so OAuth users participate in the same
     // get_mnemonic_for_account cache path as mnemonic-login users.
     // OAuth has no eth_address or sr25519_pair — those derive from a

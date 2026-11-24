@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canExpandFolderRow, resolveFolderExpansion } from "../folderExpansion";
+import { canExpandFolderRow, expandedFolderPath, resolveFolderExpansion } from "../folderExpansion";
 import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 const local = {
@@ -116,3 +116,28 @@ describe("canExpandFolderRow", () => {
     ).toBe(true);
   });
 });
+
+describe("a whole drive's row (Starred)", () => {
+  it("expands to the drive's root, locally or from the server", () => {
+    const root = { ...local, source: "/Users/a/chains", relativePath: "", isDriveRoot: true };
+    expect(resolveFolderExpansion(root)).toEqual({ enabled: true, label: "chains", remote: false });
+    expect(resolveFolderExpansion({ ...remote, relativePath: "", isDriveRoot: true }).enabled).toBe(true);
+  });
+
+  it("is the only row that may list a drive's root", () => {
+    expect(resolveFolderExpansion({ ...local, relativePath: "" }).enabled).toBe(false);
+  });
+});
+
+describe("expandedFolderPath", () => {
+  it("lists a whole drive's row at its root, not a folder named after the drive", () => {
+    expect(expandedFolderPath({ isDriveRoot: true, actualFileName: "", name: "Camera Uploads" }, "")).toBe("");
+  });
+
+  it("lists a folder by its path, a bare name under the folder on screen, a full path as it is", () => {
+    expect(expandedFolderPath({ actualFileName: "photos", name: "photos" }, "")).toBe("photos");
+    expect(expandedFolderPath({ actualFileName: "2024", name: "2024" }, "photos")).toBe("photos/2024");
+    expect(expandedFolderPath({ actualFileName: "Work/Q3", name: "Q3" }, "")).toBe("Work/Q3");
+  });
+});
+
