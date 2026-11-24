@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **A notification when an update is ready, even when Hippius sits in the tray.** The update used to be offered only inside the main window, which is easy to miss when the app is minimized, behind other windows or in the tray. Now you also get a system notification, and the tray popover shows "Hippius x.y.z is ready to install" until you update.
 - **Star files, folders and drives.** Choose Star from any file, folder or drive menu, the preview or the selection bar, and find everything you starred on the new Starred page in the sidebar. It looks and works like your Drive, in list or card view: starred folders and drives expand with their arrow or open right there on the Starred page, and each item says where it is. Starred items show a small star beside their name, and your stars are the same in the phone app and on the web.
 - **See the phones and computers linked to your account.** Settings has a new Devices section that lists each one with when it was last active, and you can unlink any of them except the computer you're using. This computer now appears there, and on your other devices, under its device name.
 - **A computer unlinked from another device signs out and says why.** If you unlink this computer from your phone or another computer, Hippius signs out the next time it checks and explains it on the sign-in screen. Everything it uploaded stays in your drive, and signing in again links it back.
@@ -249,6 +250,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Hippius uses less memory when it is left running for days, most of all on Windows.** Windows kept a little memory for every update the app's windows received and never gave it back. The app now sends its windows far fewer of those, and refreshes a window that has been hidden or minimized for a couple of hours to give the rest back.
 - **A person's link made from a link with an NDA now asks them to accept it.** Hippius adds your NDA to each new person's link as it is made, so the link opens for them once they accept. If that cannot be done, the link says so and offers Try again instead of sending a link that would not open. Adding people on a free plan now says links per person come with paid Drive plans.
 - **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
 - **Folders that hold only empty folders can move to another drive.** Before, Hippius refused them.
