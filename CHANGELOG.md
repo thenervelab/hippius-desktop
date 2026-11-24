@@ -258,6 +258,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Hippius Drive is called Hippius Drive on your Mac too.** Your Applications folder, Launchpad, Spotlight and the Dock now show the app as Hippius Drive instead of Hippius. It is still the same app, so updates keep installing over your current copy.
 - **NDA records no longer show a raw placeholder.** On a link that doesn't ask for an email, the NDA record leaves out the Recipient line instead of showing the placeholder, and any other unknown value reads as plain words.
 - **Clearer link rules.** The Watermark card says "Date, and email when known", the first-open email switch says it covers every link, and a password link's NDA card says why it can't have one.
 - **Beta updates show their release notes.** The update dialog on the beta channel now lists what changed, instead of only "Beta Build".

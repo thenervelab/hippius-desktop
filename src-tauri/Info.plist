@@ -18,8 +18,17 @@
          src/utils/app_name.rs, whose tests pin this). -->
     <key>CFBundleName</key>
     <string>Hippius Drive</string>
+    <!-- Finder, Launchpad, Spotlight and the Dock name the app by its folder
+         ("Hippius.app") unless the bundle has a LOCALIZED display name. The
+         localized "Hippius Drive" lives in en.lproj/InfoPlist.strings
+         (src-tauri/locales, copied in by bundle.macOS.files), and macOS only
+         uses it when this unlocalized value equals the folder name without
+         ".app". So this must stay "Hippius" while productName does; setting it
+         to "Hippius Drive" here makes Finder fall back to the folder name. -->
     <key>CFBundleDisplayName</key>
-    <string>Hippius Drive</string>
+    <string>Hippius</string>
+    <key>LSHasLocalizedDisplayName</key>
+    <true/>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <!-- CFBundleShortVersionString is deliberately ABSENT. Tauri merges this

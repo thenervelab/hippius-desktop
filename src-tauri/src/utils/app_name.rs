@@ -10,7 +10,14 @@
 //! read changes: the window title, the tray, the macOS menu bar
 //! (`CFBundleName` in `Info.plist`) and the app menu below.
 //!
-//! Pinned against `tauri.conf.json` and `Info.plist` by this module's tests.
+//! Finder, Launchpad, Spotlight and the Dock name an app by its folder
+//! (`Hippius.app`) unless it has a localized display name, so on macOS the
+//! name comes from `en.lproj/InfoPlist.strings` (`LSHasLocalizedDisplayName`).
+//! macOS only applies it when the unlocalized `CFBundleDisplayName` equals the
+//! folder name, which is why that one Info.plist value says "Hippius".
+//!
+//! Pinned against `tauri.conf.json`, `Info.plist` and `InfoPlist.strings` by
+//! this module's tests.
 
 /// What the app calls itself wherever it names the app.
 pub const APP_DISPLAY_NAME: &str = "Hippius Drive";
@@ -86,13 +93,47 @@ mod tests {
         assert_eq!(conf()["identifier"].as_str(), Some("hippius.com"));
     }
 
+    /// The value of `"{key}" = "...";` in the bundled InfoPlist.strings.
+    fn strings_value(key: &str) -> Option<String> {
+        let strings = include_str!("../../locales/en.lproj/InfoPlist.strings");
+        let after = strings.split(&format!("\"{key}\" = \"")).nth(1)?;
+        Some(after[..after.find("\";")?].to_string())
+    }
+
     /// The macOS menu bar shows `CFBundleName`; it must say what the window
     /// title and the app menu say.
     #[test]
     fn the_menu_bar_name_is_the_display_name() {
         assert_eq!(plist_string("CFBundleName").as_deref(), Some(APP_DISPLAY_NAME));
-        assert_eq!(plist_string("CFBundleDisplayName").as_deref(), Some(APP_DISPLAY_NAME));
+        assert_eq!(strings_value("CFBundleName").as_deref(), Some(APP_DISPLAY_NAME));
         // macOS truncates a CFBundleName longer than 15 characters.
         assert!(APP_DISPLAY_NAME.chars().count() <= 15);
+    }
+
+    /// Finder, Launchpad, Spotlight and the Dock show the localized
+    /// `CFBundleDisplayName`, and only when the bundle opts in AND the
+    /// unlocalized value equals the folder name (`productName`). Setting the
+    /// unlocalized value to "Hippius Drive" makes them show "Hippius" again.
+    #[test]
+    fn finder_shows_the_display_name_through_a_localized_name() {
+        assert_eq!(plist_string("CFBundleDisplayName").as_deref(), conf()["productName"].as_str());
+        let plist = include_str!("../../Info.plist");
+        let after = plist
+            .split("<key>LSHasLocalizedDisplayName</key>")
+            .nth(1)
+            .expect("LSHasLocalizedDisplayName is declared");
+        assert!(after.trim_start().starts_with("<true/>"), "LSHasLocalizedDisplayName must be true");
+        assert_eq!(strings_value("CFBundleDisplayName").as_deref(), Some(APP_DISPLAY_NAME));
+    }
+
+    /// The strings file only counts if it lands in the bundle, in the
+    /// development region's folder, which every other language falls back to.
+    #[test]
+    fn the_localized_name_is_bundled_for_the_development_region() {
+        assert_eq!(plist_string("CFBundleDevelopmentRegion").as_deref(), Some("en"));
+        assert_eq!(
+            conf()["bundle"]["macOS"]["files"]["Resources/en.lproj/InfoPlist.strings"].as_str(),
+            Some("locales/en.lproj/InfoPlist.strings")
+        );
     }
 }
