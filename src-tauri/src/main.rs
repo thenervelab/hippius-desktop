@@ -125,6 +125,7 @@ use crate::sync::lifecycle::{
     stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
+use crate::sync::part_hashes::get_file_part_hashes;
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_captures, get_recent_uploads, search_files, search_files_in_drive};
@@ -536,6 +537,7 @@ fn main() {
             get_file_type_summary,
             get_source_summary,
             rename_remote_file,
+            get_file_part_hashes,
             rename_remote_folder,
             create_remote_folder,
             create_cloud_drive,
