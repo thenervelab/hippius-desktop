@@ -87,6 +87,8 @@ pub struct AppState {
     pub chat: crate::chat::ChatState,
     /// Link activity: the counts the last poll saw, and a notification's pending open.
     pub link_alerts: crate::shares::link_alerts::LinkAlertsState,
+    /// When each long-lived webview went out of sight (`webview_refresh`).
+    pub webview_refresh: crate::webview_refresh::WebviewRefreshState,
     /// Screen capture: the one live capture session, if any.
     pub capture: crate::capture::commands::CaptureState,
     /// The file viewer's loopback video stream on Linux (`video_stream.rs`):
@@ -425,6 +427,7 @@ impl AppState {
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
             link_alerts: crate::shares::link_alerts::LinkAlertsState::default(),
+            webview_refresh: crate::webview_refresh::WebviewRefreshState::default(),
             capture: crate::capture::commands::CaptureState::default(),
             video_stream: crate::video_stream::VideoStreams::default(),
             video_engine: crate::video_engine::VideoEngineState::default(),
@@ -906,7 +909,9 @@ impl<'de, R: tauri::Runtime> tauri::ipc::CommandArg<'de, R> for SessionAccount {
         // `message` is a `Copy` reference, so reading it does not move
         // `command`, which the deserializer below consumes.
         let message = command.message;
-        let state = message.state_ref().try_get::<AppState>().ok_or_else(|| {
+        // `Manager::try_state` on the calling webview: `InvokeMessage::state_ref`
+        // is deprecated since tauri 2.11.
+        let state = tauri::Manager::try_state::<AppState>(message.webview_ref()).ok_or_else(|| {
             tauri::ipc::InvokeError(serde_json::Value::String(format!(
                 "AppState is not managed (command `{name}`, arg `{key}`)"
             )))

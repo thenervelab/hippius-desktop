@@ -42,6 +42,7 @@ pub mod video_engine;
 pub mod video_stream;
 pub mod vpn;
 pub mod wallet;
+pub mod webview_refresh;
 
 #[cfg(test)]
 mod test_helpers;
