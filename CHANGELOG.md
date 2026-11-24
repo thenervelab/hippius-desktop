@@ -84,6 +84,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Updates finish on their own.** After an update installs, Hippius restarts by itself, and only asks first if a recording or upload is in progress.
 - **A clearer Free plan watermark.** Free plan screenshots and recordings now carry a small dark pill reading "Recorded with Hippius" with the Hippius logo, so it is easy to read on light screens as well as dark ones. It sits in the same corner as before.
 - **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.

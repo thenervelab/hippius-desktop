@@ -395,6 +395,12 @@ impl CaptureState {
         lock(&self.phase).unwrap_or(CapturePhase::Idle)
     }
 
+    /// Whether a picture is open in the screenshot editor. The editor keeps
+    /// its changes in memory until Save, so a restart would lose them.
+    pub fn editor_open(&self) -> bool {
+        lock(&self.editor).is_some()
+    }
+
     fn take_recorder(&self) -> Option<Box<dyn Recorder>> {
         lock(&self.recorder).take()
     }
