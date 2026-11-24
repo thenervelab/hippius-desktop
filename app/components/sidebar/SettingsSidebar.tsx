@@ -5,7 +5,7 @@ import { useAtom, useAtomValue } from "jotai";
 import { sidebarCollapsedAtom } from "./sideBarAtoms";
 import cn from "@/app/lib/utils/cn";
 import { Icons } from "@/components/ui";
-import { Camera, ChevronLeft, SunMoon } from "lucide-react";
+import { Camera, ChevronLeft, MonitorSmartphone, SunMoon } from "lucide-react";
 import SidebarFooter from "./SidebarFooter";
 import SidebarSearch from "./SidebarSearch";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
@@ -23,7 +23,8 @@ const ICON_CLASS = "size-[18px]";
 
 // Exported so the nav-shape tests can assert the order. One plain list, with
 // no dividers, still ordered by topic: this computer's files, then how the
-// app tells and looks, then keys and access, then the app itself. Billing is
+// app tells and looks, then keys and access (Devices: what is signed in to
+// the account, beside Security), then the app itself. Billing is
 // not here: it is Plans & Billing in the main sidebar's Account section, as
 // in the console.
 export const settingsNavItems = [
@@ -46,6 +47,11 @@ export const settingsNavItems = [
     label: "Appearance",
     section: "appearance",
     icon: <SunMoon className={ICON_CLASS} strokeWidth={2} />,
+  },
+  {
+    label: "Devices",
+    section: "devices",
+    icon: <MonitorSmartphone className={ICON_CLASS} strokeWidth={2} />,
   },
   {
     label: "Security",

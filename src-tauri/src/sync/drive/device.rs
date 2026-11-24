@@ -46,9 +46,22 @@ pub(crate) async fn set_device_name_internal(pool: &SqlitePool, name: &str) -> R
 }
 
 /// Set a custom friendly device name for this machine.
+///
+/// The signed-in account's device on the server follows (best effort, in
+/// the background): Settings › Devices on every other device shows the new
+/// name, and the next device check sends it if this one cannot.
 #[tauri::command]
-pub async fn set_device_name(state: tauri::State<'_, crate::app_state::AppState>, name: String) -> Result<()> {
-    set_device_name_internal(state.pool()?, &name).await
+pub async fn set_device_name(app: tauri::AppHandle, state: tauri::State<'_, crate::app_state::AppState>, name: String) -> Result<()> {
+    set_device_name_internal(state.pool()?, &name).await?;
+    if let Ok(account_id) = state.current_account_id() {
+        let name = validate_device_name(&name)?;
+        tauri::async_runtime::spawn(async move {
+            use tauri::Manager;
+            let state = app.state::<crate::app_state::AppState>();
+            crate::devices::registration::push_name(&state, &account_id, &name).await;
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
