@@ -15,6 +15,10 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- The sign-in screen now shows what Hippius Drive does: encryption, screen recording and sharing with insights.
+
 ### Added
 
 - **Star files, folders and drives.** Choose Star from any file, folder or drive menu, the preview or the selection bar, and find everything you starred on the new Starred page in the sidebar. It looks and works like your Drive, in list or card view: starred folders and drives expand with their arrow or open right there on the Starred page, and each item says where it is. Starred items show a small star beside their name, and your stars are the same in the phone app and on the web.
