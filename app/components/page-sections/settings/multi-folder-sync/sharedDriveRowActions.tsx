@@ -10,6 +10,13 @@ import { FolderOpen, LogOut, RefreshCw, Users } from "lucide-react";
 import type { ActionItem } from "@/components/ui/alt-table/TableActionMenu";
 import type { DriveMembershipInfo } from "@/app/lib/tauri/sharedDrives";
 import type { DriveRole } from "@/app/lib/shared-drives/roles";
+import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
+
+/** Star / Unstar the whole drive (or granted folder), right after Open. */
+export interface RowStar {
+  starred: boolean;
+  onToggle: () => void;
+}
 
 export interface SharedDriveActionHandlers {
   membership: DriveMembershipInfo;
@@ -27,6 +34,7 @@ export interface SharedDriveActionHandlers {
    */
   onManageAccess?: () => void;
   onLeave: () => void;
+  star?: RowStar;
 }
 
 /**
@@ -76,7 +84,8 @@ export function buildSharedDriveActions(
     onItemClick: handlers.onLeave,
   });
 
-  return items;
+  const star = handlers.star;
+  return withStarItem(items, star ? starMenuItem(star.starred, star.onToggle) : null);
 }
 
 /**
@@ -87,6 +96,7 @@ export function buildSharedDriveActions(
 export function buildFolderGrantActions(handlers: {
   onOpen?: () => void;
   onLeave: () => void;
+  star?: RowStar;
 }): ActionItem[] {
   const items: ActionItem[] = [];
   if (handlers.onOpen) {
@@ -102,5 +112,6 @@ export function buildFolderGrantActions(handlers: {
     variant: "destructive",
     onItemClick: handlers.onLeave,
   });
-  return items;
+  const star = handlers.star;
+  return withStarItem(items, star ? starMenuItem(star.starred, star.onToggle) : null);
 }

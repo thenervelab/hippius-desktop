@@ -45,6 +45,7 @@ import { Button } from "@/components/ui/button";
 import FolderList from "@/components/page-sections/drive/folder-list/FolderList";
 import FolderListEmptyState from "@/components/page-sections/drive/folder-list/FolderListEmptyState";
 import { toFolderRows, type FolderRow } from "@/components/page-sections/drive/folder-list/folderRows";
+import { useDriveStars } from "@/components/page-sections/drive/folder-list/useDriveStars";
 import { buildFolderActions } from "@/components/page-sections/drive/folder-list/buildFolderActions";
 import { SYNC_FOLDER_LABEL } from "@/components/page-sections/drive/uploadActions";
 import { driveFolderRoute } from "@/app/lib/routes";
@@ -102,6 +103,8 @@ function openTarget(row: FolderRow): string {
   }, [driveStatuses]);
   const [remoteFolders, setRemoteFolders] = useState<RemoteFolder[]>([]);
   const folderRows = toFolderRows(syncFolders, remoteFolders);
+  // Star / Unstar a whole drive from its row menu.
+  const driveStars = useDriveStars(folderRows);
   // Own drives only: a member drive's sharing is described by the role
   // badge, and asking the server for its members would be the owner's
   // question, not ours.
@@ -601,6 +604,7 @@ function openTarget(row: FolderRow): string {
           buildActions={(row) =>
             buildFolderActions(row, {
               planSupportsSharedDrives: sharedDrivesInPlan,
+              star: driveStars,
               // A manager reaches the mint on a drive they do not own; the
               // row's own `ownerSs58` cannot say which member drives those are.
               role: sharedDriveRoles.get(row.folderName),

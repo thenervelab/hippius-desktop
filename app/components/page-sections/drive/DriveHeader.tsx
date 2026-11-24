@@ -19,7 +19,6 @@ import SyncFolderBreadcrumb, {
 import { useFilesNavigation } from "@/lib/hooks/useFilesNavigation";
 
 import useNavigationLoader from "@/app/lib/hooks/useNavigationLoader";
-import { List } from "lucide-react";
 import StartSyncingButton from "@/app/components/StartSyncingButton";
 import FilterPills from "./FilterPills";
 import type { UploaderOption } from "./AddedByFilter";
@@ -43,18 +42,9 @@ import RemoteUploadButton from "./RemoteUploadButton";
 import RemoteNewFolderButton from "./RemoteNewFolderButton";
 import RemoteFolderUploadButton from "./RemoteFolderUploadButton";
 import CaptureButtons from "@/app/components/capture/CaptureButtons";
+import ViewModeToggle from "./ViewModeToggle";
 
 
-const VIEW_TOGGLE_BUTTON_BASE =
-  "flex items-center justify-center size-6 rounded-[3px] transition-opacity";
-
-const VIEW_TOGGLE_ACTIVE = cn(
-  "bg-grey-light-300 border border-grey-dark-100",
-  "shadow-[0px_5px_2.3px_0px_rgba(0,0,0,0.03),0px_1px_1.9px_0px_rgba(0,0,0,0.14),0px_0px_1px_0px_rgba(0,0,0,0.16)]",
-  "dark:bg-black-primary-bg dark:border-black-300",
-);
-
-const VIEW_TOGGLE_INACTIVE = "opacity-50 hover:opacity-75";
 
 interface DriveHeaderProps {
   isRecentFiles?: boolean;
@@ -437,30 +427,7 @@ const DriveHeader: FC<DriveHeaderProps> = ({
     />
   );
 
-  const viewModeToggle = (
-    <div className="flex items-start gap-1 p-[3px] rounded-[6px] bg-grey-primary-bg dark:bg-black-600">
-      <button
-        className={cn(
-          VIEW_TOGGLE_BUTTON_BASE,
-          viewMode === "list" ? VIEW_TOGGLE_ACTIVE : VIEW_TOGGLE_INACTIVE,
-        )}
-        onClick={() => setViewMode("list")}
-        aria-label="List View"
-      >
-        <List className="size-3 text-black-700 dark:text-white" />
-      </button>
-      <button
-        className={cn(
-          VIEW_TOGGLE_BUTTON_BASE,
-          viewMode === "card" ? VIEW_TOGGLE_ACTIVE : VIEW_TOGGLE_INACTIVE,
-        )}
-        onClick={() => setViewMode("card")}
-        aria-label="Card View"
-      >
-        <Icons.Category className="size-3 text-black-700 dark:text-white" />
-      </button>
-    </div>
-  );
+  const viewModeToggle = <ViewModeToggle viewMode={viewMode} setViewMode={setViewMode} />;
 
   return (
     <>
