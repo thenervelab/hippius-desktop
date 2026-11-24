@@ -6,7 +6,7 @@ import { getFileIconForThumbnail } from '@/lib/utils/fileTypeUtils';
 import { FormattedUserFile } from '@/app/lib/hooks/use-user-files';
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
+import { pageFolderHref, useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 
 interface FileTypeIconProps {
     fileType?: FileTypes;
@@ -31,12 +31,16 @@ const FileTypeIcon: React.FC<FileTypeIconProps> = ({
     };
 
     const { getParam } = useUrlParams();
-    const { basePath } = useDriveRoute();
+    const driveRoute = useDriveRoute();
+    const { basePath } = driveRoute;
     const iconSizeClass = sizeClassMap[size];
     const { icon: Icon, color: iconColor } = getFileIconForThumbnail(fileType, !!file.isFolder);
 
     // Get folder URL from the utility function
-    const { url: folderUrl } = file.isFolder ? generateFolderUrl(file, getParam, undefined, basePath) : { url: '' };
+    // A page whose rows come from many drives (Starred) says where a folder opens.
+    const folderUrl = file.isFolder
+        ? pageFolderHref(driveRoute, file) ?? generateFolderUrl(file, getParam, undefined, basePath).url
+        : '';
 
     return (
         <div className={cn(className)}>

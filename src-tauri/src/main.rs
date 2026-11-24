@@ -20,6 +20,7 @@ pub mod chat;
 mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod devices;
 pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
@@ -456,6 +457,13 @@ fn main() {
             crate::sync::trash::restore_trash_items,
             crate::sync::trash::delete_trash_items_forever,
             crate::sync::trash::empty_trash,
+            crate::sync::favorites::set_star,
+            crate::sync::favorites::set_stars,
+            crate::sync::favorites::list_starred,
+            crate::sync::favorites::star_scopes,
+            crate::devices::commands::list_account_devices,
+            crate::devices::commands::unlink_account_device,
+            crate::devices::file_details::get_file_source_details,
             crate::sync::drive_move::cancel_drive_move,
             create_sync_folder,
             list_sync_folder,

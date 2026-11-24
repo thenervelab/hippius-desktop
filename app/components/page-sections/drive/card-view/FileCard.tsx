@@ -16,6 +16,7 @@ import { Folder2 } from "@/components/ui/icons";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
+import { StarMark } from "@/components/page-sections/drive/StarMark";
 import { folderShareRelativePath } from "@/app/lib/utils/folderShareGating";
 import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import { useUrlParams } from '@/app/utils/hooks/useUrlParams';
@@ -29,7 +30,7 @@ import { useRouter } from "next/navigation";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import { Check } from "lucide-react";
 import { entryKey } from "../highlightEntry";
-import { useDriveRoute } from "../driveRoute";
+import { pageFolderHref, useDriveRoute } from "../driveRoute";
 /** Card thumbnail resolution — shared by the resolve and the evict-on-error. */
 const CARD_THUMB_MAX_DIM = 256;
 
@@ -46,8 +47,11 @@ const FileCard: React.FC<FileCardProps> = ({
   onClick,
   actionMenu,
 }) => {
-  // A folder opens on the page this grid is on (Drive, or Captures).
-  const { basePath } = useDriveRoute();
+  // A folder opens on the page this grid is on (Drive, or Captures); a page
+  // whose rows come from many drives (Starred) says where.
+  const driveRoute = useDriveRoute();
+  const { basePath } = driveRoute;
+  const pageHref = file.isFolder ? pageFolderHref(driveRoute, file) : null;
   const { fileName, fileFormat } = getFilePartsFromFileName(file.name);
   const router = useRouter();
   const { isSelectionMode, isFileSelected, toggleFileSelection } = useFileSelection();
@@ -305,7 +309,7 @@ const FileCard: React.FC<FileCardProps> = ({
                 {displayName}
               </span>
             ) : (
-              <Link href={`${basePath}?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
+              <Link href={pageHref ?? `${basePath}?folderCid=${file.arionHash}&folderName=${encodeURIComponent(file.name)}&folderActualName=${encodeURIComponent(file.actualFileName ?? "")}&mainFolderCid=${encodeURIComponent(newMainFolderHash)}&mainFolderActualName=${encodeURIComponent(newMainFolder)}&subFolderPath=${encodeURIComponent(newSubFolderPath)}&folderSource=${file.source}&mainReqHash=${file.mainReqHash}`} draggable={false}>
                 <span
                   className={cn(
                     "text-sm text-grey-20 dark:text-grey-light-100 hover:text-primary-40 transition truncate"
@@ -334,6 +338,7 @@ const FileCard: React.FC<FileCardProps> = ({
               compact
               className="ml-1.5"
             />
+            <StarMark file={file} basePath={subFolderPath} className="ml-1.5" />
           </div>
         ) : (
           <div className="flex items-center min-w-0 flex-1">
@@ -362,6 +367,7 @@ const FileCard: React.FC<FileCardProps> = ({
               fileSize={file.size}
               className="ml-1.5"
             />
+            <StarMark file={file} basePath={subFolderPath} className="ml-1.5" />
             {/* Captures page only: opens the link's Insights. */}
             <CaptureInsightsButton
               label={file.label}

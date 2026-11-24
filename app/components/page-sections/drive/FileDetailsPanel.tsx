@@ -30,6 +30,8 @@ import { useDriveSharing } from "@/app/lib/hooks/useDriveSharing";
 import { useSharedDriveMembership } from "@/app/lib/hooks/useSharedDriveRoles";
 import UploaderCell from "@/app/components/page-sections/drive/files-table/UploaderCell";
 import { SidePanel } from "@/app/components/ui/SidePanel";
+import { useFileSourceDetails } from "@/app/lib/hooks/useFileSourceDetails";
+import { formatCompactDate } from "@/app/lib/utils/dateUtils";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -58,6 +60,16 @@ const PillRow: React.FC<{
   </div>
 );
 
+// A capture or modification date from the file's upload origin, in Unix
+// seconds Rust already checked are believable (1990 to a day from now). Not
+// `FormattedTimestamp`, which dashes anything before 2000: a scan of a 1995
+// photo is a real Date Taken.
+const SourceDate: React.FC<{ seconds: number }> = ({ seconds }) => (
+  <div className="text-left text-base font-medium self-start text-grey-dark-900 dark:text-white">
+    {formatCompactDate(new Date(seconds * 1000))}
+  </div>
+);
+
 interface PanelBodyProps {
   file: FormattedUserFile;
   onClose: () => void;
@@ -66,6 +78,10 @@ interface PanelBodyProps {
 const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   const { polkadotAddress } = useWalletAuth();
   const arionCid = arionContentHash(file);
+  // Date Taken, Date Modified, Camera and Uploaded from: files only, and
+  // only once Rust answers. The rows above them paint at once; a failed
+  // lookup adds nothing.
+  const source = useFileSourceDetails(polkadotAddress, file.isFolder ? null : file);
   // Attribution is only worth showing on a SHARED drive. On a solo drive
   // every file was uploaded by the reader, so the row would say nothing and
   // cost a line on every file they open.
@@ -150,6 +166,18 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
           )}
         </PillRow>
 
+        {source?.takenAt != null && (
+          <PillRow label="Date Taken">
+            <SourceDate seconds={source.takenAt} />
+          </PillRow>
+        )}
+
+        {source?.modifiedAt != null && (
+          <PillRow label="Date Modified">
+            <SourceDate seconds={source.modifiedAt} />
+          </PillRow>
+        )}
+
         <PillRow label="File Size">
           <div className="flex items-center gap-[6px]">
             <span className="size-[20px] rounded-[4px] flex items-center justify-center shrink-0">
@@ -158,6 +186,18 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <span>{fileSize}</span>
           </div>
         </PillRow>
+
+        {source?.camera && (
+          <PillRow label="Camera">
+            <p className="break-words">{source.camera}</p>
+          </PillRow>
+        )}
+
+        {source?.uploadedFrom && (
+          <PillRow label="Uploaded from">
+            <p className="break-words">{source.uploadedFrom}</p>
+          </PillRow>
+        )}
 
         {driveIsShared && !file.isFolder && (
           // Who put this here. A shared drive has more than one possible

@@ -18,6 +18,8 @@ interface SyncFileEntry {
   uploaded_by_name?: string | null;
   /** Uploader email beside uploaded_by (hcfs #455); absent when unknown. */
   uploaded_by_email?: string | null;
+  /** The caller's star, on a `/browse` row; absent/null when the server did not say. */
+  favorite?: boolean | null;
 }
 
 interface GroupedListing {
@@ -357,6 +359,8 @@ export function useNestedFolderListing({
           uploadedBy: entry.uploaded_by || undefined,
           uploadedByName: entry.uploaded_by_name || undefined,
           uploadedByEmail: entry.uploaded_by_email || undefined,
+          // The server's star for this row; unknown stays unknown.
+          favorite: typeof entry.favorite === "boolean" ? entry.favorite : undefined,
           syncStatus:
             (entry.sync_status as FormattedUserFile["syncStatus"]) ??
             "unknown",
