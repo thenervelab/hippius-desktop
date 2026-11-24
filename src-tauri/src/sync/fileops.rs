@@ -9,6 +9,7 @@ pub mod drive_summaries;
 pub mod files;
 pub mod folders;
 pub mod listing_cache;
+pub mod part_hashes;
 pub mod recent_uploads;
 pub mod rekey_probe;
 pub mod remote;

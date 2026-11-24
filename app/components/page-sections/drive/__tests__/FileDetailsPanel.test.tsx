@@ -4,7 +4,7 @@
 // paint the path id — or "Not yet synced" — over a real digest.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -21,6 +21,22 @@ const PATH_ID =
 const openUrl = vi.fn();
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: (...args: unknown[]) => openUrl(...args),
+}));
+
+// The part list is answered per test; every other command (the drive
+// membership lookup) gets an empty list.
+const ipc = vi.hoisted(() => ({
+  parts: [] as string[],
+  calls: [] as Array<Record<string, unknown>>,
+  pending: false,
+}));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (cmd: string, args: Record<string, unknown>) => {
+    if (cmd !== "get_file_part_hashes") return Promise.resolve([]);
+    ipc.calls.push(args);
+    if (ipc.pending) return new Promise(() => {});
+    return Promise.resolve(ipc.parts);
+  },
 }));
 
 vi.mock("@/app/lib/wallet-auth-context", () => ({
@@ -174,5 +190,120 @@ describe("FileDetailsPanel upload attribution", () => {
     driveSharing.isShared = true;
     renderPanel(makeFile({ isFolder: true, uploadedBy: "5Someone" }));
     expect(screen.queryByText("Added by")).not.toBeInTheDocument();
+  });
+});
+
+const part = (n: number) => n.toString(16).padStart(64, "0");
+const BIG = 196_950_000;
+
+describe("FileDetailsPanel file stored in parts", () => {
+  beforeEach(() => {
+    openUrl.mockReset();
+    ipc.parts = [];
+    ipc.calls = [];
+    ipc.pending = false;
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    });
+  });
+
+  it("does not ask for parts for a file that fits one", () => {
+    renderPanel(makeFile({ size: 2048 }));
+    expect(ipc.calls).toHaveLength(0);
+    expect(screen.getByText("Arion Hash")).toBeInTheDocument();
+  });
+
+  it("asks Rust with the drive and the path id, never the content hash", async () => {
+    renderPanel(makeFile({ size: BIG }));
+    await waitFor(() => expect(ipc.calls).toHaveLength(1));
+    expect(ipc.calls[0]).toEqual({
+      accountId: "5TestAddress",
+      label: "Docs",
+      pathHash: PATH_ID,
+    });
+  });
+
+  it("keeps the single hash while the parts load", () => {
+    ipc.pending = true;
+    renderPanel(makeFile({ size: BIG }));
+    expect(screen.getByText("Arion Hash")).toBeInTheDocument();
+    expect(screen.getByLabelText("Loading the file's parts")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /view on file tracker/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the single hash when the server lists no parts", async () => {
+    ipc.parts = [];
+    renderPanel(makeFile({ size: BIG }));
+    await waitFor(() => expect(ipc.calls).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.queryByLabelText("Loading the file's parts")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText("Arion Hash")).toBeInTheDocument();
+    expect(screen.queryByTestId("arion-hash-parts")).not.toBeInTheDocument();
+  });
+
+  it("lists three or fewer parts without a Show all", async () => {
+    ipc.parts = [part(1), part(2), part(3)];
+    renderPanel(makeFile({ size: BIG }));
+    const list = await screen.findByTestId("arion-hash-parts");
+    expect(screen.getByText("Arion Hashes")).toBeInTheDocument();
+    expect(screen.getByText("3 parts")).toBeInTheDocument();
+    expect(list.querySelectorAll("li")).toHaveLength(3);
+    expect(screen.queryByRole("button", { name: /show all/i })).not.toBeInTheDocument();
+  });
+
+  it("shows the first three of many, then every part on Show all", async () => {
+    ipc.parts = Array.from({ length: 24 }, (_, i) => part(i + 1));
+    renderPanel(makeFile({ size: BIG }));
+    const list = await screen.findByTestId("arion-hash-parts");
+    expect(screen.getByText("24 parts")).toBeInTheDocument();
+    expect(list.querySelectorAll("li")).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show all 24 parts" }));
+    expect(screen.getByTestId("arion-hash-parts").querySelectorAll("li")).toHaveLength(24);
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(screen.getByTestId("arion-hash-parts").querySelectorAll("li")).toHaveLength(3);
+  });
+
+  it("copies and opens each part by its own hash", async () => {
+    ipc.parts = [part(1), part(2)];
+    renderPanel(makeFile({ size: BIG }));
+    await screen.findByTestId("arion-hash-parts");
+
+    fireEvent.click(screen.getByTitle("Copy part 2 hash"));
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(part(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "Open part 2 on File Tracker" }));
+    await waitFor(() =>
+      expect(openUrl).toHaveBeenCalledWith(`https://hipstats.com/file-tracker/${part(2)}`),
+    );
+  });
+
+  it("explains how the file is stored, and closes on Escape", async () => {
+    ipc.parts = [part(1), part(2)];
+    renderPanel(makeFile({ size: BIG }));
+    await screen.findByTestId("arion-hash-parts");
+
+    fireEvent.click(screen.getByRole("button", { name: "How your file is stored" }));
+    expect(screen.getByRole("dialog", { name: "How your file is stored" })).toHaveTextContent(
+      "Files over 8 MB are split into 8 MB parts",
+    );
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "How your file is stored" })).not.toBeInTheDocument();
+  });
+
+  it("explains a single-hash file without mentioning parts", () => {
+    renderPanel(makeFile());
+    fireEvent.click(screen.getByRole("button", { name: "How your file is stored" }));
+    const dialog = screen.getByRole("dialog", { name: "How your file is stored" });
+    expect(dialog).toHaveTextContent("Its Arion Hash lets you look it up");
+    expect(dialog).not.toHaveTextContent("parts");
+  });
+
+  it("offers no explanation while the file has no hash yet", () => {
+    renderPanel(makeFile({ arionCid: "" }));
+    expect(screen.queryByRole("button", { name: "How your file is stored" })).not.toBeInTheDocument();
   });
 });
