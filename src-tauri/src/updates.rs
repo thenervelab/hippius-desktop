@@ -659,6 +659,89 @@ pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgres
     Ok(())
 }
 
+/// Something a restart right now would cut off.
+///
+/// The update dialog restarts the app by itself once an update is installed,
+/// and asks first only while one of these is true. `line` is what the dialog
+/// shows, so the wording stays here with the decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartBlocker {
+    pub kind: RestartBlockerKind,
+    pub line: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestartBlockerKind {
+    /// A screen recording is running, paused or being saved.
+    Recording,
+    /// A picture is open in the screenshot editor; its edits live only in memory.
+    EditorOpen,
+    /// Files are being encrypted, uploaded or downloaded.
+    Transfer,
+}
+
+/// The facts [`restart_blockers_from`] decides on, read from app state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartFacts {
+    pub capture: crate::capture::session::CapturePhase,
+    pub editor_open: bool,
+    /// The sync engine has files in its session that are not finished yet.
+    pub files_moving: bool,
+    /// An upload started from the app is still being copied and encrypted.
+    pub upload_preparing: bool,
+}
+
+/// What a restart right now would lose, in the order the dialog lists it.
+///
+/// Choosing what to capture is not a blocker: nothing has been recorded yet.
+pub fn restart_blockers_from(facts: RestartFacts) -> Vec<RestartBlocker> {
+    use crate::capture::session::CapturePhase;
+    let mut out = Vec::new();
+    if matches!(
+        facts.capture,
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing
+    ) {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::Recording,
+            line: "A screen recording is in progress.".into(),
+        });
+    }
+    if facts.editor_open {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::EditorOpen,
+            line: "A picture is open in the editor.".into(),
+        });
+    }
+    if facts.files_moving || facts.upload_preparing {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::Transfer,
+            line: "Files are still uploading or downloading.".into(),
+        });
+    }
+    out
+}
+
+/// Whether the sync engine's session still has unfinished files.
+fn files_moving(snapshot: &crate::sync::progress::SyncSnapshot) -> bool {
+    snapshot.is_active && snapshot.total_files > snapshot.completed_files + snapshot.failed_files
+}
+
+/// What would be lost if the app restarted now. Empty means restart at once.
+///
+/// The update dialog asks this when an install finishes, and again every few
+/// seconds while the user chose "Restart when done".
+#[tauri::command]
+pub fn restart_blockers(state: tauri::State<'_, crate::app_state::AppState>) -> Vec<RestartBlocker> {
+    restart_blockers_from(RestartFacts {
+        capture: state.capture.current(),
+        editor_open: state.capture.editor_open(),
+        files_moving: files_moving(&state.sync.snapshot()),
+        upload_preparing: state.upload_processing.any_active(),
+    })
+}
+
 /// What the channel-switch surface needs to render itself.
 ///
 /// `targetVersion` is `None` when the target's manifest could not be read — an
@@ -838,6 +921,123 @@ pub fn current_release_channel() -> ReleaseChannel {
         warn!("running a staging build; automatic updates are disabled on this lane");
     }
     channel
+}
+
+#[cfg(test)]
+mod restart_blocker_tests {
+    use super::{RestartBlockerKind, RestartFacts, restart_blockers_from};
+    use crate::capture::session::{CaptureKind, CaptureMode, CapturePhase};
+
+    fn idle() -> RestartFacts {
+        RestartFacts {
+            capture: CapturePhase::Idle,
+            editor_open: false,
+            files_moving: false,
+            upload_preparing: false,
+        }
+    }
+
+    fn kinds(facts: RestartFacts) -> Vec<RestartBlockerKind> {
+        restart_blockers_from(facts).into_iter().map(|b| b.kind).collect()
+    }
+
+    #[test]
+    fn nothing_running_restarts_at_once() {
+        assert!(restart_blockers_from(idle()).is_empty());
+    }
+
+    #[test]
+    fn a_recording_running_paused_or_saving_holds_the_restart() {
+        for capture in [
+            CapturePhase::Recording {
+                elapsed_secs: 3,
+                microphone: true,
+            },
+            CapturePhase::Paused {
+                elapsed_secs: 3,
+                microphone: false,
+            },
+            CapturePhase::Finalizing,
+        ] {
+            assert_eq!(
+                kinds(RestartFacts { capture, ..idle() }),
+                vec![RestartBlockerKind::Recording],
+                "{capture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn choosing_what_to_capture_does_not_hold_the_restart() {
+        let selecting = CapturePhase::Selecting {
+            kind: CaptureKind::Recording,
+            mode: CaptureMode::Screen,
+        };
+        assert!(
+            restart_blockers_from(RestartFacts {
+                capture: selecting,
+                ..idle()
+            })
+            .is_empty()
+        );
+        let capturing = CapturePhase::Capturing {
+            kind: CaptureKind::Screenshot,
+        };
+        assert!(
+            restart_blockers_from(RestartFacts {
+                capture: capturing,
+                ..idle()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_open_editor_holds_the_restart() {
+        assert_eq!(kinds(RestartFacts { editor_open: true, ..idle() }), vec![RestartBlockerKind::EditorOpen]);
+    }
+
+    #[test]
+    fn moving_files_hold_the_restart_once_however_they_move() {
+        for (files_moving, upload_preparing) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                kinds(RestartFacts {
+                    files_moving,
+                    upload_preparing,
+                    ..idle()
+                }),
+                vec![RestartBlockerKind::Transfer],
+            );
+        }
+    }
+
+    #[test]
+    fn every_blocker_is_listed_in_order_with_rusts_words() {
+        let all = restart_blockers_from(RestartFacts {
+            capture: CapturePhase::Finalizing,
+            editor_open: true,
+            files_moving: true,
+            upload_preparing: false,
+        });
+        let lines: Vec<&str> = all.iter().map(|b| b.line.as_str()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "A screen recording is in progress.",
+                "A picture is open in the editor.",
+                "Files are still uploading or downloading.",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_wire_shape_is_kind_and_line_in_camel_case() {
+        let json = serde_json::to_value(restart_blockers_from(RestartFacts { editor_open: true, ..idle() })).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{ "kind": "editorOpen", "line": "A picture is open in the editor." }])
+        );
+    }
 }
 
 #[cfg(test)]

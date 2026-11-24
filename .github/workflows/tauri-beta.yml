@@ -899,6 +899,20 @@ jobs:
             --notes-file "${work}/body.md"
           echo "Release name and notes written to ${TAG}."
 
+          # The in-app update dialog shows the manifest's `notes`, not the
+          # release body. tauri-action filled it with the platform jobs'
+          # `releaseBody` placeholder, so beta testers saw "**Beta Build**" and
+          # nothing else. Same notes as the release, without the prerelease
+          # banner. Runs before verify-release and publish-release, which copies
+          # this manifest to `beta-channel` as is.
+          gh release download "${TAG}" --repo "${REPO}" --pattern 'latest.json' --dir "${work}" --clobber
+          head -c 100000 "${work}/notes.md" >"${work}/manifest-notes.md"
+          jq --rawfile notes "${work}/manifest-notes.md" '.notes = ($notes | rtrimstr("\n"))' \
+            "${work}/latest.json" >"${work}/latest.json.new"
+          mv "${work}/latest.json.new" "${work}/latest.json"
+          gh release upload "${TAG}" --repo "${REPO}" "${work}/latest.json" --clobber
+          echo "Update notes written to the ${TAG} manifest."
+
       # Checksums for every asset (from the API's own digests, nothing is
       # downloaded) plus a Downloads table naming the installer per platform.
       # Runs BEFORE verification so the asset set the next job checks is final.

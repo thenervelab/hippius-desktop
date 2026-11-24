@@ -3,6 +3,7 @@
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings, { useLinkGate } from "@/components/page-sections/shares/insights/EmailGateSettings";
 import NdaSettings, { useLinkNda } from "@/components/page-sections/shares/insights/NdaSettings";
+import { MUTED } from "@/components/page-sections/shares/insights/panelStyles";
 import { RuleCards, type LinkRule } from "./RuleCards";
 import { ExpiryEditor, TTL_OPTIONS, type ExpiryEdit } from "./ExpiryEditor";
 import {
@@ -11,6 +12,8 @@ import {
   expirySummary,
   GATE_VALUE,
   isWatermarkable,
+  NDA_PASSWORD_REASON,
+  NDA_PASSWORD_VALUE,
   ndaSummary,
   passwordSummary,
   RULE_LABELS,
@@ -97,7 +100,19 @@ export function LinkRules({
   }
 
   const nda = ndaStore.nda;
-  if (shareToken !== null && nda?.offered) {
+  if (shareToken !== null && nda && !nda.offered && nda.passwordLink) {
+    rules.push({
+      id: "nda",
+      label: RULE_LABELS.nda,
+      on: false,
+      value: NDA_PASSWORD_VALUE,
+      editor: (
+        <p className={`text-xs ${MUTED}`} data-testid="nda-password-reason">
+          {NDA_PASSWORD_REASON}
+        </p>
+      ),
+    });
+  } else if (shareToken !== null && nda?.offered) {
     rules.push({
       id: "nda",
       label: RULE_LABELS.nda,

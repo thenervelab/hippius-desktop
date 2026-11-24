@@ -6,7 +6,9 @@ import { useAtomValue } from "jotai";
 import {
   checkForUpdate,
   installUpdate,
+  restartBlockers,
   type AvailableUpdate,
+  type RestartBlocker,
 } from "@/lib/tauri/updates";
 import { tauriErrorDetail } from "@/lib/utils/dispatchTauriError";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -37,6 +39,7 @@ import {
 } from "./updateStore";
 import BasicMarkdown from "./BasicMarkdown";
 import { UPDATE_FAILED_FALLBACK } from "./checkForUpdates";
+import { AUTO_RESTART_DELAY_MS, startRestartWhenDone } from "./autoRestart";
 
 /* Dev-only mock data. Used when the dev panel forces a state — the
  * real `update` object is null when no update is actually available,
@@ -62,12 +65,18 @@ We've made a couple of improvements to the Drive experience that have been buggi
  * illustration, 58% right pane carrying a compact state card. Six
  * lifecycle states share the same card chrome:
  *
- *   checking → available → downloading → installing → complete
+ *   checking → available → downloading → installing → restarting
+ *                                                   ↘ waiting (something would be lost)
  *   no-update / error  (terminal branches)
+ *   complete           (only when the automatic relaunch failed: Restart App)
  *
  * The dialog is self-contained: re-runs the Rust check_for_update on open,
- * drives install_update internally, calls relaunch() on
- * the user's Restart App click. The store atom (updateDialogOpenAtom)
+ * drives install_update internally, and once the update is installed asks
+ * Rust (`restart_blockers`) whether a restart would cut anything off. Nothing
+ * → "Restarting…" and relaunch() by itself. Something (a recording, an open
+ * editor, files moving) → the user picks "Restart when done" or "Restart now".
+ * Windows never reaches this: its installer closes the app and starts the
+ * new version itself. The store atom (updateDialogOpenAtom)
  * is the only external trigger — auto-mount via UpdateChecker →
  * checkForUpdates → store, manual mount via TopBarLogoMenu setting the
  * atom directly. */
@@ -78,6 +87,8 @@ type Status =
   | "no-update"
   | "downloading"
   | "installing"
+  | "restarting"
+  | "waiting"
   | "complete"
   | "error";
 
@@ -203,6 +214,8 @@ function StatePill({ status }: { status: Status }) {
             />
           ),
         };
+      case "restarting":
+      case "waiting":
       case "complete":
         return {
           label: "Update Completed",
@@ -254,6 +267,7 @@ export default function UpdateDialog() {
   const [installProgress, setInstallProgress] = useState(0);
   const [downloadedBytes, setDownloadedBytes] = useState(0);
   const [totalBytes, setTotalBytes] = useState(0);
+  const [blockers, setBlockers] = useState<RestartBlocker[]>([]);
 
   // Refs mirror the byte counters so the install progress callback
   // doesn't capture stale closures across rerenders.
@@ -325,6 +339,8 @@ export default function UpdateDialog() {
   const isInProgress =
     effectiveStatus === "downloading" ||
     effectiveStatus === "installing" ||
+    effectiveStatus === "restarting" ||
+    effectiveStatus === "waiting" ||
     effectiveStatus === "complete";
 
   useEffect(() => {
@@ -370,6 +386,50 @@ export default function UpdateDialog() {
     confirmUpdate(false);
   };
 
+  // Relaunch, falling back to the manual Restart App button if it fails.
+  const restartNow = async () => {
+    try {
+      await relaunch();
+    } catch (err) {
+      console.error("Restart failed:", err);
+      setStatus("complete");
+      toast.error("Unable to restart the app. Please restart manually.");
+    }
+  };
+
+  // "Restarting…" for a moment, then relaunch without a button press.
+  const restartShortly = () => {
+    setStatus("restarting");
+    setTimeout(() => {
+      void restartNow();
+    }, AUTO_RESTART_DELAY_MS);
+  };
+
+  // The update is installed. Rust says whether a restart now would cut
+  // anything off; a question it cannot answer counts as nothing in the way.
+  const afterInstall = async () => {
+    const now = await restartBlockers().catch(() => [] as RestartBlocker[]);
+    if (now.length === 0) {
+      restartShortly();
+      return;
+    }
+    setBlockers(now);
+    setStatus("waiting");
+  };
+
+  // "Restart when done": the dialog goes away and the app restarts by itself
+  // once Rust reports nothing in the way.
+  const handleRestartWhenDone = () => {
+    closeUpdateDialog();
+    toast.success("Update installed", {
+      description: "Hippius will restart by itself when this finishes.",
+    });
+    void startRestartWhenDone({
+      getBlockers: restartBlockers,
+      restart: restartNow,
+    });
+  };
+
   // The install step reports no progress of its own — Rust's `install_update`
   // streams download bytes and then blocks through the install. We fake a
   // 5-phase progress so the user sees forward motion before the relaunch.
@@ -379,7 +439,7 @@ export default function UpdateDialog() {
       await new Promise((r) => setTimeout(r, 500));
       setInstallProgress(phase);
     }
-    setStatus("complete");
+    await afterInstall();
   };
 
   const handleUpdateNow = async () => {
@@ -488,6 +548,10 @@ export default function UpdateDialog() {
         return "Please Wait While Your Update Is Downloading";
       case "installing":
         return "Please Wait While Your Update Is Installed";
+      case "restarting":
+        return "Restarting Hippius";
+      case "waiting":
+        return "Update Installed";
       case "complete":
         return "Update Has Been Successfully Installed";
       case "no-update":
@@ -510,6 +574,8 @@ export default function UpdateDialog() {
           label: installPlan.kind === "manual" ? "Download" : "Update",
           onClick: handleUpdateNow,
         };
+      case "waiting":
+        return { label: "Restart when done", onClick: handleRestartWhenDone };
       case "complete":
         return { label: "Restart App", onClick: handleRestart };
       case "no-update":
@@ -677,6 +743,16 @@ export default function UpdateDialog() {
                               {errorDetail || UPDATE_FAILED_FALLBACK}
                             </p>
                           )}
+                          {effectiveStatus === "restarting" && (
+                            <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
+                              Hippius is restarting to finish the update.
+                            </p>
+                          )}
+                          {effectiveStatus === "waiting" && (
+                            <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
+                              Hippius needs to restart to finish the update.
+                            </p>
+                          )}
                           {effectiveStatus === "checking" && (
                             <p className="text-[15px] font-medium leading-[22px] tracking-[-0.30px] text-grey-50 dark:text-grey-dark-500">
                               Please wait a moment…
@@ -710,6 +786,48 @@ export default function UpdateDialog() {
                           className="inline-block size-8 rounded-full border-2 border-grey-90 border-t-primary-50 animate-spin dark:border-black-300 dark:border-t-primary-65"
                         />
                       </motion.div>
+                    )}
+
+                    {effectiveStatus === "restarting" && (
+                      <motion.div
+                        key="restarting"
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.25, ease: "easeOut" }}
+                        className="flex w-full items-center justify-center"
+                        role="status"
+                        aria-live="polite"
+                        data-testid="update-restarting"
+                      >
+                        <span
+                          aria-hidden="true"
+                          className="inline-block size-8 rounded-full border-2 border-grey-90 border-t-primary-50 animate-spin motion-reduce:animate-none dark:border-black-300 dark:border-t-primary-65"
+                        />
+                        <span className="sr-only">Restarting…</span>
+                      </motion.div>
+                    )}
+
+                    {effectiveStatus === "waiting" && (
+                      <motion.ul
+                        key="waiting"
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -6 }}
+                        transition={{ duration: 0.25, ease: "easeOut" }}
+                        className="flex w-full flex-col gap-[6px] text-[14px] leading-[20px] tracking-[-0.28px] text-grey-10 dark:text-white"
+                        data-testid="update-restart-blockers"
+                      >
+                        {blockers.map((b) => (
+                          <li key={b.kind} className="flex items-start gap-[8px]">
+                            <span
+                              aria-hidden="true"
+                              className="mt-[7px] inline-block size-[6px] shrink-0 rounded-full bg-warning-50"
+                            />
+                            <span>{b.line}</span>
+                          </li>
+                        ))}
+                      </motion.ul>
                     )}
 
                     {effectiveStatus === "available" &&
@@ -799,6 +917,24 @@ export default function UpdateDialog() {
                         >
                           {cta.label}
                         </Button>
+                        {effectiveStatus === "waiting" && (
+                          <Button
+                            type="button"
+                            onClick={() => void restartNow()}
+                            variant="ghost"
+                            size="auto"
+                            className="mt-[8px] h-[44px] w-full rounded-[6px] px-4 text-[15px] font-medium tracking-[-0.30px]"
+                          >
+                            Restart now
+                          </Button>
+                        )}
+                        {effectiveStatus === "available" &&
+                          installPlan.kind === "in-place" && (
+                            <p className="mt-[8px] text-center text-[12px] leading-[18px] tracking-[-0.24px] text-grey-60 dark:text-grey-dark-600">
+                              Hippius restarts by itself when the update is
+                              installed.
+                            </p>
+                          )}
                       </motion.div>
                     )}
                   </AnimatePresence>
