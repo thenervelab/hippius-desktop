@@ -26,6 +26,10 @@ Every path that RE-authenticates an existing account from a stored mnemonic — 
 - **No half-logins**: `complete_oauth_flow` errors when the callback yields no `substrate_address` instead of returning an unpersistable success the FE would treat as authenticated.
 - **Direct-grant deprecation probe**: `complete_oauth_flow`'s `params.token` branch (a bearer token delivered in the deep link — the RFC 6750 §2.3 shape) logs a `warn!` on entry. hippius-console sends only `code`, so the branch should be reachable only via the env-gated dev injector; if a release passes without the warning firing, the branch can be deleted outright.
 
+## Device registration on sign-in
+
+`login_with_mnemonic` and `complete_oauth_flow` mark this computer's device `reconnect_pending` (`devices::store`) after the session is persisted, so a computer unlinked from another device is linked again by signing in. `restore_session` never marks it: at launch a confirmed device missing from `GET /v1/devices` means it was unlinked, and `devices::registration` signs out through `logout_full` and emits `this_device_unlinked`; the webview then runs only its local half of logout (`clearLocalSession`, never a second `logout_full`) and the sign-in screen explains.
+
 ## Deep links
 
 Inbound `hippiusapp://` URLs are logged only via `oauth.rs::deep_link_public_part` (scheme+path, never the query — a direct-grant callback carries the bearer token). The FE dedups callbacks on `ParsedDeepLink.dedupKey` (Rust-computed SHA-256 of the URL; `app/lib/auth/deepLinkDedup.ts` keeps a legacy raw-URL comparison for markers written by pre-fix builds) instead of persisting the raw URL in localStorage.

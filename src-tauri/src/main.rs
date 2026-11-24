@@ -20,6 +20,7 @@ pub mod chat;
 mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod devices;
 pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
@@ -124,6 +125,7 @@ use crate::sync::lifecycle::{
     stop_sync,
 };
 use crate::sync::mnemonic::{ensure_sync_mnemonic, get_drive_mnemonic};
+use crate::sync::part_hashes::get_file_part_hashes;
 use crate::sync::paths::{get_sync_path, remove_sync_path, set_sync_path};
 use crate::sync::progress::{sp_clear_all_data, sp_dismiss_sync_widget, sp_get_snapshot};
 use crate::sync::recent_uploads::{get_recent_captures, get_recent_uploads, search_files, search_files_in_drive};
@@ -457,6 +459,13 @@ fn main() {
             crate::sync::trash::restore_trash_items,
             crate::sync::trash::delete_trash_items_forever,
             crate::sync::trash::empty_trash,
+            crate::sync::favorites::set_star,
+            crate::sync::favorites::set_stars,
+            crate::sync::favorites::list_starred,
+            crate::sync::favorites::star_scopes,
+            crate::devices::commands::list_account_devices,
+            crate::devices::commands::unlink_account_device,
+            crate::devices::file_details::get_file_source_details,
             crate::sync::drive_move::cancel_drive_move,
             create_sync_folder,
             list_sync_folder,
@@ -528,6 +537,7 @@ fn main() {
             get_file_type_summary,
             get_source_summary,
             rename_remote_file,
+            get_file_part_hashes,
             rename_remote_folder,
             create_remote_folder,
             create_cloud_drive,
