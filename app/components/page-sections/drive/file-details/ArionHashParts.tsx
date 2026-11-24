@@ -8,10 +8,17 @@ import { CopyText } from "@/components/ui";
 import { cn } from "@/app/lib/utils";
 import { fileTrackerUrl } from "@/lib/utils/arionContentHash";
 
+/**
+ * A hash shown as a link to its File Tracker page: muted at rest, the accent
+ * with an underline on hover and keyboard focus.
+ */
+export const HASH_LINK =
+  "min-w-0 cursor-pointer text-left text-grey-20 underline-offset-2 hover:text-[#3167dd] hover:underline focus-visible:text-[#3167dd] focus-visible:underline focus-visible:outline-none dark:text-white dark:hover:text-[#618ce8] dark:focus-visible:text-[#618ce8]";
+
 /** Parts shown before "Show all". */
 export const PARTS_PREVIEW = 3;
 
-const shortHash = (hash: string) =>
+export const shortHash = (hash: string) =>
   hash.length > 18 ? `${hash.slice(0, 8)}…${hash.slice(-6)}` : hash;
 
 /**
@@ -67,17 +74,20 @@ const ArionHashParts: React.FC<{ partHashes: string[] }> = ({ partHashes }) => {
               copyIconClassName="size-[14px]"
               checkIconClassName="size-[14px]"
             >
-              <span
+              <button
+                type="button"
+                onClick={() => void openPart(hash)}
                 title={hash}
-                className="truncate font-mono text-[12px] text-grey-20 dark:text-white"
+                aria-label={`Open part ${i + 1} on File Tracker`}
+                className={cn("truncate font-mono text-[12px]", HASH_LINK)}
               >
                 {shortHash(hash)}
-              </span>
+              </button>
             </CopyText>
             <button
               type="button"
               onClick={() => void openPart(hash)}
-              aria-label={`Open part ${i + 1} on File Tracker`}
+              aria-label={`View part ${i + 1} on File Tracker`}
               title="View on File Tracker"
               className="flex size-[24px] items-center justify-center rounded-[6px] text-[#3167dd] hover:bg-black/5 focus-visible:bg-black/5 focus-visible:outline-none dark:text-[#618ce8] dark:hover:bg-white/10 dark:focus-visible:bg-white/10"
             >

@@ -294,6 +294,79 @@ describe("FileDetailsPanel file stored in parts", () => {
     expect(screen.queryByRole("dialog", { name: "How your file is stored" })).not.toBeInTheDocument();
   });
 
+  it("opens the explanation on hover and closes it after the pointer leaves", async () => {
+    renderPanel(makeFile());
+    const icon = screen.getByRole("button", { name: "How your file is stored" });
+    fireEvent.mouseEnter(icon);
+    const dialog = screen.getByRole("dialog", { name: "How your file is stored" });
+
+    // Moving onto the explanation keeps it open.
+    fireEvent.mouseLeave(icon);
+    fireEvent.mouseEnter(dialog);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(screen.getByRole("dialog", { name: "How your file is stored" })).toBeInTheDocument();
+
+    fireEvent.mouseLeave(dialog);
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "How your file is stored" })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("opens the explanation on keyboard focus", () => {
+    renderPanel(makeFile());
+    fireEvent.focus(screen.getByRole("button", { name: "How your file is stored" }));
+    expect(screen.getByRole("dialog", { name: "How your file is stored" })).toBeInTheDocument();
+  });
+
+  it("keeps a clicked explanation open after the pointer leaves, until clicked again", async () => {
+    renderPanel(makeFile());
+    const icon = screen.getByRole("button", { name: "How your file is stored" });
+    fireEvent.mouseEnter(icon);
+    fireEvent.click(icon);
+    fireEvent.mouseLeave(icon);
+    await new Promise((r) => setTimeout(r, 250));
+    expect(screen.getByRole("dialog", { name: "How your file is stored" })).toBeInTheDocument();
+
+    fireEvent.click(icon);
+    expect(screen.queryByRole("dialog", { name: "How your file is stored" })).not.toBeInTheDocument();
+  });
+
+  it("closes the explanation on a click outside", () => {
+    renderPanel(makeFile());
+    fireEvent.click(screen.getByRole("button", { name: "How your file is stored" }));
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByRole("dialog", { name: "How your file is stored" })).not.toBeInTheDocument();
+  });
+
+  it("opens the File Tracker from the single hash's own text", async () => {
+    renderPanel(makeFile());
+    const link = screen.getByRole("button", { name: "Open the Arion Hash on File Tracker" });
+    expect(link).toHaveAttribute("title", HEX);
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(openUrl).toHaveBeenCalledWith(`https://hipstats.com/file-tracker/${HEX}`),
+    );
+  });
+
+  it("opens each part's File Tracker page from its hash text and from its arrow", async () => {
+    ipc.parts = [part(1), part(2), part(3)];
+    renderPanel(makeFile({ size: BIG }));
+    await screen.findByTestId("arion-hash-parts");
+
+    const link = screen.getByRole("button", { name: "Open part 3 on File Tracker" });
+    expect(link).toHaveAttribute("title", part(3));
+    fireEvent.click(link);
+    await waitFor(() =>
+      expect(openUrl).toHaveBeenCalledWith(`https://hipstats.com/file-tracker/${part(3)}`),
+    );
+
+    openUrl.mockReset();
+    fireEvent.click(screen.getByRole("button", { name: "View part 1 on File Tracker" }));
+    await waitFor(() =>
+      expect(openUrl).toHaveBeenCalledWith(`https://hipstats.com/file-tracker/${part(1)}`),
+    );
+  });
+
   it("explains a single-hash file without mentioning parts", () => {
     renderPanel(makeFile());
     fireEvent.click(screen.getByRole("button", { name: "How your file is stored" }));

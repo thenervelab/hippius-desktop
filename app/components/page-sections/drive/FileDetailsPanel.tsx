@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useCallback } from "react";
-import * as Tooltip from "@radix-ui/react-tooltip";
 import { useAtom } from "jotai";
 import { X, FolderOpen, ArrowUpRight } from "lucide-react";
 import { toast } from "sonner";
@@ -11,8 +10,7 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { cn } from "@/app/lib/utils";
-import { FormattedTimestamp, Icons } from "@/app/components/ui";
-import * as TableModule from "@/app/components/ui/alt-table";
+import { CopyText, FormattedTimestamp, Icons } from "@/app/components/ui";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
 import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
@@ -32,7 +30,7 @@ import UploaderCell from "@/app/components/page-sections/drive/files-table/Uploa
 import { SidePanel } from "@/app/components/ui/SidePanel";
 import { useFilePartHashes } from "@/app/lib/hooks/useFilePartHashes";
 import ArionHashInfo from "./file-details/ArionHashInfo";
-import ArionHashParts from "./file-details/ArionHashParts";
+import ArionHashParts, { HASH_LINK, shortHash } from "./file-details/ArionHashParts";
 
 const PANEL_WIDTH_PX = 305;
 
@@ -230,32 +228,22 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
             <ArionHashParts partHashes={partHashes} />
           ) : arionCid ? (
             <div className="flex flex-col gap-[6px] w-full">
-              <Tooltip.Provider delayDuration={200}>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <div className="w-full">
-                      <TableModule.CopyableCell
-                        title="Copy Arion Hash"
-                        toastMessage="Arion Hash Copied Successfully!"
-                        copyAbleText={arionCid}
-                        isTable={true}
-                        textColor="text-grey-20 dark:text-white"
-                        className="max-w-full h-full"
-                      />
-                    </div>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className="z-50 max-w-[18.75rem] bg-white dark:bg-black-600 border border-grey-80 dark:border-black-300 rounded-[0.5rem] px-3 py-2 text-xs font-medium text-grey-40 dark:text-grey-dark-600 break-all shadow-lg"
-                      side="top"
-                      sideOffset={4}
-                    >
-                      {arionCid}
-                      <Tooltip.Arrow className="fill-white dark:fill-black-600" />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
+              <CopyText
+                text={arionCid}
+                title="Copy Arion Hash"
+                toastMessage="Arion Hash Copied Successfully!"
+                className="w-full"
+              >
+                <button
+                  type="button"
+                  onClick={handleViewOnExplorer}
+                  title={arionCid}
+                  aria-label="Open the Arion Hash on File Tracker"
+                  className={cn("truncate font-mono text-[14px]", HASH_LINK)}
+                >
+                  {shortHash(arionCid)}
+                </button>
+              </CopyText>
 
               {partsLoading ? (
                 <span
