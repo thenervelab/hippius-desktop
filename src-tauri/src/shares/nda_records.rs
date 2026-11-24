@@ -56,20 +56,23 @@ fn nda_date(rfc3339: &str) -> String {
     chrono::DateTime::parse_from_rfc3339(rfc3339).map_or_else(|_| String::new(), |t| t.with_timezone(&chrono::Utc).format("%B %-d, %Y").to_string())
 }
 
-/// The text as the viewer read it: `{viewer_email}`, `{date}` and
-/// `{file_name}` filled, each left as it is when its value is blank (the
-/// console's `fillNdaPlaceholders`).
-fn fill_placeholders(text: &str, email: Option<&str>, date: &str, file_name: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
+/// The placeholders a text may use, and what each reads as mid-sentence when
+/// its value is not known (the console's `fillNdaPlaceholders`).
+const PLACEHOLDERS: [(&str, &str); 3] = [
+    ("{viewer_email}", "the viewer"),
+    ("{date}", "the date accepted"),
+    ("{file_name}", "this file"),
+];
+
+/// `line` with each placeholder replaced by `value(placeholder, unknown)`.
+fn replace_placeholders(line: &str, value: impl Fn(&str, &str) -> String) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
     while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         let tail = &rest[open..];
-        let filled = [("{viewer_email}", email.unwrap_or("")), ("{date}", date), ("{file_name}", file_name)]
-            .into_iter()
-            .find(|(p, _)| tail.starts_with(p));
-        if let Some((p, v)) = filled {
-            out.push_str(if v.trim().is_empty() { p } else { v.trim() });
+        if let Some((p, unknown)) = PLACEHOLDERS.iter().find(|(p, _)| tail.starts_with(p)) {
+            out.push_str(&value(p, unknown));
             rest = &tail[p.len()..];
         } else {
             out.push('{');
@@ -78,6 +81,45 @@ fn fill_placeholders(text: &str, email: Option<&str>, date: &str, file_name: &st
     }
     out.push_str(rest);
     out
+}
+
+/// Whether what is left of a line without its placeholders is only a short
+/// label ("Recipient:") or nothing at all.
+fn is_label_only(rest: &str) -> bool {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return true;
+    }
+    let Some(label) = rest.strip_suffix(':') else {
+        return false;
+    };
+    let n = label.chars().count();
+    (1..=40).contains(&n) && !label.chars().any(|c| matches!(c, '.' | '!' | '?' | ':' | '{' | '}'))
+}
+
+/// The text as the viewer read it, with no placeholder left as written (the
+/// console's `fillNdaPlaceholders`). A known value fills its placeholder. A
+/// line that is only a label and a placeholder whose value is not known
+/// (`Recipient: {viewer_email}` on a link that asks for no email) is left
+/// out; elsewhere an unknown value reads as a plain phrase ("the viewer").
+fn fill_placeholders(text: &str, email: Option<&str>, date: &str, file_name: &str) -> String {
+    let known = |p: &str| -> Option<String> {
+        let v = match p {
+            "{viewer_email}" => email.unwrap_or(""),
+            "{date}" => date,
+            _ => file_name,
+        }
+        .trim();
+        (!v.is_empty()).then(|| v.to_string())
+    };
+    text.split('\n')
+        .filter(|line| {
+            let missing = PLACEHOLDERS.iter().any(|(p, _)| line.contains(p) && known(p).is_none());
+            !missing || !is_label_only(&replace_placeholders(line, |_, _| String::new()))
+        })
+        .map(|line| replace_placeholders(line, |p, unknown| known(p).unwrap_or_else(|| unknown.to_string())))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The text's SHA-256 over its UTF-8 bytes, in lowercase hex.
@@ -385,13 +427,28 @@ mod tests {
         let r = record("Q3 report.pdf", &l, 7).unwrap();
         assert!(r.contains(&format!("Text SHA-256: {}\n", text_sha256(filled))));
         assert!(r.ends_with(&format!("\nText\n\n{filled}\n")));
-        // Without an email its placeholder stays as written.
+        // Without an email no placeholder is left as written.
         l.accepts[1].email = None;
-        assert!(
-            record("Q3 report.pdf", &l, 7)
-                .unwrap()
-                .contains("I, {viewer_email}, on November 20, 2026")
+        assert!(record("Q3 report.pdf", &l, 7).unwrap().contains("I, the viewer, on November 20, 2026"));
+    }
+
+    #[test]
+    fn a_label_line_without_its_value_is_left_out_and_no_placeholder_shows() {
+        let text = "Date: {date}\nRecipient: {viewer_email}\nFile: {file_name}\n\n{viewer_email}\nTo {viewer_email} about {file_name}.";
+        assert_eq!(
+            fill_placeholders(text, None, "November 20, 2026", "Deck.pdf"),
+            "Date: November 20, 2026\nFile: Deck.pdf\n\nTo the viewer about Deck.pdf."
         );
+        assert_eq!(
+            fill_placeholders(text, Some(" a@b.co "), "November 20, 2026", "Deck.pdf"),
+            "Date: November 20, 2026\nRecipient: a@b.co\nFile: Deck.pdf\n\na@b.co\nTo a@b.co about Deck.pdf."
+        );
+        assert_eq!(
+            fill_placeholders("On {date}, {file_name}.", Some(""), " ", ""),
+            "On the date accepted, this file."
+        );
+        // Braces that are not a placeholder are the owner's own words.
+        assert_eq!(fill_placeholders("Keep {other} quiet.", None, "", ""), "Keep {other} quiet.");
     }
 
     #[test]
