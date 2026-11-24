@@ -121,9 +121,22 @@ describe("filterNavSections", () => {
     expect(drive(true)).toEqual([
       "My Drive /files",
       "Shared Drives /shared-drives",
+      "Starred /starred",
       "Captures /captures",
     ]);
     expect(drive(false)).not.toContain("Captures /captures");
+  });
+
+  // Starred sits right after Shared Drives on every lane, ungated: the page
+  // says so itself when the server has no Starred yet.
+  it("puts Starred right after Shared Drives, ungated", () => {
+    const drive = (sharedDrivesEnabled: boolean) =>
+      filterNavSections(navSections, { shareEnabled: false, sharedDrivesEnabled })
+        .find((s) => s.key === "drive")
+        ?.items.map((i) => `${i.label} ${i.path}`) ?? [];
+    const on = drive(true);
+    expect(on.indexOf("Starred /starred")).toBe(on.indexOf("Shared Drives /shared-drives") + 1);
+    expect(drive(false)).toContain("Starred /starred");
   });
 
   // Shared drives have a page of their own, right under My Drive, and follow
@@ -191,7 +204,7 @@ describe("filterNavSections", () => {
     });
     expect(out.map((s) => [s.label ?? `(${s.key})`, ...s.items.map((i) => i.label)])).toEqual([
       ["(overview)", "Overview"],
-      ["DRIVE", "My Drive", "Shared Drives", "Captures"],
+      ["DRIVE", "My Drive", "Shared Drives", "Starred", "Captures"],
       ["ACCOUNT", "Plans & Billing", "Wallet", "Chat", "Referrals"],
       ["SUPPORT", "Documentation", "Help & Support"],
     ]);
@@ -227,6 +240,7 @@ describe("filterNavSections", () => {
       "Screenshots & Recording",
       "Notifications",
       "Appearance",
+      "Devices",
       "Security",
       "Wallets",
       "API Token",
@@ -234,6 +248,14 @@ describe("filterNavSections", () => {
       "VPN Settings",
       "Customize RPC",
     ]);
+  });
+
+  // What is signed in to the account sits with keys and access, just above
+  // Security, and opens the Devices section.
+  it("puts Devices right before Security", () => {
+    const labels = settingsNavItems.map((i) => i.label);
+    expect(labels.indexOf("Devices")).toBe(labels.indexOf("Security") - 1);
+    expect(settingsNavItems.find((i) => i.label === "Devices")?.section).toBe("devices");
   });
 
   // Every capture setting has its own tab, right after Sync & Storage,

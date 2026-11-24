@@ -97,7 +97,8 @@ import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
 import { useRouter } from "next/navigation";
 import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
-import { useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
+import { pageFolderHref, useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
+import { isSelectableRow } from "@/app/lib/utils/selectableRow";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { useFileSelection, selectionKey } from "@/app/contexts/FileSelectionContext";
 import { useDriveMove } from "../move/DriveMoveProvider";
@@ -105,6 +106,9 @@ import { rowDropClass, useHoverExpand, useMoveRow } from "../move/useMoveDnd";
 import { rangeBetween } from "@/app/lib/drive-move/moveLogic";
 import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import { FolderSymlink } from "lucide-react";
+import { rowLabels, useStars } from "@/app/lib/starred/useStars";
+import { canStar } from "@/app/lib/starred/starState";
+import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -673,6 +677,9 @@ const FilesTable: FC<FilesTableProps> = memo(
     // For the row "Retry sync" action: invalidate the drive's failures query
     // after a retry so the badge/reason clears immediately.
     const queryClient = useQueryClient();
+    // Star / Unstar in every row menu; the drives on screen are fetched once.
+    const starLabels = useMemo(() => rowLabels(allFiles ?? files), [allFiles, files]);
+    const { isStarred: isRowStarred, toggleRow: toggleRowStar } = useStars(starLabels);
     const normalizedSubfolderPath = useMemo(() => {
       if (!currentSubfolderPath) return "";
       return currentSubfolderPath.replace(/^\/+|\/+$/g, "");
@@ -844,7 +851,8 @@ const FilesTable: FC<FilesTableProps> = memo(
       return activeSort.desc ? "desc" : "asc";
     }, [sorting]);
     const { getParam } = useUrlParams();
-    const { basePath: drivePagePath } = useDriveRoute();
+    const driveRoute = useDriveRoute();
+    const drivePagePath = driveRoute.basePath;
     const router = useRouter();
     const {
       isSelectionMode,
@@ -1069,13 +1077,12 @@ const FilesTable: FC<FilesTableProps> = memo(
         // Compute folderUrl if file is a folder
         let folderUrl: string | undefined = undefined;
         if (file.isFolder) {
-          const { url } = generateFolderUrl(
-            file,
-            getParam,
-            parentSubFolderPath,
-            drivePagePath,
-          );
-          folderUrl = url;
+          // A page whose rows come from many drives (Starred) says where a
+          // folder opens; elsewhere the Drive's own link.
+          folderUrl =
+            pageFolderHref(driveRoute, file, parentSubFolderPath) ??
+            generateFolderUrl(file, getParam, parentSubFolderPath, drivePagePath)
+              .url;
         }
 
         // Action-menu items disable themselves when their row is
@@ -1089,8 +1096,19 @@ const FilesTable: FC<FilesTableProps> = memo(
           parentSubFolderPath ?? normalizedSubfolderPath,
         );
 
-        return [
-          ...(file.isFolder && folderExpansion
+        // Star / Unstar goes right after Download (after Open where there
+        // is no Download), resolved against the folder the row lives in.
+        const starBase = parentSubFolderPath ?? normalizedSubfolderPath;
+        const starItem = canStar(file, starBase)
+          ? starMenuItem(
+              isRowStarred(file, starBase),
+              () => void toggleRowStar(file, starBase),
+              itemDeleting,
+            )
+          : null;
+
+        const expandItems: ActionItem[] =
+          file.isFolder && folderExpansion
             ? [
                 {
                   icon: folderExpansion.expanded ? (
@@ -1105,8 +1123,9 @@ const FilesTable: FC<FilesTableProps> = memo(
                   disabled: itemDeleting,
                 },
               ]
-            : []),
-          ...(file.isFolder && folderUrl
+            : [];
+        const openItems: ActionItem[] =
+          file.isFolder && folderUrl
             ? [
                 {
                   icon: <Folder className="size-4" />,
@@ -1117,7 +1136,18 @@ const FilesTable: FC<FilesTableProps> = memo(
                   disabled: itemDeleting,
                 },
               ]
-            : []),
+            : [];
+
+        // A whole drive's row (Starred): expand, open, star. Its source is
+        // the drive's sync root, so every other item would act on the whole
+        // drive folder.
+        if (file.isDriveRoot) {
+          return withStarItem([...expandItems, ...openItems], starItem);
+        }
+
+        return withStarItem([
+          ...expandItems,
+          ...openItems,
           // Cloud-only FOLDER rows have no zip-export source (the pack walks
           // the local sync root) — per-file downloads still work via
           // download_remote_file, so only the folder case hides.
@@ -1474,15 +1504,18 @@ const FilesTable: FC<FilesTableProps> = memo(
                   variant: "destructive" as const,
                 },
               ]),
-        ];
+        ], starItem);
       },
       [
+        isRowStarred,
+        toggleRowStar,
         handleDownload,
         handleSetSelectedFile,
         localHandleShowFileDetails,
         handleDeleteFile,
         getParam,
         drivePagePath,
+        driveRoute,
         router,
         polkadotAddress,
         shareEnabled,
@@ -2337,7 +2370,9 @@ const FilesTable: FC<FilesTableProps> = memo(
       createTableItems,
       onSelectFile: handleSetSelectedFile,
       onOpenFolder: (childFile, parentPath) => {
-        const { url } = generateFolderUrl(childFile, getParam, parentPath, drivePagePath);
+        const url =
+          pageFolderHref(driveRoute, childFile, parentPath) ??
+          generateFolderUrl(childFile, getParam, parentPath, drivePagePath).url;
         router.push(url);
       },
       accountId: polkadotAddress,
@@ -2396,7 +2431,8 @@ const FilesTable: FC<FilesTableProps> = memo(
             annotatedRow,
             cascadeAncestorChain,
           );
-          const canSelectRow = rowData.isAssigned && !isDeleting;
+          // A whole drive's row (Starred) is never selected: see `isSelectableRow`.
+          const canSelectRow = isSelectableRow(rowData) && !isDeleting;
 
           return (
             <DriveFileRow
@@ -2488,6 +2524,7 @@ const FilesTable: FC<FilesTableProps> = memo(
           <SelectionActionBar
             onDelete={handleDeleteSelectedFiles}
             isDeleting={isDeleting}
+            basePath={normalizedSubfolderPath}
           />
         )}
 

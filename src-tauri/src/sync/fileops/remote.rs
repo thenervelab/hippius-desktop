@@ -994,6 +994,10 @@ pub(crate) struct BrowseFolderRow {
     /// the field, which is what `Option` is for.
     #[serde(default)]
     pub created_at: Option<i64>,
+    /// Whether the signed-in account starred this folder. Absent (unknown)
+    /// from a server that could not look it up, and for the admin bearer.
+    #[serde(default)]
+    pub favorite: Option<bool>,
 }
 
 /// The half of `/browse`'s result this module reads.
@@ -1045,6 +1049,7 @@ pub(crate) fn append_browse_page(
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: f.favorite,
         });
     }
     for f in page_files {
@@ -1080,6 +1085,7 @@ pub(crate) fn append_browse_page(
             uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
             uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
             uploaded_by_email: present_email(f.uploaded_by_email.as_deref()),
+            favorite: f.favorite,
         });
     }
 }
@@ -1494,6 +1500,7 @@ mod tests {
                     file_count: *count,
                     total_bytes: *bytes,
                     created_at: None,
+                    favorite: None,
                 })
                 .collect(),
             files: file_sizes.iter().map(|size| browse_file(Some("x"), None, *size, 1, 1)).collect(),
@@ -1717,6 +1724,47 @@ mod tests {
     /// field on the floor, so a shared drive could not say who put a file
     /// there. Folders are never attributed, and an empty string is the
     /// server's "unattributed", not a blank name to render.
+    /// The server's star rides every `/browse` row to the webview, folders
+    /// included (the pinned folder type has no such field, which is why the
+    /// desktop reads folders into its own row). An absent `favorite` stays
+    /// unknown rather than becoming "not starred".
+    #[test]
+    fn browse_page_carries_the_star_through_and_absent_stays_unknown() {
+        let zeros = serde_json::json!(vec![0u8; 32]);
+        let file = |name: &str, hash: u8, favorite: Option<bool>| {
+            let mut v = serde_json::json!({
+                "path_hash": vec![hash; 32], "salted_hash": zeros, "size_bytes": 1, "revision_seq": 1,
+                "revision_id": zeros, "file_name": name, "relative_path": name, "created_at": 1, "updated_at": 1,
+            });
+            if let Some(f) = favorite {
+                v["favorite"] = serde_json::json!(f);
+            }
+            v
+        };
+        let body = serde_json::json!({ "Success": {
+            "folders": [
+                { "name": "Taxes", "file_count": 1, "total_bytes": 2, "created_at": 3, "favorite": true },
+                { "name": "Trips", "file_count": 1, "total_bytes": 2, "created_at": 3, "favorite": false },
+                { "name": "Old", "file_count": 1, "total_bytes": 2 },
+            ],
+            "files": [file("a.pdf", 1, Some(true)), file("b.pdf", 2, Some(false)), file("c.pdf", 3, None)],
+            "total_count": 6, "has_more": false,
+        }});
+        let parsed: hcfs_shared::network::NetworkResponse<BrowsePage> = serde_json::from_value(body).expect("browse page parses");
+        let hcfs_shared::network::NetworkResponse::Success(page) = parsed else {
+            panic!("expected Success");
+        };
+        let (mut folders, mut files) = (Vec::new(), Vec::new());
+        append_browse_page(&mut folders, &mut files, page.folders, page.files);
+        let stars = |rows: &[super::super::files::FileEntry]| rows.iter().map(|r| r.favorite).collect::<Vec<_>>();
+        assert_eq!(stars(&folders), vec![Some(true), Some(false), None]);
+        assert_eq!(stars(&files), vec![Some(true), Some(false), None]);
+        // On the wire to the webview: present as a bool, absent when unknown.
+        let wire = serde_json::to_value(&folders).expect("serialize");
+        assert_eq!(wire[0]["favorite"], serde_json::json!(true));
+        assert!(wire[2].get("favorite").is_none());
+    }
+
     #[test]
     fn browse_page_carries_the_uploader_through() {
         let mut folders = Vec::new();
@@ -1747,6 +1795,7 @@ mod tests {
                 file_count: 1,
                 total_bytes: 1,
                 created_at: Some(10),
+                favorite: None,
             }],
             vec![attributed, blank, unattributed, placeholder],
         );
@@ -1815,6 +1864,7 @@ mod tests {
                 file_count: 23,
                 total_bytes: 999,
                 created_at: Some(1_784_659_766),
+                favorite: None,
             }],
             vec![],
         );
@@ -1839,6 +1889,7 @@ mod tests {
                 file_count: 1,
                 total_bytes: 1,
                 created_at: None,
+                favorite: None,
             }],
             vec![],
         );
@@ -1862,6 +1913,7 @@ mod tests {
                 file_count: 0,
                 total_bytes: 0,
                 created_at: Some(0),
+                favorite: None,
             }],
             vec![],
         );
@@ -1882,6 +1934,7 @@ mod tests {
                 file_count: 2500,
                 total_bytes: 999,
                 created_at: None,
+                favorite: None,
             }],
             vec![],
         );
@@ -1956,6 +2009,7 @@ mod tests {
                 file_count: 1,
                 total_bytes: 2,
                 created_at: None,
+                favorite: None,
             }],
             vec![browse_file(Some("a.jpg"), Some("a.jpg"), 3, 4, 5)],
         );
@@ -2524,6 +2578,7 @@ mod tests {
                         file_count: 0,
                         total_bytes: 0,
                         created_at: None,
+                        favorite: None,
                     }],
                     vec![],
                 );

@@ -31,7 +31,8 @@ import { formatBytes } from "@/lib/utils/formatBytes";
 import { formatRowDate } from "./formatRowDate";
 import { RowDot as Dot } from "./RowDot";
 
-import { isCloudOnly, presenceLabel, type FolderRow } from "./folderRows";
+import { DriveStarMark } from "../StarMark";
+import { folderRowLabel, isCloudOnly, presenceLabel, type FolderRow } from "./folderRows";
 
 /**
  * The cloud mark.
@@ -303,6 +304,7 @@ const FolderList: React.FC<FolderListProps> = ({
                   <span className="truncate font-geist text-[14px] font-medium text-[#0A0A0A] dark:text-white">
                     {row.folderName}
                   </span>
+                  <DriveStarMark label={folderRowLabel(row)} />
                   {markOwned && !row.ownerSs58 && <OwnerChip />}
                   <SharedMark
                     row={row}

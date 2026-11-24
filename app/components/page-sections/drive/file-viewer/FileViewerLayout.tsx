@@ -43,6 +43,9 @@ import FileViewerTitle from "./FileViewerTitle";
 import { copyLinkLabel, linkPathFor } from "../existingLink";
 import { useExistingLinks } from "../useExistingLinks";
 import { useCopyExistingLink } from "../useCopyExistingLink";
+import { useStars } from "@/app/lib/starred/useStars";
+import { canStar, starLabelOf } from "@/app/lib/starred/starState";
+import { StarMenuIcon, starMenuLabel } from "@/app/lib/starred/starMenu";
 
 /**
  * Stacking order of the full-screen file viewer overlay.
@@ -234,6 +237,16 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     }).catch((error) => toast.error(tauriErrorMessage(error)));
   }, [file, onClose]);
 
+  // Star / Unstar the file on screen; the viewer only opens files, whose id
+  // is all a star needs.
+  const stars = useStars([starLabelOf(file)]);
+  const starrable = canStar(file, "");
+  const starred = starrable && stars.isStarred(file, "");
+  const { toggleRow } = stars;
+  const handleStar = useCallback(() => {
+    void toggleRow(file, "");
+  }, [toggleRow, file]);
+
   const handleDelete = useCallback(() => {
     onClose();
     // A direct handler (sidebar search preview) deletes straight away via its
@@ -348,6 +361,15 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                       title={copyLinkLabel(existingLink)}
                     >
                       <Link2 className="size-[17px]" strokeWidth={1.8} />
+                    </ActionButton>
+                  )}
+                  {starrable && (
+                    <ActionButton
+                      onClick={handleStar}
+                      ariaLabel={starMenuLabel(starred)}
+                      title={starMenuLabel(starred)}
+                    >
+                      <StarMenuIcon starred={starred} className="size-[17px]" />
                     </ActionButton>
                   )}
                   {canShare && (

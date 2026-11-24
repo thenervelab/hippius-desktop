@@ -2,7 +2,11 @@ import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button/NewButton";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
-import { FolderSymlink, Trash2 } from "lucide-react";
+import { FolderSymlink, MoreHorizontal, Trash2 } from "lucide-react";
+import TableActionMenu from "@/components/ui/alt-table/TableActionMenu";
+import { rowLabels, useStars } from "@/app/lib/starred/useStars";
+import { canStar } from "@/app/lib/starred/starState";
+import { starMenuItem } from "@/app/lib/starred/starMenu";
 import { useDriveMove } from "./move/DriveMoveProvider";
 import { MOVE_DISABLED_TOOLTIP } from "@/app/lib/utils/renameGating";
 import DeleteConfirmationDialog from "./DeleteConfirmationDialog";
@@ -11,14 +15,25 @@ interface SelectionActionBarProps {
   /** `turnOffLinks[i]`: the links to turn off once `files[i]` is deleted. */
   onDelete: (files: FormattedUserFile[], turnOffLinks?: string[][]) => void;
   isDeleting?: boolean;
+  /**
+   * The folder the view shows, for a selected folder that carries only its
+   * own name (Star resolves its path against it).
+   */
+  basePath?: string | null;
 }
 
 const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
   onDelete,
   isDeleting = false,
+  basePath,
 }) => {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const { isSelectionMode, selectedFiles, clearSelection } = useFileSelection();
+  // The overflow's Star: "Unstar" once every starrable item in the
+  // selection is starred, one request batch and one toast either way.
+  const stars = useStars(rowLabels(selectedFiles));
+  const starrable = selectedFiles.filter((f) => canStar(f, basePath));
+  const selectionStarred = stars.allStarred(starrable, basePath);
   // Move sits beside Delete inside a drive folder, under the Rename gates:
   // offered when every item may be written, enabled when every one is
   // settled.
@@ -84,6 +99,29 @@ const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
                 <FolderSymlink className="w-4 h-4" />
                 <span>Move</span>
               </Button>
+            )}
+            {starrable.length > 0 && (
+              <TableActionMenu
+                dropdownTitle=""
+                items={[
+                  starMenuItem(
+                    selectionStarred,
+                    () => void stars.toggleRows(starrable, basePath),
+                    isDeleting,
+                  ),
+                ]}
+              >
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="More actions"
+                  title="More actions"
+                  disabled={isDeleting}
+                  className="flex items-center hover:!text-grey-90 !text-grey-100"
+                >
+                  <MoreHorizontal className="w-4 h-4" />
+                </Button>
+              </TableActionMenu>
             )}
             <Button
               variant="destructive"

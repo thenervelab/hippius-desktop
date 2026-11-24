@@ -75,6 +75,25 @@ export type FormattedUserFile = {
    * server-side has the drive to work in.
    */
   remoteDriveLabel?: string;
+  /**
+   * Whether the signed-in account starred this item, as the server's
+   * `/browse` or `/search_files` row says. Absent means the listing did not
+   * say (a local disk row, an older server), never "not starred": the star
+   * shown then comes from the Starred list (`app/lib/starred`).
+   */
+  favorite?: boolean;
+  /**
+   * The row is a whole drive, listed beside folders and files (Starred). It
+   * expands to the drive's root and opens the drive; it is never selected,
+   * renamed, moved, shared or deleted as a folder, since its `source` is
+   * the drive's sync root itself.
+   */
+  isDriveRoot?: boolean;
+  /**
+   * Where the row lives ("Docs / Work"), for a list that mixes drives and
+   * folders (Starred). Shown in the table's Location column.
+   */
+  location?: string;
   fileCount?: number;
   /**
    * For folder rows whose `actualFileName` is only the basename (the
