@@ -256,6 +256,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Beta updates show their release notes.** The update dialog on the beta channel now lists what changed, instead of only "Beta Build".
 - **Hippius uses less memory when it is left running for days, most of all on Windows.** Windows kept a little memory for every update the app's windows received and never gave it back. The app now sends its windows far fewer of those, and refreshes a window that has been hidden or minimized for a couple of hours to give the rest back.
 - **A person's link made from a link with an NDA now asks them to accept it.** Hippius adds your NDA to each new person's link as it is made, so the link opens for them once they accept. If that cannot be done, the link says so and offers Try again instead of sending a link that would not open. Adding people on a free plan now says links per person come with paid Drive plans.
 - **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
