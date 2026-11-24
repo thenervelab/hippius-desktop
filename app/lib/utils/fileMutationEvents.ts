@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { GET_USER_IPFS_FILES_QUERY_KEY } from "@/app/lib/hooks/use-user-files";
+import { STARRED_QUERY_KEY } from "@/app/lib/starred/queryKeys";
 
 // Window event fired after an in-app mutation (delete, rename) changes file
 // names/paths OUTSIDE the TanStack-cached lists. The nested-folder listings
@@ -41,6 +42,11 @@ export async function notifyFilesMutated(
     }),
     queryClient.refetchQueries({
       queryKey: ["recent-files"],
+    }),
+    // A delete drops the item's star on the server, and a rename or move
+    // changes where Starred says it is: the Starred list reads again.
+    queryClient.invalidateQueries({
+      queryKey: [STARRED_QUERY_KEY],
     }),
   ]);
 }

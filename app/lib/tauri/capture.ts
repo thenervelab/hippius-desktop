@@ -413,6 +413,12 @@ export interface CapturePreviewCard {
   linkText?: string;
   /** Rust's line on who can open the link ("Anyone with the link can view. Never expires."); absent = none. */
   linkNote?: string;
+  /**
+   * While the link is being made: how much of its upload is done, 0 to 100,
+   * for the card's bar. Absent while it is still being prepared, and once it
+   * has settled.
+   */
+  linkPercent?: number;
   actions: CapturePreviewActions;
   /**
    * In the drive with its link settled (Rust's `settled`): only then does the

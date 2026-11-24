@@ -84,6 +84,11 @@ pub struct FileEntry {
     /// FE shows it in the account tooltip, never as the identity key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uploaded_by_email: Option<String>,
+    /// Whether the signed-in account starred this entry, as `/browse` says.
+    /// `None` is "unknown", never "not starred": a local disk entry, and a
+    /// server that could not look the stars up, both leave it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub favorite: Option<bool>,
 }
 
 /// List contents of sync folder.
@@ -371,6 +376,7 @@ async fn list_sync_folder_inner_with(
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: None,
         });
     }
 
@@ -625,6 +631,7 @@ pub async fn list_sync_folder_grouped_inner(
                             uploaded_by: None,
                             uploaded_by_name: None,
                             uploaded_by_email: None,
+                            favorite: None,
                         });
                         seen_names.insert(remainder.to_string());
                     }
@@ -673,6 +680,7 @@ pub async fn list_sync_folder_grouped_inner(
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: None,
         });
     }
     files.extend(server_only_files);
@@ -872,6 +880,7 @@ async fn cache_only_folder_candidates(
                 uploaded_by: None,
                 uploaded_by_name: None,
                 uploaded_by_email: None,
+                favorite: None,
             }
         })
         .collect()
@@ -908,6 +917,7 @@ mod tests {
             uploaded_by: None,
             uploaded_by_name: None,
             uploaded_by_email: None,
+            favorite: None,
         };
         let file_keys: BTreeSet<String> = serde_json::to_value(&child)
             .expect("serialize FileEntry")

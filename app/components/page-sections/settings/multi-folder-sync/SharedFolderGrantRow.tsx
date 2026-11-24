@@ -34,6 +34,9 @@ import { parseDriveRole } from "@/app/lib/shared-drives/roles";
 import type { MyFolderGrantInfo } from "@/app/lib/tauri/sharedDrives";
 import { buildFolderGrantActions } from "./sharedDriveRowActions";
 import { folderGrantMemberCountTitle, folderGrantRowView } from "./sharedWithMeState";
+import { makeFolderGrantLabel } from "@/app/lib/shared-drives/sharedDriveLabel";
+import { useStars } from "@/app/lib/starred/useStars";
+import { DriveStarMark } from "@/components/page-sections/drive/StarMark";
 
 export default function SharedFolderGrantRow({
   grant,
@@ -47,6 +50,10 @@ export default function SharedFolderGrantRow({
   const view = folderGrantRowView(grant);
   const role = parseDriveRole(grant.role);
   const size = useFolderGrantStats(grant);
+  // A star on a granted folder names that folder of the owner's drive: the
+  // grant's own browse label resolves to it.
+  const starLabel = makeFolderGrantLabel(grant);
+  const { isDriveStarred, toggleDrive } = useStars([starLabel]);
 
   return (
     <div
@@ -88,6 +95,7 @@ export default function SharedFolderGrantRow({
           >
             {view.folderName}
           </span>
+          <DriveStarMark label={starLabel} />
           {/* Before the role, as on the console: what the row IS comes
               before what you may do in it. */}
           <FolderGrantChip />
@@ -147,7 +155,14 @@ export default function SharedFolderGrantRow({
         </div>
       </div>
 
-      <TableActionMenu dropdownTitle="" items={buildFolderGrantActions({ onOpen, onLeave })}>
+      <TableActionMenu dropdownTitle="" items={buildFolderGrantActions({
+          onOpen,
+          onLeave,
+          star: {
+            starred: isDriveStarred(starLabel),
+            onToggle: () => void toggleDrive(starLabel, view.folderName),
+          },
+        })}>
         <Button
           variant="ghost"
           size="auto"

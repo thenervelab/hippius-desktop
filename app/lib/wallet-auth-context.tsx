@@ -36,6 +36,9 @@ import {
 import { buildOAuthSession, type LoginResult } from "./auth/buildOAuthSession";
 import { isMasterMnemonicUnrecoverable } from "./utils/dispatchTauriError";
 import { useAtomValue } from "jotai";
+import { onTauriEvent } from "./utils/tauriListeners";
+import { THIS_DEVICE_UNLINKED_EVENT, type ThisDeviceUnlinked } from "./tauri/devices";
+import { rememberDeviceUnlinkedNotice } from "./global-atoms/deviceUnlinkedAtoms";
 
 /** Signal MigrationChecker to run the single authoritative check_migration call. */
 function triggerMigrationCheck() {
@@ -119,31 +122,23 @@ export function WalletAuthProvider({
     }
   }, [polkadotAddress]);
 
-  const logout = useCallback(
-    async (redirectPath?: string) => {
-      // Clear the logout timer first to prevent re-entrant calls
-      if (logoutTimerRef.current) {
-        clearTimeout(logoutTimerRef.current);
-        logoutTimerRef.current = null;
-      }
+  const clearLogoutTimer = useCallback(() => {
+    if (logoutTimerRef.current) {
+      clearTimeout(logoutTimerRef.current);
+      logoutTimerRef.current = null;
+    }
+  }, []);
 
-      try {
-        // Single Rust call: stops sync, clears auth, clears progress data.
-        // Awaited so sync teardown completes before we clear local state.
-        const currentAddress = polkadotAddressRef.current;
-        await invoke("logout_full", { accountId: currentAddress || "" });
-      } catch (err) {
-        // logout_full rejects when the persisted session could NOT be
-        // cleared (Rust leaves the in-memory session intact). Clearing local
-        // state and redirecting here would blank the UI while the backend stays
-        // logged in, and the live on-disk token would silently rehydrate the
-        // session on the next boot. Keep the user logged in and surface the
-        // failure so they can retry.
-        logger.warn("[WalletAuth] logout_full failed; keeping session:", err);
-        toast.error("Logout failed — your session is still active. Please try again.");
-        return;
-      }
-
+  /**
+   * The webview's half of signing out, once Rust's `logout_full` has run:
+   * forget the browser-side session and every session-scoped atom, then go
+   * to `redirectPath`. Shared by `logout` and by the unlinked-computer
+   * listener below, where Rust has ALREADY signed out — calling
+   * `logout_full` a second time there could only fail and toast "Logout
+   * failed" over a sign-out that worked.
+   */
+  const clearLocalSession = useCallback(
+    (redirectPath?: string) => {
       // Clear browser-side OAuth session (Rust can't access localStorage)
       clearOAuthSessionHint();
       if (typeof window !== "undefined") {
@@ -170,6 +165,50 @@ export function WalletAuthProvider({
       }
     },
     [router]
+  );
+
+  const logout = useCallback(
+    async (redirectPath?: string) => {
+      // Clear the logout timer first to prevent re-entrant calls
+      clearLogoutTimer();
+
+      try {
+        // Single Rust call: stops sync, clears auth, clears progress data.
+        // Awaited so sync teardown completes before we clear local state.
+        const currentAddress = polkadotAddressRef.current;
+        await invoke("logout_full", { accountId: currentAddress || "" });
+      } catch (err) {
+        // logout_full rejects when the persisted session could NOT be
+        // cleared (Rust leaves the in-memory session intact). Clearing local
+        // state and redirecting here would blank the UI while the backend stays
+        // logged in, and the live on-disk token would silently rehydrate the
+        // session on the next boot. Keep the user logged in and surface the
+        // failure so they can retry.
+        logger.warn("[WalletAuth] logout_full failed; keeping session:", err);
+        toast.error("Logout failed — your session is still active. Please try again.");
+        return;
+      }
+
+      clearLocalSession(redirectPath);
+    },
+    [clearLogoutTimer, clearLocalSession]
+  );
+
+  // Another device unlinked this computer: Rust's device check has already
+  // run the full logout (`logout_full`) for the account and tells us so.
+  // Only the webview's half is left, plus the notice the sign-in screen
+  // shows. An event for an account that is not the one signed in here is
+  // stale and ignored.
+  useEffect(
+    () =>
+      onTauriEvent<ThisDeviceUnlinked>(THIS_DEVICE_UNLINKED_EVENT, ({ payload }) => {
+        const current = polkadotAddressRef.current;
+        if (!current || payload?.accountId !== current) return;
+        clearLogoutTimer();
+        rememberDeviceUnlinkedNotice();
+        clearLocalSession("/login");
+      }),
+    [clearLogoutTimer, clearLocalSession]
   );
 
   function scheduleLogout(ms: number) {

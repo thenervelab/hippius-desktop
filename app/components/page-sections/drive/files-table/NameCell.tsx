@@ -5,7 +5,7 @@ import { getFileIcon } from "@/lib/utils/fileTypeUtils";
 import { isPreviewableFileName } from "@/app/lib/utils/filePreviewType";
 import { cn } from "@/lib/utils";
 import { useUrlParams } from "@/app/utils/hooks/useUrlParams";
-import { useDriveRoute } from "@/components/page-sections/drive/driveRoute";
+import { pageFolderHref, useDriveRoute } from "@/components/page-sections/drive/driveRoute";
 import { buildFolderPath } from "@/app/utils/folderPathUtils";
 import { Video } from "lucide-react";
 import { Icons } from "@/components/ui";
@@ -14,6 +14,7 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import SharedLinkBadge from "@/components/page-sections/drive/SharedLinkBadge";
 import CaptureInsightsButton from "@/components/page-sections/drive/CaptureInsightsButton";
 import FolderSharingMark from "@/components/page-sections/drive/FolderSharingMark";
+import { StarMark } from "@/components/page-sections/drive/StarMark";
 import SyncQueueOverallProgress from "@/app/(pages)/SyncQueueOverallProgress";
 import CustomTooltip2 from "@/components/ui/CustomTooltip2";
 import {
@@ -408,13 +409,28 @@ const NameCell: FC<NameCellProps> = ({
     },
   };
 
+  // A page whose rows come from many drives (Starred) says where a folder
+  // opens; elsewhere the Drive's own link above.
+  const pageHref = isFolder && file ? pageFolderHref(driveRoute, file, parentSubFolderPath) : null;
+  // Where the row lives, on a list that mixes drives (Starred). Beside the
+  // name rather than in its suffix: the suffix's width comes off the name's.
+  const location = file?.location ? (
+    <span
+      data-testid="name-cell-location"
+      title={file.location}
+      className="ml-2 min-w-0 max-w-[45%] shrink truncate text-xs text-grey-50 dark:text-grey-dark-600"
+    >
+      {file.location}
+    </span>
+  ) : null;
+
   return (
     // `@container`: the folder sharing mark's Manage access button reads the
     // name cell's width to choose between words and an icon.
     <div className={cn("@container w-full min-w-0", className)} draggable={false}>
       {isFolder ? (
         <Link
-          href={folderUrl}
+          href={pageHref ?? folderUrl}
           prefetch={false}
           draggable={false}
           className="cursor-pointer"
@@ -427,28 +443,36 @@ const NameCell: FC<NameCellProps> = ({
               textClassName="hover:text-primary-40 hover:underline"
               suffix={
                 <>
-                  <SharedLinkBadge
-                    label={label}
-                    actualName={actualName}
-                    isFolder
-                    // `subFolderPath` already folds `parentSubFolderPath` in
-                    // (see above), so this resolves the same drive-relative
-                    // path the share menu item mints with.
-                    folderRelativePath={folderRelativePath}
-                    onManageShare={onManageShare}
-                    className="ml-1.5"
-                  />
-                  {/* Shared on its own (a folder invite or grant): the same
-                      path the "Share folder" item invites to. */}
-                  <FolderSharingMark
-                    label={label}
-                    folderPath={folderRelativePath}
-                    folderName={rawName}
-                    className="ml-1.5"
-                  />
+                  {/* A whole drive's row (Starred) has no folder path to
+                      look a link or a folder share up by. */}
+                  {!file?.isDriveRoot && (
+                    <>
+                      <SharedLinkBadge
+                        label={label}
+                        actualName={actualName}
+                        isFolder
+                        // `subFolderPath` already folds `parentSubFolderPath` in
+                        // (see above), so this resolves the same drive-relative
+                        // path the share menu item mints with.
+                        folderRelativePath={folderRelativePath}
+                        onManageShare={onManageShare}
+                        className="ml-1.5"
+                      />
+                      {/* Shared on its own (a folder invite or grant): the same
+                          path the "Share folder" item invites to. */}
+                      <FolderSharingMark
+                        label={label}
+                        folderPath={folderRelativePath}
+                        folderName={rawName}
+                        className="ml-1.5"
+                      />
+                    </>
+                  )}
+                  {file && <StarMark file={file} basePath={subFolderPath} className="ml-1.5" />}
                 </>
               }
             />
+            {location}
           </div>
         </Link>
       ) : (
@@ -475,15 +499,19 @@ const NameCell: FC<NameCellProps> = ({
                 // Looks the file's links up by its drive-relative path, as
                 // its menu does: a row inside a folder carries only its own
                 // name in `actualName`.
-                <SharedLinkBadge
-                  label={label}
-                  actualName={fileRelativePath}
-                  onManageShare={onManageShare}
-                  fileSize={file?.size}
-                  className="ml-1.5"
-                />
+                <>
+                  <SharedLinkBadge
+                    label={label}
+                    actualName={fileRelativePath}
+                    onManageShare={onManageShare}
+                    fileSize={file?.size}
+                    className="ml-1.5"
+                  />
+                  {file && <StarMark file={file} basePath={subFolderPath} className="ml-1.5" />}
+                </>
               }
             />
+            {location}
           </div>
           <FileStatusBadge
             status={badgeStatus}
