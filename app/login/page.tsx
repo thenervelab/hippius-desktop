@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAtomValue } from "jotai";
 import { LoginForm } from "@/app/components/auth/LoginForm";
 import AuthLayout from "@/components/auth/AuthLayout";
+import DeviceUnlinkedNotice from "@/components/auth/DeviceUnlinkedNotice";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 
@@ -42,6 +43,9 @@ export default function LoginPage() {
       <AuthLayout hideHeader={hideHeader}>
         <LoginForm onHideHeaderChange={setHideHeader} />
       </AuthLayout>
+      {/* Why the account was signed out, when another device unlinked this
+          computer (`this_device_unlinked`). Renders nothing otherwise. */}
+      <DeviceUnlinkedNotice />
     </div>
   );
 }

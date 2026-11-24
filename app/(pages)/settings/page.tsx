@@ -7,6 +7,8 @@ import CaptureSettings from "@/components/page-sections/settings/CaptureSettings
 import ReleaseChannelSettings from "@/components/page-sections/settings/ReleaseChannelSettings";
 import MultiFolderSyncManager from "@/components/page-sections/settings/MultiFolderSyncManager";
 import DeviceNameSetting from "@/components/page-sections/settings/DeviceNameSetting";
+import DevicesSettings from "@/components/page-sections/settings/devices/DevicesSettings";
+import { DEVICES_DESCRIPTION, DEVICES_TITLE } from "@/components/page-sections/settings/devices/deviceCopy";
 import FinderExtensionSetting from "@/components/page-sections/settings/FinderExtensionSetting";
 import { isMacPlatform } from "@/app/lib/utils/isMacPlatform";
 import RecoveryPhraseSettings from "@/components/page-sections/settings/RecoveryPhraseSettings";
@@ -56,6 +58,13 @@ const SECTION_META: Record<
   sync: {
     title: "Sync & Storage",
     description: "Configure your sync folders and storage options.",
+  },
+  devices: {
+    title: DEVICES_TITLE,
+    description: DEVICES_DESCRIPTION,
+    tooltip:
+      "Each phone and computer here is signed in to your account. Unlink one you no longer use and it signs out the next time it goes online. The files it uploaded stay in your Drive. To remove this computer, sign out of Hippius Drive on it.",
+    showDescription: true,
   },
   [CAPTURE_SETTINGS_SECTION]: {
     title: "Screenshots & Recording",
@@ -176,6 +185,8 @@ function SettingsContent() {
             {isMacPlatform() && <FinderExtensionSetting />}
           </>
         )}
+
+        {section === "devices" && <DevicesSettings />}
 
         {/* Screen capture: the rows hide themselves where this computer
             cannot capture. */}

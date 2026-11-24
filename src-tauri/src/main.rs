@@ -20,6 +20,7 @@ pub mod chat;
 mod cli;
 pub mod console_access;
 pub mod crypto;
+pub mod devices;
 pub mod diagnostics;
 pub mod error;
 #[cfg(any(unix, windows))]
@@ -449,6 +450,9 @@ fn main() {
             move_entries,
             crate::sync::drive_move::list_move_destinations,
             crate::sync::drive_move::move_between_drives,
+            crate::devices::commands::list_account_devices,
+            crate::devices::commands::unlink_account_device,
+            crate::devices::file_details::get_file_source_details,
             crate::sync::drive_move::cancel_drive_move,
             create_sync_folder,
             list_sync_folder,

@@ -218,6 +218,9 @@ pub struct AppState {
     /// Cancel flags of the moves between drives running now, by the id the
     /// webview gave each. See `crate::sync::drive_move`.
     pub drive_moves: crate::sync::drive_move::DriveMoveJobs,
+    /// This computer's device check, one loop per signed-in account. See
+    /// `crate::devices::registration`.
+    pub device_registration: crate::devices::registration::RegistrationLoops,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -438,6 +441,7 @@ impl AppState {
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             remote_listing_cache: std::sync::Arc::default(),
             drive_moves: crate::sync::drive_move::DriveMoveJobs::default(),
+            device_registration: crate::devices::registration::RegistrationLoops::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),

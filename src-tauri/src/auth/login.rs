@@ -118,6 +118,13 @@ pub async fn login_with_mnemonic(
 
     save_api_token(pool, &substrate_address, &token).await?;
 
+    // An explicit sign-in links this computer's device again if another
+    // device unlinked it (a launch restore never does: there, a missing
+    // device means it was unlinked). Best effort; see `devices::registration`.
+    if let Err(e) = crate::devices::store::mark_reconnect_pending(pool, &substrate_address).await {
+        warn!(error = %e, "Could not note the sign-in for this computer's device");
+    }
+
     // Ensure the one-time welcome notification exists for this user.
     // Idempotent: user-scoped dedup makes repeat calls a no-op. Non-
     // fatal — a failed insert must not block login.

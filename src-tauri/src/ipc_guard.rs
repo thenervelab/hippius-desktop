@@ -75,6 +75,7 @@ pub const MAIN_WINDOW_ONLY: &[&str] = &[
     "start_drive_card_checkout",
     // Deletes, revokes and leaving shared drives.
     "delete_files",
+    "unlink_account_device",
     "delete_remote_folder",
     "confirm_mass_delete",
     "confirm_empty_remote",
