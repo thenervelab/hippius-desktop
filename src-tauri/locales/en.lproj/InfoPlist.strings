@@ -1,0 +1,5 @@
+/* The name macOS shows for the app in Finder, Launchpad, Spotlight, the Dock
+   and the menu bar. The bundle stays Hippius.app so updates replace the
+   installed app (see CFBundleDisplayName in src-tauri/Info.plist). */
+"CFBundleDisplayName" = "Hippius Drive";
+"CFBundleName" = "Hippius Drive";

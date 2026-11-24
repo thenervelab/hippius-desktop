@@ -89,8 +89,8 @@ mod windows_impl {
             // webview's thread, during the event.
             unsafe {
                 args.PermissionKind(&raw mut kind)?;
-                // webview2-com's PWSTR is windows 0.61's, which this crate
-                // cannot name (it depends on 0.62): let the call infer it.
+                // Let the call infer webview2-com's PWSTR, so this stays
+                // right whichever `windows` version webview2-com is built on.
                 #[allow(clippy::default_trait_access)]
                 let mut raw = Default::default();
                 if args.Uri(&raw mut raw).is_ok() {

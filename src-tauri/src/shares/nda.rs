@@ -75,6 +75,10 @@ pub struct LinkNda {
     /// prompt; `None` when the plan could not be read (nothing is locked,
     /// and the server still checks).
     pub in_plan: Option<bool>,
+    /// A password link without a text: none can be sealed, since the link's
+    /// key needs the password, which is never kept. The app says so where
+    /// the setting would be.
+    pub password_link: bool,
 }
 
 /// One page of a link's accepts, for the Insights NDA tab.
@@ -342,6 +346,7 @@ pub(super) async fn set_link_text(http: &reqwest::Client, api: &Api, token: &str
 fn link_nda(current: Option<&WireNda>, token: &str, key: std::result::Result<&CommentKey, KeyUnavailable>, in_plan: Option<bool>) -> LinkNda {
     let on = current.is_some();
     let editable = key.is_ok();
+    let password_link = !on && key.is_err_and(|k| k == KeyUnavailable::Password);
     let text = match (current, key) {
         (Some(n), Ok(k)) => open_text(k, token, &n.ct, &n.nonce),
         _ => None,
@@ -352,6 +357,7 @@ fn link_nda(current: Option<&WireNda>, token: &str, key: std::result::Result<&Co
         text,
         editable,
         in_plan,
+        password_link,
     }
 }
 
@@ -461,6 +467,7 @@ pub async fn share_set_nda(state: tauri::State<'_, AppState>, share_token: Strin
         text: Some(text.to_string()),
         editable: true,
         in_plan,
+        password_link: false,
     })
 }
 
@@ -661,7 +668,11 @@ mod tests {
 
         let password = link_nda(None, TOKEN, Err(KeyUnavailable::Password), Some(true));
         assert!(!password.offered, "a password link's text could be neither sealed nor read");
-        assert!(!link_nda(None, TOKEN, Err(KeyUnavailable::NotOnDevice), Some(true)).offered);
+        assert!(password.password_link, "and the app says why");
+        let elsewhere_key = link_nda(None, TOKEN, Err(KeyUnavailable::NotOnDevice), Some(true));
+        assert!(!elsewhere_key.offered);
+        assert!(!elsewhere_key.password_link);
+        assert!(!off.password_link);
 
         let n = stored(&k, "Keep it quiet.");
         let on = link_nda(Some(&n), TOKEN, Ok(&k), Some(false));
@@ -823,7 +834,9 @@ mod tests {
     fn the_setting_and_the_accepts_cross_ipc_in_camel_case() {
         assert_eq!(
             serde_json::to_value(LinkNda::default()).unwrap(),
-            serde_json::json!({ "offered": false, "on": false, "text": null, "editable": false, "inPlan": null })
+            serde_json::json!({
+                "offered": false, "on": false, "text": null, "editable": false, "inPlan": null, "passwordLink": false
+            })
         );
         let view = NdaAccepts {
             offered: true,

@@ -113,6 +113,9 @@
       "entitlements": "entitlements.plist",
       "exceptionDomain": "hippius.com",
       "frameworks": [],
+      "files": {
+        "Resources/en.lproj/InfoPlist.strings": "locales/en.lproj/InfoPlist.strings"
+      },
       "providerShortName": "Hippius",
       "signingIdentity": null,
       "hardenedRuntime": true,

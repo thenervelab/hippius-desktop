@@ -64,6 +64,20 @@ describe("a direct upload", () => {
     expect(done.announce).toBe("Uploaded · Public link copied");
   });
 
+  // The link is made first, from the capture, before the file goes into the drive.
+  it("shows the link's own upload while the link is made, in Rust's words", () => {
+    const making = card({ state: "uploading" }, { link: { state: "creating" }, linkText: "Uploading link 40%, about 30 s left", linkPercent: 40 });
+    expect(cardView(making, remote(), [])).toMatchObject({ percent: 40, text: "Uploading link 40%, about 30 s left", announce: "Making link", done: false });
+    const preparing = card({ state: "uploading" }, { link: { state: "creating" }, linkText: "Preparing link…" });
+    expect(cardView(preparing, null, [])).toMatchObject({ percent: null, text: "Preparing link…" });
+  });
+
+  it("goes on saying the link is copied while the file goes into the drive", () => {
+    const out = card({ state: "uploading" }, { link: { state: "public", copied: true }, linkText: "Public link copied" });
+    expect(cardView(out, remote(), [])).toMatchObject({ percent: 62, text: "Uploading · 62% · Public link copied", announce: "Uploading · Public link copied" });
+    expect(cardView(out, null, []).text).toBe("Preparing upload… · Public link copied");
+  });
+
   it("ignores another file's row, or the same name in another drive", () => {
     expect(cardView(card({ state: "uploading" }), remote({ path: "Captures/x.png" }), []).percent).toBeNull();
     expect(cardView(card({ state: "uploading" }), remote({ label: "Photos" }), []).percent).toBeNull();

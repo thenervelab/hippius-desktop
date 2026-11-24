@@ -73,11 +73,26 @@ export function cardView(
   const status = card.status;
   switch (status.state) {
     case "uploading": {
+      // The link is made first, from the capture itself, before the file
+      // goes into the drive: while it is, Rust's line says how far it is.
+      if (card.link.state === "creating" && card.linkText) {
+        return {
+          percent: card.linkPercent ?? null,
+          text: card.linkText,
+          announce: "Making link",
+          done: false,
+          settled: false,
+          failed: false,
+          waiting: false,
+        };
+      }
       const percent = remoteRow && sameFile(card, remoteRow) ? cappedPercent(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
+      // A link already made goes on saying so while the file goes into the drive.
+      const linkOut = card.link.state === "public" ? card.linkText : undefined;
       return {
         percent,
-        text: percent === null ? "Preparing upload…" : `Uploading · ${percent}%`,
-        announce: percent === null ? "Preparing upload…" : "Uploading",
+        text: joinLink(percent === null ? "Preparing upload…" : `Uploading · ${percent}%`, linkOut),
+        announce: joinLink(percent === null ? "Preparing upload…" : "Uploading", linkOut),
         done: false,
         settled: false,
         failed: false,

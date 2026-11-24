@@ -87,6 +87,20 @@ export async function installUpdate(
   return invoke<void>("install_update", { onProgress: onProgressChannel });
 }
 
+/** Something a restart right now would cut off, in Rust's words. */
+export type RestartBlocker = {
+  kind: "recording" | "editorOpen" | "transfer";
+  line: string;
+};
+
+/**
+ * What would be lost if the app restarted now. Rust decides; an empty list
+ * means the update dialog restarts at once.
+ */
+export async function restartBlockers(): Promise<RestartBlocker[]> {
+  return invoke<RestartBlocker[]>("restart_blockers");
+}
+
 /** The lane this build came from, without a network round-trip. */
 export async function currentReleaseChannel(): Promise<ReleaseChannel> {
   return invoke<ReleaseChannel>("current_release_channel");

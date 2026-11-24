@@ -25,7 +25,10 @@ export const GATE_VALUE = "Code by email";
 export const ANYONE_WITH_EMAIL = "Anyone with an email";
 export const NDA_OFF_VALUE = "Viewers accept your text first";
 export const NDA_ELSEWHERE = "Set on another device";
-export const WATERMARK_VALUE = "Email and date on each page";
+export const NDA_PASSWORD_VALUE = "Not on password links";
+export const NDA_PASSWORD_REASON = "The NDA is encrypted with the link's key, which needs the link's password.";
+/** The date always; the viewer's email only when the link asked for it. */
+export const WATERMARK_VALUE = "Date, and email when known";
 export const WATERMARK_WHEN_VIEW_ONLY = "When download is off";
 export const WATERMARK_PDF_ONLY = "PDFs only";
 export const DOWNLOAD_ON_VALUE = "Viewers can save it";

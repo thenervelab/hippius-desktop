@@ -216,6 +216,12 @@ impl UploadProcessingState {
         self.lock().get(label).is_some_and(|i| i.started_at.is_some())
     }
 
+    /// Whether any drive has an upload still being copied and encrypted.
+    /// The update dialog waits for this before it restarts the app.
+    pub fn any_active(&self) -> bool {
+        self.lock().values().any(|i| i.started_at.is_some())
+    }
+
     /// Test/diagnostic snapshot for a single label: `(active, pending_files)`.
     #[doc(hidden)]
     pub fn snapshot_for(&self, label: &str) -> (bool, u64) {
@@ -543,6 +549,19 @@ pub fn spawn_watchdog(state: Weak<UploadProcessingState>, app: tauri::AppHandle)
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn any_active_is_true_while_any_drive_is_preparing_an_upload() {
+        let s = UploadProcessingState::new();
+        assert!(!s.any_active());
+        s.begin_for_test("drive-a", 1, 1);
+        s.begin_for_test("drive-b", 2, 1);
+        assert!(s.any_active());
+        s.clear_if_session_advanced_for_test("drive-a", 2);
+        assert!(s.any_active(), "drive-b is still preparing");
+        s.clear_if_session_advanced_for_test("drive-b", 2);
+        assert!(!s.any_active());
+    }
 
     #[test]
     fn begin_then_clear_with_advanced_epoch_zeros_state() {
