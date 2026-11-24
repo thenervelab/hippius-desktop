@@ -84,6 +84,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **New folder links count views on paid plans.** A folder link now starts with Insights on for a paid Drive plan, as a file link does, and stays off on the free plan.
 - **A clearer Free plan watermark.** Free plan screenshots and recordings now carry a small dark pill reading "Recorded with Hippius" with the Hippius logo, so it is easy to read on light screens as well as dark ones. It sits in the same corner as before.
 - **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
@@ -249,6 +250,8 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **NDA records no longer show a raw placeholder.** On a link that doesn't ask for an email, the NDA record leaves out the Recipient line instead of showing the placeholder, and any other unknown value reads as plain words.
+- **Clearer link rules.** The Watermark card says "Date, and email when known", the first-open email switch says it covers every link, and a password link's NDA card says why it can't have one.
 - **A person's link made from a link with an NDA now asks them to accept it.** Hippius adds your NDA to each new person's link as it is made, so the link opens for them once they accept. If that cannot be done, the link says so and offers Try again instead of sending a link that would not open. Adding people on a free plan now says links per person come with paid Drive plans.
 - **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
 - **Folders that hold only empty folders can move to another drive.** Before, Hippius refused them.
