@@ -15,12 +15,18 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ## [Unreleased]
 
+### Changed
+
+- The sign-in screen now shows what Hippius Drive does: encryption, screen recording and sharing with insights.
+
 ### Added
 
+- **A notification when an update is ready, even when Hippius sits in the tray.** The update used to be offered only inside the main window, which is easy to miss when the app is minimized, behind other windows or in the tray. Now you also get a system notification, and the tray popover shows "Hippius x.y.z is ready to install" until you update.
 - **Star files, folders and drives.** Choose Star from any file, folder or drive menu, the preview or the selection bar, and find everything you starred on the new Starred page in the sidebar. It looks and works like your Drive, in list or card view: starred folders and drives expand with their arrow or open right there on the Starred page, and each item says where it is. Starred items show a small star beside their name, and your stars are the same in the phone app and on the web.
 - **See the phones and computers linked to your account.** Settings has a new Devices section that lists each one with when it was last active, and you can unlink any of them except the computer you're using. This computer now appears there, and on your other devices, under its device name.
 - **A computer unlinked from another device signs out and says why.** If you unlink this computer from your phone or another computer, Hippius signs out the next time it checks and explains it on the sign-in screen. Everything it uploaded stays in your drive, and signing in again links it back.
 - **More about your photos in File details.** File details now show when a photo was taken and last changed, the camera it came from, and which of your devices uploaded it, whenever that is known.
+- **File Details now shows every part of a large file, each with its own File Tracker link.** Files over 8 MB are stored in 8 MB parts, so their Arion Hash row now lists every part, with copy and a File Tracker link for each, and the info icon beside it explains how the file is stored.
 - **End a link on a date you pick, a watermark switch, and each viewer's visits.** A file link's Expiry can now be any day up to a year ahead, beside 24 hours, 7 days, 30 days and Until I revoke it. The watermark on a PDF is its own switch, so a file can be watermarked and still downloadable. In Insights, open a viewer to see each of their visits, how long they stayed and, for a document, the time they spent on each page. A signer's typed name now shows in the NDA tab and goes into the export and the Record.
 - **A link's rules at a glance, and a record of each NDA accept.** The Share dialog and Insights' Link settings now list a link's rules as cards (Ask for email, Allow list, NDA, Watermark, Download, Expiry, Password), each saying On or Off with a short value; open one to change it. The NDA tab is a table you can export as a spreadsheet, and each accept has a Record you can save: the file's name, the full NDA text with its fingerprint, the signer's email and the time they accepted.
 - **Know when your links are opened.** While Hippius is running it tells you when your shared links get new views, a few at a time ("3 new views on deck.pdf"), and clicking the notification opens that link's Insights. The tray shows your last three link events with See all for Shared Links, and Settings, Notifications has a Link activity switch to turn them off.
@@ -84,6 +90,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **A recording's link is ready sooner, and the card shows how long is left.** When you stop a recording, its share link is now made before the file goes into your drive, so the two no longer compete for your connection, and the link is copied the moment it exists. While it is made, the capture card shows how far the link has got and roughly how much time is left, instead of "Creating link…".
 - **A clearer Free plan watermark.** Free plan screenshots and recordings now carry a small dark pill reading "Recorded with Hippius" with the Hippius logo, so it is easy to read on light screens as well as dark ones. It sits in the same corner as before.
 - **The app is now called Hippius Drive.** It matches the Hippius Drive app for iPhone and Android: the name beside the logo, the sign-in screens, the window title, the menu bar, the tray and the update messages all say Hippius Drive. Nothing moves: your files, folders, sign-in and settings stay as they are, and updates install over your current copy as before.
 - **A roomier Insights panel.** Insights is wider, matching the web, and its tabs sit in one clean row with each count beside its name, so every tab and number reads in full.
@@ -250,6 +257,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Fixed
 
 - **Hippius Drive is called Hippius Drive on your Mac too.** Your Applications folder, Launchpad, Spotlight and the Dock now show the app as Hippius Drive instead of Hippius. It is still the same app, so updates keep installing over your current copy.
+- **Hippius uses less memory when it is left running for days, most of all on Windows.** Windows kept a little memory for every update the app's windows received and never gave it back. The app now sends its windows far fewer of those, and refreshes a window that has been hidden or minimized for a couple of hours to give the rest back.
 - **A person's link made from a link with an NDA now asks them to accept it.** Hippius adds your NDA to each new person's link as it is made, so the link opens for them once they accept. If that cannot be done, the link says so and offers Try again instead of sending a link that would not open. Adding people on a free plan now says links per person come with paid Drive plans.
 - **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
 - **Folders that hold only empty folders can move to another drive.** Before, Hippius refused them.

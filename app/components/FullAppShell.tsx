@@ -16,6 +16,7 @@ import TranslocationGuard from "@/app/components/TranslocationGuard";
 import FinderExtensionGuard from "@/app/components/FinderExtensionGuard";
 import ZoomController from "@/app/components/ZoomController";
 import SettingsShortcut from "@/app/components/SettingsShortcut";
+import { IdleWebviewReload } from "@/app/lib/hooks/useIdleWebviewReload";
 import SplashWrapper from "./splash-screen-v2";
 
 /**
@@ -71,6 +72,7 @@ export default function FullAppShell({ children }: { children: React.ReactNode }
                 <FinderExtensionGuard />
                 <ZoomController />
                 <SettingsShortcut />
+                <IdleWebviewReload />
                 <SplashWrapper preventClose={false}>
                   <Suspense fallback={<PageLoader ringFill="once" />}>
                     <div className="flex min-h-screen h-screen">{children}</div>
