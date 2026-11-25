@@ -78,9 +78,11 @@ pub struct ServerCapabilities {
     /// A file link opened while its file is still uploading answers
     /// "still uploading" (`409 share_uploading` with the chunks received so
     /// far, hcfs #1454) instead of the bodiless 404 an older server gives,
-    /// and the share page says so. A capture's link is opened in the
-    /// browser before its upload finishes only against such a server
-    /// (`capture::deliver::EARLY_LINK`).
+    /// and the share page says so. Such a server also takes the link's
+    /// switches and chat preview during the upload. A capture's link is
+    /// handed out (copied, opened, its switches and preview sent) before its
+    /// upload finishes only against such a server
+    /// (`capture::commands::link_first`).
     pub share_open_while_uploading: bool,
     /// Share link insights (hcfs #670): `GET /v1/shares/{token}/insights`
     /// and `PATCH /v1/shares/{token}/settings`. Absent on older servers,

@@ -221,9 +221,9 @@ pub struct Minted {
 /// the card says the link could not be made rather than that the capture
 /// failed. `progress` follows the link's upload for the card.
 ///
-/// `on_link`, when given, gets the link the moment it exists, while the
-/// file is still uploading ([`mint_reporting_link`]); this still returns
-/// only once the upload has finished or failed.
+/// `on_link`, when given, is offered the link the moment it exists, while
+/// the file is still uploading ([`mint_reporting_link`]); this still
+/// returns only once the upload has finished or failed.
 pub async fn link_from_file(state: &AppState, account_id: &str, file: &Path, progress: Option<ShareProgressFn>, on_link: Option<OnLink>) -> Minted {
     match mint_reporting_link(state, account_id, &LinkSource::External(file.to_path_buf()), progress, on_link).await {
         Ok(link) => Minted {
@@ -329,7 +329,6 @@ pub async fn mint(
 
 /// A capture's link the moment it exists, before its file has finished
 /// uploading: what [`mint_reporting_link`] hands to its `on_link`.
-#[derive(Clone, PartialEq, Eq)]
 pub struct EarlyLink {
     pub share_url: String,
     pub share_token: String,
@@ -342,44 +341,17 @@ impl std::fmt::Debug for EarlyLink {
     }
 }
 
-/// Called with a capture's link as soon as it exists (see [`EarlyLink`]).
-/// Called at most once per mint: a link that was reported is never made
-/// again by a retry. Cheap and panic-free, since it runs inside the upload.
-pub type OnLink = std::sync::Arc<dyn Fn(EarlyLink) + Send + Sync>;
+/// Offered a capture's link as soon as it exists (see [`EarlyLink`]), and
+/// answers whether it handed the link out. Only a link handed out stops a
+/// later failure from being retried: once someone may have it, a new link
+/// would be a different one nobody was given. Called at most once per mint.
+/// Cheap and panic-free, since it runs inside the upload.
+pub type OnLink = std::sync::Arc<dyn Fn(EarlyLink) -> bool + Send + Sync>;
 
-/// When a capture's link is handed out while its file is still uploading.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EarlyLinkPolicy {
-    /// Copy it the moment it exists, whatever the server. Until the server
-    /// answers a link still uploading with "still uploading" (capability
-    /// `share_open_while_uploading`), someone who opens it before the
-    /// upload finishes gets "not found"; once it has finished, it opens.
-    Always,
-    /// Copy it early only where the server advertises
-    /// `share_open_while_uploading`; elsewhere once the upload has finished,
-    /// as before.
-    WhenServerShowsUploading,
-}
-
-/// The one switch for handing a capture's link out before its upload ends.
-/// `Always` puts the link in chat at once, which is what people asked for;
-/// `WhenServerShowsUploading` waits for servers that tell a recipient the
-/// file is still on its way.
-pub const EARLY_LINK: EarlyLinkPolicy = EarlyLinkPolicy::Always;
-
-/// Whether a capture's link goes out before its upload ends, under `policy`,
-/// given whether the server says "still uploading" to a recipient.
-#[must_use]
-pub fn hand_out_early(policy: EarlyLinkPolicy, server_shows_uploading: bool) -> bool {
-    match policy {
-        EarlyLinkPolicy::Always => true,
-        EarlyLinkPolicy::WhenServerShowsUploading => server_shows_uploading,
-    }
-}
-
-/// Whether the server tells someone who opens a link still uploading that
-/// it is on its way (`share_open_while_uploading`), rather than "not found".
-/// No answer reads as no.
+/// Whether the server answers someone who opens a link still uploading with
+/// "still uploading" (`share_open_while_uploading`, `409 share_uploading`)
+/// rather than the "not found" an older server gives. Only then is a
+/// capture's link handed out before its upload ends. No answer reads as no.
 pub async fn server_shows_uploading(state: &AppState, account_id: &str) -> bool {
     crate::shares::capabilities::fetch_capabilities(state, account_id)
         .await
@@ -391,14 +363,15 @@ pub async fn server_shows_uploading(state: &AppState, account_id: &str) -> bool 
 /// revoked it, so the copied link never opens.
 pub const LINK_BROKEN: &str = "The link you copied won't open because its upload failed. Retry to make a new link.";
 
-/// [`mint`], also handing the link to `on_link` the moment it exists, while
-/// a large file is still uploading (only for [`LinkSource::External`], the
-/// capture's own file; a synced file's link is reported when it is done).
+/// [`mint`], also offering the link to `on_link` the moment it exists, while
+/// a large file is still uploading. Only for [`LinkSource::External`], the
+/// capture's own file: a synced file's link is never offered to `on_link`,
+/// and comes back only when the mint returns.
 ///
-/// A failure before the link existed is tried again as in [`mint`]. One
-/// after it was reported is not: the reported link is already out and is
-/// now revoked, and a new one would be a different link nobody was given.
-/// It comes back as [`LINK_BROKEN`].
+/// A failure before the link was handed out is tried again as in [`mint`].
+/// One after `on_link` took it is not: that link is already out and is now
+/// revoked, and a new one would be a different link nobody was given. It
+/// comes back as [`LINK_BROKEN`].
 ///
 /// # Errors
 ///
@@ -425,11 +398,12 @@ pub async fn mint_reporting_link(
                 let report = on_link.clone().map(|on_link| {
                     let reported = reported.clone();
                     Box::new(move |link: &hcfs_client::client::share::ShareResult| {
-                        reported.store(true, Ordering::SeqCst);
-                        on_link(EarlyLink {
+                        let handed_out = on_link(EarlyLink {
                             share_url: link.share_url.clone(),
                             share_token: link.share_token.clone(),
                         });
+                        // Read back on this same task once the mint returns.
+                        reported.store(handed_out, Ordering::Relaxed);
                     }) as hcfs_client::client::share::ShareLinkFn
                 });
                 crate::shares::commands::share_external_file_reporting_link(
@@ -448,7 +422,7 @@ pub async fn mint_reporting_link(
             Ok(link) => return Ok(link),
             Err(e) => e,
         };
-        if reported.load(Ordering::SeqCst) {
+        if reported.load(Ordering::Relaxed) {
             tracing::warn!(error = %e, "capture link was handed out, then its upload failed; the link is revoked");
             return Err(LINK_BROKEN.to_string());
         }
@@ -791,6 +765,10 @@ pub fn delivered_notice(delivered: &Delivered) -> (String, String) {
     let saved = format!("{} is in {place}.", delivered.file_name);
     if delivered.share_url.is_some() {
         ("Link copied".into(), saved)
+    } else if delivered.link_error.as_deref() == Some(LINK_BROKEN) {
+        // The link was copied while it uploaded, and is already in someone's
+        // chat: "could not be created" would hide that it won't open.
+        ("Capture saved".into(), format!("{saved} {LINK_BROKEN}"))
     } else {
         ("Capture saved".into(), format!("{saved} The share link could not be created."))
     }
@@ -848,18 +826,6 @@ mod tests {
             ("Hippius Captures", "Captures/Recording.mp4")
         );
         assert!(!rows.contains_key("tok-sync"), "a synced share records its own origin when minted");
-    }
-
-    /// The product asks for the link in chat at once, so the switch ships on
-    /// `Always`; `WhenServerShowsUploading` copies early only where the
-    /// server tells a visitor the file is still on its way.
-    #[test]
-    fn the_link_goes_out_early_by_default_and_the_other_choice_asks_the_server() {
-        assert_eq!(EARLY_LINK, EarlyLinkPolicy::Always);
-        assert!(hand_out_early(EarlyLinkPolicy::Always, false));
-        assert!(hand_out_early(EarlyLinkPolicy::Always, true));
-        assert!(!hand_out_early(EarlyLinkPolicy::WhenServerShowsUploading, false));
-        assert!(hand_out_early(EarlyLinkPolicy::WhenServerShowsUploading, true));
     }
 
     /// The sentence for a copied link whose upload failed names the link
@@ -1059,6 +1025,24 @@ mod tests {
         let (title, body) = delivered_notice(&delivered(None));
         assert_eq!(title, "Capture saved");
         assert!(body.contains("is in Work › Captures") && body.contains("could not be created"));
+    }
+
+    /// A capture with no card whose link was copied while it uploaded, and
+    /// whose upload then failed, says the copied link won't open: the link
+    /// is already in someone's chat, so "could not be created" is wrong.
+    #[test]
+    fn a_copied_link_that_broke_says_so_in_the_notice() {
+        let broken = Delivered {
+            link_error: Some(LINK_BROKEN.into()),
+            ..delivered(None)
+        };
+        let (title, body) = delivered_notice(&broken);
+        assert_eq!(title, "Capture saved");
+        assert_eq!(
+            body,
+            format!("Screenshot 2026-09-22 at 14.03.11.png is in Work › Captures. {LINK_BROKEN}")
+        );
+        assert!(!body.contains("could not be created"), "{body}");
     }
 
     /// The kept file is in a hidden folder; naming it helps nobody. The

@@ -2825,3 +2825,169 @@ async fn a_link_minted_elsewhere_is_not_reshared() {
     assert!(recorded.create_bodies.lock().unwrap().is_empty());
     assert!(recorded.revoked_tokens.lock().unwrap().is_empty());
 }
+
+// ── A capture's link handed out while it uploads ───────────────────────────
+
+/// The token the mock's chunked `init` mints for a capture's file link.
+const CAPTURE_TOKEN: &str = "CaptureLinkToken_0123456789abcdefghijklmn";
+
+/// What the file-share upload routes saw.
+#[derive(Clone, Default)]
+struct FileShareRecorded {
+    inits: Arc<Mutex<u32>>,
+    chunks: Arc<Mutex<u32>>,
+    completes: Arc<Mutex<u32>>,
+    revokes: Arc<Mutex<Vec<String>>>,
+}
+
+/// A chunked file share as hcfs-server takes it: `init` opens the share and
+/// mints its token (so the link exists from here on), then the chunks, then
+/// `complete`. `chunk_fails` answers every chunk 404, a final refusal the
+/// client does not retry, as for a share reaped mid-upload.
+fn file_share_routes(chunk_fails: bool, rec: &FileShareRecorded) -> Router {
+    let (inits, chunks, completes, revokes) = (rec.inits.clone(), rec.chunks.clone(), rec.completes.clone(), rec.revokes.clone());
+    Router::new()
+        .route(
+            "/can_upload",
+            post(|| async { Json(json!({ "result": true, "error": null })).into_response() }),
+        )
+        .route(
+            "/v1/shares/init",
+            post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| async move {
+                if let Some(resp) = bearer_rejection(&headers) {
+                    return resp;
+                }
+                assert!(body["total_chunks"].as_u64().expect("total_chunks") > 1, "a chunked share");
+                *inits.lock().unwrap() += 1;
+                let stored = body.get("link_envelope").is_some();
+                (
+                    StatusCode::CREATED,
+                    Json(json!({ "share_token": CAPTURE_TOKEN, "expires_at": null, "link_envelope": stored })),
+                )
+                    .into_response()
+            }),
+        )
+        .route(
+            "/v1/shares/{token}/chunks/{n}",
+            put(move |Path((_, _)): Path<(String, u32)>| async move {
+                *chunks.lock().unwrap() += 1;
+                if chunk_fails {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                StatusCode::OK.into_response()
+            })
+            // A transport chunk is bigger than axum's 2 MiB default limit.
+            .layer(axum::extract::DefaultBodyLimit::disable()),
+        )
+        .route(
+            "/v1/shares/{token}/complete",
+            post(move |Path(_): Path<String>| async move {
+                *completes.lock().unwrap() += 1;
+                StatusCode::OK.into_response()
+            }),
+        )
+        .route(
+            "/v1/shares/{token}",
+            delete(move |Path(token): Path<String>| async move {
+                revokes.lock().unwrap().push(token);
+                StatusCode::NO_CONTENT.into_response()
+            }),
+        )
+}
+
+/// A served file-share mock, a state for `account` and a capture large
+/// enough to go up in chunks.
+async fn capture_link_harness(account: &str, chunk_fails: bool) -> (AppState, FileShareRecorded, tempfile::TempDir, std::path::PathBuf) {
+    let _home = &*TEST_HOME;
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let pool = make_pool(dir.path()).await;
+    let rec = FileShareRecorded::default();
+    let options = MockOptions {
+        capabilities: json!({ "shares": true, "share_open_while_uploading": true }),
+        ..MockOptions::default()
+    };
+    let base = serve(share_router(options, Recorded::default()).merge(file_share_routes(chunk_fails, &rec))).await;
+    seed_account(&pool, account, &base).await;
+    let capture = dir.path().join("Recording 2026-11-25 at 10.00.00.mp4");
+    std::fs::write(&capture, big_file()).expect("capture");
+    (make_state(pool, account), rec, dir, capture)
+}
+
+/// An `on_link` that counts its calls and answers `hands_out`.
+fn counting_on_link(hands_out: bool) -> (tauri_project_lib::capture::deliver::OnLink, Arc<Mutex<Vec<String>>>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = seen.clone();
+    let on_link: tauri_project_lib::capture::deliver::OnLink = Arc::new(move |link| {
+        log.lock().unwrap().push(link.share_token);
+        hands_out
+    });
+    (on_link, seen)
+}
+
+/// A capture's link handed out right after `init`, whose upload then
+/// fails, is never made again: one init, one hand-out, the share revoked,
+/// and the sentence that says the copied link won't open. A retry that
+/// minted a second link would put a link in chat nobody was given.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_capture_link_handed_out_then_failed_is_not_made_again() {
+    use tauri_project_lib::capture::deliver::{LINK_BROKEN, LinkSource, mint_reporting_link};
+    let account = "5CaptureLinkBrokenAccount";
+    let (state, rec, _dir, capture) = capture_link_harness(account, true).await;
+    let (on_link, seen) = counting_on_link(true);
+
+    let err = mint_reporting_link(&state, account, &LinkSource::External(capture), None, Some(on_link))
+        .await
+        .expect_err("the upload failed");
+
+    assert_eq!(err, LINK_BROKEN);
+    assert_eq!(*rec.inits.lock().unwrap(), 1, "one link, never a second");
+    assert_eq!(
+        *seen.lock().unwrap(),
+        vec![CAPTURE_TOKEN.to_string()],
+        "handed out once, before the chunks"
+    );
+    assert!(*rec.chunks.lock().unwrap() >= 1);
+    assert_eq!(*rec.completes.lock().unwrap(), 0);
+    assert_eq!(*rec.revokes.lock().unwrap(), vec![CAPTURE_TOKEN.to_string()], "the link out is revoked");
+}
+
+/// The twin that uploads: the link handed out at `init` is the one the
+/// mint returns, with the file completed and nothing revoked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_capture_link_handed_out_while_it_uploads_is_the_link_returned() {
+    use tauri_project_lib::capture::deliver::{LinkSource, mint_reporting_link};
+    let account = "5CaptureLinkUploadedAccount";
+    let (state, rec, _dir, capture) = capture_link_harness(account, false).await;
+    let (on_link, seen) = counting_on_link(true);
+
+    let link = mint_reporting_link(&state, account, &LinkSource::External(capture), None, Some(on_link))
+        .await
+        .expect("the link is made");
+
+    assert_eq!(link.share_token, CAPTURE_TOKEN);
+    assert_eq!(*rec.inits.lock().unwrap(), 1);
+    assert_eq!(*seen.lock().unwrap(), vec![CAPTURE_TOKEN.to_string()]);
+    assert_eq!(*rec.completes.lock().unwrap(), 1);
+    assert!(rec.revokes.lock().unwrap().is_empty());
+}
+
+/// A link offered but not handed out (a server that has not said it shows
+/// "still uploading", or did not answer in time) reached nobody, so a
+/// failed upload is tried again like any other, and never reads as a
+/// copied link that broke.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_capture_link_not_handed_out_is_tried_again_on_failure() {
+    use tauri_project_lib::capture::deliver::{LINK_BROKEN, LinkSource, mint_reporting_link};
+    let account = "5CaptureLinkDeclinedAccount";
+    let (state, rec, _dir, capture) = capture_link_harness(account, true).await;
+    let (on_link, seen) = counting_on_link(false);
+
+    let err = mint_reporting_link(&state, account, &LinkSource::External(capture), None, Some(on_link))
+        .await
+        .expect_err("every try failed");
+
+    assert_ne!(err, LINK_BROKEN);
+    assert_eq!(*rec.inits.lock().unwrap(), 3, "three tries in all");
+    assert_eq!(seen.lock().unwrap().len(), 3, "each new link offered once");
+    assert_eq!(rec.revokes.lock().unwrap().len(), 3, "each failed link revoked");
+}
