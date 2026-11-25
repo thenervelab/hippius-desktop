@@ -87,7 +87,7 @@ pub struct AppState {
     pub chat: crate::chat::ChatState,
     /// Link activity: the counts the last poll saw, and a notification's pending open.
     pub link_alerts: crate::shares::link_alerts::LinkAlertsState,
-    /// When each long-lived webview went out of sight (`webview_refresh`).
+    /// When each long-lived webview went out of use (`webview_refresh`).
     pub webview_refresh: crate::webview_refresh::WebviewRefreshState,
     /// Screen capture: the one live capture session, if any.
     pub capture: crate::capture::commands::CaptureState,

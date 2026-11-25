@@ -1,4 +1,4 @@
-//! Reloading a long-lived webview that has been out of sight for hours.
+//! Reloading a long-lived webview that has been out of use for hours.
 //!
 //! On Windows, WebView2 keeps every distinct script it runs and never frees
 //! it, and every Tauri event a webview receives is such a script
@@ -7,14 +7,20 @@
 //! over days. Fewer and steadier events slow that down; a reload is what gives
 //! the memory back, because the leaked scripts belong to the page.
 //!
-//! The reload is only ever done where nobody can see it: the window is hidden
-//! (the macOS tray, the popover between opens) or minimized, and has been for
-//! [`RELOAD_AFTER`]. A window that is on screen but behind others is left
-//! alone, since a reload there is visible. No capture may be in progress, and
-//! the page itself refuses while a dialog is open (`useIdleWebviewReload`).
+//! A webview is reloaded when it is [`Sight::Hidden`] (the macOS tray, the
+//! popover between opens, a minimized window) for [`RELOAD_AFTER`], on every
+//! platform. Under WebView2 only, a window on screen without focus
+//! ([`Sight::Unfocused`]) is reloaded too, after [`RELOAD_UNFOCUSED_AFTER`]:
+//! a Windows user can leave the main window open behind others for days, and
+//! a support bundle showed WebView2 at 15 GB after six. That reload can be
+//! seen, so it waits much longer and also needs the page to have had no input
+//! for as long. Elsewhere a window on screen is never reloaded, since no other
+//! engine leaks this way. No capture may be in progress, and the page itself
+//! refuses while a dialog is open (`useIdleWebviewReload`).
 //!
 //! Rust owns the clock and the decision; the page asks every few minutes
-//! (`webview_reload_due`) and reloads itself when told to.
+//! (`webview_reload_due`), says how long it has had no input, and reloads
+//! itself when told to.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -24,39 +30,94 @@ use tauri::Manager;
 
 use crate::capture::session::CapturePhase;
 
-/// How long a webview must have been out of sight before it is reloaded.
+/// How long a webview must have been hidden or minimized before it is reloaded.
 pub const RELOAD_AFTER: Duration = Duration::from_hours(2);
 
-/// When each webview, by label, was first seen out of sight without a break.
+/// How long a WebView2 window on screen must have gone without focus and
+/// without input before it is reloaded. Chosen with the product owner: long
+/// enough that the user has plainly left it, short enough that a window left
+/// open for days is reloaded a few times a day.
+pub const RELOAD_UNFOCUSED_AFTER: Duration = Duration::from_hours(6);
+
+/// The web engine behind this build's webviews.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Engine {
+    /// Windows: keeps every event script for the life of the page.
+    WebView2,
+    /// WebKit on macOS and Linux.
+    Other,
+}
+
+impl Engine {
+    /// The engine this build runs on.
+    pub const CURRENT: Self = if cfg!(windows) { Self::WebView2 } else { Self::Other };
+}
+
+/// How a webview is placed, as far as a reload goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sight {
+    /// In use, or on screen where a reload would be seen for no gain.
+    Watched,
+    /// On screen without focus, under WebView2.
+    Unfocused,
+    /// Hidden or minimized.
+    Hidden,
+}
+
+impl Sight {
+    /// Where a webview stands, from its window's state.
+    #[must_use]
+    pub fn of(visible: bool, minimized: bool, focused: bool, engine: Engine) -> Self {
+        if !visible || minimized {
+            Self::Hidden
+        } else if !focused && engine == Engine::WebView2 {
+            Self::Unfocused
+        } else {
+            Self::Watched
+        }
+    }
+
+    /// How long a webview must stay like this before it is reloaded.
+    fn reload_after(self) -> Option<Duration> {
+        match self {
+            Self::Watched => None,
+            Self::Unfocused => Some(RELOAD_UNFOCUSED_AFTER),
+            Self::Hidden => Some(RELOAD_AFTER),
+        }
+    }
+}
+
+/// One look at a webview, from its window and its page.
+#[derive(Debug)]
+pub struct Look {
+    /// How the window is placed.
+    pub sight: Sight,
+    /// How long the page has gone without keyboard, pointer or wheel input.
+    pub input_idle: Duration,
+    /// A capture is in progress; it must not lose its window.
+    pub capture_busy: bool,
+}
+
+/// When each webview, by label, was first seen out of use without a break.
 #[derive(Default)]
 pub struct WebviewRefreshState {
     clocks: Mutex<HashMap<String, Instant>>,
 }
 
-/// Whether a webview can be reloaded without anyone noticing.
-#[must_use]
-pub fn out_of_sight(visible: bool, minimized: bool) -> bool {
-    !visible || minimized
-}
-
-/// Record where `label` is now and decide whether it is due for a reload.
+/// Record how `label` looks now and decide whether it is due for a reload.
 ///
-/// The first check that finds it out of sight starts its clock; a check that
-/// finds it on screen clears it. A reload restarts the clock, so the page that
-/// comes back is not reloaded again on the next check.
-pub fn check<S: std::hash::BuildHasher>(
-    clocks: &mut HashMap<String, Instant, S>,
-    label: &str,
-    hidden: bool,
-    capture_busy: bool,
-    now: Instant,
-) -> bool {
-    if !hidden {
+/// The first look that finds it out of use starts its clock; a look that finds
+/// it watched clears it. The time out of use counts only while the page has
+/// also had no input. A reload restarts the clock, so the page that comes back
+/// is not reloaded again on the next look.
+pub fn check<S: std::hash::BuildHasher>(clocks: &mut HashMap<String, Instant, S>, label: &str, look: Look, now: Instant) -> bool {
+    let Some(after) = look.sight.reload_after() else {
         clocks.remove(label);
         return false;
-    }
+    };
     let since = *clocks.entry(label.to_string()).or_insert(now);
-    if capture_busy || now.duration_since(since) < RELOAD_AFTER {
+    let unused_for = now.duration_since(since).min(look.input_idle);
+    if look.capture_busy || unused_for < after {
         return false;
     }
     clocks.insert(label.to_string(), now);
@@ -64,19 +125,29 @@ pub fn check<S: std::hash::BuildHasher>(
 }
 
 /// Asked by a long-lived page every few minutes: should it reload itself now?
+/// `idle_ms` is how long the page has gone without input.
 #[tauri::command]
-pub fn webview_reload_due(window: tauri::WebviewWindow) -> bool {
+pub fn webview_reload_due(window: tauri::WebviewWindow, idle_ms: u64) -> bool {
     let Some(state) = window.try_state::<crate::app_state::AppState>() else {
         return false;
     };
-    let hidden = out_of_sight(window.is_visible().unwrap_or(true), window.is_minimized().unwrap_or(false));
-    let capture_busy = !matches!(state.capture.current(), CapturePhase::Idle);
+    let sight = Sight::of(
+        window.is_visible().unwrap_or(true),
+        window.is_minimized().unwrap_or(false),
+        window.is_focused().unwrap_or(true),
+        Engine::CURRENT,
+    );
+    let look = Look {
+        sight,
+        input_idle: Duration::from_millis(idle_ms),
+        capture_busy: !matches!(state.capture.current(), CapturePhase::Idle),
+    };
     let Ok(mut clocks) = state.webview_refresh.clocks.lock() else {
         return false;
     };
-    let due = check(&mut clocks, window.label(), hidden, capture_busy, Instant::now());
+    let due = check(&mut clocks, window.label(), look, Instant::now());
     if due {
-        tracing::info!(label = %window.label(), "reloading a webview that has been out of sight for hours");
+        tracing::info!(label = %window.label(), ?sight, "reloading a webview that has been out of use for hours");
     }
     due
 }
@@ -85,61 +156,117 @@ pub fn webview_reload_due(window: tauri::WebviewWindow) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn hidden_or_minimized_is_out_of_sight_and_behind_others_is_not() {
-        assert!(out_of_sight(false, false));
-        assert!(out_of_sight(true, true));
-        assert!(!out_of_sight(true, false));
+    /// A look with no input for days, so only the window's own clock counts.
+    fn look(sight: Sight) -> Look {
+        Look {
+            sight,
+            input_idle: Duration::from_hours(100),
+            capture_busy: false,
+        }
     }
 
     #[test]
-    fn a_webview_is_due_only_after_two_hours_out_of_sight() {
-        let mut clocks = HashMap::new();
-        let start = Instant::now();
-        assert!(!check(&mut clocks, "main", true, false, start));
-        assert!(!check(&mut clocks, "main", true, false, start + Duration::from_hours(1)));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+    fn hidden_or_minimized_is_hidden_on_every_engine() {
+        for engine in [Engine::WebView2, Engine::Other] {
+            assert_eq!(Sight::of(false, false, false, engine), Sight::Hidden);
+            assert_eq!(Sight::of(true, true, false, engine), Sight::Hidden);
+        }
     }
 
     #[test]
-    fn coming_back_on_screen_restarts_the_clock() {
+    fn on_screen_without_focus_counts_only_under_webview2() {
+        assert_eq!(Sight::of(true, false, false, Engine::WebView2), Sight::Unfocused);
+        assert_eq!(Sight::of(true, false, false, Engine::Other), Sight::Watched);
+        assert_eq!(Sight::of(true, false, true, Engine::WebView2), Sight::Watched);
+    }
+
+    #[test]
+    fn a_hidden_webview_is_due_after_two_hours() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "main", false, false, start + Duration::from_mins(90)));
-        assert!(!check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+        assert!(!check(&mut clocks, "main", look(Sight::Hidden), start));
+        assert!(!check(&mut clocks, "main", look(Sight::Hidden), start + Duration::from_hours(1)));
+        assert!(check(&mut clocks, "main", look(Sight::Hidden), start + RELOAD_AFTER));
+    }
+
+    #[test]
+    fn an_unfocused_webview_waits_six_hours_not_two() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "main", look(Sight::Unfocused), start);
+        assert!(!check(&mut clocks, "main", look(Sight::Unfocused), start + RELOAD_AFTER));
+        assert!(check(&mut clocks, "main", look(Sight::Unfocused), start + RELOAD_UNFOCUSED_AFTER));
+    }
+
+    #[test]
+    fn recent_input_holds_an_unfocused_reload() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "main", look(Sight::Unfocused), start);
+        let scrolled = Look {
+            input_idle: Duration::from_mins(10),
+            ..look(Sight::Unfocused)
+        };
+        assert!(!check(&mut clocks, "main", scrolled, start + RELOAD_UNFOCUSED_AFTER));
+        let still = Look {
+            input_idle: RELOAD_UNFOCUSED_AFTER,
+            ..look(Sight::Unfocused)
+        };
+        assert!(check(&mut clocks, "main", still, start + RELOAD_UNFOCUSED_AFTER));
+    }
+
+    #[test]
+    fn hidden_then_unfocused_keeps_one_clock() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "main", look(Sight::Hidden), start);
+        assert!(!check(&mut clocks, "main", look(Sight::Unfocused), start + Duration::from_hours(5)));
+        assert!(check(&mut clocks, "main", look(Sight::Unfocused), start + RELOAD_UNFOCUSED_AFTER));
+    }
+
+    #[test]
+    fn being_watched_restarts_the_clock() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "main", look(Sight::Hidden), start);
+        assert!(!check(&mut clocks, "main", look(Sight::Watched), start + Duration::from_mins(90)));
+        assert!(!check(&mut clocks, "main", look(Sight::Hidden), start + RELOAD_AFTER));
     }
 
     #[test]
     fn a_capture_in_progress_holds_the_reload_until_it_ends() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "main", true, true, start + RELOAD_AFTER));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER + Duration::from_mins(1)));
+        check(&mut clocks, "main", look(Sight::Hidden), start);
+        let busy = Look {
+            capture_busy: true,
+            ..look(Sight::Hidden)
+        };
+        assert!(!check(&mut clocks, "main", busy, start + RELOAD_AFTER));
+        assert!(check(
+            &mut clocks,
+            "main",
+            look(Sight::Hidden),
+            start + RELOAD_AFTER + Duration::from_mins(1)
+        ));
     }
 
     #[test]
     fn a_reload_restarts_the_clock_so_it_happens_once() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
-        check(&mut clocks, "tray-panel", true, false, start);
-        assert!(check(&mut clocks, "tray-panel", true, false, start + RELOAD_AFTER));
-        assert!(!check(
-            &mut clocks,
-            "tray-panel",
-            true,
-            false,
-            start + RELOAD_AFTER + Duration::from_mins(1)
-        ));
+        check(&mut clocks, "tray-panel", look(Sight::Hidden), start);
+        assert!(check(&mut clocks, "tray-panel", look(Sight::Hidden), start + RELOAD_AFTER));
+        let next = start + RELOAD_AFTER + Duration::from_mins(1);
+        assert!(!check(&mut clocks, "tray-panel", look(Sight::Hidden), next));
     }
 
     #[test]
     fn each_webview_has_its_own_clock() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "tray-panel", true, false, start + RELOAD_AFTER));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+        check(&mut clocks, "main", look(Sight::Hidden), start);
+        assert!(!check(&mut clocks, "tray-panel", look(Sight::Hidden), start + RELOAD_AFTER));
+        assert!(check(&mut clocks, "main", look(Sight::Hidden), start + RELOAD_AFTER));
     }
 }

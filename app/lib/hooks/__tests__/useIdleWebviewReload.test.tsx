@@ -9,7 +9,7 @@ import {
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
-// Rust decides when a long-hidden webview is due (`webview_reload_due`); the
+// Rust decides when a long-unused webview is due (`webview_reload_due`); the
 // page reloads only when told to, and never over an open dialog.
 describe("useIdleWebviewReload", () => {
   beforeEach(() => {
@@ -30,8 +30,19 @@ describe("useIdleWebviewReload", () => {
     const reload = vi.fn();
     renderHook(() => useIdleWebviewReload(reload));
     await tick();
-    expect(invoke).toHaveBeenCalledWith("webview_reload_due");
+    expect(invoke).toHaveBeenCalledWith("webview_reload_due", { idleMs: IDLE_RELOAD_CHECK_MS });
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  // Rust holds a reload of a window on screen while the page is in use, so
+  // the page must report input, not only its age.
+  it("reports the time since the last input, not since the page loaded", async () => {
+    vi.mocked(invoke).mockResolvedValue(false);
+    renderHook(() => useIdleWebviewReload(vi.fn()));
+    await vi.advanceTimersByTimeAsync(IDLE_RELOAD_CHECK_MS - 1000);
+    window.dispatchEvent(new WheelEvent("wheel"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(invoke).toHaveBeenLastCalledWith("webview_reload_due", { idleMs: 1000 });
   });
 
   it("does nothing while it is not due", async () => {
