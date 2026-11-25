@@ -59,6 +59,8 @@ export interface ServerCapabilities {
   upload_folder_shares?: boolean;
   /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
   share_preview?: boolean;
+  /** A link opened while its file still uploads says so instead of "not found". Read by Rust only; listed so the type matches the wire. */
+  share_open_while_uploading?: boolean;
   /** A link's Insights and its Insights switch. Absent on older servers. */
   share_insights?: boolean;
   /** Encrypted comments and reactions on links. Absent on older servers. */

@@ -72,6 +72,22 @@ describe("a direct upload", () => {
     expect(cardView(preparing, null, [])).toMatchObject({ percent: null, text: "Preparing link…" });
   });
 
+  // The link is out (copied) before its upload ends: the line says both, the
+  // bar follows the upload, and a screen reader hears that it was copied.
+  it("says the link is copied while its upload runs, with the upload's bar", () => {
+    const out = card(
+      { state: "uploading" },
+      { link: { state: "uploading", copied: true }, linkText: "Link copied, uploading 40%, about 30 s left", linkPercent: 40 },
+    );
+    expect(cardView(out, remote(), [])).toMatchObject({
+      percent: 40,
+      text: "Link copied, uploading 40%, about 30 s left",
+      announce: "Link copied",
+      done: false,
+      settled: false,
+    });
+  });
+
   it("goes on saying the link is copied while the file goes into the drive", () => {
     const out = card({ state: "uploading" }, { link: { state: "public", copied: true }, linkText: "Public link copied" });
     expect(cardView(out, remote(), [])).toMatchObject({ percent: 62, text: "Uploading · 62% · Public link copied", announce: "Uploading · Public link copied" });

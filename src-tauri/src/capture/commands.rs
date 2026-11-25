@@ -4595,6 +4595,15 @@ struct LinkChoices {
     link_insights: bool,
 }
 
+/// What happened to a link handed out while its upload ran.
+#[derive(Debug, Clone, Copy)]
+struct HandedOut {
+    /// It reached the clipboard.
+    copied: bool,
+    /// It was opened in the browser.
+    opened: bool,
+}
+
 /// What [`link_first`] handed out.
 #[derive(Debug, Clone, Default)]
 struct LinkFirst {
@@ -4606,10 +4615,21 @@ struct LinkFirst {
 /// Make the capture's link from its own file, before the file goes into the
 /// drive, and hand it out at once: copied, opened if Settings says so, and
 /// on the card, which shows the link's upload as it goes
-/// ([`card_link_progress`]). Its switches (Insights, Comments, Reactions)
-/// are sent in the background once it exists, and its chat preview, read
-/// from the same file while the link is made, right after it, so a chat app
-/// that unfurls the link the moment it is pasted finds the picture.
+/// ([`card_link_progress`]).
+///
+/// "At once" is the moment the link exists, before its upload has finished
+/// (`deliver::EARLY_LINK`): a long recording's link is in the clipboard
+/// while the card says "Link copied, uploading 40%, about 30 s left", and
+/// this returns once the upload has finished or failed, so the drive's own
+/// upload never shares the connection with it. The browser opens it early
+/// only on a server that tells a visitor the file is still uploading;
+/// elsewhere once it is up. If the upload fails after the link was copied,
+/// hcfs-client revokes it and the card says the copied link won't open
+/// (`LinkState::Broken`), with Retry.
+///
+/// Its switches (Insights, Comments, Reactions) and its chat preview, read
+/// from the same file while the link is made, are sent once the upload has
+/// finished: the server refuses both for a share that is still uploading.
 ///
 /// A Retry after the drive refused the file keeps the link the first try
 /// already handed out: it still opens (it is its own copy of the capture),
@@ -4646,16 +4666,70 @@ async fn link_first(
         });
     }
     let progress = card_id.map(|id| card_link_progress(app, id));
-    let minted = super::deliver::link_from_file(&state, account_id, path, progress).await;
+    let policy = super::deliver::EARLY_LINK;
+    let needs_answer = policy == super::deliver::EarlyLinkPolicy::WhenServerShowsUploading;
+    // Whether a visitor to a link still uploading is told so, asked while the
+    // file is read, so the answer is in by the time the link exists.
+    let mut asking = (choices.open_link || needs_answer).then(|| {
+        let (app, account_id) = (app.clone(), account_id.to_string());
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            super::deliver::server_shows_uploading(&state, &account_id).await
+        })
+    });
+    let known = match asking.take() {
+        Some(answer) if needs_answer => Some(answer.await.unwrap_or(false)),
+        other => {
+            asking = other;
+            None
+        }
+    };
+    let early = super::deliver::hand_out_early(policy, known.unwrap_or(false));
+    // The link is reported from inside the upload, so it is handed out here,
+    // alongside it: the sender lives as long as the mint does.
+    let (sender, mut reported) = tokio::sync::mpsc::unbounded_channel::<super::deliver::EarlyLink>();
+    let on_link: Option<super::deliver::OnLink> = early.then(|| {
+        std::sync::Arc::new(move |link: super::deliver::EarlyLink| {
+            let _ = sender.send(link);
+        }) as super::deliver::OnLink
+    });
+    let hand_out = async {
+        let link = reported.recv().await?;
+        let copied = copy_link_to_clipboard(app, Some(&link.share_url));
+        if let Some(id) = card_id {
+            announce_uploading(app, &state.capture, id, &link, copied);
+        }
+        // A visitor who opens it now sees "still uploading" only on a server
+        // that says so; anywhere else the browser waits for the upload.
+        let shows_uploading = match (known, asking) {
+            (Some(answer), _) => answer,
+            (None, Some(answer)) => answer.await.unwrap_or(false),
+            (None, None) => false,
+        };
+        let opened = choices.open_link && shows_uploading;
+        if opened {
+            open_link_in_browser(app, Some(&link.share_url));
+        }
+        Some(HandedOut { copied, opened })
+    };
+    let (mut minted, handed_out) = tokio::join!(super::deliver::link_from_file(&state, account_id, path, progress, on_link), hand_out);
+    let broken = handed_out.is_some() && minted.share_url.is_none();
+    if broken {
+        // Whatever stopped it, the link that was copied is revoked.
+        minted.link_error = Some(super::deliver::LINK_BROKEN.to_string());
+    }
     if let Some(token) = minted.share_token.as_deref() {
         crate::shares::insights::spawn_apply(app, account_id, token, crate::shares::insights::for_capture(choices.link_insights));
     }
-    let copied = copy_link_to_clipboard(app, minted.share_url.as_deref());
-    if choices.open_link {
+    let copied = match handed_out {
+        Some(out) => out.copied && !broken,
+        None => copy_link_to_clipboard(app, minted.share_url.as_deref()),
+    };
+    if choices.open_link && !handed_out.is_some_and(|out| out.opened) {
         open_link_in_browser(app, minted.share_url.as_deref());
     }
     if let Some(id) = card_id {
-        announce_minted(app, &state.capture, id, &minted, copied);
+        announce_minted(app, &state.capture, id, &minted, copied, broken);
     }
     // Waited for here, before the file can move into the drive: the picture
     // is read from it. It was read while the link was made, so this is
@@ -4714,7 +4788,7 @@ fn card_link_progress(app: &AppHandle, id: u64) -> hcfs_client::client::share::S
         };
         let state = app.state::<AppState>();
         update_card(&app, &state.capture, id, |card| {
-            if card.link == LinkState::Creating {
+            if card.link.is_being_made() {
                 card.link_progress = Some(next);
             }
         });
@@ -4730,12 +4804,24 @@ fn link_state_for(share_url: Option<&String>, link_error: Option<&String>) -> Li
     }
 }
 
+/// The link exists and is out while its upload runs: the card keeps it
+/// (Copy link works), says it was copied, and goes on following the upload.
+fn announce_uploading(app: &AppHandle, state: &CaptureState, id: u64, link: &super::deliver::EarlyLink, copied: bool) {
+    update_card(app, state, id, |card| {
+        card.share_url = Some(link.share_url.clone());
+        card.share_token = Some(link.share_token.clone());
+        card.link = LinkState::Uploading { copied };
+    });
+}
+
 /// The link is made (or not), before the file is in the drive: the card
 /// says so at once and keeps the link, whatever the drive's upload does
-/// next. [`announce_link`] says it again once the file is placed.
-fn announce_minted(app: &AppHandle, state: &CaptureState, id: u64, minted: &super::deliver::Minted, copied: bool) {
+/// next. [`announce_link`] says it again once the file is placed. `broken`:
+/// it was handed out while uploading and the upload then failed.
+fn announce_minted(app: &AppHandle, state: &CaptureState, id: u64, minted: &super::deliver::Minted, copied: bool, broken: bool) {
     let link = match link_state_for(minted.share_url.as_ref(), minted.link_error.as_ref()) {
         LinkState::Public { .. } => LinkState::Public { copied },
+        LinkState::Failed { message } if broken => LinkState::Broken { message },
         other => other,
     };
     update_card(app, state, id, |card| {
@@ -5122,7 +5208,12 @@ fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &sup
         card.status = with_link_fields(&card.status, copied, delivered.link_error.clone());
         card.share_url.clone_from(&delivered.share_url);
         card.share_token.clone_from(&delivered.share_token);
-        card.link = link;
+        // A copied link whose upload failed goes on saying so: "No link yet"
+        // would hide that the link already in someone's chat won't open.
+        let still_broken = delivered.share_url.is_none() && matches!(card.link, LinkState::Broken { .. });
+        if !still_broken {
+            card.link = link;
+        }
         card.placed_path = placed;
     })
 }
