@@ -145,6 +145,12 @@ pub fn install_panic_hook() {
                 thread = thread_name,
                 "PANIC: the application panicked"
             );
+            // A panic that broke the async runtime itself (tokio's I/O
+            // driver) leaves the app open with nothing working behind it:
+            // the watchdog restarts the app (`runtime_watchdog.rs`).
+            if crate::runtime_watchdog::note_panic(payload) {
+                tracing::error!("the async runtime is broken; the watchdog will restart the app");
+            }
             previous(info);
         }));
     });

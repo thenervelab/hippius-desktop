@@ -234,9 +234,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // server-side totals grow per committed file). Silent so the list updates in
   // place. See useRefreshWhileSyncing.
   useRefreshWhileSyncing(
-    useCallback(() => {
-      void loadFolders({ silent: true });
-    }, [loadFolders]),
+    useCallback(() => loadFolders({ silent: true }), [loadFolders]),
     !!polkadotAddress,
   );
 
