@@ -135,12 +135,19 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
         body.contains("upload_files_to_remote_folder_inner("),
         "the upload must be the remote file upload"
     );
-    let mint = fn_body(&src, "pub async fn mint(");
+    assert!(
+        fn_body(&src, "pub async fn mint(").contains("mint_reporting_link("),
+        "every capture link goes through the one mint"
+    );
+    let mint = fn_body(&src, "pub async fn mint_reporting_link(");
     // A capture in a synced drive is shared by its place in the drive, so
     // Drive shows it as shared and can revoke the link; any other file the
     // way the Finder shares one.
     assert!(mint.contains("share_synced_file("), "a synced capture's link must record its origin");
-    assert!(mint.contains("share_external_file("), "the link must come from the existing share path");
+    assert!(
+        mint.contains("share_external_file_reporting_link("),
+        "the link must come from the existing share path"
+    );
     for body in [&body, &mint] {
         for forbidden in ["HcfsClient", "reqwest", "encrypt"] {
             assert!(!body.contains(forbidden), "delivery must not talk to the server itself ({forbidden})");
