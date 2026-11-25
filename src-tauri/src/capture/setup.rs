@@ -784,7 +784,8 @@ pub enum CaptureDriveStatus {
         /// The folder in the drive captures go to, as a path from its root;
         /// empty for the root (a captures drive of its own).
         folder: String,
-        /// Not synced on this computer: browsed from the server.
+        /// Captures for it are uploaded to the server rather than synced from
+        /// a folder here (not synced here, or paused): browsed from the server.
         remote: bool,
         /// Their folder here, when the drive is synced here.
         location: Option<Location>,
@@ -806,10 +807,14 @@ async fn status_for(pool: &sqlx::SqlitePool, account_id: &str) -> Result<Capture
     let home = home_dir()?;
     let drives = destination::drives_here(pool, account_id).await?;
     if let Some(d) = destination::load(pool, account_id).await? {
-        // A paused drive is still this computer's: Drive browses it here.
         let here = drives.iter().find(|h| h.label == d.label && !h.member);
+        // Browsed where captures land: a drive whose sync runs here gets them
+        // in its folder here; any other (paused, or not synced here) gets
+        // them uploaded straight to the server (`deliver::place`), so its
+        // folder here never has them and only the server's listing does.
+        let remote = !destination::is_local(pool, account_id, &d.label).await;
         return Ok(CaptureDriveStatus::Ready {
-            remote: here.is_none(),
+            remote,
             location: here.map(|h| location(&destination::local_dir(&h.path, &d.folder), &home)),
             label: d.label,
             name: d.display_name,
@@ -1432,7 +1437,9 @@ mod tests {
             panic!("the drive exists");
         };
         assert_eq!(label, "Hippius Captures");
-        assert!(!remote, "a paused drive is still browsed here");
+        // Captures for a paused drive are uploaded straight to the server
+        // (`deliver::place`), so the page lists the server's copy.
+        assert!(remote, "a paused drive's captures are on the server, not in its folder here");
         assert_eq!(location.unwrap().place, "Elsewhere › Hippius Captures");
 
         // Moved into a folder of that drive: the folder is what is shown.
@@ -1446,5 +1453,18 @@ mod tests {
         };
         assert_eq!(folder, "Shots/hippius-captures");
         assert_eq!(location.unwrap().place, "Elsewhere › Hippius Captures › Shots › hippius-captures");
+
+        // Its sync running again, captures are moved into its folder here, so
+        // that folder is what is listed, the folder inside it included.
+        sqlx::query("UPDATE sync_paths SET is_paused = 0 WHERE owner = ? AND label = 'Hippius Captures'")
+            .bind(&owner)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let CaptureDriveStatus::Ready { folder, remote, .. } = status_for(&pool, "5Status").await.unwrap() else {
+            panic!("the drive exists");
+        };
+        assert_eq!(folder, "Shots/hippius-captures");
+        assert!(!remote, "a drive synced here is listed from its folder here");
     }
 }

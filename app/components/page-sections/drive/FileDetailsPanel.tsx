@@ -13,6 +13,7 @@ import { cn } from "@/app/lib/utils";
 import { CopyText, FormattedTimestamp, Icons } from "@/app/components/ui";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { isKnownEmptyFolder } from "@/lib/utils/emptyFolder";
 import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
@@ -109,8 +110,8 @@ const PanelBody: React.FC<PanelBodyProps> = ({ file, onClose }) => {
   // the table, which both render "—" for it.
   const fileSize = omitsBilledSize(file.syncStatus)
     ? "—"
-    : file.size
-      ? formatBytesFromBigInt(BigInt(file.size))
+    : file.size || isKnownEmptyFolder(file)
+      ? formatBytesFromBigInt(BigInt(file.size ?? 0))
       : "Unknown";
 
   const handleViewOnExplorer = async () => {
