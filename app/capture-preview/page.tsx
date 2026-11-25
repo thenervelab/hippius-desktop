@@ -588,9 +588,11 @@ export default function CapturePreviewPage() {
             >
               {desktopNote.text}
             </p>
-          ) : card.notice ? (
+          ) : card.notice && card.link.state !== "uploading" ? (
             // Rust's line about the capture (a Free plan recording stopped at
             // its limit) takes the destination's place, two lines at most.
+            // While a copied link still uploads, "Keep Hippius open" wins the
+            // slot: quitting then leaves a link that never opens.
             <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
               {card.notice}
             </p>

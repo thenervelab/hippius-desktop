@@ -877,6 +877,19 @@ describe("a recording stopped at the Free plan's limit", () => {
     }
   });
 
+  // Quitting while a copied link still uploads leaves a link that never
+  // opens, so that note takes the line until the upload is done.
+  it("lets a copied link's upload note take the line while it uploads", async () => {
+    await setup({
+      ...capped({ state: "uploading" }),
+      link: { state: "uploading", copied: true },
+      linkText: "Link copied, uploading 40%, about 30 s left",
+      linkNote: "Keep Hippius open until the upload finishes.",
+    });
+    expect(screen.queryByTestId("capture-notice")).toBeNull();
+    expect(screen.getByTestId("capture-link-note")).toHaveTextContent("Keep Hippius open until the upload finishes.");
+  });
+
   it("shows the drive as before for any other card", async () => {
     await setup(card({ state: "uploaded", linkCopied: true }));
     expect(screen.queryByTestId("capture-notice")).toBeNull();

@@ -88,8 +88,9 @@ export function cardView(
         };
       }
       const percent = remoteRow && sameFile(card, remoteRow) ? cappedPercent(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
-      // A link already made goes on saying so while the file goes into the drive.
-      const linkOut = card.link.state === "public" ? card.linkText : undefined;
+      // A link already made goes on saying so while the file goes into the
+      // drive, and so does a copied link that won't open.
+      const linkOut = card.link.state === "public" || card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
         text: joinLink(percent === null ? "Preparing upload…" : `Uploading · ${percent}%`, linkOut),
@@ -103,10 +104,13 @@ export function cardView(
     case "syncing": {
       const row = syncFiles.find((f) => sameFile(card, f));
       const percent = row ? cappedPercent(row.bytesTransferred, row.totalBytes) : null;
+      // A copied link that won't open is said while the file syncs too: the
+      // sync line alone would hide that the link in chat is dead.
+      const broken = card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
-        text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
-        announce: percent === null ? "Saved · waiting for sync" : "Uploading",
+        text: joinLink(percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`, broken),
+        announce: joinLink(percent === null ? "Saved · waiting for sync" : "Uploading", broken),
         done: false,
         settled: false,
         failed: false,
