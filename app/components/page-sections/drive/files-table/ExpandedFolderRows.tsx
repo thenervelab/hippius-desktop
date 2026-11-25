@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { FormattedTimestamp } from "@/app/components/ui";
 import { cn } from "@/lib/utils";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { isKnownEmptyFolder } from "@/lib/utils/emptyFolder";
 import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import {
@@ -700,8 +701,8 @@ const ExpandedFolderRows: React.FC<ExpandedFolderRowsProps> = ({
                   ? "..."
                   : omitsBilledSize(childFile.syncStatus)
                     ? "—"
-                    : childFile.size
-                      ? formatBytesFromBigInt(BigInt(childFile.size))
+                    : childFile.size || isKnownEmptyFolder(childFile)
+                      ? formatBytesFromBigInt(BigInt(childFile.size ?? 0))
                       : "Unknown"}
               </td>
               {showUploadedBy ? (
