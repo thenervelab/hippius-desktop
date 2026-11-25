@@ -5,6 +5,7 @@ import React, {
   useContext,
   useState,
   useEffect,
+  useLayoutEffect,
   useRef,
   useCallback,
 } from "react";
@@ -88,7 +89,10 @@ export function WalletAuthProvider({
   // always reads the current value (avoids stale closure).
   const polkadotAddressRef = useRef<string | null>(null);
 
-  useEffect(() => {
+  // A layout effect, so the ref holds the address by the time the screen shows
+  // it: a passive effect can still be pending then, and a sign-out (or an
+  // unlink event) in that gap would reach `logout_full` without the account.
+  useLayoutEffect(() => {
     polkadotAddressRef.current = polkadotAddress;
   }, [polkadotAddress]);
 
