@@ -15,12 +15,14 @@
 //! a support bundle showed WebView2 at 15 GB after six. That reload can be
 //! seen, so it waits much longer and also needs the page to have had no input
 //! for as long. Elsewhere a window on screen is never reloaded, since no other
-//! engine leaks this way. No capture may be in progress, and the page itself
-//! refuses while a dialog is open (`useIdleWebviewReload`).
+//! engine leaks this way. A busy webview (a capture in progress, or a dialog
+//! open on the page) is held: its clock keeps running, so it reloads at the
+//! first look after it stops being busy rather than waiting the whole time
+//! again.
 //!
 //! Rust owns the clock and the decision; the page asks every few minutes
-//! (`webview_reload_due`), says how long it has had no input, and reloads
-//! itself when told to.
+//! (`webview_reload_due`), says how long it has had no input and whether a
+//! dialog is open, and reloads itself when told to.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -93,9 +95,12 @@ pub struct Look {
     /// How the window is placed.
     pub sight: Sight,
     /// How long the page has gone without keyboard, pointer or wheel input.
+    /// Counts only for [`Sight::Unfocused`]: a hidden page gets no input, so
+    /// there it could only be reset by a re-render, never by the user.
     pub input_idle: Duration,
-    /// A capture is in progress; it must not lose its window.
-    pub capture_busy: bool,
+    /// A capture is in progress, or the page has a dialog open; a reload
+    /// would throw either away.
+    pub busy: bool,
 }
 
 /// When each webview, by label, was first seen out of use without a break.
@@ -107,17 +112,21 @@ pub struct WebviewRefreshState {
 /// Record how `label` looks now and decide whether it is due for a reload.
 ///
 /// The first look that finds it out of use starts its clock; a look that finds
-/// it watched clears it. The time out of use counts only while the page has
-/// also had no input. A reload restarts the clock, so the page that comes back
-/// is not reloaded again on the next look.
+/// it watched clears it. An unfocused window's time out of use counts only
+/// while its page has also had no input. A busy look leaves the clock alone.
+/// A reload restarts the clock, so the page that comes back is not reloaded
+/// again on the next look.
 pub fn check<S: std::hash::BuildHasher>(clocks: &mut HashMap<String, Instant, S>, label: &str, look: Look, now: Instant) -> bool {
     let Some(after) = look.sight.reload_after() else {
         clocks.remove(label);
         return false;
     };
     let since = *clocks.entry(label.to_string()).or_insert(now);
-    let unused_for = now.duration_since(since).min(look.input_idle);
-    if look.capture_busy || unused_for < after {
+    let mut unused_for = now.duration_since(since);
+    if look.sight == Sight::Unfocused {
+        unused_for = unused_for.min(look.input_idle);
+    }
+    if look.busy || unused_for < after {
         return false;
     }
     clocks.insert(label.to_string(), now);
@@ -125,9 +134,10 @@ pub fn check<S: std::hash::BuildHasher>(clocks: &mut HashMap<String, Instant, S>
 }
 
 /// Asked by a long-lived page every few minutes: should it reload itself now?
-/// `idle_ms` is how long the page has gone without input.
+/// `idle_ms` is how long the page has gone without input; `dialog_open` says a
+/// dialog a reload would throw away is on the page.
 #[tauri::command]
-pub fn webview_reload_due(window: tauri::WebviewWindow, idle_ms: u64) -> bool {
+pub fn webview_reload_due(window: tauri::WebviewWindow, idle_ms: u64, dialog_open: bool) -> bool {
     let Some(state) = window.try_state::<crate::app_state::AppState>() else {
         return false;
     };
@@ -140,7 +150,7 @@ pub fn webview_reload_due(window: tauri::WebviewWindow, idle_ms: u64) -> bool {
     let look = Look {
         sight,
         input_idle: Duration::from_millis(idle_ms),
-        capture_busy: !matches!(state.capture.current(), CapturePhase::Idle),
+        busy: dialog_open || !matches!(state.capture.current(), CapturePhase::Idle),
     };
     let Ok(mut clocks) = state.webview_refresh.clocks.lock() else {
         return false;
@@ -161,7 +171,7 @@ mod tests {
         Look {
             sight,
             input_idle: Duration::from_hours(100),
-            capture_busy: false,
+            busy: false,
         }
     }
 
@@ -216,6 +226,18 @@ mod tests {
     }
 
     #[test]
+    fn input_idle_does_not_hold_a_hidden_reload() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "tray-panel", look(Sight::Hidden), start);
+        let rerendered = Look {
+            input_idle: Duration::from_mins(1),
+            ..look(Sight::Hidden)
+        };
+        assert!(check(&mut clocks, "tray-panel", rerendered, start + RELOAD_AFTER));
+    }
+
+    #[test]
     fn hidden_then_unfocused_keeps_one_clock() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
@@ -234,12 +256,31 @@ mod tests {
     }
 
     #[test]
+    fn a_busy_webview_is_held_and_reloads_as_soon_as_it_is_free() {
+        let mut clocks = HashMap::new();
+        let start = Instant::now();
+        check(&mut clocks, "main", look(Sight::Unfocused), start);
+        let dialog = Look {
+            busy: true,
+            ..look(Sight::Unfocused)
+        };
+        assert!(!check(&mut clocks, "main", dialog, start + RELOAD_UNFOCUSED_AFTER));
+        let later = Look {
+            busy: true,
+            ..look(Sight::Unfocused)
+        };
+        assert!(!check(&mut clocks, "main", later, start + RELOAD_UNFOCUSED_AFTER * 2));
+        let free = start + RELOAD_UNFOCUSED_AFTER * 2 + Duration::from_mins(5);
+        assert!(check(&mut clocks, "main", look(Sight::Unfocused), free));
+    }
+
+    #[test]
     fn a_capture_in_progress_holds_the_reload_until_it_ends() {
         let mut clocks = HashMap::new();
         let start = Instant::now();
         check(&mut clocks, "main", look(Sight::Hidden), start);
         let busy = Look {
-            capture_busy: true,
+            busy: true,
             ..look(Sight::Hidden)
         };
         assert!(!check(&mut clocks, "main", busy, start + RELOAD_AFTER));

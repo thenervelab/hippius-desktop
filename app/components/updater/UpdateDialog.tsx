@@ -596,6 +596,10 @@ export default function UpdateDialog() {
         <Dialog.Overlay className="fixed inset-0 z-[10000] bg-black/30 backdrop-blur-[8px] dark:bg-black/60 animate-fade-in-0.2" />
         <Dialog.Content
           aria-describedby={undefined}
+          // A reload re-runs the startup update check, which opens this dialog
+          // again, so an idle-memory reload may go ahead over it, except
+          // while a download or install would be cut off (useIdleWebviewReload).
+          data-reload-safe={isInProgress ? undefined : ""}
           onEscapeKeyDown={(e) => {
             if (isInProgress) e.preventDefault();
           }}

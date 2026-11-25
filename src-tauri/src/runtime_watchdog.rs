@@ -11,9 +11,17 @@
 //!
 //! A task on the runtime bumps a counter every [`BEAT_EVERY`]; a plain OS
 //! thread reads it every [`CHECK_EVERY`]. When the counter has stood still for
-//! [`DEAD_AFTER`] of on-time checks, the runtime is declared dead and the app
-//! restarts through Tauri's event loop, which runs on the main thread and does
-//! not need the runtime.
+//! [`DEAD_AFTER`], the runtime is declared dead and the app restarts through
+//! Tauri's event loop, which runs on the main thread and does not need the
+//! runtime.
+//!
+//! What it does not do:
+//! - Notice a partial death. In a release build a worker that panics dies
+//!   alone and loses only its own tasks; the others keep the beat going.
+//! - Back off. If whatever stalled the runtime survives the restart, the app
+//!   restarts again about every five minutes. Accepted: a restart frees the
+//!   memory the dead process held, and a persisted restart count would add
+//!   state for a case not yet seen.
 //!
 //! Windows only, by decision: the failure and its reports are Windows-only,
 //! and a restart is a visible act we keep to where it is needed. The decision
@@ -48,7 +56,7 @@ const RESTART_GRACE: Duration = Duration::from_secs(30);
 pub enum Verdict {
     /// The runtime has beaten recently enough, or there is no evidence yet.
     Alive,
-    /// The beat has stood still for [`DEAD_AFTER`] of on-time checks.
+    /// The beat has stood still for [`DEAD_AFTER`].
     Dead,
 }
 
@@ -57,24 +65,28 @@ pub enum Verdict {
 pub struct Watch {
     /// The beat counter as last seen.
     last_beat: u64,
-    /// How long the counter has stood still, counting only on-time checks.
+    /// How long the counter has stood still, not counting a system sleep.
     stale_for: Duration,
 }
 
 impl Watch {
     /// Look at the beat counter, `since_last_check` after the previous look.
     ///
-    /// A check more than twice [`CHECK_EVERY`] late means the watchdog thread
-    /// itself was not running, as across a system sleep. The runtime was
-    /// frozen too, so the gap is no evidence against it: it starts the count
-    /// again instead of adding to it.
+    /// A gap of [`DEAD_AFTER`] or more since the last check means the watchdog
+    /// thread itself was not running, as across a system sleep. The runtime
+    /// was frozen too, so the gap is no evidence against it: it starts the
+    /// count again, where adding it would declare death at once. A shorter
+    /// late gap counts in full: on a machine starved enough to kill the
+    /// runtime, the thread can wake late on every check, and those checks
+    /// must still add up. A shorter sleep that is counted does no harm, since
+    /// the runtime beats again within [`BEAT_EVERY`] of waking.
     pub fn observe(&mut self, beat: u64, since_last_check: Duration) -> Verdict {
         if beat != self.last_beat {
             self.last_beat = beat;
             self.stale_for = Duration::ZERO;
             return Verdict::Alive;
         }
-        if since_last_check > CHECK_EVERY * 2 {
+        if since_last_check >= DEAD_AFTER {
             self.stale_for = Duration::ZERO;
             return Verdict::Alive;
         }
@@ -190,20 +202,22 @@ mod tests {
     }
 
     #[test]
-    fn a_check_over_twice_late_is_a_system_sleep_and_starts_the_count_again() {
+    fn a_gap_as_long_as_dead_after_is_a_system_sleep_and_starts_the_count_again() {
         let mut watch = Watch::default();
         let checks = checks_to_dead(CHECK_EVERY);
         stand_still(&mut watch, 0, CHECK_EVERY, checks - 1);
-        assert_eq!(watch.observe(0, CHECK_EVERY * 2 + Duration::from_secs(1)), Verdict::Alive);
+        assert_eq!(watch.observe(0, DEAD_AFTER), Verdict::Alive);
         assert_eq!(stand_still(&mut watch, 0, CHECK_EVERY, checks - 1), Verdict::Alive);
         assert_eq!(watch.observe(0, CHECK_EVERY), Verdict::Dead);
     }
 
+    /// A starved machine, the state this watchdog exists for, can wake the
+    /// thread late every time; those gaps must still add up to a death.
     #[test]
-    fn a_check_up_to_twice_late_still_counts_in_full() {
+    fn late_checks_count_in_full() {
         let mut watch = Watch::default();
-        let late = CHECK_EVERY * 2;
-        assert_eq!(stand_still(&mut watch, 0, late, checks_to_dead(late) - 1), Verdict::Alive);
-        assert_eq!(watch.observe(0, late), Verdict::Dead);
+        let late = DEAD_AFTER.checked_sub(Duration::from_secs(1)).expect("DEAD_AFTER is minutes long");
+        assert_eq!(watch.observe(0, late), Verdict::Alive);
+        assert_eq!(watch.observe(0, CHECK_EVERY), Verdict::Dead);
     }
 }
