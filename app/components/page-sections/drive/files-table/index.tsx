@@ -19,6 +19,7 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { actionableSyncFilesAtom } from "@/lib/hooks/useSyncSnapshot";
 import * as TableModule from "@/components/ui/alt-table";
 import { formatBytesFromBigInt } from "@/lib/utils/formatBytes";
+import { isKnownEmptyFolder } from "@/lib/utils/emptyFolder";
 import { omitsBilledSize } from "@/lib/utils/syncStatusDisplay";
 import { getFilePartsFromFileName } from "@/lib/utils/getFilePartsFromFileName";
 import { Button } from "@/components/ui/button";
@@ -1768,10 +1769,12 @@ const FilesTable: FC<FilesTableProps> = memo(
                 <div className="truncate text-grey-dark-800 text-xs">—</div>
               );
             }
-            if (value === undefined || value === 0) return "Unknown";
+            // An empty folder is "0 B", as on the web; any other missing size is unknown.
+            const empty = isKnownEmptyFolder(cell.row.original);
+            if ((value === undefined || value === 0) && !empty) return "Unknown";
             return (
               <div className="text-grey-dark-800 text-xs font-medium truncate tracking-[-0.24px]">
-                {formatBytesFromBigInt(BigInt(value))}
+                {formatBytesFromBigInt(BigInt(value ?? 0))}
               </div>
             );
           },

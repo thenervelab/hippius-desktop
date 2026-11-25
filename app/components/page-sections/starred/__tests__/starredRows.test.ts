@@ -7,6 +7,8 @@ import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
 import { resolveRowRelativePath } from "@/app/lib/utils/rowRelativePath";
 import { isSelectableRow } from "@/app/lib/utils/selectableRow";
 import { starTargetFor } from "@/app/lib/starred/starState";
+import { arionContentHash } from "@/app/lib/utils/arionContentHash";
+import { partHashesTarget } from "@/app/lib/hooks/useFilePartHashes";
 import {
   arrangeStarredItems,
   matchesStarredSearch,
@@ -38,6 +40,7 @@ function starredItem(overrides: Partial<StarredItem> = {}): StarredItem {
     openPath: "Work",
     uploadedBy: null,
     uploadedByName: null,
+    arionCid: "",
     ...overrides,
   };
 }
@@ -111,6 +114,22 @@ describe("starredItemRow", () => {
     expect(row.remoteDriveLabel).toBe("Old");
     expect(isCloudOnlyRow(row)).toBe(true);
     expect(canRenameFile(row)).toBe(true);
+  });
+
+  it("gives File Details a starred file's Arion hash, as a Drive row does", () => {
+    const cid = "cd".repeat(32);
+    // Synced here and browsed from the server alike.
+    for (const row of [
+      starredItemRow(starredItem({ arionCid: cid }), "/Users/me/Docs")!,
+      starredItemRow(starredItem({ arionCid: cid, openRemote: true, openLabel: "Old" }), null)!,
+    ]) {
+      expect(arionContentHash(row)).toBe(cid);
+    }
+    // A large one asks for its parts by its drive and id, as in the Drive.
+    const large = starredItemRow(starredItem({ arionCid: cid, size: 20_000_000 }), "/Users/me/Docs")!;
+    expect(partHashesTarget(large)).toEqual({ label: "Docs", pathHash: FILE_ID });
+    // Not hashed yet: File Details says so, as for a Drive row.
+    expect(arionContentHash(starredItemRow(starredItem(), "/Users/me/Docs")!)).toBeNull();
   });
 
   it("gives a folder its full path, which every Drive path resolver keeps as it is", () => {

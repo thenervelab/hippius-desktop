@@ -66,6 +66,7 @@ function listed(id: string): StarredItem {
     openPath: "",
     uploadedBy: null,
     uploadedByName: null,
+    arionCid: "",
   };
 }
 

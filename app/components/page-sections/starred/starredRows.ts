@@ -155,7 +155,9 @@ export function starredItemRow(item: StarredItem, syncRoot: string | null): Form
     size: item.size ?? undefined,
     createdAt: createdMs,
     arionHash: item.fileId ?? "",
-    arionCid: "",
+    // The content hash, so File Details shows the Arion hash as it does for
+    // the same file in the Drive.
+    arionCid: item.arionCid ?? "",
     minerIds: [],
     isAssigned: true,
     lastChargedAt: createdMs,
