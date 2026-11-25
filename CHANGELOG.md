@@ -18,6 +18,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Changed
 
 - The sign-in screen now shows what Hippius Drive does: encryption, screen recording and sharing with insights.
+- **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading; the card shows how far the upload has got, and if the upload fails it tells you the copied link won't open and offers Retry. Long recordings also upload faster.
 
 ### Added
 

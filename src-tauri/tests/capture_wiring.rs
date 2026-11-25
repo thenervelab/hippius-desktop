@@ -397,7 +397,7 @@ fn the_link_is_made_from_the_capture_before_it_is_placed() {
     let first = fn_body(&src, "async fn link_first(");
     let creating = first.find("LinkState::Creating").expect("the card says the link is being made");
     let minted = first.find("link_from_file(").expect("from the capture's own file");
-    let copied = first.find("copy_link_to_clipboard(").expect("copied the moment it exists");
+    let copied = first.rfind("copy_link_to_clipboard(").expect("copied once it exists");
     assert!(creating < minted && minted < copied);
     assert!(first.contains("card_link_progress("), "the card follows the link's upload");
     assert!(first.contains("announce_minted("), "the card keeps the link from the moment it exists");
@@ -421,6 +421,57 @@ fn the_link_is_made_from_the_capture_before_it_is_placed() {
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
     assert!(follow.contains("link_finishes_card("), "only its own folder");
+}
+
+/// The link reaches the clipboard the moment it exists, while the capture's
+/// copy behind it is still uploading, and the card says so with the
+/// upload's progress. Everything the server refuses for a share still
+/// uploading (its switches, its chat preview) waits for the upload; the
+/// drive's own upload still waits too, so the two never share the
+/// connection. A link that was handed out and then failed is never minted
+/// again behind the user's back, and the card keeps saying it won't open.
+#[test]
+fn the_link_is_copied_while_its_upload_runs() {
+    let src = read("src/capture/commands.rs");
+    let first = fn_body(&src, "async fn link_first(");
+    assert!(first.contains("super::deliver::EARLY_LINK"), "one switch decides it");
+    let joined = first.find("tokio::join!(").expect("the link is handed out alongside its upload");
+    let hand_out = first.find("let hand_out = async").expect("the hand-out runs beside the mint");
+    assert!(hand_out < joined);
+    let early = &first[hand_out..joined];
+    let copied = early.find("copy_link_to_clipboard(").expect("copied the moment it is reported");
+    let carded = early.find("announce_uploading(").expect("the card keeps it and follows the upload");
+    let asked = early.find("shows_uploading").expect("the browser waits for a server that says uploading");
+    assert!(copied < carded && carded < asked, "the clipboard first, before any network wait");
+    assert!(first[joined..].contains("link_from_file(") && first[joined..].contains("on_link"));
+    for after_upload in ["insights::spawn_apply(", "send_rendered("] {
+        let at = first.find(after_upload).unwrap_or_else(|| panic!("{after_upload} is sent"));
+        assert!(at > joined, "{after_upload} waits for the upload: the server refuses it before");
+    }
+    let deliver_and_announce = fn_body(&src, "async fn deliver_and_announce(");
+    let link = deliver_and_announce.find("link_first(").expect("link first");
+    let place = deliver_and_announce.find("super::deliver::place(").expect("then the drive");
+    assert!(link < place, "the drive's upload starts once the link's has finished");
+
+    let deliver = read("src/capture/deliver.rs");
+    let mint = fn_body(&deliver, "pub async fn mint_reporting_link(");
+    assert!(mint.contains("share_external_file_reporting_link("));
+    let no_second_link = mint.find("reported.load(").expect("a reported link is never made again");
+    let retry = mint.find("mint_retry_after(").expect("an unreported failure is retried");
+    assert!(no_second_link < retry);
+    assert!(mint[no_second_link..retry].contains("LINK_BROKEN"));
+    let shares = read("src/shares/commands.rs");
+    assert!(fn_body(&shares, "pub(crate) async fn share_external_file_reporting_link(").contains(".create_share_reporting_link("));
+
+    let minted = fn_body(&src, "fn announce_minted(");
+    assert!(minted.contains("LinkState::Broken"), "a copied link that failed is told apart");
+    let announce = fn_body(&src, "fn announce_link(");
+    assert!(
+        announce.contains("LinkState::Broken"),
+        "placing the file never turns \"won't open\" back into \"No link yet\""
+    );
+    let progress = fn_body(&src, "fn card_link_progress(");
+    assert!(progress.contains("is_being_made()"), "the card follows the upload after the link is out");
 }
 
 /// An overlay that is not the key window (any display but the bar's, or all

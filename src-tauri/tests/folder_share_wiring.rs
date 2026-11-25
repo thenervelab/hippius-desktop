@@ -83,7 +83,7 @@ fn every_file_mint_path_uploads_an_owner_wrap() {
     let source = include_str!("../src/shares/commands.rs");
     for name in [
         "async fn create_share_inner(",
-        "async fn share_external_file(",
+        "async fn share_external_file_reporting_link(",
         "async fn mint_remote_share_at(",
     ] {
         let body = fn_body(source, name);
@@ -93,11 +93,16 @@ fn every_file_mint_path_uploads_an_owner_wrap() {
 
 /// Every file mint keeps a `#s=` link's share key right after the mint, before
 /// an email gate can end the server handing it out (`shares::file_link_key`).
-/// Found by every `.create_share(` call, so a new funnel cannot skip it.
+/// Found by every `.create_share(` and `.create_share_reporting_link(` call,
+/// so a new funnel cannot skip it.
 #[test]
 fn every_file_mint_keeps_a_file_links_share_key() {
     let source = include_str!("../src/shares/commands.rs");
-    let mints: Vec<usize> = source.match_indices(".create_share(").map(|(i, _)| i).collect();
+    let mints: Vec<usize> = source
+        .match_indices(".create_share(")
+        .chain(source.match_indices(".create_share_reporting_link("))
+        .map(|(i, _)| i)
+        .collect();
     assert!(mints.len() >= 3, "the three file mint funnels call create_share");
     for at in mints {
         let rest = &source[at..];

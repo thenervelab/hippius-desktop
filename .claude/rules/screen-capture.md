@@ -845,8 +845,24 @@ connection with the synced drive's upload of the same file, or wait for a
 direct upload to finish. While it is made the card shows its upload in Rust's
 words (`LinkProgress`, `card_link_progress`: "Uploading link 40%, about 30 s
 left", `linkPercent` for the bar), one update per step or percent
-(`link_progress_moved`). The chat preview is read from the same file while
-the link is made and awaited before the file can move. Once placed,
+(`link_progress_moved`). **The link is handed out the moment it exists,
+before its upload ends** (`deliver::EARLY_LINK`, one switch: `Always`, or
+`WhenServerShowsUploading` for servers advertising
+`share_open_while_uploading`): hcfs-client's `create_share_reporting_link`
+reports it right after `init`, `link_first` copies it and the card goes to
+`LinkState::Uploading { copied }` ("Link copied, uploading 40%, about 30 s
+left", note "Keep Hippius open until the upload finishes"; Copy link only,
+no Revoke or Manage until it is up). `link_first` still returns only when
+the upload has finished, so the drive's upload never shares the connection.
+Switches and the chat preview go after the upload (the server 404s both for
+a share still uploading), and the browser opens it early only on a server
+with `share_open_while_uploading`. A link reported and then failed is
+revoked by hcfs-client, never re-minted by the retry (`LINK_BROKEN`), and
+the card says `LinkState::Broken` ("Copied link won't open") with Retry in
+Create link's place; `announce_link` keeps it through placement. Pinned by
+`capture_wiring::the_link_is_copied_while_its_upload_runs`. The chat preview
+is read from the same file while the link is made and awaited before the
+file can move. Once placed,
 `remember_placed_origin` records the link as the placed file's
 (`shares::origin`, plus the Finder badge for a synced one), which is what
 `share_synced_file` did when the link was minted after placing.

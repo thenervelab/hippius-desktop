@@ -75,11 +75,12 @@ export function cardView(
     case "uploading": {
       // The link is made first, from the capture itself, before the file
       // goes into the drive: while it is, Rust's line says how far it is.
-      if (card.link.state === "creating" && card.linkText) {
+      // It is out (copied) before its upload ends, and the line says both.
+      if ((card.link.state === "creating" || card.link.state === "uploading") && card.linkText) {
         return {
           percent: card.linkPercent ?? null,
           text: card.linkText,
-          announce: "Making link",
+          announce: card.link.state === "uploading" ? (card.link.copied ? "Link copied" : "Link ready") : "Making link",
           done: false,
           settled: false,
           failed: false,
