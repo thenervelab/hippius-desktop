@@ -104,7 +104,7 @@ pub fn crash_record(what: &str, detail: &str, location: &str, thread: &str, back
 
 /// Where the crash file goes: beside the rolling logs. `None` in tests (they
 /// must not write to the real home) and without a home folder.
-fn crash_log_path() -> Option<std::path::PathBuf> {
+pub fn crash_log_path() -> Option<std::path::PathBuf> {
     if cfg!(test) {
         return None;
     }

@@ -33,6 +33,8 @@ pub mod recovery;
 pub mod recovery_binding;
 pub mod recovery_proof;
 pub mod release_channel;
+#[cfg(any(windows, test))]
+pub mod runtime_watchdog;
 pub mod shared_drives;
 pub mod shares;
 pub mod sync;

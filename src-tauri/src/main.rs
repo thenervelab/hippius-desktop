@@ -35,6 +35,8 @@ pub mod recovery;
 pub mod recovery_binding;
 mod recovery_proof;
 pub mod release_channel;
+#[cfg(any(windows, test))]
+pub mod runtime_watchdog;
 pub mod shared_drives;
 pub mod shares;
 pub mod splash;
@@ -1234,6 +1236,11 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         debug!(".setup() closure called in setup.rs");
         // Converted video previews a crash left in the private cache.
         tauri::async_runtime::spawn_blocking(crate::video_engine::sweep_converted_at_launch);
+
+        // Windows: restart the app if its async runtime dies, rather than
+        // leave a window that does nothing (`runtime_watchdog`).
+        #[cfg(windows)]
+        crate::runtime_watchdog::start(app.handle().clone());
 
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before
