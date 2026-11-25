@@ -17,7 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
-- The sign-in screen now shows what Hippius Drive does: encryption, screen recording and sharing with insights.
+- The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
 
 ### Added
 
