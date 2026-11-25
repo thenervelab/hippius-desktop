@@ -126,6 +126,9 @@ import {
   driveRootHref,
   driveTrail,
   initialDriveView,
+  isInsidePinnedFolder,
+  pinnedFolderHref,
+  trailFromPinnedFolder,
   urlAfterOpen,
   type TrailTarget,
 } from "./driveTrail";
@@ -1776,6 +1779,21 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     if (next.url) router.push(next.url);
   }, [allData, isNested, isOnLocalView, isLoading, router, getParam, basePath]);
 
+  // A page rooted at a folder inside a drive (captures kept in a folder of
+  // another drive) lists that folder and what is under it, never the rest of
+  // the drive. Every way above it (opening the page, the drive's root, a
+  // crumb, a stale link) lands back on the folder, so this is the one place
+  // that keeps the page inside it.
+  const pinnedFolderUrl = useMemo(
+    () => pinnedFolderHref(basePath, pinned, pinned ? drivePathsByLabel[pinned.label] : null),
+    [basePath, pinned, drivePathsByLabel],
+  );
+  useEffect(() => {
+    if (!pinnedFolderUrl || isRecentFiles) return;
+    if (isInsidePinnedFolder(pinned, isNested, urlSubFolderPath)) return;
+    router.replace(pinnedFolderUrl);
+  }, [pinnedFolderUrl, isRecentFiles, pinned, isNested, urlSubFolderPath, router]);
+
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the
   // first segment is the active sync folder display name, followed by one
@@ -1958,7 +1976,8 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
               sharedDriveNames.get(target.label),
             )
         : () => handleNavigateToBreadcrumbSegment(target.name, target.subPath);
-    return steps.map((step) => ({
+    // A page rooted at a folder starts its trail there.
+    return trailFromPinnedFolder(steps, pinned).map((step) => ({
       label: step.label,
       title: step.label,
       onClick: step.target ? go(step.target) : undefined,
@@ -1981,6 +2000,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     urlSubFolderPath,
     urlMainFolderActualName,
     activeRemoteLabel,
+    pinned,
     handleNavigateToSyncFolderRoot,
     handleNavigateToBreadcrumbSegment,
   ]);

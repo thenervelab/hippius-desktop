@@ -359,6 +359,10 @@ pub struct StarredItem {
     pub open_path: Option<String>,
     pub uploaded_by: Option<String>,
     pub uploaded_by_name: Option<String>,
+    /// A file's content hash (the server's `arion_hash`), which File Details
+    /// shows as the Arion hash, as for a Drive row. Empty for a drive or
+    /// folder, and for a file the server has not hashed yet.
+    pub arion_cid: String,
 }
 
 #[derive(Serialize, Debug, Clone, Default, PartialEq, Eq)]
@@ -532,6 +536,7 @@ pub fn build_items(dir: &DriveDirectory, pages: &[FavoritesPage]) -> Vec<Starred
                 open_path: Some(String::new()),
                 uploaded_by: None,
                 uploaded_by_name: None,
+                arion_cid: String::new(),
             });
         }
         for f in &page.folders {
@@ -568,6 +573,7 @@ pub fn build_items(dir: &DriveDirectory, pages: &[FavoritesPage]) -> Vec<Starred
                 open_name: at.open_name,
                 uploaded_by: None,
                 uploaded_by_name: None,
+                arion_cid: String::new(),
             });
         }
         for f in &page.files {
@@ -621,6 +627,7 @@ fn file_item(dir: &DriveDirectory, f: &wire::FavoriteFile, id: String, key: Stri
         open_path,
         uploaded_by: f.uploaded_by.clone().filter(|s| !s.is_empty()),
         uploaded_by_name: f.uploaded_by_name.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        arion_cid: f.arion_hash.clone().unwrap_or_default(),
     }
 }
 
@@ -890,6 +897,25 @@ mod tests {
         let granted = &items[4];
         assert_eq!(granted.open_path.as_deref(), Some(""), "the grant's folder is the label's root");
         assert_eq!(granted.location, "Client work / Clients / Acme");
+    }
+
+    #[test]
+    fn a_starred_file_carries_its_arion_hash_for_file_details() {
+        let page: FavoritesPage = serde_json::from_value(serde_json::json!({
+            "files": [
+                { "owner_ss58": ME, "folder_hash": HASH, "file_id": "aa".repeat(32), "file_name": "a.pdf",
+                  "relative_path": "a.pdf", "arion_hash": "cid-abc" },
+                { "owner_ss58": ME, "folder_hash": HASH, "file_id": "bb".repeat(32), "file_name": "b.pdf",
+                  "relative_path": "b.pdf" }
+            ],
+            "folders": [{ "owner_ss58": ME, "folder_hash": HASH, "path": "A" }],
+            "drives": [{ "owner_ss58": ME, "folder_hash": HASH, "label": "Docs" }]
+        }))
+        .unwrap();
+        let items = build_items(&directory(), &[page]);
+        let cids: Vec<_> = items.iter().map(|i| (i.kind, i.arion_cid.as_str())).collect();
+        // A file the server has not hashed yet, and every drive or folder, carry none.
+        assert_eq!(cids, vec![("drive", ""), ("folder", ""), ("file", "cid-abc"), ("file", "")]);
     }
 
     #[test]
