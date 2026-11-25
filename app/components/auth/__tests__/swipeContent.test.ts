@@ -1,11 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { SWIPE_CONTENT } from "../SwipeContent";
+import {
+  SHARE_TRACK_SLIDE,
+  SHARE_TRACK_SLIDE_ENABLED,
+  SWIPE_CONTENT,
+} from "../SwipeContent";
 
-const publicDir = path.resolve(__dirname, "../../../../public");
-// The sign-in panel was reported to push memory up on Linux, so a new clip
-// must stay within what the original clips weighed.
+const repoRoot = path.resolve(__dirname, "../../../..");
+const publicDir = path.join(repoRoot, "public");
+const parkedClips = path.join(repoRoot, "docs/plans/signin-visuals/clips");
+// The sign-in panel was reported to push memory up on Linux, so a clip must
+// stay within what the original clips weighed.
 const MAX_GIF_BYTES = 4.5 * 1024 * 1024;
 
 describe("sign-in slides", () => {
@@ -14,7 +20,6 @@ describe("sign-in slides", () => {
       "Distributed Storage",
       "Encrypted on Your Device",
       "Screen Recording",
-      "Share & Track",
       "Referrals",
     ]);
   });
@@ -51,5 +56,20 @@ describe("sign-in slides", () => {
       .filter((f) => f.endsWith(".gif"))
       .map((f) => `/assets/signin/${f}`);
     expect(shipped.sort()).toEqual([...used].sort());
+  });
+
+  describe("Share & Track, hidden until document links are live everywhere", () => {
+    it("is off the carousel while the flag is off", () => {
+      expect(SHARE_TRACK_SLIDE_ENABLED).toBe(false);
+      expect(SWIPE_CONTENT).not.toContain(SHARE_TRACK_SLIDE);
+    });
+
+    it("keeps its clips in the repo, outside the app bundle, ready to come back", () => {
+      for (const src of [SHARE_TRACK_SLIDE.gif, SHARE_TRACK_SLIDE.gifDark]) {
+        const name = path.basename(src);
+        expect(fs.existsSync(path.join(parkedClips, name))).toBe(true);
+        expect(fs.existsSync(path.join(publicDir, src))).toBe(false);
+      }
+    });
   });
 });
