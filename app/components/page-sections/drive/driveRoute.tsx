@@ -9,6 +9,12 @@ export interface PinnedDrive {
   label: string;
   /** Not synced on this computer: browsed from the server. */
   remote: boolean;
+  /**
+   * A folder inside the drive the page is rooted at, as a path from the
+   * drive's root: captures kept in a folder of another drive. The page lists
+   * that folder and what is under it, never the rest of the drive.
+   */
+  folder?: string;
 }
 
 /**

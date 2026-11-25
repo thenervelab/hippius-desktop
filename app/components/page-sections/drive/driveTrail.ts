@@ -9,6 +9,7 @@
 
 import { openDriveHref, type DriveToOpen } from "@/app/lib/routes";
 import { isNestedFolderView } from "@/app/lib/utils/filesViewMode";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 import type { DriveRoute, PinnedDrive } from "./driveRoute";
 
 /** Where a crumb goes. `null` on the crumb for the current location. */
@@ -145,4 +146,89 @@ export function isDriveOpenInUrl(getParam: (key: string) => string | null | unde
     folderName: getParam("folderName"),
     subFolderPath: getParam("subFolderPath"),
   });
+}
+
+// ── A page rooted at a folder inside a drive ─────────────────────────────
+//
+// Captures kept in a folder of another drive (`PinnedDrive.folder`): the
+// Captures page lists that folder and what is under it, and nothing above
+// it. These answer, from the URL alone, where the page's root is, whether
+// the view on screen is inside it, and what the trail shows from there.
+
+/** A folder path as compared here: no leading, trailing or doubled `/`. */
+function folderPathOf(path: string | null | undefined): string {
+  return (path ?? "").split("/").filter(Boolean).join("/");
+}
+
+/**
+ * The URL of the folder a pinned page is rooted at, built the way a
+ * breadcrumb jump builds a folder's URL, or `null` when the page is pinned
+ * to a whole drive, or when a drive synced here has no folder known yet
+ * (`syncPath`), so there is nothing to point the listing at.
+ */
+export function pinnedFolderHref(
+  basePath: string,
+  pinned: PinnedDrive | null,
+  syncPath: string | null | undefined,
+): string | null {
+  const folder = folderPathOf(pinned?.folder);
+  if (!pinned || !folder) return null;
+  // The listing finds its drive by this: `remote://<label>` for one browsed
+  // from the server, a path inside the drive's own folder for one synced here.
+  const source = pinned.remote
+    ? `${REMOTE_SOURCE_PREFIX}${pinned.label}`
+    : syncPath
+      ? `${syncPath.replace(/\/+$/, "")}/${folder}`
+      : null;
+  if (!source) return null;
+  const parts = folder.split("/");
+  const name = parts[parts.length - 1];
+  const params = new URLSearchParams();
+  params.set("folderName", name);
+  params.set("folderActualName", name);
+  params.set("mainFolderActualName", parts[0]);
+  params.set("subFolderPath", folder);
+  params.set("folderSource", source);
+  return `${basePath}?${params.toString()}`;
+}
+
+/**
+ * Whether the view on screen is the pinned folder or a folder under it.
+ * Always true for a page pinned to a whole drive. The drive's root, or any
+ * folder beside the pinned one, is outside it.
+ */
+export function isInsidePinnedFolder(
+  pinned: PinnedDrive | null,
+  nested: boolean,
+  subFolderPath: string | null | undefined,
+): boolean {
+  const folder = folderPathOf(pinned?.folder);
+  if (!folder) return true;
+  if (!nested) return false;
+  const path = folderPathOf(subFolderPath);
+  return path === folder || path.startsWith(`${folder}/`);
+}
+
+/**
+ * Whether the view on screen is the pinned page's own root: the pinned
+ * drive's root, or the pinned folder itself. That is where the page shows
+ * its own empty state.
+ */
+export function isPinnedRoot(pinned: PinnedDrive | null, subFolderPath: string | null | undefined): boolean {
+  if (!pinned) return false;
+  return folderPathOf(subFolderPath) === folderPathOf(pinned.folder);
+}
+
+/**
+ * The trail on a page rooted at a folder: it starts at that folder, since
+ * the drive and the folders above it are not part of the page. Unchanged
+ * for a page pinned to a whole drive.
+ */
+export function trailFromPinnedFolder(steps: TrailStep[], pinned: PinnedDrive | null): TrailStep[] {
+  const folder = folderPathOf(pinned?.folder);
+  if (!folder) return steps;
+  // `steps` is the drive, then one crumb per folder from the drive's root,
+  // so the pinned folder's own crumb is at its depth.
+  const depth = folder.split("/").length;
+  return steps.length > depth ? steps.slice(depth) : steps;
 }

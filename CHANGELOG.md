@@ -17,7 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
-- The sign-in screen now shows what Hippius Drive does: encryption, screen recording and sharing with insights.
+- The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
 - **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading; the card shows how far the upload has got, and if the upload fails it tells you the copied link won't open and offers Retry. Long recordings also upload faster.
 
 ### Added
@@ -259,6 +259,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Captures saved in a folder inside one of your drives show on the Captures page.** If you picked a folder in, say, your Documents drive, the Captures page now lists the screenshots, recordings and folders in it, also while that drive is paused on this computer, instead of only saying where they are.
 - **Hippius Drive is called Hippius Drive on your Mac too.** Your Applications folder, Launchpad, Spotlight and the Dock now show the app as Hippius Drive instead of Hippius. It is still the same app, so updates keep installing over your current copy.
 - **NDA records no longer show a raw placeholder.** On a link that doesn't ask for an email, the NDA record leaves out the Recipient line instead of showing the placeholder, and any other unknown value reads as plain words.
 - **Clearer link rules.** The Watermark card says "Date, and email when known", the first-open email switch says it covers every link, and a password link's NDA card says why it can't have one.

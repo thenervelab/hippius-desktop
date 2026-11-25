@@ -108,6 +108,11 @@ export interface StarredItem {
   /** Files: the uploader, when the server says. */
   uploadedBy: string | null;
   uploadedByName: string | null;
+  /**
+   * A file's content hash, shown in File Details as the Arion hash, as for
+   * a Drive row. Empty for a drive, a folder, or a file not hashed yet.
+   */
+  arionCid: string;
 }
 
 export interface StarredListing {

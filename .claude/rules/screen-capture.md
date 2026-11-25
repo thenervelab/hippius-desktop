@@ -1472,8 +1472,8 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `~/.hippius`. Such a folder is remembered in `capture_drive_folders_v1`
   (`own_capture_folders`), never in the labels list, so the free plan's
   count and the share dialog's capture default read only that folder of the
-  drive; the Captures page does not pin that drive, it names the folder and
-  opens it in Drive.
+  drive; the Captures page pins the drive ROOTED AT that folder
+  (`PinnedDrive.folder`, below).
   `permission_note` warns before macOS's Documents/Desktop/Downloads prompt;
   `folder_refused_copy` explains a refusal. The drive is added through
   `add_local_sync_folder` (Sync a Folder's path) under `ENSURE_LOCK`; a
@@ -1494,7 +1494,14 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `DriveContainer`, pinned through `DriveRouteContext` (`driveRoute.tsx`:
   `basePath` for folder links and navigation, `pinned` opens it straight in
   and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
-  page's `emptyState` at the pinned root), keyed on the drive. Before it
+  page's `emptyState` at the pinned root), keyed on the drive and folder. A
+  folder inside another drive is `pinned.folder`: `DriveContainer` replaces
+  any URL outside it with `pinnedFolderHref` (`isInsidePinnedFolder`), and
+  the trail starts at it (`trailFromPinnedFolder`), so the page never shows
+  the rest of that drive. `capture_drive_status.remote` follows delivery
+  (`destination::is_local`): a paused drive's captures are uploaded straight
+  to the server and never reach its folder here, so it is browsed from the
+  server. Pinned by `driveTrail.test.ts` and `CapturesView.test.tsx`. Before it
   exists: an empty state with Record / Screenshot and "Set up the folder
   now", plus Rust's pending sentence or the waiting count.
 

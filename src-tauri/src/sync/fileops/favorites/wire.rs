@@ -132,6 +132,10 @@ pub struct FavoriteFile {
     pub uploaded_by: Option<String>,
     #[serde(default)]
     pub uploaded_by_name: Option<String>,
+    /// The file's content hash, as `/browse` gives it: File Details shows it
+    /// as the Arion hash, the same field a Drive row shows.
+    #[serde(default)]
+    pub arion_hash: Option<String>,
 }
 
 impl FavoriteFile {

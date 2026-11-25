@@ -2,8 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { useSetAtom } from "jotai";
-import { useRouter } from "next/navigation";
-import { Camera, FolderOpen, HardDrive } from "lucide-react";
+import { Camera, HardDrive } from "lucide-react";
 
 import PageHeader from "@/components/ui/page-header";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,7 @@ import DriveContainer from "@/app/components/page-sections/drive/DriveContainer"
 import { DriveRouteContext, type DriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useCaptureDriveStatus } from "@/app/lib/hooks/useCaptureDriveStatus";
 import { captureDialogAtom } from "@/app/lib/capture/captureFlow";
-import { CAPTURES_ROUTE, driveFolderRoute } from "@/app/lib/routes";
+import { CAPTURES_ROUTE } from "@/app/lib/routes";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
 import { activeSubMenuItemAtom } from "@/app/components/sidebar/sideBarAtoms";
 import { freeRecordingsUsed, useFreePlanNotice } from "@/app/lib/capture/freePlanNotice";
@@ -41,9 +40,10 @@ const SUBTITLE = "Your screenshots and recordings, in a drive of their own.";
  * go, or the chosen folder could not be added yet) it says what happens and
  * offers to set it up. Which state applies is Rust's (`capture_drive_status`).
  *
- * Captures kept in a folder inside one of the user's drives (their main
- * drive, say) are not pinned here: the page would show that whole drive. It
- * says where they are and opens that folder in Drive instead.
+ * Captures kept in a folder inside one of the user's drives (their
+ * Documents drive, say) are listed the same way, rooted at that folder
+ * (`PinnedDrive.folder`): its captures and subfolders, never the rest of the
+ * drive.
  */
 export default function CapturesView() {
   const { data: status, isLoading, isError, refetch } = useCaptureDriveStatus();
@@ -57,21 +57,20 @@ export default function CapturesView() {
     return () => setFileDetails(null);
   }, [setActiveSubMenuItem, setFileDetails]);
 
-  const router = useRouter();
-  // A folder inside another drive: never pin the whole drive here.
-  const inFolder = status?.state === "ready" && status.folder ? status : null;
-  const label = status?.state === "ready" && !inFolder ? status.label : null;
+  const label = status?.state === "ready" ? status.label : null;
   const remote = status?.state === "ready" ? status.remote : false;
+  // A folder inside another drive: the page is rooted there.
+  const folder = status?.state === "ready" ? status.folder || undefined : undefined;
   const route = useMemo<DriveRoute | null>(
     () =>
       label
         ? {
             basePath: CAPTURES_ROUTE,
-            pinned: { label, remote },
+            pinned: { label, remote, folder },
             emptyState: <CapturesEmptyState />,
           }
         : null,
-    [label, remote],
+    [label, remote, folder],
   );
 
   const openSetup = () => setDialog({ kind: "captureDrive" });
@@ -95,31 +94,11 @@ export default function CapturesView() {
           {recordingsUsed}
         </p>
       )}
-      {inFolder ? (
-        <div className="flex flex-col gap-3 px-3 pb-10">
-          <div data-testid="captures-in-folder" className={NOTE}>
-            <FolderOpen
-              aria-hidden
-              className="mt-0.5 size-[18px] shrink-0 text-primary-50 dark:text-primary-brand-dark"
-              strokeWidth={2}
-            />
-            <p className="min-w-0 flex-1 basis-60">
-              {`Your captures are saved in ${inFolder.location?.place ?? inFolder.folder}, in your ${inFolder.name} drive.`}
-            </p>
-            <Button
-              variant="defaultStable"
-              size="sm"
-              onClick={() => router.push(driveFolderRoute(inFolder.label, inFolder.remote, inFolder.folder))}
-            >
-              Open folder
-            </Button>
-          </div>
-        </div>
-      ) : route ? (
-        // Keyed on the drive: a moved captures drive is a different drive,
-        // opened fresh rather than over the old one's view.
+      {route ? (
+        // Keyed on the drive and folder: a moved captures folder is a
+        // different place, opened fresh rather than over the old one's view.
         <DriveRouteContext.Provider value={route}>
-          <DriveContainer key={`${route.pinned?.label}:${route.pinned?.remote}`} />
+          <DriveContainer key={`${route.pinned?.label}:${route.pinned?.remote}:${route.pinned?.folder ?? ""}`} />
         </DriveRouteContext.Provider>
       ) : (
         <div className="flex flex-col gap-3 px-3 pb-10">
