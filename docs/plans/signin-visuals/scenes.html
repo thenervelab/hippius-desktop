@@ -203,31 +203,22 @@ function docLines(x, y, w, lines, color, opacityFn) {
   }
 }
 
-// ---------- depth: parallax layers, bobbing, wall planes, light sweeps ----------
-// Each layer drifts on the same slow loop, scaled by its depth, so nearer
-// layers move further than farther ones. Offsets snap to whole pixels: the
-// GIF then only changes when a layer actually moves a pixel, which is what
-// keeps a clip with constant motion small.
+// ---------- depth: layers, wall planes, light sweeps ----------
+// The scene holds still: depth comes from the isometric drawing, the floor
+// shadows and the light sweeps, never from moving the scene. A camera drift
+// (each layer translated a few pixels on a slow loop) and floating bobs (a
+// few pixels up and down) used to sit on top of the animation; snapped to
+// whole pixels, they read as the whole picture swaying and as objects
+// shaking, so both are gone and only the elements' own animation moves.
 const TAU = Math.PI * 2;
-const WAVE = TAU / LOOP;
-// ?drift= scales the drift (0 turns it off) for size experiments.
-const DRIFT = Number(params.get("drift") ?? 1);
-function off(depth) {
-  return [
-    Math.round(6 * DRIFT * depth * Math.sin(WAVE * currentT)),
-    Math.round(3 * DRIFT * depth * Math.cos(WAVE * currentT + 0.6)),
-  ];
-}
 let currentT = 0;
-function layer(depth, fn) {
-  const [dx, dy] = off(depth);
-  add(`<g transform="translate(${dx},${dy})">`);
+// One plane of the scene, drawn back to front; kept as a group so the order
+// of planes reads in the scene code.
+function layer(fn) {
+  add(`<g>`);
   fn();
   add(`</g>`);
 }
-// Whole-pixel bob in z; k cycles per loop keeps it seamless.
-const bob = (amp, phase = 0, k = 1) => Math.round(amp * Math.sin(k * WAVE * currentT + phase));
-const shift = (p, d) => { const [dx, dy] = off(d); return [p[0] + dx, p[1] + dy]; };
 
 // Local (u right, v down) onto a wall facing the viewer's left (+y normal).
 const wallY = (x, y, z) => {
@@ -328,11 +319,10 @@ function sceneNet(t) {
   const offline = ease(seg(t, 3.9, 4.4)) * reset;
   const ghost = ease(seg(t, 1.0, 1.5)) * (1 - ease(seg(t, 4.7, 5.4)));
   const ok = easeOut(seg(t, 5.3, 5.8)) * (1 - ease(seg(t, 6.6, 7.2)));
-  const cardTop = 250 + bob(5);
-  const GROUND = 0.3, MID = 0.6, NEAR = 1.4;
+  const cardTop = 250;
 
   const lit = (ci) => ease(seg(t, land(ci) - 0.1, land(ci) + 0.3)) * reset;
-  layer(GROUND, () => {
+  layer(() => {
     const items = [{ k: 0, draw: () => disc(0, 0, 58, 24) }];
     clusters.forEach((c, ci) => c.forEach((n) => items.push({ k: n[0] + n[1], draw: () => {
       const dim = ci === OFF ? offline : 0;
@@ -352,8 +342,8 @@ function sceneNet(t) {
   });
 
   // the file floating above the hub, with its shadow on the hub
-  layer(MID, () => {
-    floorShadow(0, 0, 70 + bob(4), 26, 0.3);
+  layer(() => {
+    floorShadow(0, 0, 70, 26, 0.3);
     panelY(-58, 0, cardTop, 116, 148, 8, { opacity: 1 - 0.72 * ghost }, () => {
       docFace(116, 148);
       sheen(116, 148, seg(t, 5.4, 6.2));
@@ -361,9 +351,9 @@ function sceneNet(t) {
   });
 
   // shards out along arcs, and back again while one cluster is offline
-  const cardC = shift(P(0, 0, cardTop - 74), MID);
+  const cardC = P(0, 0, cardTop - 74);
   clusters.forEach((c, ci) => {
-    const dst = shift(P(c[0][0], c[0][1], c[0][3]), GROUND);
+    const dst = P(c[0][0], c[0][1], c[0][3]);
     const show = ease(seg(t, send(ci) - 0.3, send(ci) + 0.6)) * reset * (ci === OFF ? 1 - 0.85 * offline : 1);
     const ctrl = arc(cardC, dst, 120 + ci * 14, show > 0 ? 1 : 0, { opacity: show * 0.85 });
     const k = seg(t, send(ci), land(ci));
@@ -380,9 +370,9 @@ function sceneNet(t) {
     }
   });
 
-  layer(NEAR, () => {
+  layer(() => {
     if (offline > 0.01) {
-      const [X, Y] = P(clusters[OFF][0][0], clusters[OFF][0][1], clusters[OFF][0][3] + 48 + bob(4, 1));
+      const [X, Y] = P(clusters[OFF][0][0], clusters[OFF][0][1], clusters[OFF][0][3] + 48);
       add(`<g opacity="${offline.toFixed(3)}" transform="translate(${X.toFixed(1)},${Y.toFixed(1)}) scale(${S})">`);
       add(`<circle r="17" fill="${C.top}" stroke="${C.edge}" stroke-width="1.4"/><path d="M-6,-6 L6,6 M6,-6 L-6,6" stroke="${C.ink}" stroke-width="2.4" stroke-linecap="round"/>`);
       add(`</g>`);
@@ -405,14 +395,14 @@ function sceneEnc(t) {
   const sealed = easeOut(seg(t, 3.4, 3.9));
   const outK = ease(seg(t, 6.3, 7.0));
   const inK = ease(seg(t, 7.0, 8.0));
-  const z = 270 + bob(5);
+  const z = 270;
   const keyed = ease(seg(t, 4.3, 4.9)) * (1 - outK);
   const unlock = ease(seg(t, 4.9, 5.3)) * (1 - ease(seg(t, 5.6, 6.0)));
   // how much of the card is inside the gate, for the scan glow
   const inside = clamp(1 - Math.abs(cx) / (CW / 2 + 20));
   const GATE_X = P(0, 0, 0)[0];
 
-  layer(0.6, () => {
+  layer(() => {
     // card shadows on the floor
     floorShadow(cx, 0, 90, 30, 0.35 * (1 - outK));
     if (inK > 0) floorShadow(-260, 0, 90, 30, 0.35 * inK);
@@ -446,16 +436,16 @@ function sceneEnc(t) {
       });
       add(`</g>`);
     };
-    if (outK < 1) card(cx, z + Math.round(40 * outK), 1 - outK);
-    if (inK > 0) card(-260, z - Math.round(40 * (1 - inK)), inK);
+    if (outK < 1) card(cx, z + 40 * outK, 1 - outK);
+    if (inK > 0) card(-260, z - 40 * (1 - inK), inK);
 
     // near post drawn over the card
     add(`<g transform="${wallX(14, 100, 300)}"><rect x="-13" y="-13" width="26" height="316" rx="13" fill="${mix(C.top, C.accLight, 0.35)}" stroke="${C.accEdge}" stroke-width="1.3"/></g>`);
   });
 
   // your key, floating at the front: only it opens the sealed file
-  const keyZ = 40 + bob(5, 1.2);
-  layer(1.4, () => {
+  const keyZ = 40;
+  layer(() => {
     slab(-200, 150, -110, 210, 14, keyZ, 10, { shadow: false });
     floorShadow(-155, 180, 50, 20, 0.35);
     add(`<g transform="${planeTop(-190, 158, keyZ + 10)}"><g transform="translate(36,22) rotate(-90)">`);
@@ -463,8 +453,8 @@ function sceneEnc(t) {
     add(`</g></g>`);
   });
   if (keyed > 0.01) {
-    const a = shift(P(-155, 180, keyZ + 10), 1.4);
-    const b = shift(P(cx, 0, z - CH / 2), 0.6);
+    const a = P(-155, 180, keyZ + 10);
+    const b = P(cx, 0, z - CH / 2);
     arc(a, b, 140, keyed, { color: C.accEdge, width: 1.8, opacity: keyed * (1 - ease(seg(t, 5.8, 6.3))) });
   }
 }
@@ -481,9 +471,9 @@ function sceneRec(t) {
   const fill = clamp((t - 1.0) / 3.9) * (t < 4.9 ? 1 : 1) * (t >= 1.0 ? 1 : 0);
   const fillK = t < 4.9 ? fill : 1;
   const grow1 = ease(seg(t, 2.1, 2.5)) * reset, grow2 = ease(seg(t, 3.5, 3.9)) * reset;
-  const wz = ZT + bob(4);
+  const wz = ZT;
 
-  layer(0.4, () => {
+  layer(() => {
     floorShadow(0, 40, 230, 60, 0.3);
     panelY(X0, 0, wz, W0, H0, 10, { r: 12 }, () => {
       // title bar and a small dashboard being recorded
@@ -516,8 +506,8 @@ function sceneRec(t) {
   });
 
   // timeline strip in front of the window
-  layer(0.8, () => {
-    const TZ = 70 + bob(3, 0.8);
+  layer(() => {
+    const TZ = 70;
     floorShadow(0, 150, 220, 26, 0.28);
     panelY(-240, 150, TZ, 480, 40, 6, { r: 10 }, () => {
       const n = 22;
@@ -534,8 +524,8 @@ function sceneRec(t) {
   });
 
   // camera bubble, record control and the share link float nearest
-  layer(1.4, () => {
-    const [bx, by] = P(X0 + 46, 50, wz - H0 + 30 + bob(4, 2));
+  layer(() => {
+    const [bx, by] = P(X0 + 46, 50, wz - H0 + 30);
     add(`<g transform="translate(${bx.toFixed(1)},${by.toFixed(1)}) scale(${S})">`);
     add(`<ellipse cx="6" cy="62" rx="44" ry="10" fill="${C.shadow}" opacity="0.5" filter="url(#soft)"/>`);
     if (recFade > 0.01) add(`<circle r="${(52 + 4 * Math.sin(currentT * TAU * 1.5)).toFixed(1)}" fill="none" stroke="${C.acc}" stroke-width="3" opacity="${(0.6 * recFade).toFixed(3)}"/>`);
@@ -543,7 +533,7 @@ function sceneRec(t) {
     add(`<clipPath id="cam"><circle r="44"/></clipPath><g clip-path="url(#cam)"><circle cx="0" cy="-8" r="16" fill="${C.accSide}"/><path d="M-30,46 c0,-34 60,-34 60,0 z" fill="${C.accSide}"/></g>`);
     add(`</g>`);
 
-    const [px, py] = P(0, 40, ZT + 70 + bob(4, 0.5));
+    const [px, py] = P(0, 40, ZT + 70);
     const secs = recording ? Math.min(3, Math.floor(t - 1.0)) : t >= 4.9 && reset > 0.5 ? 3 : 0;
     const ringK = recording ? seg(t, 1.0, 4.9) : t >= 4.9 && reset > 0.5 ? 1 : 0;
     add(`<g transform="translate(${px.toFixed(1)},${py.toFixed(1)}) scale(${S})">`);
@@ -581,8 +571,8 @@ function sceneShare(t) {
   ];
   const appearAt = (i) => 0.9 + i * 0.62;
   const outFade = 1 - ease(seg(t, 6.7, 7.5));
-  layer(0.4, () => shareGround(t, people, appearAt, outFade));
-  layer(1.2, () => shareFloating(t, people, appearAt, outFade));
+  layer(() => shareGround(t, people, appearAt, outFade));
+  layer(() => shareFloating(t, people, appearAt, outFade));
 }
 
 function shareGround(t, people, appearAt, outFade) {
@@ -638,7 +628,7 @@ function shareFloating(t, people, appearAt, outFade) {
   const views = people.filter((p, i) => t >= appearAt(i) + 0.55).length;
   const counterIn = easeOut(seg(t, 1.2, 1.6)) * outFade;
   if (counterIn > 0.01) {
-    const z = lerp(14, 60, counterIn) + bob(4, 0.4);
+    const z = lerp(14, 60, counterIn);
     slab(-170, -230, -60, -180, 14, z, 8, { opacity: counterIn, shadow: false });
     add(`<g opacity="${counterIn.toFixed(3)}" transform="${planeTop(-160, -222, z + 8)}">`);
     add(`<path d="M6,17 q12,-12 24,0 q-12,12 -24,0 z" fill="none" stroke="${C.accEdge}" stroke-width="2"/><circle cx="18" cy="17" r="4" fill="${C.accEdge}"/>`);
