@@ -743,7 +743,15 @@ export default function CapturePreviewPage() {
               )}
               {actions.mintLink ? (
                 <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
-                  <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                  {card.link.state === "broken" ? (
+                    <>
+                      <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                    </>
+                  ) : (
+                    <>
+                      <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                    </>
+                  )}
                 </button>
               ) : (
                 <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY_ACTION}>

@@ -75,6 +75,13 @@ pub struct ServerCapabilities {
     /// shows for a file link (`shares::preview`). Absent on older servers,
     /// which then get no preview and no request.
     pub share_preview: bool,
+    /// A file link opened while its file is still uploading answers
+    /// "still uploading" (`409 share_uploading` with the chunks received so
+    /// far, hcfs #1454) instead of the bodiless 404 an older server gives,
+    /// and the share page says so. A capture's link is opened in the
+    /// browser before its upload finishes only against such a server
+    /// (`capture::deliver::EARLY_LINK`).
+    pub share_open_while_uploading: bool,
     /// Share link insights (hcfs #670): `GET /v1/shares/{token}/insights`
     /// and `PATCH /v1/shares/{token}/settings`. Absent on older servers,
     /// which then get no switches sent and show no Insights.
@@ -308,7 +315,7 @@ mod tests {
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
             r#""share_recipient_links":true,"share_group_insights":true,"#,
             r#""share_expiry_date":true,"share_watermark_switch":true,"share_nda_signer_names":true,"#,
-            r#""drive_moves":true,"folder_share_insights":true,"drive_trash":true}"#,
+            r#""drive_moves":true,"folder_share_insights":true,"drive_trash":true,"share_open_while_uploading":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -320,6 +327,7 @@ mod tests {
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
         assert!(caps.share_preview);
+        assert!(caps.share_open_while_uploading);
         assert!(caps.share_insights);
         assert!(caps.share_comments);
         assert!(caps.share_notifications);
@@ -372,6 +380,7 @@ mod tests {
                 "share_nda",
                 "share_nda_signer_names",
                 "share_notifications",
+                "share_open_while_uploading",
                 "share_preview",
                 "share_reaction_moments",
                 "share_recipient_links",
@@ -393,6 +402,10 @@ mod tests {
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
         assert!(!old.share_preview, "a server without the preview routes is never sent one");
+        assert!(
+            !old.share_open_while_uploading,
+            "a server that 404s a link still uploading never has one opened early"
+        );
         assert!(!old.share_insights, "a server without insights is sent no switches");
         assert!(!old.share_comments, "a server without comments shows none");
         assert!(!old.share_notifications, "a server without email preferences shows none");
