@@ -76,8 +76,9 @@ pub enum LinkState {
     /// so it never slides away before it can say the link was copied.
     Creating,
     /// The link exists and was handed out (`copied` says whether it reached
-    /// the clipboard) while the capture's copy behind it is still uploading
-    /// (`deliver::EARLY_LINK`). It opens once the upload has finished.
+    /// the clipboard) while the capture's copy behind it is still uploading,
+    /// on a server that says "still uploading" to whoever opens it
+    /// (`share_open_while_uploading`). It opens once the upload has finished.
     Uploading { copied: bool },
     /// A link handed out while uploading whose upload then failed: it was
     /// revoked and never opens. The card says so and offers Retry, which
@@ -1208,14 +1209,6 @@ mod tests {
         assert!(!c.actions.copy_link, "the revoked link is never copied again");
         assert!(!c.settled, "it stays up until the user has seen it");
         assert_eq!(c.link_fields(), (false, Some("x".into())));
-    }
-
-    #[test]
-    fn a_link_out_while_uploading_counts_as_being_made() {
-        assert!(LinkState::Creating.is_being_made());
-        assert!(LinkState::Uploading { copied: false }.is_being_made());
-        assert!(!LinkState::Public { copied: true }.is_being_made());
-        assert!(!LinkState::Broken { message: String::new() }.is_being_made());
     }
 
     #[test]

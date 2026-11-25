@@ -846,20 +846,28 @@ direct upload to finish. While it is made the card shows its upload in Rust's
 words (`LinkProgress`, `card_link_progress`: "Uploading link 40%, about 30 s
 left", `linkPercent` for the bar), one update per step or percent
 (`link_progress_moved`). **The link is handed out the moment it exists,
-before its upload ends** (`deliver::EARLY_LINK`, one switch: `Always`, or
-`WhenServerShowsUploading` for servers advertising
-`share_open_while_uploading`): hcfs-client's `create_share_reporting_link`
-reports it right after `init`, `link_first` copies it and the card goes to
+before its upload ends, only where `/v1/capabilities` reports
+`share_open_while_uploading`** (`deliver::server_shows_uploading`, asked
+while the file is read and never awaited; an answer not in by the time the
+link exists counts as no): hcfs-client's `create_share_reporting_link`
+offers it right after `init` to `OnLink`, which answers whether it took it,
+and `link_first` then copies it, sends its switches (`spawn_apply`,
+registered before the card holds the token) and opens it, the card goes to
 `LinkState::Uploading { copied }` ("Link copied, uploading 40%, about 30 s
-left", note "Keep Hippius open until the upload finishes"; Copy link only,
-no Revoke or Manage until it is up). `link_first` still returns only when
-the upload has finished, so the drive's upload never shares the connection.
-Switches and the chat preview go after the upload (the server 404s both for
-a share still uploading), and the browser opens it early only on a server
-with `share_open_while_uploading`. A link reported and then failed is
-revoked by hcfs-client, never re-minted by the retry (`LINK_BROKEN`), and
-the card says `LinkState::Broken` ("Copied link won't open") with Retry in
-Create link's place; `announce_link` keeps it through placement. Pinned by
+left", note "Keep Hippius open until the upload finishes", which wins the
+line over a `notice`; Copy link only, no Revoke or Manage until it is up),
+and the chat preview is sent as soon as it is read, since that server takes
+the switches and the preview during the upload (and answers `/meta`,
+`/link-key`, `/blob` with `409 share_uploading`). Without the capability all
+of that waits for the upload, as on an older server, where such a link
+answers 404. `link_first` returns only when the upload has finished, so the
+drive's upload never shares the connection. A link handed out and then
+failed is revoked by hcfs-client, never re-minted by the retry
+(`LINK_BROKEN`; one offered but not taken is retried as usual), and the
+card says `LinkState::Broken` ("Copied link won't open", also joined to the
+`uploading` and `syncing` status lines) with Retry in Create link's place;
+`announce_link` keeps it through placement, and a capture with no card says
+`LINK_BROKEN` in its notification (`delivered_notice`). Pinned by
 `capture_wiring::the_link_is_copied_while_its_upload_runs`. The chat preview
 is read from the same file while the link is made and awaited before the
 file can move. Once placed,
