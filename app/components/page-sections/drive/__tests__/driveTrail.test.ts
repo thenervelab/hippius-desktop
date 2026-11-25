@@ -5,8 +5,15 @@ import {
   driveTrail,
   initialDriveView,
   isDriveOpenInUrl,
+  isInsidePinnedFolder,
+  isPinnedRoot,
+  pinnedFolderHref,
+  trailFromPinnedFolder,
   urlAfterOpen,
 } from "../driveTrail";
+import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
+import { isNestedFolderView } from "@/app/lib/utils/filesViewMode";
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { DRIVE_PAGE_ROUTE } from "../driveRoute";
 import { SHARED_DRIVES_DRIVE_ROUTE } from "../../shared-drives/SharedDriveOpenView";
 import { sharedDrivesDriveRoute } from "@/app/lib/routes";
@@ -155,5 +162,106 @@ describe("whether Shared Drives has a drive open", () => {
     expect(isDriveOpenInUrl(paramsOf("/shared-drives"))).toBe(false);
     // Half a folder link shows the list rather than an empty folder.
     expect(isDriveOpenInUrl(paramsOf("/shared-drives?folderName=ACME"))).toBe(false);
+  });
+});
+
+// Captures kept in a folder the user picked inside one of their synced
+// drives (Documents > hippius-recordingss): the Captures page lists that
+// folder, its captures and its subfolders, and nothing else of the drive.
+describe("a Captures page rooted at a folder inside a drive", () => {
+  const SYNCED = { label: "Documents", remote: false, folder: "hippius-recordingss" };
+  const DOCUMENTS = "/Users/a/Documents";
+  // The page's getter, as `useUrlParams` gives it (missing = the default).
+  const getterOf = (href: string) => {
+    const params = new URL(`app://x${href}`).searchParams;
+    return (key: string, fallback = "") => params.get(key) ?? fallback;
+  };
+  const folderRow = (name: string, source: string): FormattedUserFile =>
+    ({ name, actualFileName: name, isFolder: true, source, arionHash: "" }) as unknown as FormattedUserFile;
+
+  it("opens the folder itself, found in the drive's folder here", () => {
+    const href = pinnedFolderHref("/captures", SYNCED, DOCUMENTS)!;
+    const get = paramsOf(href);
+    expect(href.startsWith("/captures?")).toBe(true);
+    expect(get("subFolderPath")).toBe("hippius-recordingss");
+    expect(get("mainFolderActualName")).toBe("hippius-recordingss");
+    expect(get("folderName")).toBe("hippius-recordingss");
+    // The listing finds the drive by a path inside its folder here.
+    expect(get("folderSource")).toBe("/Users/a/Documents/hippius-recordingss");
+    expect(isNestedFolderView({ folderName: get("folderName"), subFolderPath: get("subFolderPath") })).toBe(true);
+  });
+
+  it("opens it on the server for a drive whose captures go there", () => {
+    const get = paramsOf(pinnedFolderHref("/captures", { ...SYNCED, remote: true }, null)!);
+    expect(get("folderSource")).toBe("remote://Documents");
+    expect(get("subFolderPath")).toBe("hippius-recordingss");
+  });
+
+  it("names a deeper folder from the drive's root", () => {
+    const get = paramsOf(pinnedFolderHref("/captures", { ...SYNCED, folder: "Shots/hippius-captures/" }, DOCUMENTS)!);
+    expect(get("mainFolderActualName")).toBe("Shots");
+    expect(get("subFolderPath")).toBe("Shots/hippius-captures");
+    expect(get("folderName")).toBe("hippius-captures");
+  });
+
+  it("has nothing to open for a whole drive, or a synced drive not located yet", () => {
+    expect(pinnedFolderHref("/captures", { label: "Hippius Captures", remote: false }, DOCUMENTS)).toBeNull();
+    expect(pinnedFolderHref("/captures", SYNCED, undefined)).toBeNull();
+  });
+
+  it("stays inside the folder and its subfolders, never the drive's root or a folder beside it", () => {
+    expect(isInsidePinnedFolder(SYNCED, false, null)).toBe(false);
+    expect(isInsidePinnedFolder(SYNCED, true, "Projects")).toBe(false);
+    expect(isInsidePinnedFolder(SYNCED, true, "hippius-recordingss-old")).toBe(false);
+    expect(isInsidePinnedFolder(SYNCED, true, "hippius-recordingss")).toBe(true);
+    expect(isInsidePinnedFolder(SYNCED, true, "hippius-recordingss/Week 1/Demos")).toBe(true);
+    // A page pinned to a whole drive is never sent anywhere.
+    expect(isInsidePinnedFolder({ label: "Hippius Captures", remote: false }, false, null)).toBe(true);
+  });
+
+  it("opens a subfolder from its row and keeps it inside the page", () => {
+    const root = pinnedFolderHref("/captures", SYNCED, DOCUMENTS)!;
+    const { url } = generateFolderUrl(
+      folderRow("Week 1", `${DOCUMENTS}/hippius-recordingss/Week 1`),
+      getterOf(root),
+      undefined,
+      "/captures",
+    );
+    const get = paramsOf(url);
+    expect(url.startsWith("/captures?")).toBe(true);
+    expect(get("subFolderPath")).toBe("hippius-recordingss/Week 1");
+    expect(isInsidePinnedFolder(SYNCED, true, get("subFolderPath"))).toBe(true);
+    expect(isPinnedRoot(SYNCED, get("subFolderPath"))).toBe(false);
+  });
+
+  it("starts the trail at the folder, each level below it a way back", () => {
+    const trail = driveTrail({
+      drive: { label: "Documents", remote: false, name: "Documents" },
+      nested: true,
+      subFolderPath: "hippius-recordingss/Week 1",
+      mainFolderActualName: "hippius-recordingss",
+    });
+    expect(trailFromPinnedFolder(trail, SYNCED)).toEqual([
+      { label: "hippius-recordingss", target: { kind: "folder", name: "hippius-recordingss", subPath: "hippius-recordingss" } },
+      { label: "Week 1", target: null },
+    ]);
+    // At the folder itself it is the one crumb, and where you are.
+    const atRoot = driveTrail({
+      drive: { label: "Documents", remote: false, name: "Documents" },
+      nested: true,
+      subFolderPath: "hippius-recordingss",
+      mainFolderActualName: "hippius-recordingss",
+    });
+    expect(trailFromPinnedFolder(atRoot, SYNCED)).toEqual([{ label: "hippius-recordingss", target: null }]);
+    // A whole drive keeps its trail.
+    expect(trailFromPinnedFolder(atRoot, { label: "Documents", remote: false })).toEqual(atRoot);
+  });
+
+  it("shows the page's own empty state at the folder, not in its subfolders", () => {
+    expect(isPinnedRoot(SYNCED, "hippius-recordingss")).toBe(true);
+    expect(isPinnedRoot(SYNCED, "hippius-recordingss/Week 1")).toBe(false);
+    expect(isPinnedRoot(SYNCED, null)).toBe(false);
+    expect(isPinnedRoot({ label: "Hippius Captures", remote: false }, null)).toBe(true);
+    expect(isPinnedRoot(null, null)).toBe(false);
   });
 });
