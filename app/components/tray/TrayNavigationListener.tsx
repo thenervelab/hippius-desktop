@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   TRAY_OPEN_FILES_EVENT,
@@ -39,10 +39,17 @@ export const TRAY_OPEN_CHAT_TAURI_EVENT = "hippius:tray-open-chat";
 export default function TrayNavigationListener() {
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
+  // Read through a ref so the listeners below are registered once for the
+  // window's life. Both functions change identity on many renders (every
+  // navigation flips the loader context twice), and re-registering five
+  // Tauri listeners each time leaves script behind in WebView2.
+  const navRef = useRef({ navigateToFilesView, push });
+  navRef.current = { navigateToFilesView, push };
 
   useEffect(() => {
+    const push = (path: string) => navRef.current.push(path);
     const goTo = (path: string) => {
-      if (path === "/files") navigateToFilesView();
+      if (path === "/files") navRef.current.navigateToFilesView();
       push(path);
     };
 
@@ -103,7 +110,7 @@ export default function TrayNavigationListener() {
       void unlistenChat.then((fn) => fn());
       void unlistenPage.then((fn) => fn());
     };
-  }, [navigateToFilesView, push]);
+  }, []);
 
   return null;
 }

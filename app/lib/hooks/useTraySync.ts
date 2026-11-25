@@ -16,6 +16,7 @@ import { VM_FEATURE_ENABLED } from "@/app/lib/featureFlags";
 import { useAtom } from "jotai";
 import type { SyncSnapshot } from "../types/syncSnapshot";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import { singleFlight } from "@/app/lib/utils/singleFlight";
 import { deriveTrayIconState } from "@/app/lib/tray/trayIconState";
 import { isLinuxPlatform as detectLinuxPlatform } from "@/lib/utils/isMacPlatform";
 
@@ -77,29 +78,37 @@ export function clearLoginStatusCache() {
   trayDataCache = null;
 }
 
-/** Fetch tray data from Rust (login status + credits), with caching. */
-async function refreshTrayData(): Promise<{
+type TrayData = {
   loggedIn: boolean;
   credits: number | null;
   substrateAddress: string | null;
-}> {
+};
+
+/**
+ * The one `get_tray_menu_data` call in flight, shared by every caller. The
+ * login watcher asks every 2 s for the whole run; without this a slow or
+ * stopped backend got a new call each tick while none of the old ones
+ * settled, and they piled up for as long as the app stayed open.
+ */
+const fetchTrayData = singleFlight(async (): Promise<TrayData> => {
+  try {
+    const data = await invoke<TrayData>("get_tray_menu_data");
+    trayDataCache = { ...data, timestamp: Date.now() };
+    return data;
+  } catch {
+    return { loggedIn: false, credits: null, substrateAddress: null };
+  }
+});
+
+/** Fetch tray data from Rust (login status + credits), with caching. */
+async function refreshTrayData(): Promise<TrayData> {
   if (
     trayDataCache &&
     Date.now() - trayDataCache.timestamp < TRAY_CACHE_DURATION
   ) {
     return trayDataCache;
   }
-  try {
-    const data = await invoke<{
-      loggedIn: boolean;
-      credits: number | null;
-      substrateAddress: string | null;
-    }>("get_tray_menu_data");
-    trayDataCache = { ...data, timestamp: Date.now() };
-    return data;
-  } catch {
-    return { loggedIn: false, credits: null, substrateAddress: null };
-  }
+  return fetchTrayData();
 }
 
 /** Synchronous login check using cached data. */
@@ -538,7 +547,9 @@ let lastLoginStatus: boolean | null = null;
 function startLoginStatusWatcher() {
   const INTERVAL_MS = 2000;
 
-  const tick = async () => {
+  // One tick at a time: a tick waits on the backend and on menu updates, and
+  // the next must not start while it does.
+  const tick = singleFlight(async () => {
     const currentLoginStatus = await refreshLoginStatus();
 
     if (lastLoginStatus !== currentLoginStatus) {
@@ -551,7 +562,7 @@ function startLoginStatusWatcher() {
         void setTrayIconSyncing(false, false);
       }
     }
-  };
+  });
 
   void tick();
   const h = setInterval(tick, INTERVAL_MS);

@@ -260,9 +260,7 @@ function openTarget(row: FolderRow): string {
   // Keep each folder's size + file count climbing as the sync uploads. See
   // useRefreshWhileSyncing — silent refresh so the list updates in place.
   useRefreshWhileSyncing(
-    useCallback(() => {
-      void loadFolders({ silent: true });
-    }, [loadFolders]),
+    useCallback(() => loadFolders({ silent: true }), [loadFolders]),
     !!polkadotAddress,
   );
 

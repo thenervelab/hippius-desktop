@@ -19,6 +19,9 @@ let menuResult: {
 
 let chatUnreadSeed = 0;
 
+// When set, get_tray_menu_data answers with this (a backend that hangs).
+let menuPending: Promise<unknown> | null = null;
+
 let updateSeed: string | null = null;
 
 let capturesResult: unknown = { label: null, files: [] };
@@ -31,7 +34,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn((cmd: string) => {
     switch (cmd) {
       case "get_tray_menu_data":
-        return Promise.resolve(menuResult);
+        return menuPending ?? Promise.resolve(menuResult);
       case "sp_get_snapshot":
         return Promise.resolve(EMPTY_SNAPSHOT);
       case "get_recent_uploads":
@@ -270,5 +273,29 @@ describe("useTrayPanelData live feeds follow visibility", () => {
     await waitFor(() => expect(focusHandler).not.toBeNull());
     act(() => focusHandler?.({ payload: true }));
     await waitFor(() => expect(result.current.updateVersion).toBe("0.6.30"));
+  });
+});
+
+// The popover refreshes on a 5 s poll, on focus and on the shown signal. A
+// backend that stops answering must leave one call waiting, not a new round
+// per tick.
+describe("useTrayPanelData against a backend that stopped answering", () => {
+  beforeEach(() => {
+    eventHandlers.clear();
+    focusHandler = null;
+    menuPending = new Promise(() => undefined);
+    vi.mocked(invoke).mockClear();
+  });
+
+  it("keeps one refresh outstanding however often it is asked", async () => {
+    const { result } = renderHook(() => useTrayPanelData(flags.capture));
+    await waitFor(() => expect(focusHandler).not.toBeNull());
+    act(() => focusHandler?.({ payload: true }));
+    act(() => eventHandlers.get("hippius:tray-panel-shown")?.({ payload: null }));
+    for (let i = 0; i < 20; i++) void result.current.refresh();
+
+    const asked = vi.mocked(invoke).mock.calls.filter(([cmd]) => cmd === "get_tray_menu_data");
+    expect(asked).toHaveLength(1);
+    menuPending = null;
   });
 });
