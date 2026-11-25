@@ -124,6 +124,7 @@ function item(overrides: Partial<StarredItem> = {}): StarredItem {
     openPath: "Work",
     uploadedBy: null,
     uploadedByName: null,
+    arionCid: "",
     ...overrides,
   };
 }
