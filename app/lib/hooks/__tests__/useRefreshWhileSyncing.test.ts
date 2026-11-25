@@ -47,6 +47,32 @@ describe("useRefreshWhileSyncing", () => {
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 
+  it("waits for a slow refresh instead of starting another on every tick", async () => {
+    mockActive = true;
+    let settle!: () => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    renderHook(() => useRefreshWhileSyncing(refresh, true, 1000));
+    vi.advanceTimersByTime(10_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    settle();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("polls again after a refresh that failed", async () => {
+    mockActive = true;
+    const refresh = vi.fn(() => Promise.reject(new Error("backend down")));
+    renderHook(() => useRefreshWhileSyncing(refresh, true, 1000));
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(refresh).toHaveBeenCalledTimes(3);
+  });
+
   it("stops polling and fires exactly once on the active→idle edge", () => {
     mockActive = true;
     const refresh = vi.fn();

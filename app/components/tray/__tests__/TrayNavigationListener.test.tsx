@@ -83,3 +83,21 @@ describe("files dropped on the tray popover, in the main window", () => {
     expect(takeTrayDrop()).toBeNull();
   });
 });
+
+describe("registration", () => {
+  // Every navigation re-renders this component with new function identities;
+  // each re-registration used to leave script behind in WebView2.
+  it("listens once however often the window re-renders", async () => {
+    const { rerender } = render(<TrayNavigationListener />);
+    await waitFor(() => expect(tauri.event.listen).toHaveBeenCalledWith(TRAY_OPEN_PAGE_EVENT, expect.any(Function)));
+    const registered = tauri.event.listen.mock.calls.length;
+    nav.push = vi.fn();
+    nav.toFiles = vi.fn();
+    for (let i = 0; i < 5; i++) rerender(<TrayNavigationListener />);
+    expect(tauri.event.listen.mock.calls.length).toBe(registered);
+
+    // And the latest functions are the ones used.
+    await tauri.emitEvent(TRAY_OPEN_PAGE_EVENT, { page: "settings" });
+    expect(nav.push).toHaveBeenCalledWith("/settings");
+  });
+});

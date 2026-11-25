@@ -168,6 +168,53 @@ struct KeychainIdentity {
     /// unreadable keychain, or a phrase that failed to derive — and every
     /// consumer must treat that as "do not act", never as a mismatch.
     derives_row_account: Option<bool>,
+    /// On a mismatch, the address the stored mnemonic derives instead, for
+    /// the log line [`identity_mismatch_note`] words.
+    derived_other: Option<String>,
+}
+
+/// How restore logs a keychain mnemonic that derives a different address
+/// than its session row, by the row's provider.
+///
+/// For an OAuth account that is the normal shape, not a fault: its sync
+/// mnemonic is its own identity, separate from the address it signs in with
+/// (see `derive_verified_keys`), so it is said once at `info`, in words that
+/// do not read as an error. Only a row labelled `mnemonic` makes it
+/// unexpected: the stored phrase should derive that very account, and the
+/// repair or the refusal that follows is the thing to look into.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MismatchNote {
+    /// An OAuth account: expected.
+    Expected,
+    /// A mnemonic account: not expected.
+    Unexpected,
+}
+
+fn identity_mismatch_note(stored_provider: &str) -> MismatchNote {
+    if stored_provider == "mnemonic" {
+        MismatchNote::Unexpected
+    } else {
+        MismatchNote::Expected
+    }
+}
+
+/// The one line restore writes when the keychain mnemonic derives `derived`
+/// rather than the row's `addr`.
+fn log_identity_mismatch(stored_provider: &str, addr: &str, derived: &str) {
+    let account = crate::console_access::short_ss58(addr);
+    let derived = crate::console_access::short_ss58(derived);
+    match identity_mismatch_note(stored_provider) {
+        MismatchNote::Expected => info!(
+            %account,
+            sync_identity = %derived,
+            "restore: OAuth account; its sync key has its own address, separate from the sign-in address (expected)"
+        ),
+        MismatchNote::Unexpected => warn!(
+            %account,
+            %derived,
+            "restore: stored mnemonic derives a different identity than this mnemonic session row"
+        ),
+    }
 }
 
 /// Read the OS keychain once and decide whether what it holds is this
@@ -181,24 +228,20 @@ fn load_keychain_identity(addr: &str) -> KeychainIdentity {
             // this account?" equality in exactly ONE place, so the H-3/H-4
             // phantom-identity class cannot reappear through a second,
             // subtly-different copy of the check.
-            let derives_row_account = match crate::auth::service::derive_verified_keys(&mnemonic, addr) {
-                Ok(_) => Some(true),
-                Err(crate::auth::service::IdentityError::Mismatch { derived }) => {
-                    warn!(
-                        account = %crate::console_access::short_ss58(addr),
-                        derived = %crate::console_access::short_ss58(&derived),
-                        "restore: stored mnemonic derives a different identity than this session row"
-                    );
-                    Some(false)
-                }
+            let (derives_row_account, derived_other) = match crate::auth::service::derive_verified_keys(&mnemonic, addr) {
+                Ok(_) => (Some(true), None),
+                // Logged by the caller, which knows the row's provider and
+                // so whether this is expected (`identity_mismatch_note`).
+                Err(crate::auth::service::IdentityError::Mismatch { derived }) => (Some(false), Some(derived)),
                 Err(crate::auth::service::IdentityError::DeriveFailed(e)) => {
                     warn!(error = %e, "restore: keychain mnemonic failed to derive an identity");
-                    None
+                    (None, None)
                 }
             };
             KeychainIdentity {
                 mnemonic: Some(mnemonic),
                 derives_row_account,
+                derived_other,
             }
         }
         KeychainResult::NotFound => {
@@ -209,6 +252,7 @@ fn load_keychain_identity(addr: &str) -> KeychainIdentity {
             KeychainIdentity {
                 mnemonic: None,
                 derives_row_account: None,
+                derived_other: None,
             }
         }
         KeychainResult::Unavailable(reason) => {
@@ -216,6 +260,7 @@ fn load_keychain_identity(addr: &str) -> KeychainIdentity {
             KeychainIdentity {
                 mnemonic: None,
                 derives_row_account: None,
+                derived_other: None,
             }
         }
     }
@@ -360,6 +405,7 @@ fn rehydrate_or_restored(state: &crate::app_state::AppState, addr: &str, auth_ty
     let KeychainIdentity {
         mnemonic,
         derives_row_account,
+        ..
     } = identity;
     if let Some(mnemonic) = mnemonic {
         if auth_type == "mnemonic" {
@@ -593,6 +639,9 @@ pub async fn restore_session(app: tauri::AppHandle, state: tauri::State<'_, crat
     // ONE keychain read for the whole restore — see `KeychainIdentity`.
     let identity = load_keychain_identity(&addr);
     let stored_provider = row.provider.clone().unwrap_or_else(|| "mnemonic".into());
+    if let Some(derived) = &identity.derived_other {
+        log_identity_mismatch(&stored_provider, &addr, derived);
+    }
     let provider = match check_provider(&stored_provider, identity.derives_row_account) {
         ProviderCheck::RepairToOauth => {
             warn!(
@@ -1069,6 +1118,31 @@ mod tests {
     fn provider_kept_for_an_oauth_row_whose_mnemonic_differs() {
         assert_eq!(check_provider("oauth", Some(false)), ProviderCheck::Keep);
     }
+
+    // Support read the old warning on every OAuth start as a fault. For an
+    // OAuth row the differing identity is said at info, as expected; only a
+    // mnemonic row (or a row with no provider, read as mnemonic) warns.
+    #[test]
+    fn an_oauth_rows_own_sync_identity_is_not_logged_as_a_warning() {
+        let oauth = {
+            let capture = crate::test_helpers::capture_logs();
+            log_identity_mismatch("oauth", OAUTH_ROW_ADDR, OTHER_DERIVED_ADDR);
+            capture.text()
+        };
+        assert!(oauth.contains("INFO") && oauth.contains("(expected)"), "{oauth}");
+        assert!(!oauth.contains("WARN"), "{oauth}");
+        assert!(!oauth.contains("different identity"), "{oauth}");
+
+        let mnemonic = {
+            let capture = crate::test_helpers::capture_logs();
+            log_identity_mismatch("mnemonic", OAUTH_ROW_ADDR, OTHER_DERIVED_ADDR);
+            capture.text()
+        };
+        assert!(mnemonic.contains("WARN") && mnemonic.contains("different identity"), "{mnemonic}");
+    }
+
+    const OAUTH_ROW_ADDR: &str = "5DPsQ8Lq1z3s7mXQ6pYV9kNw2hZb4cTfR8uJ3eGa1mLx9WvK";
+    const OTHER_DERIVED_ADDR: &str = "5EhiN4kT2wQ9rB7uYx3pLm6vC8sJ1dFg5aHz2eKt9oRq4WbN";
 
     // ─── Idle-logout timer ─────────────────────────────────────────
     //

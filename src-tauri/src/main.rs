@@ -31,10 +31,12 @@ pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod preview_archive;
+pub mod process_memory;
 pub mod recovery;
 pub mod recovery_binding;
 mod recovery_proof;
 pub mod release_channel;
+pub mod runtime_watchdog;
 pub mod shared_drives;
 pub mod shares;
 pub mod splash;
@@ -1337,6 +1339,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
         let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
+        // Restart the app if its async runtime dies or stops, instead of
+        // leaving the windows open over a dead backend; also logs memory
+        // hourly. After `manage`: the watchdog reads `AppState`.
+        crate::runtime_watchdog::start(app_handle.clone());
 
         // `hippius --capture` / `--record` that started the app: the
         // single-instance handler sees them only when it is already running,

@@ -390,6 +390,9 @@ nix = { version = "0.31.2", features = ["fs"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
 objc = "0.2"
+# `proc_pid_rusage` for the hourly memory line (`process_memory.rs`). Already
+# in the graph through many crates.
+libc = "0.2"
 
 # Keep the system awake while sync transfers are active (see src/power.rs).
 # macOS backend = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep);
@@ -437,8 +440,10 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Performance",
     "Win32_System_Power",
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
