@@ -15,9 +15,17 @@
 //!
 //! Rust owns the clock and the decision; the page asks every few minutes
 //! (`webview_reload_due`) and reloads itself when told to.
+//!
+//! When the web views are heavy (the watchdog's memory sample, see
+//! `runtime_watchdog::WEBVIEW_HEAVY_BYTES`), an out-of-sight webview reloads
+//! after [`RELOAD_AFTER_WHEN_HEAVY`] instead, at most once per
+//! [`RELOAD_AFTER`]: the memory cannot be pinned on one window, so a window
+//! that has just been reloaded and is still out of sight is not reloaded again
+//! for memory another window holds.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use tauri::Manager;
@@ -26,11 +34,29 @@ use crate::capture::session::CapturePhase;
 
 /// How long a webview must have been out of sight before it is reloaded.
 pub const RELOAD_AFTER: Duration = Duration::from_hours(2);
+/// The same, while the web views are heavy.
+pub const RELOAD_AFTER_WHEN_HEAVY: Duration = Duration::from_mins(10);
 
-/// When each webview, by label, was first seen out of sight without a break.
+/// When each webview, by label, was first seen out of sight without a break,
+/// and when it was last reloaded.
 #[derive(Default)]
 pub struct WebviewRefreshState {
-    clocks: Mutex<HashMap<String, Instant>>,
+    clocks: Mutex<Clocks>,
+    memory_heavy: AtomicBool,
+}
+
+impl WebviewRefreshState {
+    /// Set by the watchdog after each memory sample.
+    pub fn set_memory_heavy(&self, heavy: bool) {
+        self.memory_heavy.store(heavy, Ordering::Relaxed);
+    }
+}
+
+/// The per-label clocks [`check`] keeps.
+#[derive(Debug, Default)]
+pub struct Clocks {
+    out_of_sight_since: HashMap<String, Instant>,
+    reloaded_at: HashMap<String, Instant>,
 }
 
 /// Whether a webview can be reloaded without anyone noticing.
@@ -44,22 +70,26 @@ pub fn out_of_sight(visible: bool, minimized: bool) -> bool {
 /// The first check that finds it out of sight starts its clock; a check that
 /// finds it on screen clears it. A reload restarts the clock, so the page that
 /// comes back is not reloaded again on the next check.
-pub fn check<S: std::hash::BuildHasher>(
-    clocks: &mut HashMap<String, Instant, S>,
-    label: &str,
-    hidden: bool,
-    capture_busy: bool,
-    now: Instant,
-) -> bool {
+///
+/// `memory_heavy` shortens the wait to [`RELOAD_AFTER_WHEN_HEAVY`] for a
+/// webview not reloaded within the last [`RELOAD_AFTER`].
+pub fn check(clocks: &mut Clocks, label: &str, hidden: bool, capture_busy: bool, memory_heavy: bool, now: Instant) -> bool {
     if !hidden {
-        clocks.remove(label);
+        clocks.out_of_sight_since.remove(label);
         return false;
     }
-    let since = *clocks.entry(label.to_string()).or_insert(now);
-    if capture_busy || now.duration_since(since) < RELOAD_AFTER {
+    let since = *clocks.out_of_sight_since.entry(label.to_string()).or_insert(now);
+    let recently_reloaded = clocks.reloaded_at.get(label).is_some_and(|at| now.duration_since(*at) < RELOAD_AFTER);
+    let wait = if memory_heavy && !recently_reloaded {
+        RELOAD_AFTER_WHEN_HEAVY
+    } else {
+        RELOAD_AFTER
+    };
+    if capture_busy || now.duration_since(since) < wait {
         return false;
     }
-    clocks.insert(label.to_string(), now);
+    clocks.out_of_sight_since.insert(label.to_string(), now);
+    clocks.reloaded_at.insert(label.to_string(), now);
     true
 }
 
@@ -74,9 +104,10 @@ pub fn webview_reload_due(window: tauri::WebviewWindow) -> bool {
     let Ok(mut clocks) = state.webview_refresh.clocks.lock() else {
         return false;
     };
-    let due = check(&mut clocks, window.label(), hidden, capture_busy, Instant::now());
+    let heavy = state.webview_refresh.memory_heavy.load(Ordering::Relaxed);
+    let due = check(&mut clocks, window.label(), hidden, capture_busy, heavy, Instant::now());
     if due {
-        tracing::info!(label = %window.label(), "reloading a webview that has been out of sight for hours");
+        tracing::info!(label = %window.label(), memory_heavy = heavy, "reloading a webview that has been out of sight");
     }
     due
 }
@@ -94,41 +125,49 @@ mod tests {
 
     #[test]
     fn a_webview_is_due_only_after_two_hours_out_of_sight() {
-        let mut clocks = HashMap::new();
+        let mut clocks = Clocks::default();
         let start = Instant::now();
-        assert!(!check(&mut clocks, "main", true, false, start));
-        assert!(!check(&mut clocks, "main", true, false, start + Duration::from_hours(1)));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+        assert!(!check(&mut clocks, "main", true, false, false, start));
+        assert!(!check(&mut clocks, "main", true, false, false, start + Duration::from_hours(1)));
+        assert!(check(&mut clocks, "main", true, false, false, start + RELOAD_AFTER));
     }
 
     #[test]
     fn coming_back_on_screen_restarts_the_clock() {
-        let mut clocks = HashMap::new();
+        let mut clocks = Clocks::default();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "main", false, false, start + Duration::from_mins(90)));
-        assert!(!check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+        check(&mut clocks, "main", true, false, false, start);
+        assert!(!check(&mut clocks, "main", false, false, false, start + Duration::from_mins(90)));
+        assert!(!check(&mut clocks, "main", true, false, false, start + RELOAD_AFTER));
     }
 
     #[test]
     fn a_capture_in_progress_holds_the_reload_until_it_ends() {
-        let mut clocks = HashMap::new();
+        let mut clocks = Clocks::default();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "main", true, true, start + RELOAD_AFTER));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER + Duration::from_mins(1)));
+        check(&mut clocks, "main", true, false, false, start);
+        assert!(!check(&mut clocks, "main", true, true, false, start + RELOAD_AFTER));
+        assert!(check(
+            &mut clocks,
+            "main",
+            true,
+            false,
+            false,
+            start + RELOAD_AFTER + Duration::from_mins(1)
+        ));
     }
 
     #[test]
     fn a_reload_restarts_the_clock_so_it_happens_once() {
-        let mut clocks = HashMap::new();
+        let mut clocks = Clocks::default();
         let start = Instant::now();
-        check(&mut clocks, "tray-panel", true, false, start);
-        assert!(check(&mut clocks, "tray-panel", true, false, start + RELOAD_AFTER));
+        check(&mut clocks, "tray-panel", true, false, false, start);
+        assert!(check(&mut clocks, "tray-panel", true, false, false, start + RELOAD_AFTER));
         assert!(!check(
             &mut clocks,
             "tray-panel",
             true,
+            false,
             false,
             start + RELOAD_AFTER + Duration::from_mins(1)
         ));
@@ -136,10 +175,41 @@ mod tests {
 
     #[test]
     fn each_webview_has_its_own_clock() {
-        let mut clocks = HashMap::new();
+        let mut clocks = Clocks::default();
         let start = Instant::now();
-        check(&mut clocks, "main", true, false, start);
-        assert!(!check(&mut clocks, "tray-panel", true, false, start + RELOAD_AFTER));
-        assert!(check(&mut clocks, "main", true, false, start + RELOAD_AFTER));
+        check(&mut clocks, "main", true, false, false, start);
+        assert!(!check(&mut clocks, "tray-panel", true, false, false, start + RELOAD_AFTER));
+        assert!(check(&mut clocks, "main", true, false, false, start + RELOAD_AFTER));
+    }
+    #[test]
+    fn heavy_web_views_reload_a_hidden_window_after_minutes() {
+        let mut clocks = Clocks::default();
+        let start = Instant::now();
+        check(&mut clocks, "main", true, false, true, start);
+        assert!(!check(&mut clocks, "main", true, false, true, start + Duration::from_mins(5)));
+        assert!(check(&mut clocks, "main", true, false, true, start + RELOAD_AFTER_WHEN_HEAVY));
+    }
+
+    #[test]
+    fn heavy_web_views_never_reload_a_window_on_screen_or_mid_capture() {
+        let mut clocks = Clocks::default();
+        let start = Instant::now();
+        check(&mut clocks, "main", true, true, true, start);
+        assert!(!check(&mut clocks, "main", true, true, true, start + Duration::from_hours(1)));
+        assert!(!check(&mut clocks, "main", false, false, true, start + Duration::from_hours(1)));
+    }
+
+    #[test]
+    fn a_window_reloaded_for_memory_waits_the_full_time_before_the_next() {
+        // The memory may belong to a window on screen: the hidden one is
+        // reloaded once, then waits the normal two hours even while heavy.
+        let mut clocks = Clocks::default();
+        let start = Instant::now();
+        check(&mut clocks, "tray-panel", true, false, true, start);
+        let first = start + RELOAD_AFTER_WHEN_HEAVY;
+        assert!(check(&mut clocks, "tray-panel", true, false, true, first));
+        assert!(!check(&mut clocks, "tray-panel", true, false, true, first + RELOAD_AFTER_WHEN_HEAVY));
+        assert!(!check(&mut clocks, "tray-panel", true, false, true, first + Duration::from_mins(90)));
+        assert!(check(&mut clocks, "tray-panel", true, false, true, first + RELOAD_AFTER));
     }
 }

@@ -45,6 +45,7 @@ dependencies = [
  "k256",
  "keepawake",
  "keyring",
+ "libc",
  "md5",
  "mime_guess",
  "netbird-embed",

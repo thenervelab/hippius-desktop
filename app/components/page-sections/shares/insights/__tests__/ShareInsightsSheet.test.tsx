@@ -1153,6 +1153,57 @@ describe("ShareInsightsSheet", () => {
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
     });
 
+    // The Expiry list is drawn at the end of the page, outside the popover,
+    // so both its focus and a press on one of its options used to read as
+    // leaving the popover, which closed before the list could open.
+    for (const wide of [true, false]) {
+      it(`picks an expiry from its list and stays open, ${wide ? "inline" : "in the narrow-window sheet"}`, async () => {
+        viewport.wide = wide;
+        answer({
+          share_get_insights: PAID,
+          share_list_comments: NO_COMMENTS,
+          share_get_reactions: NO_REACTIONS,
+          share_get_link_settings: ALL_SWITCHES_ON,
+          hcfs_update_share_expiry: null,
+        });
+        renderSheet(CAPS, (client) =>
+          client.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]),
+        );
+        const settings = await openSettings();
+        await openRule(settings, "expiry");
+        const trigger = await within(settings).findByRole("combobox", { name: "Link expires" });
+        expect(trigger).toHaveTextContent("Choose how long it lasts");
+        // A press on it, with focus in the popover.
+        trigger.focus();
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+        fireEvent.click(trigger);
+        const option = await screen.findByRole("option", { name: "7 days" });
+        expect(settings).not.toContainElement(option);
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+        // By test id: an open list hides the rest of the page from roles.
+        expect(screen.queryByTestId("link-settings")).toBe(settings);
+        // Its list is drawn above the narrow-window sheet, not behind it.
+        const listZ = Number(/z-\[(\d+)\]/.exec(screen.getByRole("listbox").closest("[class*='z-[']")?.getAttribute("class") ?? "")?.[1]);
+        expect(listZ).toBeGreaterThan(1003);
+
+        fireEvent.pointerDown(option, { button: 0, pointerType: "mouse" });
+        fireEvent.pointerUp(option, { button: 0, pointerType: "mouse" });
+        fireEvent.click(option);
+        await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("hcfs_update_share_expiry", { shareToken: "tok", ttl: "7d" }));
+        await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+        expect(screen.getByRole("dialog", { name: "Link settings" })).toBe(settings);
+        expect(within(settings).getByRole("combobox", { name: "Link expires" })).toHaveTextContent("7 days");
+        // A press truly outside still closes it.
+        fireEvent.pointerDown(screen.getByRole("region", { name: "Summary" }), { button: 0 });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+      });
+    }
+
     it("says in the Comments tab that comments are off, with Turn on, and still lists what is there", async () => {
       let link = SOME_OFF;
       answer({
