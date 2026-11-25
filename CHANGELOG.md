@@ -258,6 +258,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Expiry in Link settings opens its list.** Choosing how long a link lasts no longer closes Link settings; the list opens and the choice is saved, in a narrow window too.
 - **Captures saved in a folder inside one of your drives show on the Captures page.** If you picked a folder in, say, your Documents drive, the Captures page now lists the screenshots, recordings and folders in it, also while that drive is paused on this computer, instead of only saying where they are.
 - **Hippius Drive is called Hippius Drive on your Mac too.** Your Applications folder, Launchpad, Spotlight and the Dock now show the app as Hippius Drive instead of Hippius. It is still the same app, so updates keep installing over your current copy.
 - **NDA records no longer show a raw placeholder.** On a link that doesn't ask for an email, the NDA record leaves out the Recipient line instead of showing the placeholder, and any other unknown value reads as plain words.
