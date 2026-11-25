@@ -611,7 +611,7 @@ jobs:
         shell: bash
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test --lib -- process_memory:: runtime_watchdog:: webview_refresh::
+        run: cargo test --lib -- "process_memory::" "runtime_watchdog::" "webview_refresh::"
 
   capture-runtime-windows:
     # Screen capture's Windows code RUN on a real Windows, not just compiled:
