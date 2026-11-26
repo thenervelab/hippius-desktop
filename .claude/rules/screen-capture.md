@@ -886,11 +886,14 @@ and NFD, never scanned), matched by label + `preview::same_drive_path` (NFC,
 `\` → `/`, leading `/` dropped, absolute paths ending in `relPath`, never
 trimmed). A row whose upload is still encrypting reads `Encrypt`, so both
 actions count. The card waits for its own upload, never for the rest of the
-sync: a `syncing` card with a public link whose file the engine has not
-started on (no row yet, or `SyncRow::Queued`, a `Pending` row behind other
-files) is marked uploaded at once (`link_finishes_card`), because minting the
-link uploads the capture's own encrypted copy. A file the engine is uploading
-right now (`Working`) shows that upload's progress instead. `PreviewCard.settled` (uploaded and the
+sync: a `syncing` card with a public link is marked uploaded at once
+(`link_finishes_card`) whether the engine has not started on the file (no row
+yet, or `SyncRow::Queued`, a `Pending` row behind other files) or is uploading
+it right now (`Working`), because minting the link uploads the capture's own
+encrypted copy, and the drive copy's progress on the card reads as a second
+upload of the same file. That copy goes on in the sync queue, where a failure
+is reported like any sync failure; only a `Failed` row still fails the card,
+and a card without a public link follows the drive upload, its only copy. `PreviewCard.settled` (uploaded and the
 link neither `Creating` nor `Failed`) is what the card's auto-hide waits for, so
 it never slides away before it can say the link was copied, and a card whose
 link failed stays up with Create link. `deliver::mint` tries a link three

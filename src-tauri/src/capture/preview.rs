@@ -418,16 +418,20 @@ impl SyncFacts {
 }
 
 /// Whether the card's public link finishes it: the card is still syncing,
-/// its link is public and the engine has not started on the file (no row
-/// yet, or queued behind other files). Minting the link uploads the
-/// capture's own encrypted copy, so the capture is on the server and
-/// shareable; the drive copy follows whenever the engine gets to it. A card
-/// whose file the engine is uploading right now shows that upload instead.
+/// its link is public and the engine's drive copy has not failed (no row
+/// yet, queued behind other files, or uploading right now). Minting the
+/// link uploads the capture's own encrypted copy, so the capture is on the
+/// server and shareable; the drive copy is a second upload of the same
+/// file, and showing its progress on the card reads as the capture being
+/// sent twice. It goes on in the sync queue like any synced file, and a
+/// failure there is reported the way any sync failure is. A failed row still
+/// fails the card, and a card without a public link follows the drive
+/// upload, since that is its only copy on the server.
 #[must_use]
 pub fn link_finishes_card(card: &PreviewCard, row: &SyncRow) -> bool {
     matches!(card.status, PreviewStatus::Syncing { .. })
         && matches!(card.link, LinkState::Public { .. })
-        && matches!(row, SyncRow::Absent | SyncRow::Queued)
+        && matches!(row, SyncRow::Absent | SyncRow::Queued | SyncRow::Working)
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -1088,26 +1092,61 @@ mod tests {
     }
 
     #[test]
-    fn a_public_link_finishes_a_card_the_engine_has_not_started() {
+    fn a_public_link_finishes_a_card_whatever_the_drive_copy_is_doing() {
         let c = syncing(true);
-        // Queued behind a long sync, or not picked up yet: the link's own
-        // copy is on the server, so the card does not wait for the queue.
+        // Queued behind a long sync, not picked up yet, or uploading right
+        // now: the link's own copy is on the server, so the card does not
+        // wait for the queue, nor show the drive copy as a second upload.
         assert!(link_finishes_card(&c, &SyncRow::Absent));
         assert!(link_finishes_card(&c, &SyncRow::Queued));
-        // Its own upload running, done or failed: the engine's row decides.
-        assert!(!link_finishes_card(&c, &SyncRow::Working));
+        assert!(link_finishes_card(&c, &SyncRow::Working));
+        // Done or failed: the engine's row decides.
         assert!(!link_finishes_card(&c, &SyncRow::Completed));
         assert!(!link_finishes_card(&c, &SyncRow::Failed(None)));
-        // No link means no evidence the bytes reached the server.
+        // No link means no evidence the bytes reached the server: the
+        // drive upload is the capture's only copy, so the card follows it.
         let mut no_link = syncing(false);
         no_link.link = LinkState::None;
         assert!(!link_finishes_card(&no_link, &SyncRow::Queued));
+        assert!(!link_finishes_card(&no_link, &SyncRow::Working));
         let mut creating = syncing(false);
         creating.link = LinkState::Creating;
-        assert!(!link_finishes_card(&creating, &SyncRow::Queued));
+        assert!(!link_finishes_card(&creating, &SyncRow::Working));
         let mut failed_link = syncing(false);
         failed_link.link = LinkState::Failed { message: "no".into() };
         assert!(!link_finishes_card(&failed_link, &SyncRow::Queued));
+        assert!(!link_finishes_card(&failed_link, &SyncRow::Working));
+        let mut broken = syncing(true);
+        broken.link = LinkState::Broken { message: "no".into() };
+        assert!(!link_finishes_card(&broken, &SyncRow::Working));
+        // Only a syncing card: one that failed stays failed until its row
+        // moves it back to syncing.
+        let mut failed = syncing(true);
+        failed.status = status_after_sync_row(&failed, &SyncRow::Failed(None)).unwrap();
+        assert!(!link_finishes_card(&failed, &SyncRow::Working));
+    }
+
+    /// A recording whose link was copied while its upload ran, placed in a
+    /// captures folder inside a synced drive: the engine starts on the drive
+    /// copy, and the card finishes with its link rather than showing that
+    /// second upload's progress. The follower turns a finishing link into a
+    /// completed row (`spawn_sync_follow`); this is that step.
+    #[test]
+    fn a_card_whose_drive_copy_is_uploading_finishes_with_its_link() {
+        let c = syncing(true);
+        assert_eq!(status_after_sync_row(&c, &SyncRow::Working), None, "the row alone keeps it syncing");
+        assert!(link_finishes_card(&c, &SyncRow::Working));
+        let next = status_after_sync_row(&c, &SyncRow::Completed).unwrap();
+        assert_eq!(
+            next,
+            PreviewStatus::Uploaded {
+                link_copied: true,
+                link_error: None
+            }
+        );
+        let done = c.with_outcome(9, next, Some("https://l".into())).unwrap();
+        assert!(done.settled, "it may slide away like any finished card");
+        assert_eq!(done.link_text.as_deref(), Some("Public link copied"));
     }
 
     #[test]
