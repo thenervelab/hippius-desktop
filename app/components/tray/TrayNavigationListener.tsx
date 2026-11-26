@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   TRAY_OPEN_FILES_EVENT,
@@ -19,6 +19,10 @@ import {
 } from "@/app/lib/tray/trayHeaderMenu";
 import { openLinkByKey } from "@/app/lib/utils/links";
 import {
+  OPEN_LINK_INSIGHTS_EVENT,
+  routeFromOpenPayload,
+} from "@/app/lib/linkActivity/linkActivity";
+import {
   parkTrayDrop,
   parseTrayDropPayload,
   TRAY_OPEN_FILES_TAURI_EVENT,
@@ -35,10 +39,17 @@ export const TRAY_OPEN_CHAT_TAURI_EVENT = "hippius:tray-open-chat";
 export default function TrayNavigationListener() {
   const { navigateToFilesView } = useFilesNavigation();
   const { push } = useNavigationLoader();
+  // Read through a ref so the listeners below are registered once for the
+  // window's life. Both functions change identity on many renders (every
+  // navigation flips the loader context twice), and re-registering five
+  // Tauri listeners each time leaves script behind in WebView2.
+  const navRef = useRef({ navigateToFilesView, push });
+  navRef.current = { navigateToFilesView, push };
 
   useEffect(() => {
+    const push = (path: string) => navRef.current.push(path);
     const goTo = (path: string) => {
-      if (path === "/files") navigateToFilesView();
+      if (path === "/files") navRef.current.navigateToFilesView();
       push(path);
     };
 
@@ -81,7 +92,16 @@ export default function TrayNavigationListener() {
       if (route) goTo(route);
     });
 
+    // A link activity notification's click (Rust) or a tray Link activity
+    // row: Shared Links with that link's Insights open. Only a token is
+    // taken from the other side, never a route.
+    const unlistenInsights = listen(OPEN_LINK_INSIGHTS_EVENT, (event) => {
+      const route = routeFromOpenPayload(event.payload);
+      if (route) goTo(route);
+    });
+
     return () => {
+      void unlistenInsights.then((fn) => fn());
       window.removeEventListener(TRAY_OPEN_FILES_EVENT, handleOpenFiles);
       window.removeEventListener(TRAY_OPEN_VM_EVENT, handleOpenVm);
       window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, handleOpenFolder);
@@ -90,7 +110,7 @@ export default function TrayNavigationListener() {
       void unlistenChat.then((fn) => fn());
       void unlistenPage.then((fn) => fn());
     };
-  }, [navigateToFilesView, push]);
+  }, []);
 
   return null;
 }

@@ -9,7 +9,11 @@ import "./tray-panel.css";
 import TrayTiles from "./TrayTiles";
 import TrayHeaderMenu from "./TrayHeaderMenu";
 import TrayUploadRow, { ProgressRing } from "./TrayUploadRow";
-import { openMainUpload, openMainWindow, revealMain } from "./trayMainWindow";
+import { openLinkInsights, openMainPage, openMainUpload, openMainWindow, revealMain } from "./trayMainWindow";
+import TrayLinkActivity from "./TrayLinkActivity";
+import TrayUpdateRow from "./TrayUpdateRow";
+import { useIdleWebviewReload } from "@/app/lib/hooks/useIdleWebviewReload";
+import { useTrayLinkActivity } from "@/app/lib/tray/useTrayLinkActivity";
 import { useTrayCaptureView } from "./useTrayCaptureView";
 import { useTrayPanelData } from "@/app/lib/tray/useTrayPanelData";
 import { useTrayShareLinks } from "@/app/lib/tray/useTrayShareLinks";
@@ -65,6 +69,9 @@ const Avatar = dynamic(() => import("boring-avatars"), { ssr: false });
  */
 export default function TrayPanelPage() {
   const { view: captureView, shortcut } = useTrayCaptureView();
+  // This popover lives hidden for the whole run: reload it after hours out
+  // of sight, which frees what WebView2 keeps (`webview_reload_due`).
+  useIdleWebviewReload();
   // Capture is on for this computer: the flag AND Rust's support, which
   // production gives macOS only. Rows offer Edit and the Captures list is
   // fetched only then.
@@ -78,10 +85,13 @@ export default function TrayPanelPage() {
     isConnected,
     unreadCount,
     chatUnread,
+    updateVersion,
     loading,
   } = useTrayPanelData(capturesOn);
   // Which rows have a link, by the rule every other list uses.
   const { linksFor, reload: reloadLinks } = useTrayShareLinks(Boolean(menu?.sessionReady));
+  // The last few views on the owner's links (Rust's link activity rows).
+  const linkActivity = useTrayLinkActivity(Boolean(menu?.sessionReady));
   // Where capture is off or unsupported there is no Captures tab: the list
   // is every upload, as before the tabs.
   const hasCapturesTab = captureView.state !== "hidden";
@@ -160,10 +170,19 @@ export default function TrayPanelPage() {
           chatUnread={chatUnread}
           showCapturesFolder={hasCapturesTab}
         />
+        <TrayUpdateRow
+          version={updateVersion}
+          onOpen={() => void invoke("open_update_from_tray").catch(() => undefined)}
+        />
         {/* Record / Screenshot / Upload, above the search field. Only Upload
             where capture is off or unsupported (see TrayTiles). */}
         <TrayTiles view={captureView} shortcut={shortcut} />
         <SearchBar />
+        <TrayLinkActivity
+          events={linkActivity}
+          onOpen={(shareToken) => void openLinkInsights(shareToken)}
+          onSeeAll={() => void openMainPage("shares")}
+        />
 
         <div className="flex items-center justify-between gap-3 px-5 pb-1 pt-4">
           {hasCapturesTab ? (

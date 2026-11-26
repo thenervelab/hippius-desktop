@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -12,6 +12,7 @@ import {
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
+import { singleFlight } from "@/app/lib/utils/singleFlight";
 import {
   applyRemoteUpload,
   mergeRemoteUploads,
@@ -108,6 +109,9 @@ export function useTrayPanelData(capturesEnabled: boolean) {
   // broadcast (reaches every window). Zero while chat is disabled or
   // signed out, which is what hides the popover's chat button.
   const [chatUnread, setChatUnread] = useState(0);
+  // The version an update is available for, when Rust has found one this run
+  // (`update_available_version`). Read each time the popover opens.
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   // First-load gate for the upload list. True until the first authoritative
   // fetch (one that ran with a hydrated session) resolves, so the popover shows
   // a loading skeleton instead of the empty state before any data has arrived.
@@ -130,7 +134,10 @@ export function useTrayPanelData(capturesEnabled: boolean) {
   // Caps the boot-gap skeleton so a stuck session can't hang it forever (F-3).
   const notReadyPollsRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  // One refresh at a time: the 5 s poll, the focus and the shown signal all
+  // call it, and a slow or stopped backend must not collect a new round of
+  // calls on every tick while the previous round is still waiting.
+  const refresh = useMemo(() => singleFlight(async () => {
     try {
       const menuData = await invoke<TrayMenuData>("get_tray_menu_data");
       setMenu(menuData);
@@ -198,7 +205,7 @@ export function useTrayPanelData(capturesEnabled: boolean) {
     } catch (error) {
       console.error("[TrayPanel] Failed to load data:", error);
     }
-  }, []);
+  }), []);
 
   // Rust answers `capture_support` after the first refresh has run, so fetch
   // the Captures list as soon as capture turns out to be on here, and drop
@@ -220,6 +227,82 @@ export function useTrayPanelData(capturesEnabled: boolean) {
         console.error("[TrayPanel] Failed to seed snapshot:", error),
       );
 
+    // Live feeds: sync progress, direct uploads and the chain block. Listened
+    // to only while the popover is on screen. This webview lives for the
+    // whole app session, and on Windows every distinct event a webview
+    // receives leaves its script behind in WebView2 for good (a block every
+    // ~6 s is tens of thousands a day). Hidden, it listens to none of them;
+    // shown, it re-reads each one's current value and follows it until it
+    // hides again (`attachLive` / `detachLive`).
+    let liveUnlisteners: Array<() => void> = [];
+    let liveGeneration = 0;
+    let liveAttached = false;
+    const detachLive = () => {
+      liveAttached = false;
+      liveGeneration += 1;
+      const current = liveUnlisteners;
+      liveUnlisteners = [];
+      for (const un of current) un();
+    };
+    const keep = (generation: number, un: () => void) => {
+      // A hide that landed while `listen` was still registering: drop it.
+      if (generation !== liveGeneration) un();
+      else liveUnlisteners.push(un);
+    };
+    const attachLive = () => {
+      if (liveAttached) return;
+      liveAttached = true;
+      const generation = liveGeneration;
+
+      void invoke<SyncSnapshot>("sp_get_snapshot")
+        .then((next) => {
+          if (generation === liveGeneration) setSnapshot(next);
+        })
+        .catch((error) => console.error("[TrayPanel] Failed to read snapshot:", error));
+      void invoke<{ blockNumber: number; isConnected: boolean }>("get_block_status")
+        .then((status) => {
+          if (generation !== liveGeneration) return;
+          setBlockNumber(status.blockNumber > 0 ? status.blockNumber : null);
+          setIsConnected(status.isConnected);
+        })
+        .catch((error) => console.error("[TrayPanel] Failed to read block status:", error));
+      void invoke<string | null>("update_available_version")
+        .then((version) => {
+          if (generation === liveGeneration) setUpdateVersion(version ?? null);
+        })
+        .catch(() => undefined);
+
+      // Refresh the server-backed recent uploads on the rising edge of the
+      // snapshot's completion (a session finishing). The main window's
+      // `sync_files_completed_changed` DOM event is window-local, so it can't
+      // reach this popover.
+      void listen<SyncSnapshot>("sync_progress_snapshot", (event) => {
+        const completed = event.payload.effectiveCompleted;
+        if (completed && !prevCompletedRef.current) {
+          void refresh();
+        }
+        prevCompletedRef.current = completed;
+        setSnapshot(event.payload);
+      })
+        .then((un) => keep(generation, un))
+        .catch((error) => console.error("[TrayPanel] snapshot listener failed:", error));
+
+      void listen<RemoteUploadProgress>("remote_upload_progress", (event) => {
+        setRemoteUploads((current) => applyRemoteUpload(current, event.payload));
+        // A finished upload is in the server list now; pull it in.
+        if (event.payload.status === "completed") void refresh();
+      })
+        .then((un) => keep(generation, un))
+        .catch((error) => console.error("[TrayPanel] remote upload listener failed:", error));
+
+      void listen<{ blockNumber: number; isConnected: boolean }>("block_number_updated", (event) => {
+        setBlockNumber(event.payload.blockNumber);
+        setIsConnected(event.payload.isConnected);
+      })
+        .then((un) => keep(generation, un))
+        .catch((error) => console.error("[TrayPanel] block listener failed:", error));
+    };
+
     // Only poll while the popover is actually shown. The seed `refresh()` above
     // and the on-show refresh below keep it fresh; this interval just keeps a
     // *visible* popover live. Polling a hidden window would hit the billing API
@@ -234,7 +317,12 @@ export function useTrayPanelData(capturesEnabled: boolean) {
     void getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
         isShownRef.current = focused;
-        if (focused) void refresh();
+        if (focused) {
+          void refresh();
+          attachLive();
+        } else {
+          detachLive();
+        }
       })
       .then((un) => {
         unlistenFocus = un;
@@ -254,49 +342,13 @@ export function useTrayPanelData(capturesEnabled: boolean) {
     void listen("hippius:tray-panel-shown", () => {
       isShownRef.current = true;
       void refresh();
+      attachLive();
     })
       .then((un) => {
         unlistenShown = un;
       })
       .catch((error) =>
         console.error("[TrayPanel] shown listener failed:", error),
-      );
-
-    // Live sync progress (uploading / failed). Events reach every window.
-    // The `sync_files_completed_changed` DOM event the main window uses to
-    // refresh the server list is window-local (dispatched by `useSyncEvents`,
-    // which the provider-less popover never mounts), so we can't rely on it
-    // here. Instead, refresh the server-backed recent uploads on the rising
-    // edge of the snapshot's completion — when a session finishes, pull the
-    // authoritative completed rows. Until then the live overlay keeps the
-    // just-finished file visible, and the 5s interval is the backstop.
-    let unlistenSnapshot: (() => void) | undefined;
-    void listen<SyncSnapshot>("sync_progress_snapshot", (event) => {
-      const completed = event.payload.effectiveCompleted;
-      if (completed && !prevCompletedRef.current) {
-        void refresh();
-      }
-      prevCompletedRef.current = completed;
-      setSnapshot(event.payload);
-    })
-      .then((un) => {
-        unlistenSnapshot = un;
-      })
-      .catch((error) =>
-        console.error("[TrayPanel] snapshot listener failed:", error),
-      );
-
-    let unlistenRemote: (() => void) | undefined;
-    void listen<RemoteUploadProgress>("remote_upload_progress", (event) => {
-      setRemoteUploads((current) => applyRemoteUpload(current, event.payload));
-      // A finished upload is in the server list now; pull it in.
-      if (event.payload.status === "completed") void refresh();
-    })
-      .then((un) => {
-        unlistenRemote = un;
-      })
-      .catch((error) =>
-        console.error("[TrayPanel] remote upload listener failed:", error),
       );
 
     // Chat unread: seed once (the popover is prewarmed before any message
@@ -318,31 +370,12 @@ export function useTrayPanelData(capturesEnabled: boolean) {
         console.error("[TrayPanel] chat unread listener failed:", error),
       );
 
-    // Mirror the chain block + connectivity broadcast (app.emit reaches every
-    // window, so this works even though the subscription runs for the main one).
-    let unlistenBlock: (() => void) | undefined;
-    void listen<{ blockNumber: number; isConnected: boolean }>(
-      "block_number_updated",
-      (event) => {
-        setBlockNumber(event.payload.blockNumber);
-        setIsConnected(event.payload.isConnected);
-      },
-    )
-      .then((un) => {
-        unlistenBlock = un;
-      })
-      .catch((error) =>
-        console.error("[TrayPanel] block listener failed:", error),
-      );
-
     return () => {
       window.clearInterval(interval);
       unlistenFocus?.();
       unlistenShown?.();
-      unlistenSnapshot?.();
-      unlistenRemote?.();
       unlistenChatUnread?.();
-      unlistenBlock?.();
+      detachLive();
     };
   }, [refresh]);
 
@@ -389,6 +422,7 @@ export function useTrayPanelData(capturesEnabled: boolean) {
     isConnected,
     unreadCount,
     chatUnread,
+    updateVersion,
     loading,
     refresh,
   };

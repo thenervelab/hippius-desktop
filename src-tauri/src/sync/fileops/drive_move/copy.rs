@@ -99,7 +99,7 @@ pub struct StageRequest<'a> {
     pub sealed: &'a Sealed,
     pub dest_path: &'a str,
     pub source_path_hash: [u8; 32],
-    pub expected_revision_id: [u8; 32],
+    pub expected_revision_id: hcfs_shared::revision_id::RevisionId,
     pub cancel: &'a Arc<AtomicBool>,
 }
 

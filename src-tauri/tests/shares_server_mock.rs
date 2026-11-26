@@ -381,6 +381,11 @@ async fn make_pool(dir: &std::path::Path) -> sqlx::SqlitePool {
         .execute(&pool)
         .await
         .expect("share_keystore schema");
+    // The keystore's put and forget also clear this table.
+    sqlx::query(tauri_project_lib::utils::schema::share_file_link_key_ddl())
+        .execute(&pool)
+        .await
+        .expect("share_file_link_key schema");
 
     // The Finder folder badge's source; same shape as `utils/schema.rs`.
     sqlx::query(

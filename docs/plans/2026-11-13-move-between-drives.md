@@ -95,10 +95,23 @@ Proved against the pinned engine in `tests/drive_move_local_sync.rs`
 the download when nothing is placed). The flow against a stand-in server is
 `tests/drive_move_server_mock.rs`.
 
+## Moves left open
+
+Each move is noted when the server names it (in memory and in the
+`drive_moves_open` table) and forgotten when it commits or its abort is
+confirmed. After sign-in and unlock (`auto_init_sync`), once per account per
+launch, the app lists `GET /v1/drive_moves` and aborts a listed move only
+when this computer noted it and no move in this app is running it. A move
+this install did not open is never aborted, whatever its age: a console tab
+or a phone may be running it. A commit with no answer stays noted, so the next launch aborts
+it if it is still open. Rule and tests: `drive_move::ledger`.
+
+## Folders of empty folders
+
+A folder holding only empty folders moves with no copy: the move is opened
+and committed with `"files": []`. A commit that finds the folder changed or
+gone (`folder_changed`, also the server's `folder_missing`) changes nothing.
+
 ## Not done
 
-- A move left open by a crash before its commit is freed by the server's
-  hourly sweep after 24 hours; until then it holds the destination's quota.
-- Empty folders alone (no files) are refused: the commit needs at least one
-  file. Empty subfolders of a moved folder move with it.
 - Drag and drop between drives is out of scope.

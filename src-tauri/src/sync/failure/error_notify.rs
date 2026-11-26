@@ -10,17 +10,14 @@
 //!
 //! ## Why we count per-label here instead of trusting the payload
 //!
-//! `SyncEvent::SyncError` carries a `consecutive_failures` count, but that
-//! counter is a single **runner-global** `AtomicI64` on hcfs-client's
-//! `SyncRunner` (verified `hcfs-client/src/engine/runner.rs:363`,
-//! incremented at `:2134`, reset to 0 by `clear_failure_state` at `:2012` /
-//! `:2055`). `trigger_sync` (`:1626`) fans out every drive concurrently
-//! (`:1651`), so any one healthy drive's success resets the shared counter
-//! every cycle. Gating a per-label notification on that global value means a
-//! genuinely-down drive in a multi-drive account never accumulates to the
-//! threshold — it would never notify. So the desktop keeps its OWN per-label
-//! consecutive-failure count and ignores the payload's global value for
-//! gating purposes.
+//! `SyncEvent::SyncError` carries a `consecutive_failures` count. It was once
+//! runner-global, which any healthy drive reset; since the per-drive failure
+//! state in hcfs-client (pinned from hcfs 2bffd770) it is that drive's own
+//! count, cleared only by that drive's success or `clear_failure_state`. The
+//! desktop still keeps its OWN per-label count and ignores the payload's for
+//! gating, because this latch must also reset when the drive is stopped
+//! (`SyncStopped`) or the account reset (`SyncReset`), which leave hcfs's
+//! count as it was.
 //!
 //! ## What this state encodes
 //!

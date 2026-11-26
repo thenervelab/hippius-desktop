@@ -209,6 +209,106 @@ pub struct PreviewCard {
     /// stays until closed so the line is not missed. Never sent to the card.
     #[serde(skip)]
     pub stopped_at_free_limit: bool,
+    /// How far the link being made has got, while it is
+    /// [`LinkState::Creating`]. The card reads it only through `link_text`
+    /// and `link_percent`. Never sent to the card.
+    #[serde(skip)]
+    pub link_progress: Option<LinkProgress>,
+    /// The link's upload in percent while it is made, for the card's bar.
+    /// Worked out in [`PreviewCard::refreshed`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_percent: Option<u8>,
+}
+
+/// How far a capture's link has got while it is made. The link is the
+/// capture's own encrypted copy, so for a recording this is most of the wait,
+/// and the card says where it is rather than "Creating link…" for a minute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkProgress {
+    /// The file is being read and encrypted for the link.
+    Preparing,
+    /// The link's copy is going up: `percent` of it, and roughly how many
+    /// seconds are left once that can be told ([`upload_seconds_left`]).
+    Uploading { percent: u8, seconds_left: Option<u64> },
+    /// Every byte is up; the server is finishing the link.
+    Finishing,
+}
+
+impl LinkProgress {
+    /// The card's line about the link while it is made.
+    #[must_use]
+    pub fn text(self) -> String {
+        match self {
+            Self::Preparing => "Preparing link…".to_string(),
+            Self::Uploading { percent, seconds_left: None } => format!("Uploading link {percent}%"),
+            Self::Uploading {
+                percent,
+                seconds_left: Some(secs),
+            } => format!("Uploading link {percent}%, {}", time_left(secs)),
+            Self::Finishing => "Finishing link…".to_string(),
+        }
+    }
+
+    /// The card's bar: the upload's percent, full while finishing, none
+    /// while preparing (nothing has been sent yet).
+    #[must_use]
+    pub fn percent(self) -> Option<u8> {
+        match self {
+            Self::Preparing => None,
+            Self::Uploading { percent, .. } => Some(percent),
+            Self::Finishing => Some(100),
+        }
+    }
+}
+
+/// `done` of `total` in whole percent, 0 to 100.
+#[must_use]
+pub fn percent_of(done: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 100;
+    }
+    let pct = u128::from(done.min(total)) * 100 / u128::from(total);
+    u8::try_from(pct).unwrap_or(100)
+}
+
+/// Whether `next` is worth a card update after `shown`: a new step, or a
+/// new percent. The estimate rides along with those and never sends one of
+/// its own, so the card hears of a recording's link a hundred times at most.
+#[must_use]
+pub fn link_progress_moved(shown: Option<LinkProgress>, next: LinkProgress) -> bool {
+    match (shown, next) {
+        (Some(LinkProgress::Uploading { percent: a, .. }), LinkProgress::Uploading { percent: b, .. }) => a != b,
+        (Some(shown), next) => std::mem::discriminant(&shown) != std::mem::discriminant(&next),
+        (None, _) => true,
+    }
+}
+
+/// "about 25 s left" / "about 3 min left", rounded up so the estimate is not
+/// beaten by a few seconds and then sits at zero.
+#[must_use]
+pub fn time_left(secs: u64) -> String {
+    if secs < 10 {
+        "a few seconds left".to_string()
+    } else if secs < 60 {
+        format!("about {} s left", secs.div_ceil(5) * 5)
+    } else {
+        format!("about {} min left", secs.div_ceil(60))
+    }
+}
+
+/// Seconds left for an upload `done` of `total` bytes into it, `elapsed`
+/// after it started, at the rate so far. None until the rate means
+/// something (at least two seconds and some bytes in), and once it is done.
+#[must_use]
+pub fn upload_seconds_left(done: u64, total: u64, elapsed: std::time::Duration) -> Option<u64> {
+    const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
+    if done == 0 || done >= total || elapsed < SETTLE {
+        return None;
+    }
+    let rate = done as f64 / elapsed.as_secs_f64();
+    let left = (total - done) as f64 / rate;
+    // A rate this low would print a number nobody believes; say nothing.
+    (left.is_finite() && left < 24.0 * 3600.0).then(|| left.ceil() as u64)
 }
 
 /// The sync engine's row for a capture delivered through a synced folder.
@@ -324,7 +424,11 @@ impl PreviewCard {
     /// again from its state. Every change to a card goes through this.
     #[must_use]
     pub fn refreshed(self) -> Self {
-        let link_text = self.link.text().map(str::to_string);
+        // While the link is made its line says how far it has got; any other
+        // state drops what the last upload reported.
+        let progress = (self.link == LinkState::Creating).then_some(self.link_progress).flatten();
+        let link_text = progress.map_or_else(|| self.link.text().map(str::to_string), |p| Some(p.text()));
+        let link_percent = progress.and_then(LinkProgress::percent);
         let link_note = self.link.note().map(str::to_string);
         let actions = self.decide_actions();
         // A link still being made, or one that failed, holds the card: it
@@ -341,6 +445,8 @@ impl PreviewCard {
             actions,
             settled,
             notice,
+            link_percent,
+            link_progress: progress,
             ..self
         }
     }
@@ -437,6 +543,8 @@ mod tests {
             link: LinkState::None,
             link_text: None,
             link_note: None,
+            link_progress: None,
+            link_percent: None,
             actions: CardActions::default(),
             settled: false,
             share_url: None,
@@ -952,5 +1060,72 @@ mod tests {
     fn a_queued_card_keeps_syncing_until_its_link_or_its_upload_finishes_it() {
         let c = syncing(true);
         assert_eq!(status_after_sync_row(&c, &SyncRow::Queued), None, "still syncing");
+    }
+
+    /// While a link is made the card says how far its upload has got, with
+    /// a bar, and drops both the moment the link settles.
+    #[test]
+    fn a_link_being_made_shows_its_upload_and_then_lets_it_go() {
+        let mut c = card(3);
+        c.link = LinkState::Creating;
+        c.link_progress = Some(LinkProgress::Preparing);
+        let c = c.refreshed();
+        assert_eq!(c.link_text.as_deref(), Some("Preparing link…"));
+        assert_eq!(c.link_percent, None, "nothing sent yet, so no bar");
+
+        let mut c = c;
+        c.link_progress = Some(LinkProgress::Uploading {
+            percent: 40,
+            seconds_left: Some(28),
+        });
+        let c = c.refreshed();
+        assert_eq!(c.link_text.as_deref(), Some("Uploading link 40%, about 30 s left"));
+        assert_eq!(c.link_percent, Some(40));
+
+        let mut c = c;
+        c.link = LinkState::Public { copied: true };
+        let c = c.refreshed();
+        assert_eq!(c.link_text.as_deref(), Some("Public link copied"));
+        assert_eq!(c.link_percent, None);
+        assert_eq!(c.link_progress, None, "a settled link forgets the upload");
+    }
+
+    #[test]
+    fn the_time_left_is_rounded_up_and_said_plainly() {
+        assert_eq!(time_left(3), "a few seconds left");
+        assert_eq!(time_left(11), "about 15 s left");
+        assert_eq!(time_left(55), "about 55 s left");
+        assert_eq!(time_left(61), "about 2 min left");
+        assert_eq!(LinkProgress::Finishing.text(), "Finishing link…");
+        assert_eq!(LinkProgress::Finishing.percent(), Some(100));
+    }
+
+    #[test]
+    fn the_estimate_waits_for_a_rate_and_stops_when_done() {
+        use std::time::Duration;
+        assert_eq!(upload_seconds_left(10, 100, Duration::from_secs(1)), None, "too early to tell");
+        assert_eq!(upload_seconds_left(0, 100, Duration::from_secs(5)), None, "nothing sent yet");
+        assert_eq!(upload_seconds_left(100, 100, Duration::from_secs(5)), None, "done");
+        // 25 of 100 bytes in 5 s: 75 more at 5 bytes a second.
+        assert_eq!(upload_seconds_left(25, 100, Duration::from_secs(5)), Some(15));
+        assert_eq!(upload_seconds_left(1, u64::MAX, Duration::from_secs(5)), None, "no believable number");
+    }
+
+    #[test]
+    fn the_card_hears_of_each_step_and_each_percent_once() {
+        let up = |percent, seconds_left| LinkProgress::Uploading { percent, seconds_left };
+        assert!(link_progress_moved(None, LinkProgress::Preparing));
+        assert!(!link_progress_moved(Some(LinkProgress::Preparing), LinkProgress::Preparing));
+        assert!(link_progress_moved(Some(LinkProgress::Preparing), up(0, None)));
+        assert!(
+            !link_progress_moved(Some(up(12, None)), up(12, Some(40))),
+            "the estimate alone sends nothing"
+        );
+        assert!(link_progress_moved(Some(up(12, None)), up(13, Some(40))));
+        assert!(link_progress_moved(Some(up(100, None)), LinkProgress::Finishing));
+        assert_eq!(percent_of(0, 0), 100);
+        assert_eq!(percent_of(1, 3), 33);
+        assert_eq!(percent_of(7, 5), 100, "never past the whole");
+        assert_eq!(percent_of(u64::MAX / 2, u64::MAX), 49);
     }
 }

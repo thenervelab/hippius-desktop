@@ -16,12 +16,14 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
-import EmailGateSettings from "./EmailGateSettings";
-import NdaSettings from "./NdaSettings";
 import RecipientLinks from "./RecipientLinks";
+import { LinkRules } from "@/components/page-sections/shares/rules/LinkRules";
+import type { ShareSummary, ShareTtl } from "@/app/lib/tauri/shares";
+import { setShareExpiryDate, updateShareExpiry } from "@/app/lib/tauri/shares";
+import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
-import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, loadErrorLine } from "./insightsView";
+import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, isWatermarkNotInPlan, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
 import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
@@ -40,6 +42,7 @@ export function useLinkSwitches(shareToken: string) {
   const queryClient = useQueryClient();
   const key = linkSettingsQueryKey(shareToken);
   const [downloadRefused, setDownloadRefused] = useState(false);
+  const [watermarkRefused, setWatermarkRefused] = useState(false);
   const current = useQuery({
     queryKey: key,
     queryFn: () => getLinkSettings(shareToken),
@@ -53,14 +56,16 @@ export function useLinkSwitches(shareToken: string) {
       await queryClient.cancelQueries({ queryKey: key });
       const before = queryClient.getQueryData<LinkSettingsDefault>(key);
       if (before) {
-        const { download, ...switches } = change;
+        const { download, watermark, ...switches } = change;
         queryClient.setQueryData<LinkSettingsDefault>(key, {
           ...before,
           on: { ...before.on, ...switches },
           download: download ?? before.download,
+          watermark: watermark ?? before.watermark,
         });
       }
       setDownloadRefused(false);
+      setWatermarkRefused(false);
       return { before };
     },
     onError: (err, _change, ctx) => {
@@ -69,11 +74,15 @@ export function useLinkSwitches(shareToken: string) {
         setDownloadRefused(true);
         return;
       }
+      if (isWatermarkNotInPlan(err)) {
+        setWatermarkRefused(true);
+        return;
+      }
       toast.error(actionErrorLine("change that setting", err, navigator.onLine));
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: key }),
   });
-  return { current, save, downloadRefused };
+  return { current, save, downloadRefused, watermarkRefused };
 }
 
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
@@ -83,11 +92,14 @@ export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
  * anchored under the panel header's gear. It is drawn inside the panel (not
  * portalled), so it sits within the narrow-window sheet's focus trap.
  * Escape, a press outside or the gear again closes it, and focus goes back
- * to whatever opened it.
+ * to whatever opened it. A list or menu it opens that is drawn elsewhere on
+ * the page counts as inside it.
  */
 export function LinkSettingsPopover({
   id,
   shareToken,
+  fileName,
+  share,
   switches,
   top,
   opener,
@@ -97,6 +109,9 @@ export function LinkSettingsPopover({
   id: string;
   /** The link these settings are for. */
   shareToken: string;
+  fileName: string;
+  /** The link's row in the share listing, for its expiry and password. */
+  share: ShareSummary | null;
   switches: LinkSwitches;
   /** Pixels from the panel's top: just under its header. */
   top: number;
@@ -110,8 +125,42 @@ export function LinkSettingsPopover({
   const titleId = useId();
   const ref = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const { current, save, downloadRefused } = switches;
+  const { current, save, downloadRefused, watermarkRefused } = switches;
   const online = useIsOnline();
+  const queryClient = useQueryClient();
+  // A rule's editor is open in place of everything else.
+  const [pushed, setPushed] = useState(false);
+  const [expirySaving, setExpirySaving] = useState(false);
+  const [ttl, setTtl] = useState<ShareTtl | null>(null);
+  const changeExpiry = (next: ShareTtl) => {
+    if (expirySaving) return;
+    const before = ttl;
+    setTtl(next);
+    setExpirySaving(true);
+    updateShareExpiry(shareToken, next)
+      .then(() => queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] }))
+      .catch((err: unknown) => {
+        setTtl(before);
+        toast.error(actionErrorLine("change the expiry", err, navigator.onLine));
+      })
+      .finally(() => setExpirySaving(false));
+  };
+  // A chosen end date in place of a preset.
+  const changeExpiryDate = (day: string) => {
+    if (expirySaving) return;
+    setExpirySaving(true);
+    setShareExpiryDate(shareToken, day)
+      .then(() => {
+        setTtl(null);
+        return queryClient.invalidateQueries({ queryKey: [SHARES_QUERY_KEY] });
+      })
+      .catch((err: unknown) => toast.error(actionErrorLine("change the expiry", err, navigator.onLine)))
+      .finally(() => setExpirySaving(false));
+  };
+  const upgrade = () => {
+    onLeave();
+    router.push(BILLING_ROUTE);
+  };
 
   // The panel hands a new `onClose` every render; the listeners read the latest.
   const onCloseRef = useRef(onClose);
@@ -133,16 +182,36 @@ export function LinkSettingsPopover({
     titleRef.current?.focus({ preventScroll: true });
   }, []);
 
+  // What it draws elsewhere on the page (the Expiry list, any menu or list a
+  // rule's editor opens) is portalled outside it in the DOM but still inside
+  // it in React, and React's events reach it from there. So "outside" is
+  // never read off the DOM alone: a press or a focus the DOM calls outside
+  // waits one task, and React's own event from the same press or focus, if
+  // one arrives, says it was inside.
+  const pressedInside = useRef<Event | null>(null);
+  const focusInside = useRef(false);
+  const pendingClose = useRef<number[]>([]);
+  const closeUnlessInside = useCallback((stillInside: () => boolean) => {
+    const timer = window.setTimeout(() => {
+      pendingClose.current = pendingClose.current.filter((t) => t !== timer);
+      if (!stillInside()) onCloseRef.current();
+    }, 0);
+    pendingClose.current.push(timer);
+  }, []);
+  useEffect(() => () => pendingClose.current.forEach((t) => window.clearTimeout(t)), []);
+
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target;
       if (!(target instanceof Element)) return;
       if (ref.current?.contains(target) || target.closest(`[${SETTINGS_TRIGGER_ATTR}]`)) return;
-      onCloseRef.current();
+      // This runs first (document, capture); React's capture handler on the
+      // popover runs after it for a press in anything it drew elsewhere.
+      closeUnlessInside(() => pressedInside.current === e);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, []);
+  }, [closeUnlessInside]);
 
   return (
     <div
@@ -157,8 +226,17 @@ export function LinkSettingsPopover({
       // focusable ancestor instead, which without this was the panel around
       // the popover, so pressing a switch read as focus leaving and closed it.
       tabIndex={-1}
+      onPointerDownCapture={(e) => {
+        pressedInside.current = e.nativeEvent;
+      }}
+      onFocus={() => {
+        focusInside.current = true;
+      }}
       onBlur={(e) => {
-        if (leftPopover(e.currentTarget, e.relatedTarget)) onCloseRef.current();
+        focusInside.current = false;
+        // Focus going to something it drew elsewhere (the Expiry list as it
+        // opens) brings its focus event right after this one.
+        if (leftPopover(e.currentTarget, e.relatedTarget)) closeUnlessInside(() => focusInside.current);
       }}
       className={cn(
         "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3 outline-none",
@@ -168,7 +246,31 @@ export function LinkSettingsPopover({
       <h3 id={titleId} ref={titleRef} tabIndex={-1} className={cn("text-[13.5px] font-semibold outline-none", STRONG)}>
         Link settings
       </h3>
-      <p className={cn("mb-2.5 mt-0.5 text-xs", MUTED)}>What people who open this link can do.</p>
+      {!pushed && <p className={cn("mb-2.5 mt-0.5 text-xs", MUTED)}>What people who open this link can do.</p>}
+      {pushed && <div className="mb-2" />}
+      {/* The link's rules as cards; a card's editor opens in their place. */}
+      <LinkRules
+        className="mb-2.5"
+        shareToken={shareToken}
+        fileName={fileName}
+        mimeType={share?.mimeType ?? null}
+        download={current.data?.download ?? null}
+        onDownloadChange={(download) => save.mutate({ download })}
+        downloadRefused={downloadRefused}
+        watermark={current.data?.watermark ?? null}
+        onWatermarkChange={(watermark) => save.mutate({ watermark })}
+        watermarkRefused={watermarkRefused}
+        savingSwitches={save.isPending}
+        switchesInPlan={current.data?.switchesInPlan ?? null}
+        expiresAt={share ? share.expiresAt : undefined}
+        expiry={share ? { ttl, saving: expirySaving, onChange: changeExpiry, onDate: changeExpiryDate } : null}
+        // Known only where this computer holds the link's key.
+        passwordOn={share?.shareUrl ? share.isPrivate : null}
+        onUpgrade={upgrade}
+        onPushedChange={setPushed}
+      />
+      {!pushed && (
+        <>
       {current.isPending ? (
         <div className={cn(SKELETON, "h-[150px] rounded-[12px]")} />
       ) : current.isError ? (
@@ -181,39 +283,11 @@ export function LinkSettingsPopover({
           disabled={save.isPending}
           switchesInPlan={current.data.switchesInPlan ?? null}
           onChange={(next) => save.mutate(switchChange(current.data.on, next))}
-          download={current.data.download ?? null}
-          onDownloadChange={(download) => save.mutate({ download })}
-          downloadRefused={downloadRefused}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
+          onUpgrade={upgrade}
         />
       ) : (
         <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
       )}
-      {/* Drawn only where Rust says the server has email gates. */}
-      <div className="mt-2.5 empty:hidden">
-        <EmailGateSettings
-          layout="list"
-          shareToken={shareToken}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
-        />
-      </div>
-      {/* Drawn only where Rust offers it: never on a password link without a text. */}
-      <div className="mt-2.5 empty:hidden">
-        <NdaSettings
-          layout="list"
-          shareToken={shareToken}
-          onUpgrade={() => {
-            onLeave();
-            router.push(BILLING_ROUTE);
-          }}
-        />
-      </div>
       {/* Drawn only where Rust offers it: a server with links per person. */}
       <div className="mt-2.5 empty:hidden">
         <RecipientLinks layout="list" shareToken={shareToken} />
@@ -221,6 +295,8 @@ export function LinkSettingsPopover({
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />
       </div>
+        </>
+      )}
     </div>
   );
 }

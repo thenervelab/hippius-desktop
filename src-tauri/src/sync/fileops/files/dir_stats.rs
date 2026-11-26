@@ -249,7 +249,7 @@ pub(crate) fn invalidate_dir_stats_under(root: &Path) {
 /// must be the listing form (DB sync path + relative), never a canonicalized
 /// target: `list_sync_folder` never canonicalizes, so on macOS a
 /// `/private/var` key would miss every row a `/var` listing wrote.
-pub(super) fn invalidate_dir_stats_for_change(sync_root: &Path, changed: &Path) {
+pub(crate) fn invalidate_dir_stats_for_change(sync_root: &Path, changed: &Path) {
     // Collect the ancestors first so the cache is swept once. Under a
     // two-part key an ancestor could be dropped with a single `remove`; now
     // that a path can hold one entry per ruleset there is no single key to

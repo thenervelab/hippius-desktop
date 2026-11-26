@@ -39,49 +39,72 @@ export function gateCountsLine(gate: Pick<LinkGate, "allowCount" | "blockCount">
 }
 
 /**
+ * A link's email gate as read from Rust, and the setter its editors share.
+ * `null` reads nothing (a folder link, which has no gate). Nothing while it
+ * is read or if the read fails, so a link without the feature looks as it
+ * always did.
+ */
+export function useLinkGate(shareToken: string | null) {
+  const [gate, setGate] = useState<LinkGate | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setGate(null);
+    if (shareToken === null) return;
+    Promise.resolve()
+      .then(() => getLinkGate(shareToken))
+      .then((g) => alive && setGate(g))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [shareToken]);
+  return { gate, setGate };
+}
+
+export type LinkGateStore = ReturnType<typeof useLinkGate>;
+
+/**
  * "Ask for email" on a file link: viewers confirm an email with a mailed
  * code before the link opens, and the owner can let in only some addresses
  * and domains, or keep some out. Drawn only when Rust says the server has
- * email gates (`offered`); nothing while it is being read or if the read
- * fails, so a link without the feature looks as it always did.
+ * email gates (`offered`).
  *
  * `layout` matches the switches it sits with: `stack` in the share dialog,
- * `list` (a bordered row) in the Insights sheet's Link settings.
+ * `list` (a bordered row) in the Insights sheet's Link settings. `store` is
+ * the gate a host already read (the rule cards' summary); without one it
+ * reads its own. `part` draws only the switch (the "Ask for email" card) or
+ * only the lists (the "Allow list" card, where saving lists turns the gate
+ * on); both by default.
  */
 export default function EmailGateSettings({
   shareToken,
   onUpgrade,
   layout = "stack",
+  store,
+  part,
 }: {
   shareToken: string;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
   layout?: "stack" | "list";
+  store?: LinkGateStore;
+  part?: "switch" | "lists";
 }) {
-  const [gate, setGate] = useState<LinkGate | null>(null);
+  const own = useLinkGate(store ? null : shareToken);
+  const { gate, setGate } = store ?? own;
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
   const [allowText, setAllowText] = useState("");
   const [blockText, setBlockText] = useState("");
   const [listError, setListError] = useState<string | null>(null);
 
-  const show = (next: LinkGate) => {
-    setGate(next);
-    setAllowText(next.lists?.allow.join("\n") ?? "");
-    setBlockText(next.lists?.block.join("\n") ?? "");
-  };
-
+  // The boxes follow the lists as stored, after each read and save.
   useEffect(() => {
-    let alive = true;
-    setGate(null);
-    Promise.resolve()
-      .then(() => getLinkGate(shareToken))
-      .then((g) => alive && show(g))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [shareToken]);
+    setAllowText(gate?.lists?.allow.join("\n") ?? "");
+    setBlockText(gate?.lists?.block.join("\n") ?? "");
+  }, [gate]);
+
+  const show = (next: LinkGate) => setGate(next);
 
   if (!gate?.offered) return null;
   const locked = gate.inPlan === false;
@@ -119,7 +142,13 @@ export default function EmailGateSettings({
   };
 
   const saved = gate.on ? gate.lists : null;
-  const dirty = saved !== null && (allowText !== saved.allow.join("\n") || blockText !== saved.block.join("\n"));
+  const showSwitch = part !== "lists";
+  // The lists alone may be written while the gate is off: saving them turns it on.
+  const listsShown = part === "lists" ? !(gate.on && gate.lists === null) : gate.on && gate.lists !== null;
+  const dirty =
+    saved !== null
+      ? allowText !== saved.allow.join("\n") || blockText !== saved.block.join("\n")
+      : part === "lists" && !gate.on && (allowText.trim() !== "" || blockText.trim() !== "");
 
   const save = async () => {
     if (busy) return;
@@ -144,6 +173,7 @@ export default function EmailGateSettings({
   return (
     <div className={cn("flex flex-col", !list && "mt-3")} data-testid="email-gate-settings">
       <div className={cn("flex flex-col gap-2.5", list && "rounded-[12px] border border-grey-80 px-3 py-2.5 dark:border-[#494949]")}>
+        {showSwitch && (
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <p
@@ -165,12 +195,13 @@ export default function EmailGateSettings({
             onCheckedChange={(on) => void flip(on)}
           />
         </div>
-        {gate.on && gate.lists === null && (
+        )}
+        {part !== "switch" && gate.on && gate.lists === null && (
           <p className="text-xs text-grey-50 dark:text-grey-dark-600" data-testid="email-gate-counts">
             {gateCountsLine(gate)}
           </p>
         )}
-        {gate.on && gate.lists !== null && (
+        {part !== "switch" && listsShown && (
           <div className="flex flex-col gap-2.5">
             <label className="flex flex-col gap-1">
               <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">Only allow</span>

@@ -1,12 +1,12 @@
 import { Icons } from "@/components/ui";
-import { Camera, MessagesSquare, Share2Icon, Users } from "lucide-react";
+import { Camera, MessagesSquare, Share2Icon, Star, Trash2, Users } from "lucide-react";
 import Support from "../ui/icons/Support";
 import {
   WALLET_FEATURE_ENABLED,
   REFERRALS_FEATURE_ENABLED,
   SHARED_DRIVES_ENABLED,
 } from "@/app/lib/featureFlags";
-import { BILLING_ROUTE } from "@/app/lib/routes";
+import { BILLING_ROUTE, STARRED_ROUTE, TRASH_ROUTE } from "@/app/lib/routes";
 
 export interface SubMenuItemData {
   label: string;
@@ -19,6 +19,8 @@ export interface NavItemData {
   label: string;
   path: string;
   icon: React.ReactNode;
+  /** Drawn instead of `icon` while this is the page you are on (Starred's filled star). */
+  activeIcon?: React.ReactNode;
   isActive?: boolean;
   comingSoon?: boolean;
   subMenuItems?: SubMenuItemData[];
@@ -34,10 +36,12 @@ export interface NavItemData {
   // `chat_get_config` reports `enabled: true` (see `chatEnabledAtom`);
   // `"capture"` hides it unless the caller says capture is on for this
   // computer (`SCREEN_CAPTURE_ENABLED` and Rust's `capture_support`);
-  // `"sharedDrives"` hides it while `SHARED_DRIVES_ENABLED` is off.
+  // `"sharedDrives"` hides it while `SHARED_DRIVES_ENABLED` is off;
+  // `"trash"` hides it until the server advertises `drive_trash: true`
+  // (see `driveTrashEnabledAtom`).
   // Adding a new gate is one entry here plus one branch in
   // `filterNavSections`.
-  featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture" | "sharedDrives";
+  featureFlag?: "shares" | "wallet" | "referrals" | "chat" | "capture" | "sharedDrives" | "trash";
 }
 
 export interface NavSection {
@@ -85,6 +89,16 @@ export const navSections: NavSection[] = [
         icon: <Users className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "sharedDrives",
       },
+      // Right after Shared Drives, as on the web Drive and the phone: what
+      // this account starred, in every drive. Ungated: the page itself says
+      // so when the server has no Starred yet.
+      {
+        label: "Starred",
+        path: STARRED_ROUTE,
+        icon: <Star className={ICON_CLASS} strokeWidth={1.5} />,
+        // Filled on its own page, as a starred item's mark is.
+        activeIcon: <Star className={ICON_CLASS} strokeWidth={1.5} fill="currentColor" />,
+      },
       // In Drive, as its own row: every capture is a file in a drive, so
       // this reads as a view of Drive.
       {
@@ -92,6 +106,14 @@ export const navSections: NavSection[] = [
         path: "/captures",
         icon: <Camera className={ICON_CLASS} strokeWidth={1.5} />,
         featureFlag: "capture",
+      },
+      // Last under Drive: where deleted items wait 30 days (the server's
+      // retention) before they are deleted forever.
+      {
+        label: "Trash",
+        path: TRASH_ROUTE,
+        icon: <Trash2 className={ICON_CLASS} strokeWidth={1.5} />,
+        featureFlag: "trash",
       },
     ],
   },
@@ -182,6 +204,7 @@ export function filterNavSections(
     referralsEnabled?: boolean;
     captureEnabled?: boolean;
     sharedDrivesEnabled?: boolean;
+    trashEnabled?: boolean;
   },
 ): NavSection[] {
   const walletEnabled = gates.walletEnabled ?? WALLET_FEATURE_ENABLED;
@@ -199,6 +222,7 @@ export function filterNavSections(
         if (item.featureFlag === "chat") return gates.chatEnabled === true;
         if (item.featureFlag === "capture") return captureEnabled;
         if (item.featureFlag === "sharedDrives") return sharedDrivesEnabled;
+        if (item.featureFlag === "trash") return gates.trashEnabled === true;
         return true;
       }),
     }))

@@ -24,6 +24,11 @@ export type FileFailureKind =
    *  is Rust's copy for it. Kept across clean cycles and never retryable:
    *  hcfs reports it once per revision and only the user can fix it. */
   | "refused"
+  /** The server refused a screen recording under the Free plan's limits
+   *  (recordings used up, or this one too long). `message` is Rust's copy
+   *  for it. Retryable: an upgrade lifts it, and for the count so does
+   *  deleting an older recording. */
+  | "recordingLimit"
   | "other";
 
 export interface FileFailureRecord {

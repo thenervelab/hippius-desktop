@@ -148,6 +148,28 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
     }
 }
 
+/// Both ways a capture reaches a drive tell the server what it is, so a Free
+/// plan's recordings are counted and held to their length (#1133): a synced
+/// drive through hcfs's declaration, made after the move picks the name and
+/// before the cycle is nudged, and a drive only on the server on the
+/// manifest of the direct upload. `deliver::tests` covers the declaration
+/// itself; this pins that `place` makes it on both paths.
+#[test]
+fn delivery_declares_the_capture_on_both_paths() {
+    let src = read("src/capture/deliver.rs");
+    let body = fn_body(&src, "pub async fn place(");
+    let length = body.find("capture_for(").expect("the capture is read from the file");
+    let moved = body.find("place_in_folder(").expect("a synced capture is moved");
+    let declared = body.find("declare_placed(").expect("a synced capture is declared");
+    let nudged = body.find("trigger_sync_now(").expect("the cycle is nudged");
+    assert!(length < moved, "read while the file is still the one recorded");
+    assert!(moved < declared && declared < nudged, "declared under its final name, before the nudge");
+
+    let upload = &body[body.find("upload_files_to_remote_folder_inner(").expect("direct upload")..];
+    let call = &upload[..upload.find(".await").expect("awaited")];
+    assert!(call.contains("capture,"), "the direct upload carries the capture: {call}");
+}
+
 /// A failed upload must leave the capture on disk; only a delivered one is
 /// removed, and only through `remove_temp_dir`, which touches nothing but the
 /// capture's own temp folder. A capture sent from the folder it was kept in
@@ -269,9 +291,15 @@ fn every_recording_start_path_goes_through_the_one_gate() {
     assert!(fn_body(&allowance, "pub async fn recording_count(").contains("list_recordings(state, account_id)"));
     let list = fn_body(&allowance, "async fn list_recordings(");
     assert!(
-        list.contains("remote::list_remote_folder_files_inner("),
-        "the count comes from the server listing the remote-folder browser uses"
+        list.contains("list_drive_files(state, account_id, label)"),
+        "the count comes from each captures drive's server listing"
     );
+    // One `get_state` walk per drive, read with each row's `capture_kind`
+    // (hcfs-client's `RemoteFileInfo` drops it), so the server's recording
+    // mark decides what counts.
+    let listing = fn_body(&allowance, "async fn list_drive_files(");
+    assert!(listing.contains(".get_all_files("), "the server's own listing");
+    assert!(list.contains("counts_by_kind("), "the mark decides when the server sends it");
     assert!(list.contains("captures_labels(state, account_id)"), "every captures drive is listed");
 }
 
@@ -348,19 +376,43 @@ fn the_recorder_never_writes_into_a_synced_folder() {
     assert!(fn_body(&shot, "pub fn capture_tmp_root(").contains(r#"join(".hippius")"#));
 }
 
-/// The card hears that the file is in the drive before the link is made,
-/// and a synced capture is followed from that moment. Waiting for both held
-/// the card on "Preparing upload" through the whole upload and the mint.
+/// The link is made FIRST, from the capture's own file, before the file goes
+/// into the drive: it is what the user is waiting for, and its upload used to
+/// share the connection with the drive's upload of the same file, or wait for
+/// it to finish. The card follows the link's upload, keeps the link once it
+/// is out, and is then told the file is placed (a synced capture followed in
+/// the sync queue from that moment).
 #[test]
-fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
+fn the_link_is_made_from_the_capture_before_it_is_placed() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
+    let link = body.find("link_first(").expect("the link is made");
+    let place = body.find("super::deliver::place(").expect("the file is placed");
     let placed = body.find("announce_placed(").expect("the placement is announced");
-    let link = body.find("link_for(").expect("the link is made");
-    assert!(placed < link, "the card must hear of the placement before the mint");
+    assert!(link < place && place < placed, "link first, then the drive");
+    assert!(
+        body.contains("remember_placed_origin("),
+        "the link is recorded as the placed file's, so Drive and the tray find it"
+    );
+    let first = fn_body(&src, "async fn link_first(");
+    let creating = first.find("LinkState::Creating").expect("the card says the link is being made");
+    let minted = first.find("link_from_file(").expect("from the capture's own file");
+    let copied = first.find("copy_link_to_clipboard(").expect("copied the moment it exists");
+    assert!(creating < minted && minted < copied);
+    assert!(first.contains("card_link_progress("), "the card follows the link's upload");
+    assert!(first.contains("announce_minted("), "the card keeps the link from the moment it exists");
+    assert!(
+        first.contains("card.filter(|c| c.share_url.is_some())"),
+        "a Retry keeps the link the first try handed out"
+    );
+    let deliver = read("src/capture/deliver.rs");
+    assert!(fn_body(&deliver, "pub async fn link_from_file(").contains("LinkSource::External("));
+    let origin = fn_body(&deliver, "pub async fn remember_placed_origin(");
+    assert!(origin.contains("remember_origin("));
+    assert!(origin.contains("badges::push_from_state("), "a synced file is marked shared in Finder");
     let announce = fn_body(&src, "fn announce_placed(");
     assert!(announce.contains("spawn_sync_follow("), "a synced capture is followed at once");
-    assert!(announce.contains("LinkState::Creating"), "the card says the link is being made");
+    assert!(!announce.contains("LinkState::Creating"), "placing never puts the link back to Creating");
     // The follower asks every source the engine answers from.
     let facts = fn_body(&src, "fn sync_facts(");
     for source in ["current_session", "recent_files", "is_synced("] {
@@ -368,26 +420,7 @@ fn the_card_is_told_the_file_is_placed_before_the_link_is_made() {
     }
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
-    assert!(
-        follow.contains("link_finishes_card("),
-        "a public link finishes a card the engine has not started on"
-    );
-    assert!(
-        !follow.contains("is_any_sync_in_progress("),
-        "the card waits for its own upload, never for the rest of the sync"
-    );
-    assert!(
-        facts.contains("FileStatus::Pending => SyncRow::Queued"),
-        "a queued row is told apart from a running one"
-    );
-    // The cycle is started, never waited for, by the placement.
-    let place = fn_body(&read("src/capture/deliver.rs"), "pub async fn place(");
-    let spawn = place.find("async_runtime::spawn(").expect("the sync is started in the background");
-    let trigger = place.find("trigger_sync_now(").expect("the sync is nudged");
-    assert!(
-        spawn < trigger,
-        "trigger_sync_now must run inside the spawned task, not be awaited inline"
-    );
+    assert!(follow.contains("link_finishes_card("), "only its own folder");
 }
 
 /// An overlay that is not the key window (any display but the bar's, or all
@@ -3288,14 +3321,20 @@ fn a_captures_chat_preview_follows_the_settings_default() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
     assert!(body.contains("o.chat_preview"), "the stored default is read");
-    let gate = body
-        .find("let preview = (mint_link && chat_preview).then(||")
-        .expect("no preview without a link or with the default off");
-    let link = body.find("link_for(").expect("the link is made");
+    assert!(body.find("if mint_link {").expect("only with a link") < body.find("link_first(").unwrap());
+    let first = fn_body(&src, "async fn link_first(");
+    let gate = first.find("let preview = wants_preview").expect("no preview with the default off");
+    assert!(
+        first.contains("let wants_preview = choices.chat_preview;"),
+        "Settings' preview switch decides"
+    );
+    let link = first.find("link_from_file(").expect("the link is made");
     assert!(gate < link, "the preview is read while the link is minted");
-    let cleanup = fn_body(&src, "fn spawn_preview_then_cleanup(");
-    assert!(cleanup.contains("tauri::async_runtime::spawn("), "sent in the background");
-    assert!(cleanup.contains("preview::send_rendered("), "a failed upload is only logged");
+    let read_back = first.find("read.await").expect("the picture is waited for");
+    assert!(link < read_back, "after the link, and before the file can move into the drive");
+    let send = first.find("preview::send_rendered(").expect("sent with the link");
+    assert!(read_back < send);
+    assert!(first[read_back..].contains("tauri::async_runtime::spawn("), "sent in the background");
 }
 
 /// Every capture link (the instant shortcut's and the automatic ones, and a
@@ -3307,9 +3346,11 @@ fn a_captures_link_settings_follow_the_settings_default() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
     assert!(body.contains("o.link_insights"), "the stored default is read");
-    let made = body.find("Delivered::from_parts(").expect("the link is made");
-    let applied = body
-        .find("insights::spawn_apply(app, &account_id, token, crate::shares::insights::for_capture(link_insights))")
+    assert!(body.contains("link_insights,"), "handed to the link step");
+    let first = fn_body(&src, "async fn link_first(");
+    let made = first.find("link_from_file(").expect("the link is made");
+    let applied = first
+        .find("insights::spawn_apply(app, account_id, token, crate::shares::insights::for_capture(choices.link_insights))")
         .expect("the default is applied to the new link");
     assert!(made < applied);
     let later = fn_body(&src, "pub async fn capture_preview_mint_link(");
@@ -3364,8 +3405,8 @@ fn no_password_share_sends_a_chat_preview() {
     assert!(confirm.contains("preview::allowed(&choice, chat_preview.unwrap_or(false))"));
     let set = fn_body(&shares, "pub async fn hcfs_set_share_preview(");
     assert!(
-        set.contains("ShareSecret::Public(_)"),
-        "turning it back on checks the link has no password"
+        set.contains("preview::secret_takes_preview("),
+        "turning it back on checks the link has no password (`secret_takes_preview` holds the rule, unit-tested in preview.rs)"
     );
 }
 

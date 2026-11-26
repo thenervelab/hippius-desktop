@@ -205,6 +205,116 @@ pub async fn check_for_update(app: AppHandle) -> Result<Option<AvailableUpdate>>
 /// an interruption is not something to hand out every few minutes.
 pub const BACKGROUND_UPDATE_CHECK_INTERVAL: Duration = Duration::from_hours(1);
 
+/// Shortest interval [`UPDATE_CHECK_SECONDS_ENV`] may set.
+const MIN_BACKGROUND_CHECK_SECONDS: u64 = 60;
+
+/// Runtime override of [`BACKGROUND_UPDATE_CHECK_INTERVAL`], in seconds, so a
+/// tester can see the background path without waiting an hour.
+const UPDATE_CHECK_SECONDS_ENV: &str = "HIPPIUS_UPDATE_CHECK_SECONDS";
+
+/// How often the background check runs for this build.
+///
+/// The override is honored by dev, staging and beta builds and ignored by
+/// production. Unlike the console override it cannot point anything
+/// elsewhere (only "how often"), so beta testers can use it to try the
+/// update notice; production keeps the fixed hour. Clamped to at least a
+/// minute so a typo cannot turn the check into a request loop.
+pub fn background_check_interval(channel: ReleaseChannel, dev_build: bool, raw: Option<&str>) -> Duration {
+    if !dev_build && channel == ReleaseChannel::Production {
+        return BACKGROUND_UPDATE_CHECK_INTERVAL;
+    }
+    match raw.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(secs) => Duration::from_secs(secs.max(MIN_BACKGROUND_CHECK_SECONDS)),
+        None => BACKGROUND_UPDATE_CHECK_INTERVAL,
+    }
+}
+
+/// Where the main window is, as far as noticing a dialog goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MainWindowPresence {
+    pub visible: bool,
+    pub minimized: bool,
+    pub focused: bool,
+}
+
+/// Whether an update found in the background also needs a system notification.
+///
+/// The dialog opens inside the main window, which is only seen when that
+/// window is on screen and in front. On macOS closing the window hides it to
+/// the tray; on Windows and Linux closing quits, so a long-running copy sits
+/// minimized or behind other windows. In each of those cases the dialog would
+/// open where nobody looks, so the notification is what tells them.
+pub fn needs_system_notice(presence: Option<MainWindowPresence>) -> bool {
+    match presence {
+        Some(p) => !p.visible || p.minimized || !p.focused,
+        None => true,
+    }
+}
+
+/// The newest version known to be available this run, from the background
+/// check or from the dialog having been shown. The tray popover reads it to
+/// show its "Update available" row. Cleared only by the restart an install
+/// performs.
+static AVAILABLE: Mutex<Option<String>> = Mutex::new(None);
+
+fn remember_available(version: &str) {
+    if version.is_empty() {
+        return;
+    }
+    if let Ok(mut available) = AVAILABLE.lock() {
+        *available = Some(version.to_string());
+    }
+}
+
+/// The version an update is available for, if one was found this run.
+#[tauri::command]
+pub fn update_available_version() -> Option<String> {
+    AVAILABLE.lock().ok().and_then(|v| v.clone())
+}
+
+/// The tray popover's "Update available" row: bring the main window forward
+/// and open the update dialog there.
+#[tauri::command]
+pub fn open_update_from_tray(app: AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit_to(MAIN_WINDOW_LABEL, UPDATE_AVAILABLE_EVENT, ());
+}
+
+const MAIN_WINDOW_LABEL: &str = "main";
+
+fn main_window_presence(app: &AppHandle) -> Option<MainWindowPresence> {
+    use tauri::Manager;
+    let window = app.get_webview_window(MAIN_WINDOW_LABEL)?;
+    Some(MainWindowPresence {
+        visible: window.is_visible().unwrap_or(false),
+        minimized: window.is_minimized().unwrap_or(false),
+        focused: window.is_focused().unwrap_or(false),
+    })
+}
+
+/// Copy of the system notification for a found update.
+pub fn update_notice_body(version: &str) -> String {
+    format!("Hippius {version} is ready to install.")
+}
+
+fn show_update_notice(app: &AppHandle, version: &str) {
+    use tauri_plugin_notification::NotificationExt;
+    if let Err(e) = app
+        .notification()
+        .builder()
+        .title("Update available")
+        .body(update_notice_body(version))
+        .show()
+    {
+        warn!(error = %e, "update notification not shown");
+    }
+}
+
 /// The version already put in front of the user this run, by whichever path
 /// got there first.
 ///
@@ -228,6 +338,7 @@ pub fn note_update_prompted(version: String) {
     if version.is_empty() {
         return;
     }
+    remember_available(&version);
     if let Ok(mut announced) = ANNOUNCED.lock() {
         debug!(%version, "user has been shown this version");
         *announced = Some(version);
@@ -265,11 +376,19 @@ pub fn should_announce(version: &str, already_announced: Option<&str>) -> bool {
 /// that runs unattended, and there is nothing the user could usefully do about
 /// it at the moment it happens.
 pub fn spawn_background_update_checks(app: AppHandle) {
+    let interval = background_check_interval(
+        release_channel::current(),
+        cfg!(debug_assertions),
+        std::env::var(UPDATE_CHECK_SECONDS_ENV).ok().as_deref(),
+    );
+    if interval != BACKGROUND_UPDATE_CHECK_INTERVAL {
+        info!(seconds = interval.as_secs(), "background update check interval overridden");
+    }
     tauri::async_runtime::spawn(async move {
         loop {
             // Sleep FIRST: startup has just checked, so an immediate second
             // check would be a duplicate request on every launch.
-            tokio::time::sleep(BACKGROUND_UPDATE_CHECK_INTERVAL).await;
+            tokio::time::sleep(interval).await;
 
             match check_for_update(app.clone()).await {
                 Ok(Some(update)) => {
@@ -287,9 +406,15 @@ pub fn spawn_background_update_checks(app: AppHandle) {
                         // told twice is better than never being told.
                         Err(_) => true,
                     };
+                    remember_available(&update.version);
                     if announce {
                         info!(version = %update.version, "background check found a new version");
-                        let _ = app.emit(UPDATE_AVAILABLE_EVENT, ());
+                        // The dialog opens in the main window either way, so it
+                        // is waiting there when the user comes back to it.
+                        let _ = app.emit_to(MAIN_WINDOW_LABEL, UPDATE_AVAILABLE_EVENT, ());
+                        if needs_system_notice(main_window_presence(&app)) {
+                            show_update_notice(&app, &update.version);
+                        }
                     } else {
                         debug!(version = %update.version, "already shown this version");
                     }
@@ -534,6 +659,89 @@ pub async fn install_update(app: AppHandle, on_progress: Channel<DownloadProgres
     Ok(())
 }
 
+/// Something a restart right now would cut off.
+///
+/// The update dialog restarts the app by itself once an update is installed,
+/// and asks first only while one of these is true. `line` is what the dialog
+/// shows, so the wording stays here with the decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartBlocker {
+    pub kind: RestartBlockerKind,
+    pub line: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RestartBlockerKind {
+    /// A screen recording is running, paused or being saved.
+    Recording,
+    /// A picture is open in the screenshot editor; its edits live only in memory.
+    EditorOpen,
+    /// Files are being encrypted, uploaded or downloaded.
+    Transfer,
+}
+
+/// The facts [`restart_blockers_from`] decides on, read from app state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RestartFacts {
+    pub capture: crate::capture::session::CapturePhase,
+    pub editor_open: bool,
+    /// The sync engine has files in its session that are not finished yet.
+    pub files_moving: bool,
+    /// An upload started from the app is still being copied and encrypted.
+    pub upload_preparing: bool,
+}
+
+/// What a restart right now would lose, in the order the dialog lists it.
+///
+/// Choosing what to capture is not a blocker: nothing has been recorded yet.
+pub fn restart_blockers_from(facts: RestartFacts) -> Vec<RestartBlocker> {
+    use crate::capture::session::CapturePhase;
+    let mut out = Vec::new();
+    if matches!(
+        facts.capture,
+        CapturePhase::Recording { .. } | CapturePhase::Paused { .. } | CapturePhase::Finalizing
+    ) {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::Recording,
+            line: "A screen recording is in progress.".into(),
+        });
+    }
+    if facts.editor_open {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::EditorOpen,
+            line: "A picture is open in the editor.".into(),
+        });
+    }
+    if facts.files_moving || facts.upload_preparing {
+        out.push(RestartBlocker {
+            kind: RestartBlockerKind::Transfer,
+            line: "Files are still uploading or downloading.".into(),
+        });
+    }
+    out
+}
+
+/// Whether the sync engine's session still has unfinished files.
+fn files_moving(snapshot: &crate::sync::progress::SyncSnapshot) -> bool {
+    snapshot.is_active && snapshot.total_files > snapshot.completed_files + snapshot.failed_files
+}
+
+/// What would be lost if the app restarted now. Empty means restart at once.
+///
+/// The update dialog asks this when an install finishes, and again every few
+/// seconds while the user chose "Restart when done".
+#[tauri::command]
+pub fn restart_blockers(state: tauri::State<'_, crate::app_state::AppState>) -> Vec<RestartBlocker> {
+    restart_blockers_from(RestartFacts {
+        capture: state.capture.current(),
+        editor_open: state.capture.editor_open(),
+        files_moving: files_moving(&state.sync.snapshot()),
+        upload_preparing: state.upload_processing.any_active(),
+    })
+}
+
 /// What the channel-switch surface needs to render itself.
 ///
 /// `targetVersion` is `None` when the target's manifest could not be read — an
@@ -716,6 +924,123 @@ pub fn current_release_channel() -> ReleaseChannel {
 }
 
 #[cfg(test)]
+mod restart_blocker_tests {
+    use super::{RestartBlockerKind, RestartFacts, restart_blockers_from};
+    use crate::capture::session::{CaptureKind, CaptureMode, CapturePhase};
+
+    fn idle() -> RestartFacts {
+        RestartFacts {
+            capture: CapturePhase::Idle,
+            editor_open: false,
+            files_moving: false,
+            upload_preparing: false,
+        }
+    }
+
+    fn kinds(facts: RestartFacts) -> Vec<RestartBlockerKind> {
+        restart_blockers_from(facts).into_iter().map(|b| b.kind).collect()
+    }
+
+    #[test]
+    fn nothing_running_restarts_at_once() {
+        assert!(restart_blockers_from(idle()).is_empty());
+    }
+
+    #[test]
+    fn a_recording_running_paused_or_saving_holds_the_restart() {
+        for capture in [
+            CapturePhase::Recording {
+                elapsed_secs: 3,
+                microphone: true,
+            },
+            CapturePhase::Paused {
+                elapsed_secs: 3,
+                microphone: false,
+            },
+            CapturePhase::Finalizing,
+        ] {
+            assert_eq!(
+                kinds(RestartFacts { capture, ..idle() }),
+                vec![RestartBlockerKind::Recording],
+                "{capture:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn choosing_what_to_capture_does_not_hold_the_restart() {
+        let selecting = CapturePhase::Selecting {
+            kind: CaptureKind::Recording,
+            mode: CaptureMode::Screen,
+        };
+        assert!(
+            restart_blockers_from(RestartFacts {
+                capture: selecting,
+                ..idle()
+            })
+            .is_empty()
+        );
+        let capturing = CapturePhase::Capturing {
+            kind: CaptureKind::Screenshot,
+        };
+        assert!(
+            restart_blockers_from(RestartFacts {
+                capture: capturing,
+                ..idle()
+            })
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_open_editor_holds_the_restart() {
+        assert_eq!(kinds(RestartFacts { editor_open: true, ..idle() }), vec![RestartBlockerKind::EditorOpen]);
+    }
+
+    #[test]
+    fn moving_files_hold_the_restart_once_however_they_move() {
+        for (files_moving, upload_preparing) in [(true, false), (false, true), (true, true)] {
+            assert_eq!(
+                kinds(RestartFacts {
+                    files_moving,
+                    upload_preparing,
+                    ..idle()
+                }),
+                vec![RestartBlockerKind::Transfer],
+            );
+        }
+    }
+
+    #[test]
+    fn every_blocker_is_listed_in_order_with_rusts_words() {
+        let all = restart_blockers_from(RestartFacts {
+            capture: CapturePhase::Finalizing,
+            editor_open: true,
+            files_moving: true,
+            upload_preparing: false,
+        });
+        let lines: Vec<&str> = all.iter().map(|b| b.line.as_str()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "A screen recording is in progress.",
+                "A picture is open in the editor.",
+                "Files are still uploading or downloading.",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_wire_shape_is_kind_and_line_in_camel_case() {
+        let json = serde_json::to_value(restart_blockers_from(RestartFacts { editor_open: true, ..idle() })).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!([{ "kind": "editorOpen", "line": "A picture is open in the editor." }])
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     /// `ANNOUNCED` is one process-global slot, and cargo runs these in
     /// parallel by default, so a test that writes it can land between another
@@ -824,6 +1149,54 @@ mod tests {
     #[test]
     fn the_background_interval_is_an_hour() {
         assert_eq!(super::BACKGROUND_UPDATE_CHECK_INTERVAL.as_secs(), 3600);
+    }
+
+    /// Production ignores the test override; the other lanes honor it, never
+    /// below a minute, and fall back to the hour on anything unparseable.
+    #[test]
+    fn the_check_interval_override_is_for_test_lanes_only() {
+        use super::{BACKGROUND_UPDATE_CHECK_INTERVAL, background_check_interval};
+        use crate::release_channel::ReleaseChannel::{Beta, Production, Staging};
+        assert_eq!(background_check_interval(Production, false, Some("90")), BACKGROUND_UPDATE_CHECK_INTERVAL);
+        assert_eq!(background_check_interval(Beta, false, Some("90")).as_secs(), 90);
+        assert_eq!(background_check_interval(Staging, false, Some("5")).as_secs(), 60);
+        assert_eq!(background_check_interval(Production, true, Some("120")).as_secs(), 120);
+        assert_eq!(background_check_interval(Beta, false, Some("soon")), BACKGROUND_UPDATE_CHECK_INTERVAL);
+        assert_eq!(background_check_interval(Beta, false, None), BACKGROUND_UPDATE_CHECK_INTERVAL);
+    }
+
+    /// The notification is for a dialog nobody would see: a hidden (macOS
+    /// tray), minimized, or unfocused main window, or none at all.
+    #[test]
+    fn a_found_update_is_also_a_notification_unless_the_window_is_in_front() {
+        use super::{MainWindowPresence, needs_system_notice};
+        let front = MainWindowPresence {
+            visible: true,
+            minimized: false,
+            focused: true,
+        };
+        assert!(!needs_system_notice(Some(front)));
+        assert!(needs_system_notice(Some(MainWindowPresence { visible: false, ..front })));
+        assert!(needs_system_notice(Some(MainWindowPresence { minimized: true, ..front })));
+        assert!(needs_system_notice(Some(MainWindowPresence { focused: false, ..front })));
+        assert!(needs_system_notice(None));
+    }
+
+    #[test]
+    fn the_update_notice_names_the_version() {
+        assert_eq!(super::update_notice_body("0.6.25"), "Hippius 0.6.25 is ready to install.");
+    }
+
+    /// The tray row reads what either path learned: the dialog being shown
+    /// records the version too.
+    #[test]
+    fn a_shown_dialog_makes_the_version_available_to_the_tray() {
+        with_clean_announced(|| {
+            super::note_update_prompted("9.9.9-test".into());
+            assert_eq!(super::update_available_version().as_deref(), Some("9.9.9-test"));
+            super::note_update_prompted(String::new());
+            assert_eq!(super::update_available_version().as_deref(), Some("9.9.9-test"));
+        });
     }
 
     use super::*;
@@ -1067,7 +1440,7 @@ mod tests {
     /// point", a reqwest chain) and the dialog shows `message` verbatim.
     #[test]
     fn failure_copy_never_leaks_the_plugin_error() {
-        let raw = "temp directory is not on the same mount point as the AppImage";
+        let raw = "temp directory is not on the same mount point as the app";
         let err = tauri_plugin_updater::Error::TempDirNotOnSameMountPoint;
         assert_eq!(err.to_string(), raw, "the fixture must be the string this test guards against");
 

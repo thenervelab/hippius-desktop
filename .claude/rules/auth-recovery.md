@@ -16,7 +16,7 @@ Modules: `login.rs` (mnemonic login), `logout.rs`, `session_restore.rs` (boot-ti
 
 ## Identity guard (the rule that governs every re-auth path)
 
-Every path that RE-authenticates an existing account from a stored mnemonic — `service.rs::refresh_auth_token_internal`, `billing_auth.rs::ensure_billing_auth`, and restore's `load_keychain_identity` — must derive via `service.rs::derive_verified_keys(mnemonic, account_id)`, **never the bare `derive_keys`**. An OAuth account's sync mnemonic derives a DIFFERENT identity than its server-custodied login SS58, and the unverified derive challenge-responded as (and could create) a phantom server account, persisting its session/token rows. A refresh mismatch surfaces re-login; a billing mismatch is a non-fatal skip. Wiring pinned by `tests/auth_wiring_pins.rs` (incl. `restore_identity_check_routes_through_verified_derive`).
+Every path that RE-authenticates an existing account from a stored mnemonic — `service.rs::refresh_auth_token_internal`, `billing_auth.rs::ensure_billing_auth`, and restore's `load_keychain_identity` — must derive via `service.rs::derive_verified_keys(mnemonic, account_id)`, **never the bare `derive_keys`**. An OAuth account's sync mnemonic derives a DIFFERENT identity than its server-custodied login SS58, and the unverified derive challenge-responded as (and could create) a phantom server account, persisting its session/token rows. A refresh mismatch surfaces re-login; a billing mismatch is a non-fatal skip; restore logs it at `info` as expected for an OAuth row and warns only for a `mnemonic` row (`log_identity_mismatch`), since support read the old every-start warning as a fault. Wiring pinned by `tests/auth_wiring_pins.rs` (incl. `restore_identity_check_routes_through_verified_derive`).
 
 ## OAuth
 
@@ -25,6 +25,10 @@ Every path that RE-authenticates an existing account from a stored mnemonic — 
 - **Restart-safe flows**: pending CSRF states use wall-clock ms TTL (5 min) and are mirrored to the `oauth_pending_states` table — `start_oauth_flow` persists, `complete_oauth_flow` reloads non-expired rows into the in-memory map (in-memory wins on collision) so an auto-update restart or crash mid-login no longer strands the browser callback. The mirror follows every consume (strict match deletes one row, the state-less fallback drains all); all persistence is best-effort.
 - **No half-logins**: `complete_oauth_flow` errors when the callback yields no `substrate_address` instead of returning an unpersistable success the FE would treat as authenticated.
 - **Direct-grant deprecation probe**: `complete_oauth_flow`'s `params.token` branch (a bearer token delivered in the deep link — the RFC 6750 §2.3 shape) logs a `warn!` on entry. hippius-console sends only `code`, so the branch should be reachable only via the env-gated dev injector; if a release passes without the warning firing, the branch can be deleted outright.
+
+## Device registration on sign-in
+
+`login_with_mnemonic` and `complete_oauth_flow` mark this computer's device `reconnect_pending` (`devices::store`) after the session is persisted, so a computer unlinked from another device is linked again by signing in. `restore_session` never marks it: at launch a confirmed device missing from `GET /v1/devices` means it was unlinked, and `devices::registration` signs out through `logout_full` and emits `this_device_unlinked`; the webview then runs only its local half of logout (`clearLocalSession`, never a second `logout_full`) and the sign-in screen explains.
 
 ## Deep links
 

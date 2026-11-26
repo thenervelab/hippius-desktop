@@ -34,9 +34,11 @@ import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import { notifyFilesMutated } from "@/app/lib/utils/fileMutationEvents";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import { useDriveRoute } from "./driveRoute";
+import { isPinnedRoot } from "./driveTrail";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
 import { useDriveMove } from "./move/DriveMoveProvider";
 import MoveHint from "./move/MoveHint";
+import { useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
 
 interface DriveContentProps {
   isRecentFiles?: boolean;
@@ -127,11 +129,13 @@ const DriveContent: FC<DriveContentProps> = ({
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   // Same handoff for `RenameDialog` (also mounted at the layout level).
   const setRenameModalFile = useSetAtom(renameModalFileAtom);
-  // The page's own empty state for a pinned drive's root (Captures).
+  // The page's own empty state at its root: a pinned drive's root, or the
+  // folder the page is rooted at (Captures).
   const { pinned, emptyState: pinnedEmptyState } = useDriveRoute();
 
   // Use selection context for delete functionality
   const { enterSelectionModeAndSelectFile } = useFileSelection();
+  const deleteMenu = useDeleteMenuAction();
   // Moving within the drive on screen; null outside a drive folder view.
   const driveMove = useDriveMove();
 
@@ -290,7 +294,7 @@ const DriveContent: FC<DriveContentProps> = ({
       (!filteredData.length && !searchTerm && activeFilters.length === 0) ||
       error
     ) {
-      if (pinned && pinnedEmptyState && !error && !currentSubfolderPath) {
+      if (pinnedEmptyState && !error && isPinnedRoot(pinned, currentSubfolderPath)) {
         return <>{pinnedEmptyState}</>;
       }
       return (
@@ -464,8 +468,9 @@ const DriveContent: FC<DriveContentProps> = ({
           file={contextMenu.file}
           onClose={() => setContextMenu(null)}
           onDelete={(file) => {
-            // Use new selection system instead of old modal system
-            enterSelectionModeAndSelectFile(file);
+            // Move to Trash runs at once; Delete and Delete forever use the
+            // selection bar's confirmation.
+            deleteMenu.run(file, () => enterSelectionModeAndSelectFile(file));
             setContextMenu(null);
           }}
           onFileDownload={handleFileDownload}

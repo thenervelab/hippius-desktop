@@ -51,7 +51,7 @@ use super::comment_crypto::{self, CommentKey, CommentMention, MentionKind};
 use crate::app_state::AppState;
 use crate::auth::tokens::get_api_token;
 use crate::error::{AppError, Result};
-use hcfs_client::client::share::{ShareKeystore, ShareSecret};
+use hcfs_client::client::share::{ShareError, ShareKeystore, ShareSecret};
 
 /// How long one request may take. These back an open sheet, not a transfer.
 pub(super) const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -63,7 +63,7 @@ const MAX_COMMENT_PAGES: usize = 25;
 /// Shown when the server does not have the routes yet. The screens that ask
 /// are hidden on such a server, so this only reaches someone who got there
 /// some other way.
-const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
+pub(super) const INSIGHTS_UNAVAILABLE: &str = "Insights aren't available yet.";
 const COMMENTS_UNAVAILABLE: &str = "Comments aren't available yet.";
 pub(super) const LINK_GONE: &str = "This link isn't active any more.";
 /// Shown when the server could not be asked which switches it takes, so a
@@ -596,6 +596,11 @@ pub enum KeyUnavailable {
     Password,
     /// The link's key is not on this computer and no owner wrap brought it.
     NotOnDevice,
+    /// A `#s=` link whose share key was never kept here and the server no
+    /// longer hands out: it asks for an email, or it has ended.
+    NotFetchable,
+    /// A `#s=` link's share key could not be fetched: no answer, or an error.
+    Unreachable,
 }
 
 impl KeyUnavailable {
@@ -603,6 +608,10 @@ impl KeyUnavailable {
         match self {
             Self::Password => "This link has a password, so its comments can only be read on the link's page.",
             Self::NotOnDevice => "Comments can't be read on this computer because the link's key isn't here.",
+            Self::NotFetchable => {
+                "Comments can't be read on this computer: this link's key can no longer be fetched, because it asks for an email or has ended."
+            }
+            Self::Unreachable => "Couldn't reach Hippius to open this link's comments. Try again.",
         }
     }
 }
@@ -778,11 +787,22 @@ pub struct SettingsPatch {
     /// link starts with downloads allowed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub download: Option<bool>,
+    /// The watermark, sent only to a server with `share_watermark_switch`
+    /// (any other refuses the key). Sent only when the owner changes it: a
+    /// link that never had it set follows `download`, and once it is sent it
+    /// stops following.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub watermark: Option<bool>,
 }
 
 impl SettingsPatch {
     const fn is_empty(self) -> bool {
-        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none() && self.download.is_none()
+        self.insights.is_none() && self.comments.is_none() && self.reactions.is_none() && self.download.is_none() && self.watermark.is_none()
+    }
+
+    /// Whether this patch turns the watermark on, which needs a paid plan.
+    const fn turns_watermark_on(self) -> bool {
+        matches!(self.watermark, Some(true))
     }
 
     /// Whether this patch turns downloads off, which, like turning a switch
@@ -815,6 +835,7 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
         comments: offered.comments.then_some(wanted.comments),
         reactions: offered.reactions.then_some(wanted.reactions),
         download: None,
+        watermark: None,
     };
     (!patch.is_empty()).then_some(patch)
 }
@@ -823,14 +844,16 @@ pub fn patch_for(wanted: LinkSettings, offered: OfferedSwitches, new_link: bool)
 /// when nothing is left to send. Unlike [`patch_for`], a switch the change
 /// leaves out stays out: the server keeps it as it stands. `download` goes
 /// only to a server that takes it (`download_offered`, its
-/// `share_download_switch`): any other answers the key with a 400.
+/// `share_download_switch`): any other answers the key with a 400. The same
+/// for `watermark` and `watermark_offered` (`share_watermark_switch`).
 #[must_use]
-pub fn change_for(change: SettingsPatch, offered: OfferedSwitches, download_offered: bool) -> Option<SettingsPatch> {
+pub fn change_for(change: SettingsPatch, offered: OfferedSwitches, download_offered: bool, watermark_offered: bool) -> Option<SettingsPatch> {
     let patch = SettingsPatch {
         insights: change.insights.filter(|_| offered.insights),
         comments: change.comments.filter(|_| offered.comments),
         reactions: change.reactions.filter(|_| offered.reactions),
         download: change.download.filter(|_| download_offered),
+        watermark: change.watermark.filter(|_| watermark_offered),
     };
     (!patch.is_empty()).then_some(patch)
 }
@@ -850,6 +873,11 @@ pub struct LinkSettingsDefault {
     /// switch (a server without `share_download_switch`, or a link not made
     /// yet, which always starts with downloads allowed).
     pub download: Option<bool>,
+    /// The watermark, as the link has it: `None` where it is not a setting
+    /// of its own (a server without `share_watermark_switch`, or a link not
+    /// made yet). A link whose owner never set it reports `!download`.
+    #[serde(default)]
+    pub watermark: Option<bool>,
 }
 
 /// The file kinds a share link tracks as a document (PDF, Word and
@@ -870,7 +898,9 @@ pub fn is_document_name(file_name: &str) -> bool {
 /// What a new link is for, as far as where its switches start goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkKind {
-    /// A folder: its links have no insights yet.
+    /// A folder: the share dialog offers no switches for it; its link's
+    /// Insights start by the plan rule once minted
+    /// (`folder_insights::apply_new_link_default`).
     Folder,
     /// A screenshot or recording this app took.
     Capture,
@@ -925,6 +955,7 @@ pub fn default_for(kind: LinkKind, captures_default: bool, caps: &ServerCapabili
         ),
         switches_in_plan,
         download: None,
+        watermark: None,
     }
 }
 
@@ -982,15 +1013,22 @@ pub const SWITCHES_NOT_IN_PLAN: &str = "Insights, comments and reactions are ava
 /// so this is matched there word for word.
 pub const DOWNLOAD_NOT_IN_PLAN: &str = "Turning off downloads is available on paid Drive plans.";
 
+/// The refusal for turning the watermark on from the free plan, matched by
+/// the rule card word for word for its upgrade prompt.
+pub const WATERMARK_NOT_IN_PLAN: &str = "The watermark is available on paid Drive plans.";
+
 /// The server could not read the Drive plan to check a switch turned on
 /// (`502 billing_unavailable`). Nothing changed, and trying again may work.
 pub(super) const PLAN_UNREADABLE: &str = "Couldn't check your Drive plan. Try again.";
 
 /// The server's refusals of a settings change, in the app's words: turning a
-/// switch on (or downloads off, `download_off`) without a paid plan is the
-/// upgrade prompt's sentence, and a plan the server could not read says so.
+/// switch on (or downloads off, or the watermark on) without a paid plan is
+/// that prompt's sentence, and a plan the server could not read says so.
 /// Anything else is left as it was.
-fn settings_refusal(err: AppError, download_off: bool) -> AppError {
+fn settings_refusal(err: AppError, patch: SettingsPatch) -> AppError {
+    let switches_on = patch.asked_on().any();
+    let download_off = patch.turns_download_off() && !switches_on;
+    let watermark_on = patch.turns_watermark_on() && !switches_on && !patch.turns_download_off();
     let AppError::Api { status, body } = &err else {
         return err;
     };
@@ -999,6 +1037,7 @@ fn settings_refusal(err: AppError, download_off: bool) -> AppError {
         .and_then(|v| v.get("error").and_then(serde_json::Value::as_str).map(str::to_owned));
     match (*status, code.as_deref()) {
         (403, Some("paid_plan_required")) if download_off => AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()),
+        (403, Some("paid_plan_required")) if watermark_on => AppError::Validation(WATERMARK_NOT_IN_PLAN.into()),
         (403, Some("paid_plan_required")) => AppError::Validation(SWITCHES_NOT_IN_PLAN.into()),
         (502, Some("billing_unavailable")) => AppError::Validation(PLAN_UNREADABLE.into()),
         _ => err,
@@ -1031,13 +1070,22 @@ pub(crate) async fn read_switches_in_plan(state: &AppState, account_id: &str) ->
 /// predates them omits the field, which reads as all off, the way a new
 /// link starts.
 fn parse_meta_settings(body: &str) -> Result<LinkSettings> {
-    parse_meta(body).map(|(on, _)| on)
+    parse_meta(body).map(|m| m.on)
 }
 
-/// [`parse_meta_settings`] and Allow download beside them. A server that
-/// predates the download switch omits `download`, which reads as allowed, as
-/// every link was before it.
-fn parse_meta(body: &str) -> Result<(LinkSettings, bool)> {
+/// A link's settings as `/meta` reports them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MetaSettings {
+    on: LinkSettings,
+    download: bool,
+    watermark: bool,
+}
+
+/// [`parse_meta_settings`], Allow download and the watermark beside them. A
+/// server that predates the download switch omits `download`, which reads as
+/// allowed, as every link was before it; one that predates the watermark
+/// switch omits `watermark`, which reads as `!download`, the rule before it.
+fn parse_meta(body: &str) -> Result<MetaSettings> {
     #[derive(Deserialize)]
     struct Wire {
         #[serde(default)]
@@ -1049,11 +1097,25 @@ fn parse_meta(body: &str) -> Result<(LinkSettings, bool)> {
         on: LinkSettings,
         #[serde(default)]
         download: Option<bool>,
+        #[serde(default)]
+        watermark: Option<bool>,
     }
     let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("share meta parse failed: {e}")))?;
-    Ok(wire
-        .settings
-        .map_or((LinkSettings::default(), true), |s| (s.on, s.download.unwrap_or(true))))
+    Ok(wire.settings.map_or(
+        MetaSettings {
+            on: LinkSettings::default(),
+            download: true,
+            watermark: false,
+        },
+        |s| {
+            let download = s.download.unwrap_or(true);
+            MetaSettings {
+                on: s.on,
+                download,
+                watermark: s.watermark.unwrap_or(!download),
+            }
+        },
+    ))
 }
 
 /// What a capture's automatic link gets: everything on when Settings says
@@ -1191,7 +1253,7 @@ impl Api {
 
 /// `s` percent-encoded for a query value (RFC 3986 unreserved characters
 /// kept). The cursor is the server's own, so it is passed back exactly.
-fn query_value(s: &str) -> String {
+pub(super) fn query_value(s: &str) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -1207,7 +1269,7 @@ fn query_value(s: &str) -> String {
 /// `s` as one URL path segment. Share tokens and comment ids are URL-safe
 /// base64 or UUIDs; anything else is refused before a request is built, so
 /// an id can never reach another route.
-fn path_segment(s: &str) -> Result<&str> {
+pub(super) fn path_segment(s: &str) -> Result<&str> {
     let ok = !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
     if ok {
         Ok(s)
@@ -1339,7 +1401,7 @@ async fn get_reactions_body(http: &reqwest::Client, api: &Api, token: &str) -> R
 
 /// The link's anonymous `/meta`, which carries its switches. No bearer: the
 /// route is the recipient's, and it is the one that reports them per link.
-async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
+pub(super) async fn get_meta_body(http: &reqwest::Client, api: &Api, token: &str) -> Result<String> {
     let resp = http
         .get(api.share_url(token, "/meta")?)
         .timeout(REQUEST_TIMEOUT)
@@ -1358,10 +1420,7 @@ pub(super) async fn patch_settings(http: &reqwest::Client, api: &Api, token: &st
         .send()
         .await
         .map_err(|e| transport("share settings", e))?;
-    read_ok(resp)
-        .await
-        .map(|_| ())
-        .map_err(|e| settings_refusal(e, patch.turns_download_off() && !patch.asked_on().any()))
+    read_ok(resp).await.map(|_| ()).map_err(|e| settings_refusal(e, *patch))
 }
 
 async fn get_preferences(http: &reqwest::Client, api: &Api) -> Result<NotificationPreferences> {
@@ -1405,7 +1464,9 @@ async fn put_preferences(http: &reqwest::Client, api: &Api, prefs: NotificationP
 // ─── The link's key ────────────────────────────────────────────────────────
 
 /// The comment key for `token`: from the share key this device holds, or the
-/// one its owner wrap brings back (the same hydration Shared Links runs).
+/// one its owner wrap brings back (the same hydration Shared Links runs). A
+/// `#s=` link's share key is the one kept at its mint, else fetched once
+/// (`shares::file_link_key`).
 pub(super) async fn comment_key_for(state: &AppState, account_id: &str, token: &str) -> std::result::Result<CommentKey, KeyUnavailable> {
     share_key_for(state, account_id, token).await.map(|key| CommentKey::derive(&key))
 }
@@ -1426,10 +1487,46 @@ pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &st
     }
     match keys.remove(token) {
         Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
-        Some(ShareSecret::Private(_)) => Err(KeyUnavailable::Password),
+        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(pool, account_id, token, &link_secret).await,
+        Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
         Some(ShareSecret::FolderLink(_) | ShareSecret::FolderLinkPrivate(_)) | None => Err(KeyUnavailable::NotOnDevice),
+    }
+}
+
+/// The share key of a `#s=` link: the one kept at its mint, else fetched once.
+async fn file_link_share_key(
+    pool: &sqlx::SqlitePool,
+    account_id: &str,
+    token: &str,
+    link_secret: &[u8; 32],
+) -> std::result::Result<Zeroizing<[u8; 32]>, KeyUnavailable> {
+    let keys = super::file_link_key::FileLinkKeys::new(pool.clone());
+    // A kept key needs no client: building one reads the bearer, which a
+    // local decrypt does not need.
+    if let Ok(Some(kept)) = keys.get(token).await {
+        return Ok(Zeroizing::new(kept));
+    }
+    let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
+        debug!(error = %e, "no client to fetch the file link's key");
+        KeyUnavailable::Unreachable
+    })?;
+    match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
+        Ok(share_key) => Ok(Zeroizing::new(share_key)),
+        Err(e) => Err(file_link_key_refusal(&e)),
+    }
+}
+
+/// Why a `#s=` link's share key could not be had. The route's bodiless 404
+/// is the server refusing the envelope (an email gate, an ended link); a
+/// keystore failure is the key not being here; anything else did not reach a
+/// verdict.
+fn file_link_key_refusal(error: &ShareError) -> KeyUnavailable {
+    match error {
+        ShareError::NotFound => KeyUnavailable::NotFetchable,
+        ShareError::Keystore(_) => KeyUnavailable::NotOnDevice,
+        _ => KeyUnavailable::Unreachable,
     }
 }
 
@@ -1740,12 +1837,13 @@ pub async fn share_get_link_settings(state: tauri::State<'_, AppState>, share_to
         get_meta_body(&state.api_client, &api, &share_token),
         read_switches_in_plan(&state, &account_id),
     );
-    let (on, download) = parse_meta(&meta?)?;
+    let meta = parse_meta(&meta?)?;
     Ok(LinkSettingsDefault {
         offered,
-        on,
+        on: meta.on,
         switches_in_plan,
-        download: caps.share_download_switch.then_some(download),
+        download: caps.share_download_switch.then_some(meta.download),
+        watermark: caps.share_watermark_switch.then_some(meta.watermark),
     })
 }
 
@@ -1758,7 +1856,12 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
     let account_id = state.current_account_id()?;
     after_mint_switches_sent(&share_token).await;
     let caps = capabilities_checked(&state, &account_id, SETTINGS_UNREACHABLE).await?;
-    let Some(patch) = change_for(change, OfferedSwitches::from_caps(&caps), caps.share_download_switch) else {
+    let Some(patch) = change_for(
+        change,
+        OfferedSwitches::from_caps(&caps),
+        caps.share_download_switch,
+        caps.share_watermark_switch,
+    ) else {
         return Err(AppError::Validation(INSIGHTS_UNAVAILABLE.into()));
     };
     let api = Api::for_account(&state, &account_id).await?;
@@ -1768,9 +1871,13 @@ pub async fn share_set_link_settings(state: tauri::State<'_, AppState>, share_to
     // does allowing downloads; turning them off is refused on the free plan,
     // as the server would.
     let asked_on = patch.asked_on();
-    if (asked_on.any() || patch.turns_download_off()) && read_switches_in_plan(&state, &account_id).await == Some(false) {
+    if (asked_on.any() || patch.turns_download_off() || patch.turns_watermark_on()) && read_switches_in_plan(&state, &account_id).await == Some(false)
+    {
         if patch.turns_download_off() {
             return Err(AppError::Validation(DOWNLOAD_NOT_IN_PLAN.into()));
+        }
+        if patch.turns_watermark_on() && !asked_on.any() {
+            return Err(AppError::Validation(WATERMARK_NOT_IN_PLAN.into()));
         }
         let was = parse_meta_settings(&get_meta_body(&state.api_client, &api, &share_token).await?)?;
         if refuses_switching_on(asked_on, was, Some(false)) {
@@ -2612,6 +2719,7 @@ pub(super) mod tests {
             comments: Some(true),
             reactions: None,
             download: None,
+            watermark: None,
         };
         assert_eq!(
             patch.asked_on(),
@@ -2669,7 +2777,7 @@ pub(super) mod tests {
         };
         let change: SettingsPatch = serde_json::from_value(serde_json::json!({"comments": false})).unwrap();
         assert_eq!(
-            serde_json::to_value(change_for(change, all, true).unwrap()).unwrap(),
+            serde_json::to_value(change_for(change, all, true, false).unwrap()).unwrap(),
             serde_json::json!({"comments": false})
         );
         let insights_only = OfferedSwitches {
@@ -2677,11 +2785,15 @@ pub(super) mod tests {
             ..Default::default()
         };
         assert_eq!(
-            change_for(change, insights_only, true),
+            change_for(change, insights_only, true, false),
             None,
             "a switch the server does not take is not sent"
         );
-        assert_eq!(change_for(SettingsPatch::default(), all, true), None, "nothing flipped, nothing sent");
+        assert_eq!(
+            change_for(SettingsPatch::default(), all, true, false),
+            None,
+            "nothing flipped, nothing sent"
+        );
     }
 
     /// Allow download goes only to a server with `share_download_switch`:
@@ -2697,13 +2809,17 @@ pub(super) mod tests {
         let off: SettingsPatch = serde_json::from_value(serde_json::json!({"download": false})).unwrap();
         assert_eq!(off.download, Some(false));
         assert_eq!(
-            serde_json::to_value(change_for(off, all, true).unwrap()).unwrap(),
+            serde_json::to_value(change_for(off, all, true, false).unwrap()).unwrap(),
             serde_json::json!({"download": false})
         );
-        assert_eq!(change_for(off, all, false), None, "a server without the switch is never sent download");
+        assert_eq!(
+            change_for(off, all, false, false),
+            None,
+            "a server without the switch is never sent download"
+        );
         let both: SettingsPatch = serde_json::from_value(serde_json::json!({"insights": true, "download": true})).unwrap();
         assert_eq!(
-            serde_json::to_value(change_for(both, all, false).unwrap()).unwrap(),
+            serde_json::to_value(change_for(both, all, false, false).unwrap()).unwrap(),
             serde_json::json!({"insights": true})
         );
         // The FE's older shape, without the key, still reads.
@@ -2888,6 +3004,7 @@ pub(super) mod tests {
             comments: Some(false),
             reactions: None,
             download: None,
+            watermark: None,
         };
         patch_settings(&reqwest::Client::new(), &api, "tok_1", &patch).await.unwrap();
         let s = seen.lock().unwrap()[0].clone();
@@ -2927,16 +3044,82 @@ pub(super) mod tests {
     #[test]
     fn allow_download_is_read_from_meta_and_missing_means_allowed() {
         let off = r#"{"settings":{"insights":true,"comments":false,"reactions":false,"download":false}}"#;
-        let (on, download) = parse_meta(off).unwrap();
-        assert!(on.insights && !on.comments && !on.reactions);
-        assert!(!download);
+        let meta = parse_meta(off).unwrap();
+        assert!(meta.on.insights && !meta.on.comments && !meta.on.reactions);
+        assert!(!meta.download);
         assert!(
             parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false}}"#)
                 .unwrap()
-                .1
+                .download
         );
-        assert!(parse_meta(r#"{"ciphertext_size":1}"#).unwrap().1);
-        assert_eq!(parse_meta_settings(off).unwrap(), on);
+        assert!(parse_meta(r#"{"ciphertext_size":1}"#).unwrap().download);
+        assert_eq!(parse_meta_settings(off).unwrap(), meta.on);
+    }
+
+    /// `/meta` reports the watermark beside downloads; a server that
+    /// predates the switch omits it, and it then follows downloads, the rule
+    /// before the switch. Once set it keeps its own value.
+    #[test]
+    fn the_watermark_is_read_from_meta_and_missing_follows_downloads() {
+        let view_only = parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false,"download":false}}"#).unwrap();
+        assert!(view_only.watermark, "an unset watermark is on while downloads are off");
+        let open = parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false,"download":true}}"#).unwrap();
+        assert!(!open.watermark);
+        let set = parse_meta(r#"{"settings":{"insights":false,"comments":false,"reactions":false,"download":true,"watermark":true}}"#).unwrap();
+        assert!(set.watermark && set.download);
+        assert!(!parse_meta(r#"{"ciphertext_size":1}"#).unwrap().watermark);
+    }
+
+    /// The watermark goes only to a server that takes it, and only when the
+    /// owner changed it, so a link keeps following downloads otherwise.
+    #[test]
+    fn the_watermark_is_sent_only_to_a_server_that_takes_it() {
+        let all = OfferedSwitches {
+            insights: true,
+            comments: true,
+            reactions: true,
+        };
+        let on: SettingsPatch = serde_json::from_value(serde_json::json!({"watermark": true})).unwrap();
+        assert_eq!(
+            serde_json::to_value(change_for(on, all, true, true).unwrap()).unwrap(),
+            serde_json::json!({"watermark": true})
+        );
+        assert_eq!(
+            change_for(on, all, true, false),
+            None,
+            "a server without the switch is never sent watermark"
+        );
+        let download: SettingsPatch = serde_json::from_value(serde_json::json!({"download": false})).unwrap();
+        assert!(
+            serde_json::to_value(change_for(download, all, true, true).unwrap())
+                .unwrap()
+                .get("watermark")
+                .is_none(),
+            "changing downloads sends no watermark"
+        );
+        assert!(on.turns_watermark_on());
+        assert!(!download.turns_watermark_on());
+    }
+
+    /// The server's plan refusal of turning the watermark on reads as the
+    /// watermark's own prompt.
+    #[test]
+    fn the_servers_refusal_to_turn_the_watermark_on_reads_as_its_own_prompt() {
+        let refused = || AppError::Api {
+            status: 403,
+            body: r#"{"error":"paid_plan_required"}"#.into(),
+        };
+        let on = SettingsPatch {
+            watermark: Some(true),
+            ..Default::default()
+        };
+        assert!(matches!(settings_refusal(refused(), on), AppError::Validation(m) if m == WATERMARK_NOT_IN_PLAN));
+        let both = SettingsPatch {
+            insights: Some(true),
+            watermark: Some(true),
+            ..Default::default()
+        };
+        assert!(matches!(settings_refusal(refused(), both), AppError::Validation(m) if m == SWITCHES_NOT_IN_PLAN));
     }
 
     /// Turning downloads off from a plan the server reads as free is refused
@@ -3198,5 +3381,35 @@ pub(super) mod tests {
             serde_json::from_str::<serde_json::Value>(&s.body).unwrap(),
             serde_json::json!({"first_views": true, "comments": false, "digest": "daily"})
         );
+    }
+
+    /// A `#s=` link's share key that could not be had says why: the server
+    /// refusing the envelope (an email gate or an ended link) is not the
+    /// network failing, and neither is the password sentence.
+    #[test]
+    fn a_file_links_unfetchable_key_says_why() {
+        assert_eq!(file_link_key_refusal(&ShareError::NotFound), KeyUnavailable::NotFetchable);
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Network("timed out".into())),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(
+            file_link_key_refusal(&ShareError::Server {
+                status: 503,
+                message: String::new()
+            }),
+            KeyUnavailable::Unreachable
+        );
+        assert_eq!(file_link_key_refusal(&ShareError::Keystore("sqlite".into())), KeyUnavailable::NotOnDevice);
+        let sentences: HashSet<&str> = [
+            KeyUnavailable::Password,
+            KeyUnavailable::NotOnDevice,
+            KeyUnavailable::NotFetchable,
+            KeyUnavailable::Unreachable,
+        ]
+        .into_iter()
+        .map(KeyUnavailable::sentence)
+        .collect();
+        assert_eq!(sentences.len(), 4, "each reason has its own sentence");
     }
 }

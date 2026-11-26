@@ -116,6 +116,15 @@ fn kind_columns(kind: &FileFailureKindPayload) -> KindColumns {
             balance_cents: None,
             required_cents: None,
         },
+        // Rust's copy for the server's code; the FE renders this column
+        // verbatim for the kind, as it does a refusal's.
+        FileFailureKindPayload::RecordingLimit { reason } => KindColumns {
+            kind: "recordingLimit",
+            message: Some(reason.clone()),
+            http_status: Some(403),
+            balance_cents: None,
+            required_cents: None,
+        },
         FileFailureKindPayload::Gone => KindColumns {
             kind: "gone",
             message: None,
@@ -449,6 +458,7 @@ mod tests {
             K::Gone,
             K::Undecryptable,
             K::Refused { reason: "r".to_string() },
+            K::RecordingLimit { reason: "l".to_string() },
             K::Other { message: "x".to_string() },
         ];
         for kind in &all {
@@ -460,6 +470,7 @@ mod tests {
                 | K::Gone
                 | K::Undecryptable
                 | K::Refused { .. }
+                | K::RecordingLimit { .. }
                 | K::Other { .. } => {}
             }
         }
@@ -494,6 +505,7 @@ mod tests {
                 "gone",
                 "undecryptable",
                 "refused",
+                "recordingLimit",
                 "other"
             ],
             "these exact strings are the `FileFailureKind` union in app/lib/types/fileFailure.ts"

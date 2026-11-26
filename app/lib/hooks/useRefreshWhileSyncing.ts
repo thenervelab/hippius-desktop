@@ -22,12 +22,17 @@ import { effectiveInProgressAtom } from "./useSyncSnapshot";
  * Cadence note: 6s mirrors the home Storage tile's live-refresh and only runs
  * while `active && enabled`, so an idle page makes zero extra network calls.
  *
- * @param refresh     re-fetch callback (should be silent)
+ * One refresh at a time: when `refresh` returns a promise, ticks are skipped
+ * until it settles, so a slow or stopped backend does not collect a new call
+ * every 6 s. That matters because the poll runs while a sync is in progress,
+ * and a backend that stopped mid-sync never reports the sync as over.
+ *
+ * @param refresh     re-fetch callback (should be silent); return its promise
  * @param enabled     gate, e.g. an account address is present
  * @param intervalMs  poll cadence while active (default 6000)
  */
 export function useRefreshWhileSyncing(
-  refresh: () => void,
+  refresh: () => void | Promise<unknown>,
   enabled: boolean,
   intervalMs = 6000,
 ): void {
@@ -39,7 +44,22 @@ export function useRefreshWhileSyncing(
   // Poll while a sync is running.
   useEffect(() => {
     if (!enabled || !active) return;
-    const id = setInterval(() => refreshRef.current(), intervalMs);
+    let inFlight = false;
+    const id = setInterval(() => {
+      if (inFlight) return;
+      const result = refreshRef.current();
+      if (result instanceof Promise) {
+        inFlight = true;
+        void result.then(
+          () => {
+            inFlight = false;
+          },
+          () => {
+            inFlight = false;
+          },
+        );
+      }
+    }, intervalMs);
     return () => clearInterval(id);
   }, [enabled, active, intervalMs]);
 

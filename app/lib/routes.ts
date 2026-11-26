@@ -49,6 +49,9 @@ export function driveFolderRoute(label: string, remote: boolean, subfolder?: str
 /** The Captures page, which shows the captures drive. */
 export const CAPTURES_ROUTE = "/captures";
 
+/** Drive Trash: deleted items, kept until the server deletes them forever after its retention. */
+export const TRASH_ROUTE = "/trash";
+
 /**
  * The Captures page pointing out one capture ("Show in folder" on a capture's
  * card). The same params as `driveFolderRoute`, read by the same Drive
@@ -63,6 +66,9 @@ export function capturesRoute(label: string, remote: boolean, openFile?: string)
 
 /** The Shared Drives page: drives shared with this account, and the ones it shared. */
 export const SHARED_DRIVES_ROUTE = "/shared-drives";
+
+/** Starred: the files, folders and drives this account starred, across every drive. */
+export const STARRED_ROUTE = "/starred";
 
 /**
  * Open a drive somebody shared with this account, or a folder of one, on the

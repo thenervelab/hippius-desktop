@@ -184,6 +184,12 @@ async function showTab(start: string) {
 
 const ALL_SWITCHES_ON = { offered: ALL_ON, on: ALL_ON, switchesInPlan: true };
 
+/** Opens a rule card in Link settings: its editor is pushed in its place. */
+async function openRule(settings: HTMLElement, id: string) {
+  const card = await within(settings).findByTestId(`rule-${id}`);
+  fireEvent.click(within(card).getByRole("button"));
+}
+
 describe("ShareInsightsSheet", () => {
   beforeEach(() => {
     invokeMock.mockReset();
@@ -281,6 +287,29 @@ describe("ShareInsightsSheet", () => {
     expect(within(viewers).getAllByText("Anonymous viewer").length).toBeGreaterThan(0);
     expect(within(viewers).getByText("2 visits")).toBeInTheDocument();
     expect(within(viewers).getByTitle("Watched 1:18")).toBeInTheDocument();
+  });
+
+  it("opens a viewer's row into their own visits, and the locked samples never open", async () => {
+    answer({
+      share_get_insights: PAID,
+      share_list_comments: NO_COMMENTS,
+      share_viewer_visits: {
+        viewerId: "b",
+        visitsTotal: 2,
+        timeSpentMs: 78_000,
+        pageTimeMs: null,
+        visits: [{ startedAt: "2026-11-20T09:12:00Z", lastSeenAt: "2026-11-20T09:20:00Z", kind: "video", timeSpentMs: 60_000, pagesSeen: null }],
+        nextBefore: null,
+      },
+    });
+    renderSheet();
+    const viewers = await showTab("Viewers");
+    const row = within(viewers).getAllByRole("button", { expanded: false })[0];
+    expect(invokeMock).not.toHaveBeenCalledWith("share_viewer_visits", expect.anything());
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("aria-expanded", "true");
+    expect(await within(viewers).findByText("2 visits · 1:18")).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith("share_viewer_visits", { shareToken: "tok", viewerId: "b", before: null });
   });
 
   it("gives a picture's numbers as Views, Viewers and Comments, with no watch bars in its rows", async () => {
@@ -753,8 +782,15 @@ describe("ShareInsightsSheet", () => {
     });
     renderSheet();
     const settings = await openSettings();
+    expect(await within(settings).findByTestId("rule-gate")).toHaveTextContent("On");
+    expect(within(settings).getByTestId("rule-allowList")).toHaveTextContent("Off");
+    await openRule(settings, "gate");
     const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
     expect(ask).toHaveAttribute("aria-checked", "true");
+    // The switch's editor holds no lists; they are the Allow list card's.
+    expect(within(settings).queryByRole("textbox", { name: "Only allow" })).toBeNull();
+    fireEvent.click(within(settings).getByRole("button", { name: "Back" }));
+    await openRule(settings, "allowList");
     expect(within(settings).getByRole("textbox", { name: "Only allow" })).toBeInTheDocument();
   });
 
@@ -770,7 +806,7 @@ describe("ShareInsightsSheet", () => {
         hasText: true,
         text: "Keep it quiet.",
         // Viewer "b" is "Ahmad" on the Viewers tab.
-        accepts: [{ id: 1, viewerId: "b", email: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
+        accepts: [{ id: 1, viewerId: "b", email: null, signerName: null, acceptedAt: "2026-11-10T12:00:00Z", earlier: false }],
         nextAfter: null,
       },
     });
@@ -781,6 +817,8 @@ describe("ShareInsightsSheet", () => {
     expect(within(panel).getByTestId("nda-accept")).toHaveTextContent("Ahmad");
 
     const settings = await openSettings();
+    expect(await within(settings).findByTestId("rule-nda")).toHaveTextContent("Keep it quiet.");
+    await openRule(settings, "nda");
     expect(await within(settings).findByRole("switch", { name: NDA_LABEL })).toHaveAttribute("aria-checked", "true");
     expect(within(settings).getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it quiet.");
   });
@@ -888,6 +926,7 @@ describe("ShareInsightsSheet", () => {
       renderSheet();
       const settings = await openSettings();
       await within(settings).findByRole("switch", { name: "Insights" });
+      expect(within(settings).queryByTestId("rule-download")).toBeNull();
       expect(within(settings).queryByRole("switch", { name: "Allow download" })).toBeNull();
     });
 
@@ -895,6 +934,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: true, download: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       const allow = await within(settings).findByRole("switch", { name: "Allow download" });
       expect(allow).toHaveAttribute("aria-checked", "true");
       fireEvent.click(allow);
@@ -908,6 +948,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: false, download: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       const allow = await within(settings).findByRole("switch", { name: "Allow download" });
       expect(within(settings).getByText(DOWNLOAD_SWITCH.locked)).toBeInTheDocument();
       fireEvent.click(allow);
@@ -921,6 +962,7 @@ describe("ShareInsightsSheet", () => {
       link({ plan: true, download: true, refuse: true });
       renderSheet();
       const settings = await openSettings();
+      await openRule(settings, "download");
       fireEvent.click(await within(settings).findByRole("switch", { name: "Allow download" }));
       expect(await within(settings).findByRole("region", { name: "Upgrade to turn off downloads" })).toBeInTheDocument();
       await waitFor(() => expect(screen.getByRole("switch", { name: "Allow download" })).toHaveAttribute("aria-checked", "true"));
@@ -1110,6 +1152,57 @@ describe("ShareInsightsSheet", () => {
       fireEvent.focusOut(settings, { relatedTarget: screen.getByRole("button", { name: "Close" }) });
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
     });
+
+    // The Expiry list is drawn at the end of the page, outside the popover,
+    // so both its focus and a press on one of its options used to read as
+    // leaving the popover, which closed before the list could open.
+    for (const wide of [true, false]) {
+      it(`picks an expiry from its list and stays open, ${wide ? "inline" : "in the narrow-window sheet"}`, async () => {
+        viewport.wide = wide;
+        answer({
+          share_get_insights: PAID,
+          share_list_comments: NO_COMMENTS,
+          share_get_reactions: NO_REACTIONS,
+          share_get_link_settings: ALL_SWITCHES_ON,
+          hcfs_update_share_expiry: null,
+        });
+        renderSheet(CAPS, (client) =>
+          client.setQueryData(["shares-list", "5Acct"], [{ shareToken: "tok", createdAt: "2026-10-20T10:00:00Z", expiresAt: null }]),
+        );
+        const settings = await openSettings();
+        await openRule(settings, "expiry");
+        const trigger = await within(settings).findByRole("combobox", { name: "Link expires" });
+        expect(trigger).toHaveTextContent("Choose how long it lasts");
+        // A press on it, with focus in the popover.
+        trigger.focus();
+        fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+        fireEvent.click(trigger);
+        const option = await screen.findByRole("option", { name: "7 days" });
+        expect(settings).not.toContainElement(option);
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+        // By test id: an open list hides the rest of the page from roles.
+        expect(screen.queryByTestId("link-settings")).toBe(settings);
+        // Its list is drawn above the narrow-window sheet, not behind it.
+        const listZ = Number(/z-\[(\d+)\]/.exec(screen.getByRole("listbox").closest("[class*='z-[']")?.getAttribute("class") ?? "")?.[1]);
+        expect(listZ).toBeGreaterThan(1003);
+
+        fireEvent.pointerDown(option, { button: 0, pointerType: "mouse" });
+        fireEvent.pointerUp(option, { button: 0, pointerType: "mouse" });
+        fireEvent.click(option);
+        await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("hcfs_update_share_expiry", { shareToken: "tok", ttl: "7d" }));
+        await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+        expect(screen.getByRole("dialog", { name: "Link settings" })).toBe(settings);
+        expect(within(settings).getByRole("combobox", { name: "Link expires" })).toHaveTextContent("7 days");
+        // A press truly outside still closes it.
+        fireEvent.pointerDown(screen.getByRole("region", { name: "Summary" }), { button: 0 });
+        await waitFor(() => expect(screen.queryByRole("dialog", { name: "Link settings" })).toBeNull());
+      });
+    }
 
     it("says in the Comments tab that comments are off, with Turn on, and still lists what is there", async () => {
       let link = SOME_OFF;

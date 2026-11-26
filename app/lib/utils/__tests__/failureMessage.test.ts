@@ -4,6 +4,7 @@ import {
   failureMessage,
   isRetryableFailedFile,
   isRetryableFailure,
+  RECORDING_LIMIT_FALLBACK_MESSAGE,
   UNDECRYPTABLE_MESSAGE,
 } from "@/app/lib/utils/failureMessage";
 import type { FileFailureRecord } from "@/app/lib/types/fileFailure";
@@ -138,6 +139,17 @@ describe("failureMessage", () => {
     expect(msg.toLowerCase()).not.toContain("try again");
   });
 
+  it("shows Rust's copy for a recording the server refused, with an upgrade fallback", () => {
+    const reason =
+      "You've used your 25 free recordings, so this recording wasn't uploaded. " +
+      "Upgrade your plan to record more, or delete an older recording.";
+    expect(failureMessage({ ...base, kind: "recordingLimit", message: reason })).toBe(reason);
+    // A blank row gets the upgrade copy, not the generic "Please try again".
+    const msg = failureMessage({ ...base, kind: "recordingLimit", message: " " });
+    expect(msg).toBe(RECORDING_LIMIT_FALLBACK_MESSAGE);
+    expect(msg).toContain("Upgrade");
+  });
+
   it("degrades an unknown future kind to the generic line", () => {
     expect(failureMessage({ ...base, kind: "somethingNew" })).toBe(
       "Sync failed. Please try again."
@@ -154,7 +166,7 @@ describe("isRetryableFailure", () => {
   });
 
   it("offers retry for every kind a retry can fix", () => {
-    for (const kind of ["network", "serverError", "insufficientBalance", "other"]) {
+    for (const kind of ["network", "serverError", "insufficientBalance", "recordingLimit", "other"]) {
       expect(isRetryableFailure(kind)).toBe(true);
     }
   });

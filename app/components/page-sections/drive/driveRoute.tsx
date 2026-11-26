@@ -2,11 +2,19 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 
+import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+
 /** A drive a page is pinned to: the Captures page and the captures drive. */
 export interface PinnedDrive {
   label: string;
   /** Not synced on this computer: browsed from the server. */
   remote: boolean;
+  /**
+   * A folder inside the drive the page is rooted at, as a path from the
+   * drive's root: captures kept in a folder of another drive. The page lists
+   * that folder and what is under it, never the rest of the drive.
+   */
+  folder?: string;
 }
 
 /**
@@ -39,6 +47,23 @@ export interface DriveRoute {
    * lands in the same place with the same trail.
    */
   parent?: DriveRouteParent;
+  /**
+   * Where opening a folder row goes, for a page whose rows come from many
+   * drives (Starred): each row opens in its own drive, which the URL the
+   * page is on cannot say. `parentPath` is the drive-relative folder the row
+   * sits in, for a row inside an expanded folder. `null` (or no function)
+   * keeps the Drive's own link.
+   */
+  folderHref?: (folder: FormattedUserFile, parentPath?: string) => string | null;
+}
+
+/** The page's own link for a folder row, or `null` to build the Drive's. */
+export function pageFolderHref(
+  route: DriveRoute,
+  folder: FormattedUserFile,
+  parentPath?: string,
+): string | null {
+  return route.folderHref?.(folder, parentPath) ?? null;
 }
 
 export const DRIVE_PAGE_ROUTE: DriveRoute = { basePath: "/files", pinned: null };

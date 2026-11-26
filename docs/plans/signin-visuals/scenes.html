@@ -1,0 +1,677 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  Sign-in slide animations, drawn in one isometric style: net (Distributed
+  Storage), enc (Encrypted on Your Device), rec (Screen Recording) and share
+  (Share & Track, hidden for now). Open with
+  ?scene=net|enc|rec|share&theme=light|dark&t=<seconds> to see one moment.
+  render-frames.mjs steps this page frame by frame and encode.sh makes the
+  GIF, so a designer can tweak colours, timing or shapes here and re-render.
+-->
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<svg id="stage" width="1620" height="911" viewBox="0 0 1620 911" xmlns="http://www.w3.org/2000/svg"></svg>
+<script>
+const params = new URLSearchParams(location.search);
+const SCENE = params.get("scene") || "enc";
+const THEME = params.get("theme") || "light";
+const W = 1620, H = 911, CX = 810;
+// Per-scene framing: vertical centre and overall scale.
+const FRAME = { net: [470, 0.9], enc: [520, 0.92], rec: [500, 0.88], share: [430, 0.95] }[SCENE] || [430, 1];
+const CY = FRAME[0], S = FRAME[1];
+const LOOP = 8; // seconds, every scene starts and ends on the same frame
+
+const PALETTE = {
+  light: {
+    bg: "#fffdff", grid: "#e7e6ec", dash: "#d3d2da", top: "#ffffff", sideA: "#f2f1f5",
+    sideB: "#e6e5eb", edge: "#c2c1ca", shadow: "#dcdbe2", ink: "#a3a2ab", inkSoft: "#d9d8df",
+    arc: "#55545c", acc: "#8fa8ef", accLight: "#b9cbf7", accSide: "#7b95e3", accEdge: "#3556c0",
+    accInk: "#ffffff", display: "#f6f7fd", red: "#e5484d", text: "#3a3940",
+    cipherFace: "#eef2fd", sheen: 0.85,
+  },
+  dark: {
+    bg: "#161416", grid: "#252329", dash: "#3a383f", top: "#232126", sideA: "#1d1b20",
+    sideB: "#19171b", edge: "#3b3940", shadow: "#0c0b0d", ink: "#56545d", inkSoft: "#34323a",
+    arc: "#8d8b96", acc: "#a9bdf6", accLight: "#c9d6fa", accSide: "#8ea5ec", accEdge: "#e1e8fd",
+    accInk: "#1a1d2c", display: "#1b1a22", red: "#ff5f63", text: "#e6e5ea",
+    cipherFace: "#1d2133", sheen: 0.16,
+  },
+};
+const C = PALETTE[THEME];
+
+const HIPPO = "M259.681 34.3294C294.421 29.8565 313.499 75.7918 313.463 102.602C313.461 103.911 314.644 104.93 315.929 104.675C358.784 96.1666 411.256 95.1143 453.462 107.849C454.975 108.306 456.451 106.922 456.217 105.359C453.977 90.4008 461.399 74.17 469.116 61.9124C483.554 38.9734 509.61 34.6265 530.566 47.2093C552.43 60.3364 542.584 107.18 532.566 123.709C525.851 134.79 519.234 140.116 515.92 142.785C514.63 143.823 513.841 144.459 513.74 144.874C513.694 145.066 513.887 145.208 514.053 145.316C639.697 226.752 635.387 490.533 432.8 508.421C429.322 508.26 425.492 508.353 421.648 508.446C420.357 508.477 419.064 508.508 417.782 508.53C415.726 508.564 414.874 506.074 416.516 504.835C419.934 502.257 423.361 499.834 426.745 497.441C440.052 486.81 445.38 480.889 454.345 464.302C463.114 448.082 457.591 432.252 452.198 416.791C451.35 414.359 450.504 411.935 449.718 409.52C449.299 408.234 446.845 408.797 446.898 410.148C447.4 422.779 445.231 436.226 438.332 447.689C423.032 475.879 398.071 493.414 367.572 502.53C326.24 514.884 274.572 508.53 228.718 506.397C190.554 504.622 151.285 487.88 115.022 477.577C102.296 474.028 97.3767 473.304 93.2138 471.135C87.9147 468.374 83.7133 463.534 79.4736 459.435C78.1193 458.126 78.9101 455.827 80.7832 455.629C92.2347 454.419 105.493 450.689 117.017 451.401C125.159 451.906 133.59 453.158 141.868 454.387C171.908 458.847 201.982 463.694 232.198 466.775C250.819 468.673 270.907 470.702 289.309 469.05C292.056 468.803 301.689 466.291 305.441 464.494C320.131 457.462 330.184 450.832 344.742 443.512C351.314 440.207 357.887 436.903 364.487 433.686C373.837 429.127 387.084 428.32 395.334 422.218C412.493 409.504 393.261 378.906 384.183 368.628C377.219 360.746 359.637 361.774 351.619 367.068C332.997 379.357 320.542 407.168 305.441 423.049C299.955 428.798 287.215 437.696 279.713 440.829C262.31 448.092 231.191 438.428 215.936 435.571C214.536 435.309 213.137 435.047 211.737 434.786C177.986 428.174 144.354 419.352 110.351 414.008C92.1193 411.144 69.9208 415.956 51.4248 416.052C50.4607 416.057 49.6023 415.438 49.3252 414.515C42.1699 390.673 31.3776 353.889 34.5732 329.454C37.5503 306.69 58.525 269.006 81.0762 262.717C100.936 257.178 121.88 254.027 142.257 250.816C151.061 249.428 183.996 245.025 181.496 231.025C180.37 224.72 186.001 219.104 187.022 218.205C192.517 213.369 198.153 208.407 201.579 203.776C204.38 199.989 206.663 194.867 209.009 189.605C212.239 182.359 215.589 174.844 220.576 170.172C233.738 157.843 247.067 145.43 261.346 134.392C262.499 133.5 262.365 131.7 261.129 130.927C254.845 126.995 249.057 121.557 246.313 118.577C222.464 94.2029 216.946 41.3625 259.681 34.3294ZM203.449 283.648C176.496 280.031 121.43 325.229 160.947 350.542C163.643 352.227 165.545 352.385 168.559 351.686C170.036 351.35 171.496 350.94 172.933 350.457C180.938 347.591 191.728 344.623 197.178 338.024C201.411 332.896 203.714 325.525 206.803 319.225C208.255 316.264 211.831 315.095 214.81 316.512C215.669 316.921 216.489 317.361 217.485 317.955C218.703 318.682 220.29 318.011 220.514 316.611C222.872 301.871 221.399 286.057 203.449 283.648ZM97.8867 339.363C109.824 325.825 109.207 281.835 83.4961 285.025C70.0775 288.177 53.1742 313.4 53.6123 327.213C54.0075 332.075 62.0651 342.655 67.4961 349.289C69.5212 351.763 75.7476 349.915 78.8828 349.289C84.4424 348.18 94.4668 343.243 97.8867 339.363ZM409.893 179.332C408.049 179.649 406.427 180.113 404.723 180.886C396.593 184.575 326.934 220.852 325.233 223.001C324.047 224.499 323.777 226.727 324.094 228.552C324.264 229.519 324.747 230.185 325.539 230.772C328.259 232.785 335.176 234.963 339.109 237.427C345.458 241.41 350.668 247.107 357.275 250.635C390.297 266.363 453.841 238.567 436.428 195.071C434.021 189.059 416.067 180.017 409.893 179.332Z";
+
+// ---------- math ----------
+const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
+const seg = (t, a, b) => clamp((t - a) / (b - a));
+const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const easeOut = (x) => 1 - Math.pow(1 - x, 3);
+const lerp = (a, b, k) => a + (b - a) * k;
+const COS = 0.866, SIN = 0.5;
+function P(x, y, z = 0) {
+  return [CX + (x - y) * COS * S, CY + ((x + y) * SIN - z) * S];
+}
+const pts = (arr) => arr.map((p) => p.map((n) => n.toFixed(1)).join(",")).join(" ");
+
+// ---------- svg helpers ----------
+let out = [];
+const add = (s) => out.push(s);
+const poly = (points, fill, stroke = "none", sw = 1.4, extra = "") =>
+  add(`<polygon points="${pts(points)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" ${extra}/>`);
+
+// Rounded rectangle in the x/y plane at height z, as a list of world points.
+function roundRect(x0, y0, x1, y1, r, z, seg = 6) {
+  const res = [];
+  const corners = [
+    [x1 - r, y0 + r, -Math.PI / 2, 0],
+    [x1 - r, y1 - r, 0, Math.PI / 2],
+    [x0 + r, y1 - r, Math.PI / 2, Math.PI],
+    [x0 + r, y0 + r, Math.PI, 1.5 * Math.PI],
+  ];
+  for (const [cx, cy, a0, a1] of corners) {
+    for (let i = 0; i <= seg; i++) {
+      const a = a0 + ((a1 - a0) * i) / seg;
+      res.push([cx + r * Math.cos(a), cy + r * Math.sin(a), z]);
+    }
+  }
+  return res;
+}
+
+// A rounded slab: shadow, visible sides, then the top face.
+function slab(x0, y0, x1, y1, r, z0, h, o = {}) {
+  const top = o.top || C.top, sideA = o.sideA || C.sideA, sideB = o.sideB || C.sideB, edge = o.edge || C.edge;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<g opacity="${op.toFixed(3)}">`);
+  if (o.shadow !== false && z0 < 1) {
+    const sh = roundRect(x0 - 6, y0 + 28, x1 - 6, y1 + 34, r, 0).map((p) => P(...p));
+    poly(sh, C.shadow, "none", 0, `filter="url(#soft)" opacity="0.55"`);
+  }
+  const base = roundRect(x0, y0, x1, y1, r, z0);
+  const topPts = roundRect(x0, y0, x1, y1, r, z0 + h);
+  for (let i = 0; i < base.length; i++) {
+    const a = base[i], b = base[(i + 1) % base.length];
+    const nx = b[1] - a[1], ny = -(b[0] - a[0]);
+    if (nx + ny <= 0) continue;
+    const quad = [a, b, [b[0], b[1], z0 + h], [a[0], a[1], z0 + h]].map((p) => P(...p));
+    poly(quad, nx > ny ? sideB : sideA, sideA, 0.6);
+  }
+  // silhouette edge of the lower rim
+  const lower = base.filter((p, i) => {
+    const b = base[(i + 1) % base.length];
+    const nx = b[1] - p[1], ny = -(b[0] - p[0]);
+    return nx + ny > 0;
+  });
+  poly(topPts.map((p) => P(...p)), top, edge, 1.3);
+  add(`</g>`);
+}
+
+// SVG transform that maps local (u, v) onto the top face at height z.
+const planeTop = (x, y, z) => {
+  const [X, Y] = P(x, y, z);
+  return `matrix(${COS * S},${SIN * S},${-COS * S},${SIN * S},${X.toFixed(1)},${Y.toFixed(1)})`;
+};
+
+function cylinder(x, y, r, h, o = {}) {
+  const [bx, by] = P(x, y, 0);
+  const [tx, ty] = P(x, y, h);
+  const rx = r * 1.2247 * S, ry = r * 0.7071 * S;
+  const glow = o.glow || 0;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<g opacity="${op.toFixed(3)}">`);
+  add(`<ellipse cx="${(bx - 10).toFixed(1)}" cy="${(by + 8).toFixed(1)}" rx="${(rx * 1.25).toFixed(1)}" ry="${(ry * 1.3).toFixed(1)}" fill="${C.shadow}" opacity="0.5" filter="url(#soft)"/>`);
+  if (glow > 0) {
+    add(`<ellipse cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" rx="${(rx * 1.9).toFixed(1)}" ry="${(ry * 1.9).toFixed(1)}" fill="${C.acc}" opacity="${(0.28 * glow).toFixed(3)}" filter="url(#soft)"/>`);
+  }
+  const side = glow > 0 ? mix(C.sideA, C.accSide, glow * 0.8) : C.sideA;
+  const topc = glow > 0 ? mix(C.top, C.acc, glow) : C.top;
+  const edge = glow > 0 ? mix(C.edge, C.accEdge, glow) : C.edge;
+  add(`<path d="M${bx - rx},${by} A${rx},${ry} 0 0 0 ${bx + rx},${by} L${tx + rx},${ty} L${tx - rx},${ty} Z" fill="${side}" stroke="${edge}" stroke-width="1.2"/>`);
+  add(`<ellipse cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${topc}" stroke="${edge}" stroke-width="1.2"/>`);
+  add(`<ellipse cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" rx="2.6" ry="1.6" fill="${glow > 0.5 ? C.accInk : C.arc}"/>`);
+  add(`</g>`);
+}
+
+function mix(a, b, k) {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (s) => [(s >> 16) & 255, (s >> 8) & 255, s & 255];
+  const A = ch(pa), B = ch(pb);
+  return "#" + A.map((v, i) => Math.round(lerp(v, B[i], clamp(k))).toString(16).padStart(2, "0")).join("");
+}
+
+// A small cube at a screen position (its top centre at sx, sy).
+function cube(sx, sy, s, o = {}) {
+  const op = o.opacity == null ? 1 : o.opacity;
+  const t = [[0, -s * SIN], [s * COS, 0], [0, s * SIN], [-s * COS, 0]];
+  const top = t.map(([dx, dy]) => [sx + dx, sy + dy]);
+  const l = [[sx - s * COS, sy], [sx, sy + s * SIN], [sx, sy + s * SIN + s], [sx - s * COS, sy + s]];
+  const r = [[sx, sy + s * SIN], [sx + s * COS, sy], [sx + s * COS, sy + s], [sx, sy + s * SIN + s]];
+  add(`<g opacity="${op.toFixed(3)}">`);
+  poly(l, C.accSide, C.accEdge, 1);
+  poly(r, mix(C.accSide, C.accEdge, 0.25), C.accEdge, 1);
+  poly(top, C.acc, C.accEdge, 1);
+  // keyhole
+  if (!o.plain) add(`<circle cx="${(sx + s * COS * 0.5).toFixed(1)}" cy="${(sy + s * 0.75).toFixed(1)}" r="${(s * 0.12).toFixed(1)}" fill="${C.accInk}"/>`);
+  add(`</g>`);
+}
+
+function grid() {
+  const g = [];
+  const R = 560, step = 44;
+  for (let k = -R; k <= R; k += step) {
+    const a = P(k, -R), b = P(k, R), c = P(-R, k), d = P(R, k);
+    g.push(`M${a[0].toFixed(1)},${a[1].toFixed(1)}L${b[0].toFixed(1)},${b[1].toFixed(1)}`);
+    g.push(`M${c[0].toFixed(1)},${c[1].toFixed(1)}L${d[0].toFixed(1)},${d[1].toFixed(1)}`);
+  }
+  add(`<path d="${g.join("")}" stroke="${C.grid}" stroke-width="1" fill="none" mask="url(#fade)"/>`);
+}
+
+function dashedBase(x0, y0, x1, y1) {
+  const p = roundRect(x0, y0, x1, y1, 26, 0).map((q) => P(...q));
+  add(`<polygon points="${pts(p)}" fill="none" stroke="${C.dash}" stroke-width="1.3" stroke-dasharray="5 6"/>`);
+}
+
+function quadPoint(a, c, b, k) {
+  return [
+    (1 - k) * (1 - k) * a[0] + 2 * (1 - k) * k * c[0] + k * k * b[0],
+    (1 - k) * (1 - k) * a[1] + 2 * (1 - k) * k * c[1] + k * k * b[1],
+  ];
+}
+function arc(a, b, lift, progress, o = {}) {
+  const c = [(a[0] + b[0]) / 2, Math.min(a[1], b[1]) - lift];
+  const len = 900;
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<path d="M${a[0].toFixed(1)},${a[1].toFixed(1)} Q${c[0].toFixed(1)},${c[1].toFixed(1)} ${b[0].toFixed(1)},${b[1].toFixed(1)}" fill="none" stroke="${o.color || C.arc}" stroke-width="${o.width || 1.6}" stroke-linecap="round" stroke-dasharray="${len}" stroke-dashoffset="${(len * (1 - clamp(progress))).toFixed(1)}" opacity="${op.toFixed(3)}"/>`);
+  return c;
+}
+
+function hippo(x, y, size, fill) {
+  const s = size / 633;
+  add(`<path d="${HIPPO}" transform="translate(${x},${y}) scale(${s})" fill="${fill}"/>`);
+}
+
+function docLines(x, y, w, lines, color, opacityFn) {
+  for (let i = 0; i < lines; i++) {
+    const lw = i % 3 === 2 ? w * 0.6 : w;
+    const op = opacityFn ? opacityFn(i) : 1;
+    add(`<rect x="${x}" y="${y + i * 14}" width="${lw}" height="6" rx="3" fill="${color}" opacity="${op.toFixed(3)}"/>`);
+  }
+}
+
+// ---------- depth: layers, wall planes, light sweeps ----------
+// The scene holds still: depth comes from the isometric drawing, the floor
+// shadows and the light sweeps, never from moving the scene. A camera drift
+// (each layer translated a few pixels on a slow loop) and floating bobs (a
+// few pixels up and down) used to sit on top of the animation; snapped to
+// whole pixels, they read as the whole picture swaying and as objects
+// shaking, so both are gone and only the elements' own animation moves.
+const TAU = Math.PI * 2;
+let currentT = 0;
+// One plane of the scene, drawn back to front; kept as a group so the order
+// of planes reads in the scene code.
+function layer(fn) {
+  add(`<g>`);
+  fn();
+  add(`</g>`);
+}
+
+// Local (u right, v down) onto a wall facing the viewer's left (+y normal).
+const wallY = (x, y, z) => {
+  const [X, Y] = P(x, y, z);
+  return `matrix(${COS * S},${SIN * S},0,${S},${X.toFixed(1)},${Y.toFixed(1)})`;
+};
+// Local (u right, v down) onto a wall facing the viewer's right (+x normal).
+const wallX = (x, y, z) => {
+  const [X, Y] = P(x, y, z);
+  return `matrix(${COS * S},${-SIN * S},0,${S},${X.toFixed(1)},${Y.toFixed(1)})`;
+};
+
+// A thick panel on a +y wall: back face offset by its thickness, then the front.
+function panelY(x0, y0, zTop, w, h, th, o, content) {
+  const op = o.opacity == null ? 1 : o.opacity;
+  add(`<g opacity="${op.toFixed(3)}">`);
+  add(`<g transform="${wallY(x0, y0 - th, zTop)}"><rect width="${w}" height="${h}" rx="${o.r || 10}" fill="${o.back || C.sideB}" stroke="${C.edge}" stroke-width="1.2"/></g>`);
+  add(`<g transform="${wallY(x0, y0, zTop)}">`);
+  add(`<rect width="${w}" height="${h}" rx="${o.r || 10}" fill="${o.face || C.top}" stroke="${o.stroke || C.edge}" stroke-width="1.3"/>`);
+  content && content();
+  add(`</g></g>`);
+}
+
+let sheenId = 0;
+// A soft diagonal highlight crossing a w x h face once as k runs 0 to 1.
+function sheen(w, h, k, r = 10) {
+  if (k <= 0 || k >= 1) return;
+  const id = `sh${sheenId++}`;
+  const x = -120 + (w + 240) * k;
+  add(`<clipPath id="${id}"><rect width="${w}" height="${h}" rx="${r}"/></clipPath>`);
+  add(`<g clip-path="url(#${id})"><rect x="${(x - 45).toFixed(1)}" y="${-h}" width="90" height="${h * 3}" fill="url(#sheenG)" transform="rotate(18 ${x.toFixed(1)} ${h / 2})"/></g>`);
+}
+
+function floorShadow(x, y, rx, ry, op) {
+  const [X, Y] = P(x, y, 0);
+  add(`<ellipse cx="${X.toFixed(1)}" cy="${Y.toFixed(1)}" rx="${(rx * S).toFixed(1)}" ry="${(ry * S).toFixed(1)}" fill="${C.shadow}" opacity="${op.toFixed(3)}" filter="url(#soft)"/>`);
+}
+
+// The blue hub disc with the hippo mark, like the hub in the original clips.
+function disc(x, y, r, h) {
+  const [bx, by] = P(x, y, 0);
+  const [tx, ty] = P(x, y, h);
+  const rx = r * 1.2247 * S, ry = r * 0.7071 * S;
+  add(`<ellipse cx="${bx.toFixed(1)}" cy="${by.toFixed(1)}" rx="${(rx * 1.5).toFixed(1)}" ry="${(ry * 1.5).toFixed(1)}" fill="${C.acc}" opacity="0.22" filter="url(#soft)"/>`);
+  add(`<path d="M${bx - rx},${by} A${rx},${ry} 0 0 0 ${bx + rx},${by} L${tx + rx},${ty} L${tx - rx},${ty} Z" fill="${C.accSide}" stroke="${C.accEdge}" stroke-width="1.4"/>`);
+  add(`<ellipse cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="1.4"/>`);
+  const s = (r * 1.25 * S) / 633;
+  add(`<g transform="translate(${(tx - r * 0.62 * S).toFixed(1)},${(ty - r * 0.42 * S).toFixed(1)}) scale(${s.toFixed(4)},${(s * 0.72).toFixed(4)})"><path d="${HIPPO}" fill="${C.accInk}"/></g>`);
+}
+
+function lockIcon(cx, cy, sc, open = 0) {
+  add(`<g transform="translate(${cx.toFixed(1)},${cy.toFixed(1)}) scale(${sc.toFixed(3)})">`);
+  add(`<circle r="40" fill="${C.acc}" opacity="0.16"/>`);
+  add(`<path d="M-12,-6 v-10 a12,12 0 0 1 24,0 v${(10 - 14 * open).toFixed(1)}" fill="none" stroke="${C.accEdge}" stroke-width="5" stroke-linecap="round" transform="translate(0,${(-6 * open).toFixed(1)})"/>`);
+  add(`<rect x="-20" y="-7" width="40" height="32" rx="6" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="2"/>`);
+  add(`<circle cx="0" cy="6" r="4" fill="${C.accInk}"/><rect x="-1.6" y="7" width="3.2" height="9" rx="1.6" fill="${C.accInk}"/>`);
+  add(`</g>`);
+}
+
+function docFace(w, h, o = {}) {
+  hippo(14, 14, 30, C.acc);
+  add(`<rect x="54" y="20" width="${w * 0.45}" height="8" rx="4" fill="${C.ink}"/>`);
+  add(`<rect x="54" y="34" width="${w * 0.28}" height="6" rx="3" fill="${C.inkSoft}"/>`);
+  const rows = Math.floor((h - 70) / 16);
+  for (let i = 0; i < rows; i++) {
+    const lw = i % 3 === 2 ? (w - 28) * 0.6 : w - 28;
+    add(`<rect x="14" y="${62 + i * 16}" width="${lw.toFixed(1)}" height="6" rx="3" fill="${C.inkSoft}"/>`);
+  }
+}
+
+// Scrambled rows: blocks whose shades reshuffle every few frames.
+function cipherFace(w, h) {
+  const tick = Math.floor(currentT * 2.5);
+  const rows = Math.floor((h - 30) / 16);
+  for (let i = 0; i < rows; i++) {
+    const cols = Math.floor((w - 28) / 13);
+    for (let b = 0; b < cols; b++) {
+      const r = ((b * 37 + i * 91 + tick * 53) % 97) / 97;
+      add(`<rect x="${14 + b * 13}" y="${16 + i * 16}" width="9" height="8" rx="1.6" fill="${C.acc}" opacity="${(0.25 + 0.75 * r).toFixed(2)}"/>`);
+    }
+  }
+}
+
+// ---------- slide 1: Distributed Storage ----------
+function sceneNet(t) {
+  dashedBase(-400, -330, 380, 320);
+  const clusters = [
+    [[-300, -130, 20, 62], [-250, -70, 15, 40], [-320, -60, 13, 30]],
+    [[170, -270, 20, 70], [230, -220, 16, 44], [240, -290, 13, 30]],
+    [[290, 30, 22, 64], [340, 80, 16, 42], [270, 100, 14, 30]],
+    [[-200, 190, 18, 52], [-140, 240, 15, 36], [-250, 240, 12, 26]],
+  ];
+  const lone = [[-60, -300, 14, 34], [60, 250, 13, 28], [-360, 70, 12, 26]];
+  const OFF = 2;
+  const send = (i) => 1.45 + i * 0.22;
+  const land = (i) => send(i) + 1.1;
+  const reset = 1 - ease(seg(t, 6.6, 7.4));
+  const offline = ease(seg(t, 3.9, 4.4)) * reset;
+  const ghost = ease(seg(t, 1.0, 1.5)) * (1 - ease(seg(t, 4.7, 5.4)));
+  const ok = easeOut(seg(t, 5.3, 5.8)) * (1 - ease(seg(t, 6.6, 7.2)));
+  const cardTop = 250;
+
+  const lit = (ci) => ease(seg(t, land(ci) - 0.1, land(ci) + 0.3)) * reset;
+  layer(() => {
+    const items = [{ k: 0, draw: () => disc(0, 0, 58, 24) }];
+    clusters.forEach((c, ci) => c.forEach((n) => items.push({ k: n[0] + n[1], draw: () => {
+      const dim = ci === OFF ? offline : 0;
+      cylinder(n[0], n[1], n[2], n[3], { glow: lit(ci) * (1 - dim), opacity: 1 - 0.55 * dim });
+    } })));
+    lone.forEach((n) => items.push({ k: n[0] + n[1], draw: () => cylinder(n[0], n[1], n[2], n[3], {}) }));
+    // copies inside a cluster: short links between its nodes once a shard lands
+    clusters.forEach((c, ci) => {
+      const k = lit(ci) * (ci === OFF ? 1 - offline : 1);
+      if (k <= 0.01) return;
+      for (let j = 1; j < c.length; j++) {
+        const a = P(c[0][0], c[0][1], c[0][3]), b = P(c[j][0], c[j][1], c[j][3]);
+        add(`<path d="M${a[0].toFixed(1)},${a[1].toFixed(1)} L${b[0].toFixed(1)},${b[1].toFixed(1)}" stroke="${C.accEdge}" stroke-width="1.4" stroke-dasharray="3 4" opacity="${(0.7 * k).toFixed(3)}"/>`);
+      }
+    });
+    items.sort((a, b) => a.k - b.k).forEach((it) => it.draw());
+  });
+
+  // the file floating above the hub, with its shadow on the hub
+  layer(() => {
+    floorShadow(0, 0, 70, 26, 0.3);
+    panelY(-58, 0, cardTop, 116, 148, 8, { opacity: 1 - 0.72 * ghost }, () => {
+      docFace(116, 148);
+      sheen(116, 148, seg(t, 5.4, 6.2));
+    });
+  });
+
+  // shards out along arcs, and back again while one cluster is offline
+  const cardC = P(0, 0, cardTop - 74);
+  clusters.forEach((c, ci) => {
+    const dst = P(c[0][0], c[0][1], c[0][3]);
+    const show = ease(seg(t, send(ci) - 0.3, send(ci) + 0.6)) * reset * (ci === OFF ? 1 - 0.85 * offline : 1);
+    const ctrl = arc(cardC, dst, 120 + ci * 14, show > 0 ? 1 : 0, { opacity: show * 0.85 });
+    const k = seg(t, send(ci), land(ci));
+    if (k > 0 && k < 1) {
+      const p = quadPoint(cardC, ctrl, dst, ease(k));
+      cube(p[0], p[1] - 12 * S, 15 * S, { opacity: easeOut(seg(k, 0, 0.15)) * (1 - seg(k, 0.85, 1)), plain: true });
+    }
+    if (ci !== OFF) {
+      const r = seg(t, 4.7 + ci * 0.08, 5.35 + ci * 0.08);
+      if (r > 0 && r < 1) {
+        const p = quadPoint(dst, ctrl, cardC, ease(r));
+        add(`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(6 * S).toFixed(1)}" fill="${C.accEdge}"/>`);
+      }
+    }
+  });
+
+  layer(() => {
+    if (offline > 0.01) {
+      const [X, Y] = P(clusters[OFF][0][0], clusters[OFF][0][1], clusters[OFF][0][3] + 48);
+      add(`<g opacity="${offline.toFixed(3)}" transform="translate(${X.toFixed(1)},${Y.toFixed(1)}) scale(${S})">`);
+      add(`<circle r="17" fill="${C.top}" stroke="${C.edge}" stroke-width="1.4"/><path d="M-6,-6 L6,6 M6,-6 L-6,6" stroke="${C.ink}" stroke-width="2.4" stroke-linecap="round"/>`);
+      add(`</g>`);
+    }
+    if (ok > 0.01) {
+      const [X, Y] = P(58, 0, cardTop + 6);
+      add(`<g opacity="${ok.toFixed(3)}" transform="translate(${X.toFixed(1)},${Y.toFixed(1)}) scale(${((0.6 + 0.4 * ok) * S).toFixed(3)})">`);
+      add(`<circle r="20" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="1.6"/><path d="M-8,0 l5,6 l11,-12" stroke="${C.accInk}" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+      add(`</g>`);
+    }
+  });
+}
+
+// ---------- slide 2: Encrypted on Your Device ----------
+function sceneEnc(t) {
+  dashedBase(-400, -220, 380, 220);
+  const CW = 150, CH = 190;
+  const travel = ease(seg(t, 0.6, 3.4));
+  const cx = lerp(-260, 250, travel);
+  const sealed = easeOut(seg(t, 3.4, 3.9));
+  const outK = ease(seg(t, 6.3, 7.0));
+  const inK = ease(seg(t, 7.0, 8.0));
+  const z = 270;
+  const keyed = ease(seg(t, 4.3, 4.9)) * (1 - outK);
+  const unlock = ease(seg(t, 4.9, 5.3)) * (1 - ease(seg(t, 5.6, 6.0)));
+  // how much of the card is inside the gate, for the scan glow
+  const inside = clamp(1 - Math.abs(cx) / (CW / 2 + 20));
+  const GATE_X = P(0, 0, 0)[0];
+
+  layer(() => {
+    // card shadows on the floor
+    floorShadow(cx, 0, 90, 30, 0.35 * (1 - outK));
+    if (inK > 0) floorShadow(-260, 0, 90, 30, 0.35 * inK);
+    // gate: base slab, far post and beam
+    slab(-26, -120, 26, 120, 10, 0, 14);
+    const ring = (dx, fill, stroke) => {
+      add(`<g transform="${wallX(dx, 100, 300)}"><rect x="0" y="0" width="200" height="290" rx="22" fill="none" stroke="${fill}" stroke-width="26"/>`);
+      add(`<rect x="-13" y="-13" width="226" height="316" rx="34" fill="none" stroke="${stroke}" stroke-width="1.3"/><rect x="13" y="13" width="174" height="264" rx="10" fill="none" stroke="${stroke}" stroke-width="1.3"/></g>`);
+    };
+    ring(-14, C.sideB, C.edge);
+    ring(14, mix(C.top, C.accLight, 0.35), C.accEdge);
+    // scan plane inside the gate while the card crosses it
+    if (inside > 0.01) {
+      add(`<g transform="${wallX(0, 100, 300)}"><rect x="13" y="13" width="174" height="264" rx="10" fill="${C.acc}" opacity="${(0.22 * inside).toFixed(3)}"/></g>`);
+    }
+    // shield emblem on the beam
+    add(`<g transform="${wallX(14, 100, 300)}"><g transform="translate(100,0) scale(0.95)"><path d="M0,-22 L19,-14 V2 C19,15 9,22 0,26 C-9,22 -19,15 -19,2 V-14 Z" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="2"/><circle cx="0" cy="0" r="4" fill="${C.accInk}"/></g></g>`);
+
+    const card = (centerX, zTop, opacity) => {
+      const x0 = centerX - CW / 2;
+      add(`<clipPath id="plain${sheenId}"><rect x="0" y="0" width="${GATE_X}" height="911"/></clipPath>`);
+      add(`<clipPath id="ciph${sheenId}"><rect x="${GATE_X}" y="0" width="${1620 - GATE_X}" height="911"/></clipPath>`);
+      const id = sheenId++;
+      add(`<g clip-path="url(#plain${id})">`);
+      panelY(x0, 0, zTop, CW, CH, 8, { opacity }, () => docFace(CW, CH));
+      add(`</g><g clip-path="url(#ciph${id})">`);
+      panelY(x0, 0, zTop, CW, CH, 8, { opacity, face: C.cipherFace, stroke: C.accEdge }, () => {
+        cipherFace(CW, CH);
+        sheen(CW, CH, seg(t, 3.7, 4.5));
+        if (sealed > 0.01) lockIcon(CW / 2, CH / 2, (0.55 + 0.45 * sealed) * sealed, unlock);
+      });
+      add(`</g>`);
+    };
+    if (outK < 1) card(cx, z + 40 * outK, 1 - outK);
+    if (inK > 0) card(-260, z - 40 * (1 - inK), inK);
+
+    // near post drawn over the card
+    add(`<g transform="${wallX(14, 100, 300)}"><rect x="-13" y="-13" width="26" height="316" rx="13" fill="${mix(C.top, C.accLight, 0.35)}" stroke="${C.accEdge}" stroke-width="1.3"/></g>`);
+  });
+
+  // your key, floating at the front: only it opens the sealed file
+  const keyZ = 40;
+  layer(() => {
+    slab(-200, 150, -110, 210, 14, keyZ, 10, { shadow: false });
+    floorShadow(-155, 180, 50, 20, 0.35);
+    add(`<g transform="${planeTop(-190, 158, keyZ + 10)}"><g transform="translate(36,22) rotate(-90)">`);
+    add(`<circle cx="-9" cy="0" r="8" fill="none" stroke="${C.accEdge}" stroke-width="3.4"/><path d="M-1,0 h18 M11,0 v6 M16,0 v5" stroke="${C.accEdge}" stroke-width="3.4" stroke-linecap="round"/>`);
+    add(`</g></g>`);
+  });
+  if (keyed > 0.01) {
+    const a = P(-155, 180, keyZ + 10);
+    const b = P(cx, 0, z - CH / 2);
+    arc(a, b, 140, keyed, { color: C.accEdge, width: 1.8, opacity: keyed * (1 - ease(seg(t, 5.8, 6.3))) });
+  }
+}
+
+// ---------- slide 3: Screen Recording ----------
+function sceneRec(t) {
+  dashedBase(-360, -200, 380, 260);
+  const W0 = 480, H0 = 250, X0 = -240, ZT = 340;
+  const recording = t >= 1.0 && t < 4.9 ? 1 : 0;
+  const recFade = ease(seg(t, 0.9, 1.2)) * (1 - ease(seg(t, 4.8, 5.1)));
+  const reset = 1 - ease(seg(t, 6.8, 7.6));
+  const chipIn = easeOut(seg(t, 5.1, 5.7)) * reset;
+  const copied = ease(seg(t, 6.0, 6.25)) * reset;
+  const fill = clamp((t - 1.0) / 3.9) * (t < 4.9 ? 1 : 1) * (t >= 1.0 ? 1 : 0);
+  const fillK = t < 4.9 ? fill : 1;
+  const grow1 = ease(seg(t, 2.1, 2.5)) * reset, grow2 = ease(seg(t, 3.5, 3.9)) * reset;
+  const wz = ZT;
+
+  layer(() => {
+    floorShadow(0, 40, 230, 60, 0.3);
+    panelY(X0, 0, wz, W0, H0, 10, { r: 12 }, () => {
+      // title bar and a small dashboard being recorded
+      add(`<rect x="0" y="0" width="${W0}" height="26" rx="12" fill="${C.sideA}"/><rect x="0" y="14" width="${W0}" height="12" fill="${C.sideA}"/>`);
+      [0, 1, 2].forEach((i) => add(`<circle cx="${16 + i * 13}" cy="13" r="4" fill="${C.inkSoft}"/>`));
+      add(`<rect x="18" y="44" width="110" height="186" rx="8" fill="${C.sideA}"/>`);
+      for (let i = 0; i < 6; i++) add(`<rect x="30" y="${60 + i * 26}" width="${i === 1 ? 70 : 84}" height="8" rx="4" fill="${i === 1 ? C.acc : C.inkSoft}"/>`);
+      add(`<rect x="146" y="44" width="316" height="186" rx="8" fill="${C.display}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+      const bars = [60, 90, 70, 110 + 40 * grow1, 80, 120, 95 + 45 * grow2];
+      bars.forEach((h, i) => add(`<rect x="${172 + i * 40}" y="${(214 - h).toFixed(1)}" width="24" height="${h.toFixed(1)}" rx="4" fill="${i === 3 || i === 6 ? C.acc : C.accLight}" opacity="${i === 3 || i === 6 ? 1 : 0.7}"/>`));
+      // recording frame: corner brackets
+      if (recFade > 0.01) {
+        const pulse = 0.65 + 0.35 * Math.sin(currentT * TAU * 1.0);
+        add(`<g stroke="${C.red}" stroke-width="4" fill="none" stroke-linecap="round" opacity="${(recFade * pulse).toFixed(3)}">`);
+        add(`<path d="M8,30 v-22 h22 M${W0 - 30},8 h22 v22 M${W0 - 8},${H0 - 30} v22 h-22 M30,${H0 - 8} h-22 v-22"/></g>`);
+      }
+      // cursor with click ripples
+      const mk = seg(t, 1.3, 4.6);
+      const pts = [[260, 190], [304, 150], [380, 120], [420, 160], [300, 200]];
+      const f = ease(mk) * (pts.length - 1);
+      const i0 = Math.min(pts.length - 2, Math.floor(f));
+      const cxp = lerp(pts[i0][0], pts[i0 + 1][0], f - i0), cyp = lerp(pts[i0][1], pts[i0 + 1][1], f - i0);
+      [[2.1, 304, 150], [3.5, 412, 150]].forEach(([at, rx, ry]) => {
+        const r = seg(t, at, at + 0.5);
+        if (r > 0 && r < 1) add(`<circle cx="${rx}" cy="${ry}" r="${(6 + 22 * r).toFixed(1)}" fill="none" stroke="${C.accEdge}" stroke-width="2" opacity="${(1 - r).toFixed(3)}"/>`);
+      });
+      add(`<path d="M${cxp.toFixed(1)},${cyp.toFixed(1)} l0,18 l5,-5 l4,9 l4,-1.8 l-4,-8.6 l7.5,0 z" fill="${C.text}" stroke="${C.top}" stroke-width="1.2"/>`);
+      sheen(W0, H0, seg(t, 0.15, 0.95), 12);
+    });
+  });
+
+  // timeline strip in front of the window
+  layer(() => {
+    const TZ = 70;
+    floorShadow(0, 150, 220, 26, 0.28);
+    panelY(-240, 150, TZ, 480, 40, 6, { r: 10 }, () => {
+      const n = 22;
+      for (let i = 0; i < n; i++) {
+        const on = i / n < fillK ? 1 : 0;
+        const hh = 8 + ((i * 7) % 5) * 3;
+        add(`<rect x="${14 + i * 20.5}" y="${(20 - hh / 2).toFixed(1)}" width="14" height="${hh}" rx="3" fill="${on ? C.acc : C.inkSoft}" opacity="${on ? (0.55 + 0.45 * reset).toFixed(3) : 1}"/>`);
+      }
+      if (fillK > 0 && reset > 0.01) {
+        const px = 10 + 450 * fillK;
+        add(`<rect x="${(px - 1.5).toFixed(1)}" y="4" width="3" height="32" rx="1.5" fill="${C.red}" opacity="${reset.toFixed(3)}"/>`);
+      }
+    });
+  });
+
+  // camera bubble, record control and the share link float nearest
+  layer(() => {
+    const [bx, by] = P(X0 + 46, 50, wz - H0 + 30);
+    add(`<g transform="translate(${bx.toFixed(1)},${by.toFixed(1)}) scale(${S})">`);
+    add(`<ellipse cx="6" cy="62" rx="44" ry="10" fill="${C.shadow}" opacity="0.5" filter="url(#soft)"/>`);
+    if (recFade > 0.01) add(`<circle r="${(52 + 4 * Math.sin(currentT * TAU * 1.5)).toFixed(1)}" fill="none" stroke="${C.acc}" stroke-width="3" opacity="${(0.6 * recFade).toFixed(3)}"/>`);
+    add(`<circle r="46" fill="${C.accLight}" stroke="${C.top}" stroke-width="5"/>`);
+    add(`<clipPath id="cam"><circle r="44"/></clipPath><g clip-path="url(#cam)"><circle cx="0" cy="-8" r="16" fill="${C.accSide}"/><path d="M-30,46 c0,-34 60,-34 60,0 z" fill="${C.accSide}"/></g>`);
+    add(`</g>`);
+
+    const [px, py] = P(0, 40, ZT + 70);
+    const secs = recording ? Math.min(3, Math.floor(t - 1.0)) : t >= 4.9 && reset > 0.5 ? 3 : 0;
+    const ringK = recording ? seg(t, 1.0, 4.9) : t >= 4.9 && reset > 0.5 ? 1 : 0;
+    add(`<g transform="translate(${px.toFixed(1)},${py.toFixed(1)}) scale(${S})">`);
+    add(`<ellipse cx="0" cy="40" rx="70" ry="9" fill="${C.shadow}" opacity="0.45" filter="url(#soft)"/>`);
+    add(`<rect x="-74" y="-24" width="148" height="48" rx="24" fill="${C.top}" stroke="${C.edge}" stroke-width="1.3"/>`);
+    const L = 2 * Math.PI * 13;
+    add(`<circle cx="-46" cy="0" r="13" fill="none" stroke="${C.inkSoft}" stroke-width="3"/>`);
+    add(`<circle cx="-46" cy="0" r="13" fill="none" stroke="${C.red}" stroke-width="3" stroke-dasharray="${L.toFixed(1)}" stroke-dashoffset="${(L * (1 - ringK)).toFixed(1)}" transform="rotate(-90 -46 0)"/>`);
+    const dotOp = recording ? 0.6 + 0.4 * Math.abs(Math.sin(currentT * Math.PI * 1.6)) : 1;
+    add(`<circle cx="-46" cy="0" r="7" fill="${C.red}" opacity="${dotOp.toFixed(3)}"/>`);
+    add(`<text x="-22" y="7" font-family="Inter, -apple-system, Helvetica, Arial, sans-serif" font-size="19" font-weight="600" fill="${C.text}">0:0${secs}</text>`);
+    add(`<rect x="40" y="-9" width="18" height="18" rx="4" fill="${C.ink}" opacity="0.55"/>`);
+    add(`</g>`);
+
+    if (chipIn > 0.01) {
+      const [cx, cy] = P(250, 230, 40 + 60 * chipIn);
+      add(`<g opacity="${chipIn.toFixed(3)}" transform="translate(${cx.toFixed(1)},${cy.toFixed(1)}) scale(${((0.8 + 0.2 * chipIn) * S).toFixed(3)})">`);
+      add(`<ellipse cx="0" cy="${(40 + 50 * chipIn).toFixed(1)}" rx="90" ry="12" fill="${C.shadow}" opacity="0.45" filter="url(#soft)"/>`);
+      add(`<rect x="-112" y="-26" width="224" height="52" rx="14" fill="${C.top}" stroke="${C.edge}" stroke-width="1.3"/>`);
+      add(`<circle cx="-84" cy="0" r="15" fill="${C.acc}"/><path d="M-91,0 h14 M-87,-6 h-3 a6,6 0 0 0 0,12 h3 M-81,-6 h3 a6,6 0 0 1 0,12 h-3" stroke="${C.accInk}" stroke-width="2.4" fill="none" stroke-linecap="round"/>`);
+      add(`<rect x="-60" y="-8" width="96" height="8" rx="4" fill="${C.ink}"/><rect x="-60" y="5" width="60" height="6" rx="3" fill="${C.inkSoft}"/>`);
+      add(`<rect x="52" y="-16" width="48" height="32" rx="9" fill="${mix(C.sideA, C.acc, copied)}" stroke="${copied > 0.5 ? C.accEdge : C.edge}" stroke-width="1"/>`);
+      if (copied > 0.5) add(`<path d="M66,0 l6,6 l12,-12" stroke="${C.accInk}" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+      else add(`<rect x="68" y="-8" width="11" height="13" rx="2" fill="none" stroke="${C.ink}" stroke-width="1.8"/><rect x="72" y="-4" width="11" height="13" rx="2" fill="${C.sideA}" stroke="${C.ink}" stroke-width="1.8"/>`);
+      add(`</g>`);
+    }
+  });
+}
+
+// ---------- Share & Track (hidden from the carousel for now) ----------
+function sceneShare(t) {
+  dashedBase(-340, -260, 340, 260);
+  const people = [
+    [-250, -150], [210, -200], [270, 90], [-90, 230], [-300, 120], [80, -260],
+  ];
+  const appearAt = (i) => 0.9 + i * 0.62;
+  const outFade = 1 - ease(seg(t, 6.7, 7.5));
+  layer(() => shareGround(t, people, appearAt, outFade));
+  layer(() => shareFloating(t, people, appearAt, outFade));
+}
+
+function shareGround(t, people, appearAt, outFade) {
+  // arcs behind everything
+  const docCenter = P(0, 0, 14);
+  people.forEach(([x, y], i) => {
+    const k = ease(seg(t, appearAt(i), appearAt(i) + 0.55));
+    if (k > 0) arc(docCenter, P(x, y, 36), 110 + (i % 3) * 30, k, { color: C.acc, width: 1.6, opacity: outFade * 0.9 });
+  });
+  const drawPerson = (i) => {
+    const [x, y] = people[i];
+    const pop = easeOut(seg(t, appearAt(i) + 0.35, appearAt(i) + 0.75)) * outFade;
+    if (pop <= 0.01) return;
+    const [px, py] = P(x, y, 0);
+    const s = (0.7 + 0.3 * pop) * S;
+    add(`<g opacity="${pop.toFixed(3)}" transform="translate(${px.toFixed(1)},${py.toFixed(1)}) scale(${s.toFixed(3)})">`);
+    add(`<ellipse cx="0" cy="2" rx="20" ry="9" fill="${C.acc}" opacity="0.35"/>`);
+    add(`<path d="M-17,0 a17,17 0 0 1 34,0 v-2 a17,19 0 0 0 -34,0 z" fill="${C.accSide}"/>`);
+    add(`<path d="M-17,0 c0,-24 34,-24 34,0 z" fill="${C.accLight}" stroke="${C.accEdge}" stroke-width="1.3"/>`);
+    add(`<circle cx="0" cy="-30" r="11" fill="${C.accLight}" stroke="${C.accEdge}" stroke-width="1.3"/>`);
+    add(`</g>`);
+  };
+  // people behind the document first
+  people.forEach(([x, y], i) => { if (x + y < 0) drawPerson(i); });
+  // the shared document
+  slab(-130, -170, 130, 170, 18, 0, 14);
+  add(`<g transform="${planeTop(-108, -148, 14)}">`);
+  add(`<rect x="0" y="0" width="216" height="296" rx="8" fill="${C.top}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  hippo(16, 16, 44, C.acc);
+  add(`<rect x="70" y="24" width="90" height="9" rx="4.5" fill="${C.ink}"/>`);
+  add(`<rect x="70" y="40" width="54" height="7" rx="3.5" fill="${C.inkSoft}"/>`);
+  docLines(16, 84, 184, 9, C.inkSoft);
+  // the link bar along the bottom of the sheet
+  add(`<rect x="16" y="232" width="184" height="44" rx="10" fill="${C.sideA}" stroke="${C.inkSoft}" stroke-width="1"/>`);
+  add(`<circle cx="38" cy="254" r="12" fill="${C.acc}"/>`);
+  add(`<path d="M32,254 h12 M35,249 h-2 a5,5 0 0 0 0,10 h2 M41,249 h2 a5,5 0 0 1 0,10 h-2" stroke="${C.accInk}" stroke-width="2" fill="none" stroke-linecap="round"/>`);
+  add(`<rect x="58" y="250" width="110" height="8" rx="4" fill="${C.ink}"/>`);
+  // NDA seal
+  const nda = easeOut(seg(t, 4.6, 5.2)) * outFade;
+  if (nda > 0.01) {
+    add(`<g opacity="${nda.toFixed(3)}" transform="translate(176,150) scale(${(0.6 + 0.4 * nda).toFixed(3)})">`);
+    add(`<path d="M0,-26 L22,-17 V2 C22,17 11,25 0,30 C-11,25 -22,17 -22,2 V-17 Z" fill="${C.acc}" stroke="${C.accEdge}" stroke-width="1.6"/>`);
+    add(`<path d="M-9,1 l6,6 l12,-13" stroke="${C.accInk}" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+    add(`</g>`);
+  }
+  add(`</g>`);
+  // people in front of the document
+  people.forEach(([x, y], i) => { if (x + y >= 0) drawPerson(i); });
+}
+
+function shareFloating(t, people, appearAt, outFade) {
+  // views counter floating above the document's corner
+  const views = people.filter((p, i) => t >= appearAt(i) + 0.55).length;
+  const counterIn = easeOut(seg(t, 1.2, 1.6)) * outFade;
+  if (counterIn > 0.01) {
+    const z = lerp(14, 60, counterIn);
+    slab(-170, -230, -60, -180, 14, z, 8, { opacity: counterIn, shadow: false });
+    add(`<g opacity="${counterIn.toFixed(3)}" transform="${planeTop(-160, -222, z + 8)}">`);
+    add(`<path d="M6,17 q12,-12 24,0 q-12,12 -24,0 z" fill="none" stroke="${C.accEdge}" stroke-width="2"/><circle cx="18" cy="17" r="4" fill="${C.accEdge}"/>`);
+    add(`<text x="40" y="24" font-family="Inter, -apple-system, Helvetica, Arial, sans-serif" font-size="20" font-weight="700" fill="${C.text}">${views}</text>`);
+    add(`</g>`);
+  }
+  // a comment bubble from one viewer
+  const bubble = easeOut(seg(t, 4.0, 4.5)) * outFade;
+  if (bubble > 0.01) {
+    const [bx, by] = P(270, 90, 0);
+    add(`<g opacity="${bubble.toFixed(3)}" transform="translate(${(bx + 34 * S).toFixed(1)},${(by - 86 * S).toFixed(1)}) scale(${((0.7 + 0.3 * bubble) * S).toFixed(3)})">`);
+    add(`<path d="M-34,-20 h68 a10,10 0 0 1 10,10 v22 a10,10 0 0 1 -10,10 h-46 l-12,12 v-12 h-10 a10,10 0 0 1 -10,-10 v-22 a10,10 0 0 1 10,-10 z" fill="${C.top}" stroke="${C.accEdge}" stroke-width="1.5"/>`);
+    [-16, 0, 16].forEach((dx) => add(`<circle cx="${dx}" cy="1" r="4" fill="${C.acc}"/>`));
+    add(`</g>`);
+  }
+}
+
+function renderAt(sec) {
+  const t = ((sec % LOOP) + LOOP) % LOOP;
+  out = [];
+  currentT = t;
+  sheenId = 0;
+  add(`<defs>
+    <linearGradient id="sheenG" x1="0" x2="1" y1="0" y2="0"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.5" stop-color="#fff" stop-opacity="${C.sheen}"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="9"/></filter>
+    <radialGradient id="fadeG" cx="50%" cy="48%" r="55%"><stop offset="0" stop-color="#fff" stop-opacity="1"/><stop offset="0.75" stop-color="#fff" stop-opacity="0.55"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <mask id="fade"><rect width="${W}" height="${H}" fill="url(#fadeG)"/></mask>
+  </defs>`);
+  add(`<rect width="${W}" height="${H}" fill="${C.bg}"/>`);
+  grid();
+  if (SCENE === "net") sceneNet(t);
+  else if (SCENE === "enc") sceneEnc(t);
+  else if (SCENE === "rec") sceneRec(t);
+  else sceneShare(t);
+  document.getElementById("stage").innerHTML = out.join("");
+}
+window.renderAt = renderAt;
+window.LOOP = LOOP;
+// The frame renderer drives the page through the DOM, which works from an
+// isolated script world too: set data-t on <body>, then dispatch "render".
+document.body.dataset.loop = String(LOOP);
+document.addEventListener("render", () => renderAt(Number(document.body.dataset.t || 0)));
+renderAt(Number(params.get("t") || 0));
+</script>
+</body>
+</html>

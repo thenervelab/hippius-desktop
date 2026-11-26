@@ -837,13 +837,24 @@ from a progress row that a capture is done or failed (a "completed" row still
 shows 99% until Rust says `uploaded`).
 Rust owns its status (`uploading` → `syncing` / `uploaded` / `failed`),
 keyed by a per-capture `id` so a late outcome never lands on a newer card; progress comes from `remote_upload_progress`.
-Delivery tells the card twice (`deliver_and_announce`): `deliver::place`
-puts the file in the drive and `announce_placed` makes the card `syncing`
-(synced) or `uploaded` (direct) with `LinkState::Creating` ("Creating
-link…") at once; only then `deliver::link_for` mints and `announce_link`
-settles the link, keeping whatever status the upload reached. Telling the card
-only after both held it on "Preparing upload" (= `uploading`) through the
-whole upload and mint. A `syncing` card is moved on by Rust
+**The link comes first** (`deliver_and_announce` → `link_first`): it is
+minted from the capture's own temp file (`deliver::link_from_file`,
+`LinkSource::External`) BEFORE `deliver::place`, copied and announced on the
+card (`announce_minted`) the moment it exists, because it used to share the
+connection with the synced drive's upload of the same file, or wait for a
+direct upload to finish. While it is made the card shows its upload in Rust's
+words (`LinkProgress`, `card_link_progress`: "Uploading link 40%, about 30 s
+left", `linkPercent` for the bar), one update per step or percent
+(`link_progress_moved`). The chat preview is read from the same file while
+the link is made and awaited before the file can move. Once placed,
+`remember_placed_origin` records the link as the placed file's
+(`shares::origin`, plus the Finder badge for a synced one), which is what
+`share_synced_file` did when the link was minted after placing.
+`announce_placed` then makes the card `syncing` (synced) or `uploaded`
+(direct), keeping the link, and `announce_link` restates it with whatever
+status the upload reached. A drive copy that fails after the link is out
+keeps the link on the card, and Retry reuses it rather than making a second
+public link and a second upload. A `syncing` card is moved on by Rust
 (`spawn_sync_follow`, started at placement), from `sync_facts`: the live
 session row, `recent_files` (completed rows leave the session) and the
 engine's synced set (`finder_bridge::badges::is_synced`, looked up in NFC
@@ -991,10 +1002,17 @@ toast carrying the same action (`useStartCapture`, `planRefusalAction`).
 Pinned by `allowance::tests`, `capture_wiring::every_capture_waits_for_the_plan`,
 `overlayPage.test.tsx` and `CaptureHost.test.tsx`.
 
-**Free plan watermark** (`watermark.rs`): the Hippius mark and "Hippius"
-(master `icons/watermark.png`, only its alpha read), white at 70 % over a
-soft shadow, bottom-right, 3 % of the shorter side tall (18 to 44 px), 2 % in
-(12 to 32 px), drawn once per size and blended over its own rectangle only.
+**Free plan watermark** (`watermark.rs`): a dark pill (rgba(14,16,20,0.62),
+white hairline at 0.14 inside its edge, no shadow) holding the Hippius mark
+and "Recorded with Hippius" in solid white, the same numbers the console and
+the extension draw (`pill_layout`, shares of the height as drawn at 44 px).
+Bottom-right, 4 % of the shorter side tall (26 to 60 px), 2 % in (12 to 32
+px), drawn once per size and blended over its own rectangle only. Masters
+`icons/watermark-logo.png` and `icons/watermark-text.png` (alpha only),
+rendered by Chromium canvas through `scripts/watermark/render-masters.mjs`;
+rerendering the text means updating `TEXT_MASTER_ADVANCE` from its output.
+The pill is not grey, so the macOS atlas is written in BGRA order (the
+helper's frames), never RGBA.
 Free tier only (`watermark::applies`); there is no unknown tier, since a
 capture whose plan was not read is refused first (above). The tier is read
 ONCE per capture: `prefetch_tier` starts it at `capture_start`,
@@ -1197,10 +1215,12 @@ the sync queue. A PAUSED drive counts as remote (`own_local_path` filters
 `is_paused`), or the card waited on sync forever. The move never overwrites
 (the name is claimed with a hard link) and a cross-volume copy goes through a
 hidden `.hippius-incoming-capture-*.part` the engine skips. Other drives
-reuse, never re-implement, `upload_files_to_remote_folder_inner`. The link
-(`deliver::mint`, only when `copyLink`) is `share_synced_file` for a synced
-capture (records the share origin, so Drive shows and can revoke it) and
-`share_external_file` otherwise; `capture_preview_mint_link` /
+reuse, never re-implement, `upload_files_to_remote_folder_inner`. The
+automatic link (only when `copyLink`) is `share_external_file` on the temp
+file before placing, its origin recorded after (above); a link made later
+(`deliver::mint`) is `share_synced_file` for a synced capture (records the
+share origin, so Drive shows and can revoke it) and `share_external_file`
+otherwise; `capture_preview_mint_link` /
 `capture_preview_revoke_link` (`hcfs_revoke_share`) reuse the same paths.
 Pinned by `tests/capture_wiring.rs`. Temp under
 `~/.hippius/capture-tmp/<one dir per capture>`, 0700; removed after the upload
@@ -1221,10 +1241,13 @@ camera only), `capture_restart` (before the take is discarded; it notifies,
 the pill has no room) and `capture_check_recording_start` (the bar asks
 before its countdown). Pinned by
 `capture_wiring::every_recording_start_path_goes_through_the_one_gate`. The
-count is EVERY video file (`.mp4`/`.webm`/`.mov`, any name, any subfolder:
-`is_video_name`, so a rename never frees a slot) in ALL of the account's own
-captures drives, each read from the server (`list_remote_folder_files_inner`),
-keyed `label/path`. A captures drive is one the server's folder list
+count is every file the server marks `capture_kind: "recording"` (any name,
+any subfolder, so a rename never frees a slot and an ordinary video is not
+one); when no listed file carries the mark (an older server), EVERY video file
+(`.mp4`/`.webm`/`.mov`: `is_video_name`) counts instead (`counts_by_kind`). It
+covers ALL of the account's own captures drives, each read from the server
+(`list_drive_files`: one `get_all_files` walk, since hcfs-client's
+`RemoteFileInfo` drops the kind), keyed `label/path`. A captures drive is one the server's folder list
 (`list_remote_folders_internal`) holds whose FOLDER HASH is the hash of a key
 label `CAPTURES_DIR_NAME` or `CAPTURES_DIR_NAME-2` to `-99`
 (`default_captures_hashes`), or of a drive this machine ever kept captures in
@@ -1433,8 +1456,8 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `~/.hippius`. Such a folder is remembered in `capture_drive_folders_v1`
   (`own_capture_folders`), never in the labels list, so the free plan's
   count and the share dialog's capture default read only that folder of the
-  drive; the Captures page does not pin that drive, it names the folder and
-  opens it in Drive.
+  drive; the Captures page pins the drive ROOTED AT that folder
+  (`PinnedDrive.folder`, below).
   `permission_note` warns before macOS's Documents/Desktop/Downloads prompt;
   `folder_refused_copy` explains a refusal. The drive is added through
   `add_local_sync_folder` (Sync a Folder's path) under `ENSURE_LOCK`; a
@@ -1455,7 +1478,14 @@ recordings an earlier build sealed under `~/.hippius/held-recordings`
   `DriveContainer`, pinned through `DriveRouteContext` (`driveRoute.tsx`:
   `basePath` for folder links and navigation, `pinned` opens it straight in
   and skips the folder list and its fallback, `hideBreadcrumbRoot`, and the
-  page's `emptyState` at the pinned root), keyed on the drive. Before it
+  page's `emptyState` at the pinned root), keyed on the drive and folder. A
+  folder inside another drive is `pinned.folder`: `DriveContainer` replaces
+  any URL outside it with `pinnedFolderHref` (`isInsidePinnedFolder`), and
+  the trail starts at it (`trailFromPinnedFolder`), so the page never shows
+  the rest of that drive. `capture_drive_status.remote` follows delivery
+  (`destination::is_local`): a paused drive's captures are uploaded straight
+  to the server and never reach its folder here, so it is browsed from the
+  server. Pinned by `driveTrail.test.ts` and `CapturesView.test.tsx`. Before it
   exists: an empty state with Record / Screenshot and "Set up the folder
   now", plus Rust's pending sentence or the waiting count.
 

@@ -17,6 +17,8 @@ export interface LinkNda {
   editable: boolean;
   /** `false` on the free plan, `null` when the plan could not be read. */
   inPlan: boolean | null;
+  /** A password link without a text: one can't be sealed, so the app says why. */
+  passwordLink?: boolean;
 }
 
 /** One viewer's accept of one text. */
@@ -25,6 +27,8 @@ export interface NdaAccept {
   viewerId: string;
   /** The email they proved on a link that asks for one, checked in Rust. */
   email: string | null;
+  /** The name the signer typed when they accepted, opened in Rust; `null` without one. */
+  signerName: string | null;
   acceptedAt: string;
   /** An accept of a text since replaced or removed. */
   earlier: boolean;

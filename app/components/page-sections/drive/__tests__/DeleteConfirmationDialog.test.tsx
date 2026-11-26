@@ -57,3 +57,23 @@ describe("DeleteConfirmationDialog: Also turn off their links", () => {
     expect(screen.getByText("Share links made from it keep working. Turn them off in Shared Links.")).toBeInTheDocument();
   });
 });
+
+describe("DeleteConfirmationDialog: Delete forever", () => {
+  it("asks Delete forever? in plain words and still offers the links box", () => {
+    h.selected = [SHOT];
+    const onConfirm = vi.fn();
+    render(<DeleteConfirmationDialog open forever onOpenChange={() => undefined} onConfirm={onConfirm} />);
+    expect(screen.getByText("Delete forever?")).toBeInTheDocument();
+    expect(screen.getByText(`“${SHOT.name}” will be deleted. This can't be undone.`)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Also turn off its links" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Delete forever" }));
+    expect(onConfirm).toHaveBeenCalledWith([SHOT], [["tok-1", "tok-2"]]);
+  });
+
+  it("keeps today's words when Trash is off", () => {
+    h.selected = [NOTES];
+    render(<DeleteConfirmationDialog open onOpenChange={() => undefined} onConfirm={vi.fn()} />);
+    expect(screen.queryByText("Delete forever?")).toBeNull();
+    expect(screen.getByRole("button", { name: "Delete File" })).toBeInTheDocument();
+  });
+});

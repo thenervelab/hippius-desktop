@@ -1171,6 +1171,8 @@ async fn upload_remote_copy(
             &[source],
             destination.owner_ss58.clone(),
             destination.folder_hash.clone(),
+            // A screenshot: the server counts none, so none is declared.
+            None,
         )
         .await
         {
@@ -1381,6 +1383,8 @@ async fn write_edited(state: &AppState, app: &AppHandle, account_id: &str, sessi
                 &[source],
                 destination.owner_ss58.clone(),
                 destination.folder_hash.clone(),
+                // A screenshot: the server counts none, so none is declared.
+                None,
             )
             .await;
             let failure = match uploaded {
@@ -1415,7 +1419,7 @@ async fn replace_link(
     source: &super::deliver::LinkSource,
     old_token: Option<&str>,
 ) -> (LinkResult, Option<(String, String, bool)>) {
-    let minted = super::deliver::mint(state, account_id, source).await;
+    let minted = super::deliver::mint(state, account_id, source, None).await;
     let old_revoked = match old_token {
         Some(token) => match crate::shares::commands::hcfs_revoke_share(state.clone(), token.to_string()).await {
             Ok(()) => true,

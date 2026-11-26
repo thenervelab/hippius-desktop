@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.23"
+version = "0.6.24"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -300,19 +300,50 @@ sha3 = "0.10"
 #
 # Now at hcfs main 778f886e, the merge commit of #1170: hcfs-client declares
 # base64's `std` feature itself (#1165), so the desktop no longer turns it on.
-# `Manifest` gains `capture` (#1148), which the desktop leaves `None`.
+# `Manifest` gains `capture` (#1148).
+#
+# Now at hcfs main b945dec5, the merge commit of #1242. It brings #1206,
+# the Free plan's recording limits on the client side: `declare_capture`
+# (the desktop declares each recording it delivers into a synced drive,
+# `capture::deliver::declare_placed`, and puts it on the manifest of a direct
+# upload) and `FileFailureKind::RecordingLimit` for the server's 403s,
+# mapped to the desktop's `recordingLimit` failure kind. The rest since
+# 778f886e is server-side or internal to hcfs-client and changes no type
+# the desktop uses (the build needed no other change).
+#
+# Now at hcfs main 2bffd770, the merge commit of #1362. Revision ids are
+# `hcfs_shared::revision_id::RevisionId` instead of `[u8; 32]` (#963), which
+# the desktop's rename, move and drive-move types now carry. `create_share`
+# mints link-secret file links (#1253): `/share/<token>#s=` (`#sp=` with a
+# password), with a `ShareSecret::FileLink` / `FileLinkPrivate` in the
+# keystore, under its own `share_keystore` kinds; the owner wrap carries
+# them (#1262), and `build_folder_share_url_for` refuses them. A `#s=` row
+# no longer holds the share key the comment key derives from, so each mint
+# opens the link's envelope once and keeps the key beside the secret
+# (`shares::file_link_key`). The console must open `#s=` / `#sp=` file links
+# first (#1273). Also: the per-drive sync scheduler and failure state, and
+# `SyncEvent::TokenRefreshHeld` (#1245), which the bridge ignores.
+#
+# Now at hcfs main cb8dfcdc, the merge commit of #1368, which also carries
+# #1367. hcfs-shared's `RemoteFileEntry` gains `capture_kind` ("recording"
+# for a screen recording, absent otherwise), which the Free plan's recording
+# count reads, and the `GET /v1/drive_moves` wire types
+# (`ListDriveMovesResult`, `OpenDriveMove`), which the launch sweep of moves
+# a crash left open reads. It also brings `favorite` on the same row
+# (#1378), which the desktop does not read yet. hcfs-client changes by one
+# field (`device_unlinked` on a listing's backup row); hcfs-crypto not at all.
 #
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
 # The file cipher, path hash and `FileKey`, which hcfs-client uses but does
 # not re-export. Same rev as hcfs-client so a `FileKey` is the type its API takes.
-hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "778f886e5ee3febaf010f43c5980cf5ef821a4e2" }
+hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the
@@ -359,6 +390,9 @@ nix = { version = "0.31.2", features = ["fs"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.25"
 objc = "0.2"
+# `proc_pid_rusage` for the hourly memory line (`process_memory.rs`). Already
+# in the graph through many crates.
+libc = "0.2"
 
 # Keep the system awake while sync transfers are active (see src/power.rs).
 # macOS backend = IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleSystemSleep);
@@ -406,8 +440,10 @@ windows = { version = "0.62", features = [
     "Win32_Security",
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Performance",
     "Win32_System_Power",
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
@@ -426,8 +462,8 @@ windows-capture = "2.0.1"
 # directly. The same 0.62 `windows` re-exports, already in the lock file.
 windows-core = "0.62"
 # WebView2's PermissionRequested, so the camera bubble and the bar's mic meter
-# can open their devices. The same 0.38 wry already uses (windows 0.61).
-webview2-com = "0.38"
+# can open their devices. The same 0.39 wry already uses (windows 0.62).
+webview2-com = "0.39"
 
 # Linux screen capture (docs/plans/2026-10-01-capture-windows-linux.md,
 # Phase 3). X11: x11rb (already in the graph through arboard; pure Rust, no

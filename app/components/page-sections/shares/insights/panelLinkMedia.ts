@@ -8,7 +8,8 @@ import type { ShareSummary } from "@/app/lib/tauri/shares";
 /**
  * What the panel can do with its link.
  *
- * The full link, with the key in its `#k=` or `#p=` part, is the listing's
+ * The full link, with its secret in the `#s=` / `#sp=` part (`#k=` / `#p=`
+ * on older links), is the listing's
  * `shareUrl`: Rust rebuilds it from this computer's keystore or, for a link
  * made in the browser, the extension or on another computer, from the owner
  * wrap, which needs the account's recovery phrase. While Hippius is locked on
