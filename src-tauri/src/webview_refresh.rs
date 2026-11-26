@@ -96,7 +96,8 @@ pub struct Look {
     pub engine: Engine,
     /// How long the page has gone without keyboard, pointer or wheel input.
     /// Counts only for [`Sight::OnScreen`]: a hidden page gets no input, so
-    /// there it could only be reset by a re-render, never by the user.
+    /// there it measures only how long the page has been loaded, which the
+    /// clock already covers.
     pub input_idle: Duration,
     /// A capture is in progress, or the page holds a dialog or unsent text;
     /// a reload would throw any of them away.
@@ -135,14 +136,16 @@ impl WebviewRefreshState {
 /// The per-label clocks [`check`] keeps.
 #[derive(Debug, Default)]
 pub struct Clocks {
-    unused_since: HashMap<String, Instant>,
+    /// How the webview was placed when its clock started, and when.
+    unused_since: HashMap<String, (Sight, Instant)>,
     reloaded_at: HashMap<String, Instant>,
 }
 
 /// Record how `label` looks now and decide whether it is due for a reload.
 ///
-/// The first look that finds it out of use starts its clock; a look that finds
-/// it never due (on screen outside WebView2) clears it. A window on screen
+/// The first look that finds it out of use starts its clock, and so does a
+/// look that finds it hidden where it was on screen or the other way round; a
+/// look that finds it never due (on screen outside WebView2) clears it. A window on screen
 /// counts as out of use only while its page has also had no input. A busy look
 /// leaves the clock alone. A reload restarts the clock, so the page that comes
 /// back is not reloaded again on the next look.
@@ -152,15 +155,21 @@ pub fn check(clocks: &mut Clocks, label: &str, look: &Look, now: Instant) -> boo
         clocks.unused_since.remove(label);
         return false;
     };
-    let since = *clocks.unused_since.entry(label.to_string()).or_insert(now);
-    let mut unused_for = now.duration_since(since);
+    // A change of sight restarts the clock: time on screen, however idle,
+    // is not time hidden, and a window in use for a day and then minimized
+    // must wait the full RELOAD_AFTER, not reload at the next look.
+    let clock = clocks.unused_since.entry(label.to_string()).or_insert((look.sight, now));
+    if clock.0 != look.sight {
+        *clock = (look.sight, now);
+    }
+    let mut unused_for = now.duration_since(clock.1);
     if look.sight == Sight::OnScreen {
         unused_for = unused_for.min(look.input_idle);
     }
     if look.busy || unused_for < wait {
         return false;
     }
-    clocks.unused_since.insert(label.to_string(), now);
+    clocks.unused_since.insert(label.to_string(), (look.sight, now));
     clocks.reloaded_at.insert(label.to_string(), now);
     true
 }
@@ -291,12 +300,32 @@ mod tests {
     }
 
     #[test]
-    fn hidden_then_on_screen_keeps_one_clock() {
+    fn a_window_used_on_screen_then_minimized_waits_the_full_time_hidden() {
+        for minimized in [look(Sight::Hidden), heavy(Sight::Hidden)] {
+            let mut clocks = Clocks::default();
+            let start = Instant::now();
+            let in_use = Look {
+                input_idle: Duration::from_mins(1),
+                ..look(Sight::OnScreen)
+            };
+            check(&mut clocks, "main", &in_use, start);
+            assert!(!check(&mut clocks, "main", &in_use, start + Duration::from_hours(24)));
+            let hidden_at = start + Duration::from_hours(24) + Duration::from_mins(5);
+            assert!(!check(&mut clocks, "main", &minimized, hidden_at));
+            assert!(!check(&mut clocks, "main", &minimized, hidden_at + Duration::from_mins(5)));
+            assert!(check(&mut clocks, "main", &minimized, hidden_at + RELOAD_AFTER));
+        }
+    }
+
+    #[test]
+    fn a_window_shown_again_counts_its_six_hours_from_when_it_appeared() {
         let mut clocks = Clocks::default();
         let start = Instant::now();
         check(&mut clocks, "main", &look(Sight::Hidden), start);
-        assert!(!check(&mut clocks, "main", &look(Sight::OnScreen), start + Duration::from_hours(5)));
-        assert!(check(&mut clocks, "main", &look(Sight::OnScreen), start + RELOAD_ON_SCREEN_AFTER));
+        let shown_at = start + Duration::from_hours(5);
+        assert!(!check(&mut clocks, "main", &look(Sight::OnScreen), shown_at));
+        assert!(!check(&mut clocks, "main", &look(Sight::OnScreen), start + RELOAD_ON_SCREEN_AFTER));
+        assert!(check(&mut clocks, "main", &look(Sight::OnScreen), shown_at + RELOAD_ON_SCREEN_AFTER));
     }
 
     #[test]
