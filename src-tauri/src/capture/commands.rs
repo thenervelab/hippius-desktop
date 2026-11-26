@@ -5224,10 +5224,11 @@ fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &sup
 /// the drive and its path in it, never by its name alone, and the engine is
 /// asked everywhere it answers (`sync_facts`): the live row, the finished
 /// list (a small file finishes in seconds and leaves the session) and the
-/// set of files it knows are on the server. A card with a public link whose
-/// file the engine has not started on (queued behind other files, or not
-/// picked up) is finished by its link ([`super::preview::link_finishes_card`]):
-/// the capture waits for its own upload, never for the rest of the sync.
+/// set of files it knows are on the server. A card with a public link is
+/// finished by its link unless the drive copy already failed
+/// ([`super::preview::link_finishes_card`]): the capture waits for its own
+/// upload, never for the rest of the sync, and the drive copy goes on in the
+/// sync queue. The follower stops once the card is uploaded.
 fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, since_ms: i64) {
     tauri::async_runtime::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -5254,7 +5255,7 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
                 tracing::info!(
                     card = id,
                     ?row,
-                    "capture card finished by its link: the sync engine has not started on it"
+                    "capture card finished by its link: the drive copy goes on in the sync queue"
                 );
                 row = super::preview::SyncRow::Completed;
             }
