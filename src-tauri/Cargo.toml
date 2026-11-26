@@ -1,6 +1,6 @@
 [package]
 name = "Hippius"
-version = "0.6.24-beta.3"
+version = "0.6.25-beta.1"
 description = "Hippius Desktop App"
 authors = ["you"]
 edition = "2024"
@@ -333,17 +333,28 @@ sha3 = "0.10"
 # (#1378), which the desktop does not read yet. hcfs-client changes by one
 # field (`device_unlinked` on a listing's backup row); hcfs-crypto not at all.
 #
+# Now at hcfs 86a0baf7, the merge of #1456 into main. A share's chunks go up
+# four at a time, and the new `create_share_reporting_link` reports the link
+# right after `init`, before the chunks, which is how a screen recording's
+# link is copied while it still uploads (`capture::deliver::EARLY_LINK`).
+# Also from main: the server's "still uploading" answer for such a link
+# (#1462, behind `share_open_while_uploading`) and `ShareError::Uploading`
+# from `open_file_link` (#1464), which every match here covers with a
+# wildcard arm; the favorites listing types and `favorite` on a drive
+# membership row (hcfs-shared, not read here yet); hcfs-crypto changes by a
+# doc comment.
+#
 # Bumping this rev is the only way a hcfs change reaches the desktop, so it
 # stays exact and is guarded by the wire-contract pins in tests/hcfs_contract.rs.
-hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
+hcfs-client = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c" }
 # hcfs-shared pulls in the `network` module types (RegisterRelativePathEntry,
 # MAX_REGISTER_RELATIVE_PATHS_BATCH, ...) that hcfs-client takes/returns on
 # its public API but does not re-export. Pinned to the same git rev so the
 # wire types stay in lockstep with the client.
-hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
+hcfs-shared = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c" }
 # The file cipher, path hash and `FileKey`, which hcfs-client uses but does
 # not re-export. Same rev as hcfs-client so a `FileKey` is the type its API takes.
-hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901" }
+hcfs-crypto = { git = "ssh://git@github.com/thenervelab/hcfs.git", rev = "86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c" }
 # NFC-normalise relative_path strings before posting them to the server's
 # register_relative_paths endpoint. macOS APFS hands filenames back in NFD
 # and the server's path_validator hard-rejects anything non-NFC — see the

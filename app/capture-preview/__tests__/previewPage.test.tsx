@@ -597,6 +597,24 @@ describe("the card's actions (Rust decides which)", () => {
     expect(called("capture_preview_mint_link")).toBe(1);
   });
 
+  it("offers Retry in Create link's place when the copied link's upload failed", async () => {
+    await setup(
+      card({ state: "uploaded", linkCopied: false }, 1, { mintLink: true }, {
+        link: { state: "broken", message: "The link you copied won't open because its upload failed. Retry to make a new link." },
+        linkText: "Copied link won't open",
+        linkNote: "Its upload failed. Retry to make a new link.",
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Create link" })).toBeNull();
+    expect(screen.getByText("Its upload failed. Retry to make a new link.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_mint_link")).toBe(1);
+    expect(called("capture_preview_retry")).toBe(0);
+  });
+
   it("reveals the file in the system's file manager from the More menu", async () => {
     await setup(linked({ state: "uploaded", linkCopied: true }, 1, { reveal: true }));
     // Not a button of its own on the row: the row keeps every label on one line.
@@ -857,6 +875,19 @@ describe("a recording stopped at the Free plan's limit", () => {
       expect(buttons.filter((b) => b.classList.contains("flex-1")).length, `state ${i}`).toBe(1);
       view.unmount();
     }
+  });
+
+  // Quitting while a copied link still uploads leaves a link that never
+  // opens, so that note takes the line until the upload is done.
+  it("lets a copied link's upload note take the line while it uploads", async () => {
+    await setup({
+      ...capped({ state: "uploading" }),
+      link: { state: "uploading", copied: true },
+      linkText: "Link copied, uploading 40%, about 30 s left",
+      linkNote: "Keep Hippius open until the upload finishes.",
+    });
+    expect(screen.queryByTestId("capture-notice")).toBeNull();
+    expect(screen.getByTestId("capture-link-note")).toHaveTextContent("Keep Hippius open until the upload finishes.");
   });
 
   it("shows the drive as before for any other card", async () => {

@@ -72,10 +72,37 @@ describe("a direct upload", () => {
     expect(cardView(preparing, null, [])).toMatchObject({ percent: null, text: "Preparing link…" });
   });
 
+  // The link is out (copied) before its upload ends: the line says both, the
+  // bar follows the upload, and a screen reader hears that it was copied.
+  it("says the link is copied while its upload runs, with the upload's bar", () => {
+    const out = card(
+      { state: "uploading" },
+      { link: { state: "uploading", copied: true }, linkText: "Link copied, uploading 40%, about 30 s left", linkPercent: 40 },
+    );
+    expect(cardView(out, remote(), [])).toMatchObject({
+      percent: 40,
+      text: "Link copied, uploading 40%, about 30 s left",
+      announce: "Link copied",
+      done: false,
+      settled: false,
+    });
+  });
+
   it("goes on saying the link is copied while the file goes into the drive", () => {
     const out = card({ state: "uploading" }, { link: { state: "public", copied: true }, linkText: "Public link copied" });
     expect(cardView(out, remote(), [])).toMatchObject({ percent: 62, text: "Uploading · 62% · Public link copied", announce: "Uploading · Public link copied" });
     expect(cardView(out, null, []).text).toBe("Preparing upload… · Public link copied");
+  });
+
+  it("goes on saying a copied link won't open while the file goes into the drive", () => {
+    const broken = card(
+      { state: "uploading" },
+      { link: { state: "broken", message: "x" }, linkText: "Copied link won't open" },
+    );
+    expect(cardView(broken, remote(), [])).toMatchObject({
+      text: "Uploading · 62% · Copied link won't open",
+      announce: "Uploading · Copied link won't open",
+    });
   });
 
   it("ignores another file's row, or the same name in another drive", () => {
@@ -105,6 +132,19 @@ describe("a capture in a synced drive", () => {
 
   it("waits for the sync queue to pick it up", () => {
     expect(cardView(syncing, null, [])).toMatchObject({ percent: null, text: "Saved · waiting for sync", done: false });
+  });
+
+  // The sync line alone would hide that the link already in chat is dead.
+  it("says a copied link won't open while the file syncs", () => {
+    const broken = card(
+      { state: "syncing", linkCopied: false },
+      { link: { state: "broken", message: "x" }, linkText: "Copied link won't open" },
+    );
+    expect(cardView(broken, null, [])).toMatchObject({
+      text: "Saved · waiting for sync · Copied link won't open",
+      announce: "Saved · waiting for sync · Copied link won't open",
+    });
+    expect(cardView(broken, null, [engine()]).text).toBe("Uploading · 40% · Copied link won't open");
   });
 
   it("follows the sync engine's row for this file, joined on its path in the drive", () => {

@@ -18,6 +18,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Changed
 
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
+- **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading, and the chat shows its preview picture right away; the card shows how far the upload has got, and if the upload fails the card and the notification tell you the copied link won't open, and the card offers Retry. Long recordings also upload faster.
 
 ### Added
 

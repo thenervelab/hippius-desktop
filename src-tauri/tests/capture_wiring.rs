@@ -135,12 +135,19 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
         body.contains("upload_files_to_remote_folder_inner("),
         "the upload must be the remote file upload"
     );
-    let mint = fn_body(&src, "pub async fn mint(");
+    assert!(
+        fn_body(&src, "pub async fn mint(").contains("mint_reporting_link("),
+        "every capture link goes through the one mint"
+    );
+    let mint = fn_body(&src, "pub async fn mint_reporting_link(");
     // A capture in a synced drive is shared by its place in the drive, so
     // Drive shows it as shared and can revoke the link; any other file the
     // way the Finder shares one.
     assert!(mint.contains("share_synced_file("), "a synced capture's link must record its origin");
-    assert!(mint.contains("share_external_file("), "the link must come from the existing share path");
+    assert!(
+        mint.contains("share_external_file_reporting_link("),
+        "the link must come from the existing share path"
+    );
     for body in [&body, &mint] {
         for forbidden in ["HcfsClient", "reqwest", "encrypt"] {
             assert!(!body.contains(forbidden), "delivery must not talk to the server itself ({forbidden})");
@@ -397,7 +404,7 @@ fn the_link_is_made_from_the_capture_before_it_is_placed() {
     let first = fn_body(&src, "async fn link_first(");
     let creating = first.find("LinkState::Creating").expect("the card says the link is being made");
     let minted = first.find("link_from_file(").expect("from the capture's own file");
-    let copied = first.find("copy_link_to_clipboard(").expect("copied the moment it exists");
+    let copied = first.rfind("copy_link_to_clipboard(").expect("copied once it exists");
     assert!(creating < minted && minted < copied);
     assert!(first.contains("card_link_progress("), "the card follows the link's upload");
     assert!(first.contains("announce_minted("), "the card keeps the link from the moment it exists");
@@ -421,6 +428,86 @@ fn the_link_is_made_from_the_capture_before_it_is_placed() {
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
     assert!(follow.contains("link_finishes_card("), "only its own folder");
+}
+
+/// On a server that says "still uploading" to whoever opens a link still
+/// uploading, the link reaches the clipboard the moment it exists, while
+/// the capture's copy behind it is still uploading, and the card says so
+/// with the upload's progress. Its switches and chat preview go with it, so
+/// a chat app that shows the link at once gets the picture. One
+/// capabilities answer decides it all, and it is never awaited: a slow one
+/// counts as no, and the link then goes out once the upload is done, as on
+/// an older server. The drive's own upload still waits for the link's, so
+/// the two never share the connection. A link that was handed out and then
+/// failed is never minted again behind the user's back, and the card keeps
+/// saying it won't open.
+#[test]
+fn the_link_is_copied_while_its_upload_runs() {
+    let src = read("src/capture/commands.rs");
+    let first = fn_body(&src, "async fn link_first(");
+    let asked = first
+        .find("server_shows_uploading(")
+        .expect("the server is asked whether it says uploading");
+    let gate = first
+        .find("shows_uploading.get() == Some(&true)")
+        .expect("the link goes out early only on a yes already in");
+    assert!(asked < gate);
+    assert!(!first.contains("shows_uploading.await"), "the answer is never waited for");
+    let joined = first.find("tokio::join!(").expect("the link is handed out alongside its upload");
+    let hand_out = first.find("let hand_out = async").expect("the hand-out runs beside the mint");
+    assert!(gate < hand_out && hand_out < joined);
+    let early = &first[hand_out..joined];
+    let copied = early.find("copy_link_to_clipboard(").expect("copied the moment it is reported");
+    let switches = early.find("insights::spawn_apply(").expect("its switches go with it");
+    let carded = early.find("announce_uploading(").expect("the card keeps it and follows the upload");
+    let opened = early.find("open_link_in_browser(").expect("opened at once");
+    let pictured = early.find("send_preview_once_read(").expect("its chat preview goes with it");
+    assert!(copied < switches, "the clipboard first");
+    assert!(switches < carded, "the switches are registered before the card holds the link");
+    assert!(carded < opened && opened < pictured);
+    assert!(first[joined..].contains("link_from_file(") && first[joined..].contains("Some(on_link)"));
+    // Without an early hand-out, everything goes once the upload is done.
+    let late = &first[first.find("// Not handed out early").expect("the late hand-out")..];
+    assert!(first.find("// Not handed out early").unwrap() > joined);
+    for after_upload in [
+        "insights::spawn_apply(",
+        "copy_link_to_clipboard(",
+        "open_link_in_browser(",
+        "send_preview_once_read(",
+    ] {
+        assert!(late.contains(after_upload), "{after_upload} once the upload is done");
+    }
+    let capabilities = read("src/shares/capabilities.rs");
+    assert!(capabilities.contains("pub share_open_while_uploading: bool"));
+    let deliver = read("src/capture/deliver.rs");
+    assert!(
+        fn_body(&deliver, "pub async fn server_shows_uploading(").contains("caps.share_open_while_uploading"),
+        "the capability decides, not a switch in the code"
+    );
+    let deliver_and_announce = fn_body(&src, "async fn deliver_and_announce(");
+    let link = deliver_and_announce.find("link_first(").expect("link first");
+    let place = deliver_and_announce.find("super::deliver::place(").expect("then the drive");
+    assert!(link < place, "the drive's upload starts once the link's has finished");
+
+    let mint = fn_body(&deliver, "pub async fn mint_reporting_link(");
+    assert!(mint.contains("share_external_file_reporting_link("));
+    let no_second_link = mint.find("reported.load(").expect("a reported link is never made again");
+    let retry = mint.find("mint_retry_after(").expect("an unreported failure is retried");
+    assert!(no_second_link < retry);
+    assert!(mint[no_second_link..retry].contains("LINK_BROKEN"));
+    let shares = read("src/shares/commands.rs");
+    assert!(fn_body(&shares, "pub(crate) async fn share_external_file_reporting_link(").contains(".create_share_reporting_link("));
+
+    assert!(first.contains("let link = minted_link_state(&minted, copied, copied_early.is_some());"));
+    let minted = fn_body(&src, "fn minted_link_state(");
+    assert!(minted.contains("LinkState::Broken"), "a copied link that failed is told apart");
+    let announce = fn_body(&src, "fn announce_link(");
+    assert!(
+        announce.contains("LinkState::Broken"),
+        "placing the file never turns \"won't open\" back into \"No link yet\""
+    );
+    let progress = fn_body(&src, "fn card_link_progress(");
+    assert!(progress.contains("is_being_made()"), "the card follows the upload after the link is out");
 }
 
 /// An overlay that is not the key window (any display but the bar's, or all
@@ -3330,11 +3417,14 @@ fn a_captures_chat_preview_follows_the_settings_default() {
     );
     let link = first.find("link_from_file(").expect("the link is made");
     assert!(gate < link, "the preview is read while the link is minted");
-    let read_back = first.find("read.await").expect("the picture is waited for");
-    assert!(link < read_back, "after the link, and before the file can move into the drive");
-    let send = first.find("preview::send_rendered(").expect("sent with the link");
+    // Waited for inside link_first on both hand-outs, so before the file
+    // can move into the drive.
+    assert_eq!(first.matches("send_preview_once_read(").count(), 2, "early and late");
+    let once_read = fn_body(&src, "async fn send_preview_once_read(");
+    let read_back = once_read.find("read.await").expect("the picture is waited for");
+    let send = once_read.find("preview::send_rendered(").expect("sent with the link");
     assert!(read_back < send);
-    assert!(first[read_back..].contains("tauri::async_runtime::spawn("), "sent in the background");
+    assert!(once_read[read_back..].contains("tauri::async_runtime::spawn("), "sent in the background");
 }
 
 /// Every capture link (the instant shortcut's and the automatic ones, and a
@@ -3348,11 +3438,18 @@ fn a_captures_link_settings_follow_the_settings_default() {
     assert!(body.contains("o.link_insights"), "the stored default is read");
     assert!(body.contains("link_insights,"), "handed to the link step");
     let first = fn_body(&src, "async fn link_first(");
+    let wanted = first
+        .find("let switches = crate::shares::insights::for_capture(choices.link_insights);")
+        .expect("Settings' default decides the switches");
+    let hand_out = first.find("let hand_out = async").expect("the early hand-out");
     let made = first.find("link_from_file(").expect("the link is made");
-    let applied = first
-        .find("insights::spawn_apply(app, account_id, token, crate::shares::insights::for_capture(choices.link_insights))")
-        .expect("the default is applied to the new link");
-    assert!(made < applied);
+    let early = first[hand_out..]
+        .find("insights::spawn_apply(app, account_id, &link.share_token, switches)")
+        .expect("the default is applied to a link handed out early");
+    let late = first
+        .rfind("insights::spawn_apply(app, account_id, token, switches)")
+        .expect("the default is applied to a link handed out once it is up");
+    assert!(wanted < hand_out && hand_out + early < made && made < late);
     let later = fn_body(&src, "pub async fn capture_preview_mint_link(");
     assert!(later.contains("deliver::spawn_link_settings("), "the card's Create link follows it too");
     let editor = read("src/capture/editor.rs");

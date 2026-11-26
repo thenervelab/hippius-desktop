@@ -588,9 +588,11 @@ export default function CapturePreviewPage() {
             >
               {desktopNote.text}
             </p>
-          ) : card.notice ? (
+          ) : card.notice && card.link.state !== "uploading" ? (
             // Rust's line about the capture (a Free plan recording stopped at
             // its limit) takes the destination's place, two lines at most.
+            // While a copied link still uploads, "Keep Hippius open" wins the
+            // slot: quitting then leaves a link that never opens.
             <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
               {card.notice}
             </p>
@@ -743,7 +745,15 @@ export default function CapturePreviewPage() {
               )}
               {actions.mintLink ? (
                 <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
-                  <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                  {card.link.state === "broken" ? (
+                    <>
+                      <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                    </>
+                  ) : (
+                    <>
+                      <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                    </>
+                  )}
                 </button>
               ) : (
                 <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY_ACTION}>

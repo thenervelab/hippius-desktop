@@ -137,7 +137,9 @@ describe("NdaSettings", () => {
     expect(screen.queryByRole("alert")).toBeNull();
 
     refusal = { kind: "Validation", message: "The text is too long." };
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Found again, not reused: the editor re-renders after the refusal, and on
+    // a slow runner the button is not back yet when the prompt appears.
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The text is too long.");
   });
 

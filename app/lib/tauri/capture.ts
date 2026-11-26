@@ -372,7 +372,11 @@ export type CaptureLinkState =
   | { state: "public"; copied: boolean }
   | { state: "failed"; message: string }
   | { state: "revoked" }
-  | { state: "creating" };
+  | { state: "creating" }
+  /** Out (copied when `copied`) while its file still uploads; opens once the upload finishes. */
+  | { state: "uploading"; copied: boolean }
+  /** Copied while uploading, then the upload failed: the link was revoked and never opens. */
+  | { state: "broken"; message: string };
 
 /** Which buttons the card offers now; Rust decides. Mirrors Rust's `CardActions`. */
 export interface CapturePreviewActions {
