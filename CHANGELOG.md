@@ -263,6 +263,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.
 - **Expiry in Link settings opens its list.** Choosing how long a link lasts no longer closes Link settings; the list opens and the choice is saved, in a narrow window too.
 - **Steadier sign-in slides.** The pictures on the sign-in screen no longer sway or shake; only their own animations move.
 - **Hippius Drive restarts itself if its background work stops**, instead of staying open without syncing while it keeps using more and more memory. This mostly helped Windows computers that leave the app running for days. If it has to restart twice within an hour, it tells you instead of trying again.
