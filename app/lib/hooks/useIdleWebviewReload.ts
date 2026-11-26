@@ -19,15 +19,33 @@ const INPUT_EVENTS = ["keydown", "pointerdown", "wheel"] as const;
  */
 const reloadPage = () => window.location.reload();
 
+/** Input types that hold text the user typed; a checkbox's value is not a draft. */
+const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number"]);
+
 /**
- * Whether the page has a dialog open that a reload would throw away (a
- * confirmation, a form). A dialog marked `data-reload-safe` does not count:
- * the update dialog marks itself so while nothing is downloading, because a
- * reload re-runs the startup check that opens it again.
+ * Whether the focused element holds text the user has typed and not sent (a
+ * comment draft, the chat composer, a search box). Only the focused element
+ * counts: a filled field the user left is a value the page keeps elsewhere.
+ */
+function hasUnsentText(doc: Document): boolean {
+  const el = doc.activeElement;
+  if (el instanceof HTMLTextAreaElement) return el.value !== "";
+  if (el instanceof HTMLInputElement) return TEXT_INPUT_TYPES.has(el.type) && el.value !== "";
+  const editable = el?.closest('[contenteditable=""], [contenteditable="true"]');
+  return (editable?.textContent ?? "") !== "";
+}
+
+/**
+ * Whether a reload would throw away something on the page: an open dialog (a
+ * confirmation, a form) or unsent text in the focused field. A dialog marked
+ * `data-reload-safe` does not count: the update dialog marks itself so while
+ * nothing is downloading, because a reload re-runs the startup check that
+ * opens it again.
  */
 export function pageIsBusy(doc: Document): boolean {
   const open = doc.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
-  return Array.from(open).some((dialog) => !dialog.hasAttribute("data-reload-safe"));
+  const dialog = Array.from(open).some((d) => !d.hasAttribute("data-reload-safe"));
+  return dialog || hasUnsentText(doc);
 }
 
 /**
@@ -36,9 +54,9 @@ export function pageIsBusy(doc: Document): boolean {
  * On Windows, WebView2 never frees the script of an event it has received, so
  * a window that stays open for days slowly grows; a reload gives that memory
  * back. Rust decides when (`webview_reload_due`: hidden or minimized for two
- * hours, or on Windows on screen without focus or input for six, nothing
- * busy). The page reports what only it can see, how long it has had no input
- * and whether a dialog is open, and reloads when told to unless the user came
+ * hours, or on Windows on screen with no input for six, nothing busy). The
+ * page reports what only it can see, how long it has had no input and whether
+ * it holds a dialog or unsent text, and reloads when told to unless the user came
  * back while it was asking.
  */
 export function useIdleWebviewReload(reload: () => void = reloadPage): void {
@@ -64,7 +82,7 @@ export function useIdleWebviewReload(reload: () => void = reloadPage): void {
         // Clamped: a wall clock stepped back would send a negative count,
         // which the u64 on the Rust side refuses outright.
         idleMs: Math.max(0, askedAt - since),
-        dialogOpen: pageIsBusy(document),
+        pageBusy: pageIsBusy(document),
       })
         .then((due) => {
           const cameBack = (lastInput.current ?? 0) > askedAt;

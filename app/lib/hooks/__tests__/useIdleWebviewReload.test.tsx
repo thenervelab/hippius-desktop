@@ -10,7 +10,7 @@ import {
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 // Rust decides when a long-unused webview is due (`webview_reload_due`); the
-// page reports its input idle time and open dialogs, and reloads when told to.
+// page reports its input idle time and whether it is busy, and reloads when told to.
 describe("useIdleWebviewReload", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -32,7 +32,7 @@ describe("useIdleWebviewReload", () => {
     await tick();
     expect(invoke).toHaveBeenCalledWith("webview_reload_due", {
       idleMs: IDLE_RELOAD_CHECK_MS,
-      dialogOpen: false,
+      pageBusy: false,
     });
     expect(reload).toHaveBeenCalledTimes(1);
   });
@@ -45,7 +45,7 @@ describe("useIdleWebviewReload", () => {
     await vi.advanceTimersByTimeAsync(IDLE_RELOAD_CHECK_MS - 1000);
     window.dispatchEvent(new WheelEvent("wheel"));
     await vi.advanceTimersByTimeAsync(1000);
-    expect(invoke).toHaveBeenLastCalledWith("webview_reload_due", { idleMs: 1000, dialogOpen: false });
+    expect(invoke).toHaveBeenLastCalledWith("webview_reload_due", { idleMs: 1000, pageBusy: false });
   });
 
   // A hidden tray popover re-renders on chat and link events; a re-render is
@@ -58,7 +58,7 @@ describe("useIdleWebviewReload", () => {
     await vi.advanceTimersByTimeAsync(1000);
     expect(invoke).toHaveBeenLastCalledWith("webview_reload_due", {
       idleMs: IDLE_RELOAD_CHECK_MS,
-      dialogOpen: false,
+      pageBusy: false,
     });
   });
 
@@ -79,7 +79,7 @@ describe("useIdleWebviewReload", () => {
     await tick();
     expect(invoke).toHaveBeenCalledWith("webview_reload_due", {
       idleMs: IDLE_RELOAD_CHECK_MS,
-      dialogOpen: true,
+      pageBusy: true,
     });
     expect(reload).not.toHaveBeenCalled();
   });
@@ -107,5 +107,29 @@ describe("useIdleWebviewReload", () => {
     expect(pageIsBusy(document)).toBe(true);
     document.body.innerHTML = "<main></main>";
     expect(pageIsBusy(document)).toBe(false);
+  });
+
+  // Six idle hours is long, but a reload in front of the user must not take a
+  // half-written comment or chat message with it.
+  it("treats unsent text in the focused field as busy, and nothing else", () => {
+    document.body.innerHTML =
+      '<textarea id="draft"></textarea><input id="search" /><input id="box" type="checkbox" />' +
+      '<div id="composer" contenteditable="true"></div>';
+    const focus = (id: string, fill: (el: HTMLElement) => void) => {
+      const el = document.getElementById(id)!;
+      fill(el);
+      el.focus();
+    };
+
+    focus("draft", (el) => ((el as HTMLTextAreaElement).value = ""));
+    expect(pageIsBusy(document)).toBe(false);
+    focus("draft", (el) => ((el as HTMLTextAreaElement).value = "Looks good, but"));
+    expect(pageIsBusy(document)).toBe(true);
+    focus("search", (el) => ((el as HTMLInputElement).value = "invoice"));
+    expect(pageIsBusy(document)).toBe(true);
+    focus("box", (el) => ((el as HTMLInputElement).checked = true));
+    expect(pageIsBusy(document)).toBe(false);
+    focus("composer", (el) => (el.textContent = "hello"));
+    expect(pageIsBusy(document)).toBe(true);
   });
 });

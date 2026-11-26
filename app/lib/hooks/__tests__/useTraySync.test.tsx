@@ -458,3 +458,38 @@ describe("useTrayInit — Linux context menu", () => {
     ).toBe(true);
   });
 });
+
+describe("useTrayInit: login watcher against a backend that stopped answering", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // The watcher asks every 2 s for the whole run. When the backend stops
+  // answering, a new call per tick piled up behind the old ones for days.
+  it("keeps a single call outstanding instead of one per tick", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const original = vi.mocked(invoke).getMockImplementation();
+    // The backend answers while the tray is built, then stops answering.
+    let answered = 0;
+    vi.mocked(invoke).mockImplementation(async (cmd: string, args?: unknown) => {
+      if (cmd === "get_tray_menu_data") {
+        mocks.invokeCmds.push(cmd);
+        if (answered++ === 0) return { loggedIn: true, credits: 5, substrateAddress: "addr" };
+        return new Promise(() => undefined);
+      }
+      return original?.(cmd, args as never);
+    });
+    vi.useFakeTimers();
+    try {
+      await mountTray(true);
+      await vi.waitFor(() => expect(mocks.trayNewCalls.length).toBe(1));
+      // A minute of 2 s ticks, well past the 5 s cache.
+      await vi.advanceTimersByTimeAsync(60_000);
+      const asked = mocks.invokeCmds.filter((c) => c === "get_tray_menu_data").length;
+      expect(asked).toBe(2);
+    } finally {
+      vi.useRealTimers();
+      if (original) vi.mocked(invoke).mockImplementation(original);
+    }
+  });
+});

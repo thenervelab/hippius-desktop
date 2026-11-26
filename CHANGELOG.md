@@ -18,6 +18,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 ### Changed
 
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
+- **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading, and the chat shows its preview picture right away; the card shows how far the upload has got, and if the upload fails the card and the notification tell you the copied link won't open, and the card offers Retry. Long recordings also upload faster.
 
 ### Added
 
@@ -258,13 +259,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Expiry in Link settings opens its list.** Choosing how long a link lasts no longer closes Link settings; the list opens and the choice is saved, in a narrow window too.
+- **Steadier sign-in slides.** The pictures on the sign-in screen no longer sway or shake; only their own animations move.
+- **Hippius Drive restarts itself if its background work stops**, instead of staying open without syncing while it keeps using more and more memory. This mostly helped Windows computers that leave the app running for days. If it has to restart twice within an hour, it tells you instead of trying again.
+- **Hippius Drive uses less memory when it stays open for days.** Windows that are hidden or minimized give memory back sooner once it starts to grow, and the app no longer piles up requests while it waits for an answer.
 - **Captures saved in a folder inside one of your drives show on the Captures page.** If you picked a folder in, say, your Documents drive, the Captures page now lists the screenshots, recordings and folders in it, also while that drive is paused on this computer, instead of only saying where they are.
 - **Hippius Drive is called Hippius Drive on your Mac too.** Your Applications folder, Launchpad, Spotlight and the Dock now show the app as Hippius Drive instead of Hippius. It is still the same app, so updates keep installing over your current copy.
 - **NDA records no longer show a raw placeholder.** On a link that doesn't ask for an email, the NDA record leaves out the Recipient line instead of showing the placeholder, and any other unknown value reads as plain words.
 - **Clearer link rules.** The Watermark card says "Date, and email when known", the first-open email switch says it covers every link, and a password link's NDA card says why it can't have one.
 - **Beta updates show their release notes.** The update dialog on the beta channel now lists what changed, instead of only "Beta Build".
 - **Hippius uses less memory when it is left running for days, most of all on Windows.** Windows kept a little memory for every update the app's windows received and never gave it back. The app now sends its windows far fewer of those, and refreshes a window that has been hidden or minimized for a couple of hours to give the rest back.
-- **On Windows, a Hippius window left open behind your other windows no longer grows for days.** After six hours with no clicks or typing it refreshes itself to give its memory back. If Hippius ever stops responding because Windows ran out of memory, it now restarts on its own instead of staying open and doing nothing.
+- **On Windows, a Hippius window left open on screen no longer grows for days.** After six hours with no clicks or typing it refreshes itself to give its memory back, whether it sits behind your other windows or in front of a locked screen. It waits while you have a dialog open or unsent text in a box.
 - **A person's link made from a link with an NDA now asks them to accept it.** Hippius adds your NDA to each new person's link as it is made, so the link opens for them once they accept. If that cannot be done, the link says so and offers Try again instead of sending a link that would not open. Adding people on a free plan now says links per person come with paid Drive plans.
 - **A move between drives that stopped half way no longer holds space for a day.** If Hippius closed while moving files to another drive, it now cancels that unfinished move the next time you sign in, so the destination's space comes back at once.
 - **Folders that hold only empty folders can move to another drive.** Before, Hippius refused them.

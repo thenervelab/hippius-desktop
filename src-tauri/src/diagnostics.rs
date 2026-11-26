@@ -104,7 +104,7 @@ pub fn crash_record(what: &str, detail: &str, location: &str, thread: &str, back
 
 /// Where the crash file goes: beside the rolling logs. `None` in tests (they
 /// must not write to the real home) and without a home folder.
-pub fn crash_log_path() -> Option<std::path::PathBuf> {
+fn crash_log_path() -> Option<std::path::PathBuf> {
     if cfg!(test) {
         return None;
     }
@@ -145,6 +145,12 @@ pub fn install_panic_hook() {
                 thread = thread_name,
                 "PANIC: the application panicked"
             );
+            // A panic that broke the async runtime itself (tokio's I/O
+            // driver) leaves the app open with nothing working behind it:
+            // the watchdog restarts the app (`runtime_watchdog.rs`).
+            if crate::runtime_watchdog::note_panic(payload) {
+                tracing::error!("the async runtime is broken; the watchdog will restart the app");
+            }
             previous(info);
         }));
     });

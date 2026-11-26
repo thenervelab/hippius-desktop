@@ -31,11 +31,11 @@ pub mod media_preview;
 pub mod notifications;
 pub mod power;
 pub mod preview_archive;
+pub mod process_memory;
 pub mod recovery;
 pub mod recovery_binding;
 mod recovery_proof;
 pub mod release_channel;
-#[cfg(any(windows, test))]
 pub mod runtime_watchdog;
 pub mod shared_drives;
 pub mod shares;
@@ -1237,11 +1237,6 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // Converted video previews a crash left in the private cache.
         tauri::async_runtime::spawn_blocking(crate::video_engine::sweep_converted_at_launch);
 
-        // Windows: restart the app if its async runtime dies, rather than
-        // leave a window that does nothing (`runtime_watchdog`).
-        #[cfg(windows)]
-        crate::runtime_watchdog::start(app.handle().clone());
-
         // Linux: the recording's tray menu (Stop, Pause, Show recording
         // controls) is answered by one app-wide listener, added here before
         // any recording puts that menu on the icon.
@@ -1344,6 +1339,10 @@ pub fn setup(builder: Builder<Wry>) -> Builder<Wry> {
         // VPN_STATUS_CHANGED. See vpn::state / vpn::commands::spawn_status_bridge.
         let vpn_status_rx = app_state.vpn.subscribe();
         app_handle.manage(app_state);
+        // Restart the app if its async runtime dies or stops, instead of
+        // leaving the windows open over a dead backend; also logs memory
+        // hourly. After `manage`: the watchdog reads `AppState`.
+        crate::runtime_watchdog::start(app_handle.clone());
 
         // `hippius --capture` / `--record` that started the app: the
         // single-instance handler sees them only when it is already running,

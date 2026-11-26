@@ -603,6 +603,16 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo test --lib "capture::"
 
+      # The hourly memory line's Windows calls (the Toolhelp process tree and
+      # GetProcessMemoryInfo's private bytes) and the runtime watchdog's
+      # rules, run on Windows itself rather than only compiled there.
+      - name: Memory and watchdog tests (Windows)
+        working-directory: src-tauri
+        shell: bash
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --lib -- "process_memory::" "runtime_watchdog::" "webview_refresh::"
+
   capture-runtime-windows:
     # Screen capture's Windows code RUN on a real Windows, not just compiled:
     # the built app binary as the recorder child (`--capture-recorder`) with

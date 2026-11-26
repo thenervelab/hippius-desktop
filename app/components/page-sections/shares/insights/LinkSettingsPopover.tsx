@@ -92,7 +92,8 @@ export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
  * anchored under the panel header's gear. It is drawn inside the panel (not
  * portalled), so it sits within the narrow-window sheet's focus trap.
  * Escape, a press outside or the gear again closes it, and focus goes back
- * to whatever opened it.
+ * to whatever opened it. A list or menu it opens that is drawn elsewhere on
+ * the page counts as inside it.
  */
 export function LinkSettingsPopover({
   id,
@@ -181,16 +182,36 @@ export function LinkSettingsPopover({
     titleRef.current?.focus({ preventScroll: true });
   }, []);
 
+  // What it draws elsewhere on the page (the Expiry list, any menu or list a
+  // rule's editor opens) is portalled outside it in the DOM but still inside
+  // it in React, and React's events reach it from there. So "outside" is
+  // never read off the DOM alone: a press or a focus the DOM calls outside
+  // waits one task, and React's own event from the same press or focus, if
+  // one arrives, says it was inside.
+  const pressedInside = useRef<Event | null>(null);
+  const focusInside = useRef(false);
+  const pendingClose = useRef<number[]>([]);
+  const closeUnlessInside = useCallback((stillInside: () => boolean) => {
+    const timer = window.setTimeout(() => {
+      pendingClose.current = pendingClose.current.filter((t) => t !== timer);
+      if (!stillInside()) onCloseRef.current();
+    }, 0);
+    pendingClose.current.push(timer);
+  }, []);
+  useEffect(() => () => pendingClose.current.forEach((t) => window.clearTimeout(t)), []);
+
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
       const target = e.target;
       if (!(target instanceof Element)) return;
       if (ref.current?.contains(target) || target.closest(`[${SETTINGS_TRIGGER_ATTR}]`)) return;
-      onCloseRef.current();
+      // This runs first (document, capture); React's capture handler on the
+      // popover runs after it for a press in anything it drew elsewhere.
+      closeUnlessInside(() => pressedInside.current === e);
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, []);
+  }, [closeUnlessInside]);
 
   return (
     <div
@@ -205,8 +226,17 @@ export function LinkSettingsPopover({
       // focusable ancestor instead, which without this was the panel around
       // the popover, so pressing a switch read as focus leaving and closed it.
       tabIndex={-1}
+      onPointerDownCapture={(e) => {
+        pressedInside.current = e.nativeEvent;
+      }}
+      onFocus={() => {
+        focusInside.current = true;
+      }}
       onBlur={(e) => {
-        if (leftPopover(e.currentTarget, e.relatedTarget)) onCloseRef.current();
+        focusInside.current = false;
+        // Focus going to something it drew elsewhere (the Expiry list as it
+        // opens) brings its focus event right after this one.
+        if (leftPopover(e.currentTarget, e.relatedTarget)) closeUnlessInside(() => focusInside.current);
       }}
       className={cn(
         "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3 outline-none",

@@ -45,6 +45,7 @@ dependencies = [
  "k256",
  "keepawake",
  "keyring",
+ "libc",
  "md5",
  "mime_guess",
  "netbird-embed",
@@ -3532,7 +3533,7 @@ dependencies = [
 [[package]]
 name = "hcfs-client"
 version = "0.1.10"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901#cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c#86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c"
 dependencies = [
  "argon2 0.6.0",
  "async-stream",
@@ -3573,7 +3574,7 @@ dependencies = [
 [[package]]
 name = "hcfs-crypto"
 version = "0.1.0"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901#cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c#86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c"
 dependencies = [
  "blake3",
  "chacha20poly1305 0.11.0",
@@ -3584,7 +3585,7 @@ dependencies = [
 [[package]]
 name = "hcfs-shared"
 version = "0.1.8"
-source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901#cb8dfcdccb4fdc91e5b0e555cc8479d0a1058901"
+source = "git+ssh://git@github.com/thenervelab/hcfs.git?rev=86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c#86a0baf75bef6d3f067a91a4dc25f2cfbf253d3c"
 dependencies = [
  "blake3",
  "ed25519-dalek 3.0.0",

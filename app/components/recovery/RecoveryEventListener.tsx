@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { onTauriEvent } from "@/app/lib/utils/tauriListeners";
 import { useAtom } from "jotai";
 
 import {
@@ -43,25 +43,27 @@ const RecoveryEventListener: React.FC = () => {
   const authTypeRef = useRef(authType);
   authTypeRef.current = authType;
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      unlisten = await listen<RecoveryCheck>("oauth_recovery_check_needed", (e) => {
+  // Read by the listener below, which is registered once: re-registering
+  // on every change of the atom raced its own cleanup (a cleanup that ran
+  // before `listen` answered left the old listener alive).
+  const currentRef = useRef(current);
+  currentRef.current = current;
+
+  useEffect(
+    () =>
+      onTauriEvent<RecoveryCheck>("oauth_recovery_check_needed", (e) => {
         // OAuthCallbackPage already populates the atom via an explicit
         // `check_recovery_state` invoke before navigating — that's the
         // primary path. This listener only fills the gap if the
         // callback failed to set the atom (e.g. network error). Skip
         // the write when the atom is already populated to avoid
         // overwriting a dialog that's mid-flow.
-        if (current === null) {
+        if (currentRef.current === null) {
           setCheck(e.payload);
         }
-      });
-    })();
-    return () => {
-      unlisten?.();
-    };
-  }, [current, setCheck]);
+      }),
+    [setCheck],
+  );
 
   // Self-heal for the session-restore race: if the backend emitted
   // `oauth_recovery_check_needed` during session_restore — before this
@@ -132,25 +134,26 @@ const RecoveryEventListener: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void (async () => {
-      try {
-        if (await hasPendingRotation()) {
-          setFinishRotationOpen(true);
-        }
-      } catch (err) {
+    // Listen first, then ask: a rotation flagged while the question is out
+    // is still heard, and an unmount before either answers leaves nothing
+    // registered.
+    let disposed = false;
+    const stop = onTauriEvent<string>("recovery_rotation_pending", () => {
+      setFinishRotationOpen(true);
+    });
+    void hasPendingRotation()
+      .then((pending) => {
+        if (pending && !disposed) setFinishRotationOpen(true);
+      })
+      .catch((err) => {
         // `hasPendingRotation` may fail if there isn't an active
         // session yet (the IPC needs a logged-in account). This is
-        // expected during early boot — swallow so the listener below
-        // still subscribes.
+        // expected during early boot.
         console.warn("hasPendingRotation check failed:", err);
-      }
-      unlisten = await listen<string>("recovery_rotation_pending", () => {
-        setFinishRotationOpen(true);
       });
-    })();
     return () => {
-      unlisten?.();
+      disposed = true;
+      stop();
     };
   }, []);
 

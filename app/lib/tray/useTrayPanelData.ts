@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -12,6 +12,7 @@ import {
   type UploadFeedItem,
 } from "@/app/lib/upload-feed/mergeUploadFeed";
 import { useRetainedCompletedUploads } from "@/app/lib/upload-feed/useRetainedCompletedUploads";
+import { singleFlight } from "@/app/lib/utils/singleFlight";
 import {
   applyRemoteUpload,
   mergeRemoteUploads,
@@ -133,7 +134,10 @@ export function useTrayPanelData(capturesEnabled: boolean) {
   // Caps the boot-gap skeleton so a stuck session can't hang it forever (F-3).
   const notReadyPollsRef = useRef(0);
 
-  const refresh = useCallback(async () => {
+  // One refresh at a time: the 5 s poll, the focus and the shown signal all
+  // call it, and a slow or stopped backend must not collect a new round of
+  // calls on every tick while the previous round is still waiting.
+  const refresh = useMemo(() => singleFlight(async () => {
     try {
       const menuData = await invoke<TrayMenuData>("get_tray_menu_data");
       setMenu(menuData);
@@ -201,7 +205,7 @@ export function useTrayPanelData(capturesEnabled: boolean) {
     } catch (error) {
       console.error("[TrayPanel] Failed to load data:", error);
     }
-  }, []);
+  }), []);
 
   // Rust answers `capture_support` after the first refresh has run, so fetch
   // the Captures list as soon as capture turns out to be on here, and drop
