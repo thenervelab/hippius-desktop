@@ -4486,6 +4486,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
     // never left in the temp folder with nothing to offer it again.
     let marked = mark_delivery(&state, path, card.as_ref(), card_destination.clone()).await;
     let mut sent_to: Option<CaptureDestination> = None;
+    // The card was finished by its link before the drive copy was sent, so
+    // it already told the user the link was copied.
+    let mut finished_by_link = false;
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
@@ -4520,7 +4523,19 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
         } else {
             None
         };
-        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
+        // Uploaded directly (the drive is not synced here): a card whose
+        // link is public is finished now, and the drive copy goes on in the
+        // upload list rather than on the card (`link_finishes_card`). A
+        // synced capture is finished by its follower instead.
+        if let Some(id) = card_id
+            && matches!(super::deliver::local_root(&state, &account_id, &destination).await, Ok(None))
+        {
+            finished_by_link = finish_card_by_link_while_direct(app, &state.capture, id);
+        }
+        // With a link out, the drive copy is the capture's backup, and the
+        // upload list says so.
+        let backup = link.as_ref().is_some_and(|l| l.minted.share_url.is_some());
+        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path, backup).await?;
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
             destination,
@@ -4575,7 +4590,10 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             spawn_preview_then_cleanup(app, &account_id, None, &delivered.file_name, None, temp);
             let _ = app.emit(DELIVERED_EVENT, &delivered);
             let shown = card_id.is_some_and(|id| announce_link(app, &state.capture, id, &delivered, copied, keep));
-            if !shown {
+            // A card its link finished may have closed long before the drive
+            // copy landed: it said the link was copied, and saying it again
+            // now would read as a second capture.
+            if !shown && !finished_by_link {
                 let (title, body) = super::deliver::delivered_notice(&delivered);
                 notify(app, title, body);
             }
@@ -4862,6 +4880,29 @@ fn spawn_preview_then_cleanup(
     });
 }
 
+/// Card `id`'s link is public and its capture is about to be uploaded
+/// directly into the drive: the card is finished by its link
+/// ([`super::preview::finished_by_link_while_direct`]), says it is uploaded
+/// with the link copied and closes on its usual countdown, while the drive
+/// copy goes on in the upload list. Closing it keeps the temp file that
+/// upload reads (`drive_copy_pending`); a failure of that upload still
+/// fails the card, or with the card gone keeps the capture for Retry and
+/// notifies ([`announce_failed`]). Any other card follows the upload.
+/// Returns whether the card was finished.
+fn finish_card_by_link_while_direct(app: &AppHandle, state: &CaptureState, id: u64) -> bool {
+    let mut finished = false;
+    update_card(app, state, id, |card| {
+        if let Some(done) = super::preview::finished_by_link_while_direct(card) {
+            *card = done;
+            finished = true;
+        }
+    });
+    if finished {
+        tracing::info!(card = id, "capture card finished by its link: the drive copy goes on in the upload list");
+    }
+    finished
+}
+
 /// A capture that could not be delivered: its card says why (when one is
 /// still on screen), its marker keeps it for Retry card or no card, and a
 /// notification says it was kept.
@@ -4883,6 +4924,7 @@ fn announce_failed(
                 reason: super::deliver::failure_reason(e),
                 retryable: path.exists(),
             };
+            card.drive_copy_pending = false;
         })
     });
     if path.exists()
@@ -5184,6 +5226,9 @@ fn announce_placed(app: &AppHandle, card_id: Option<u64>, destination: &CaptureD
         } else {
             PreviewStatus::Uploaded { link_copied, link_error }
         };
+        // A card its link finished has its drive copy now: closing it may
+        // give up the temp copy again.
+        card.drive_copy_pending = false;
         // The link was made before the file was placed (`link_first`): the
         // card keeps what it already says about it.
         card.placed_path = Some(placed.placed.clone());
@@ -5251,7 +5296,7 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
                 break;
             }
             let mut row = sync_facts(&state.sync, &label, &rel_path, since_ms).row();
-            if super::preview::link_finishes_card(&card, &row) {
+            if super::preview::link_finishes_card(&card, super::preview::DriveCopy::Synced(&row)) {
                 tracing::info!(
                     card = id,
                     ?row,
@@ -5756,6 +5801,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         link: LinkState::None,
         link_text: None,
         link_note: None,
+        link_info: None,
         link_progress: None,
         link_percent: None,
         actions: super::preview::CardActions::default(),
@@ -5768,6 +5814,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         kept_locally: awaiting_setup,
         stopped_at_free_limit: false,
         notice: None,
+        drive_copy_pending: false,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -8040,6 +8087,53 @@ mod tests {
             minted_link_state(&super::super::deliver::Minted::default(), false, false),
             LinkState::None
         );
+    }
+
+    /// A card its public link finished while the capture is still being
+    /// uploaded directly into the drive closes (on its countdown, Show in
+    /// folder, a new capture) without removing the file that upload reads,
+    /// so a failure there is kept for Retry. Once the drive copy landed the
+    /// temp copy goes with the card as before, and a failed one is parked.
+    #[test]
+    fn closing_a_card_its_link_finished_keeps_the_file_its_drive_copy_reads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = crate::test_helpers::set_test_home(tmp.path());
+        let dir = super::super::screenshot::capture_tmp_root().unwrap().join("capture-direct");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Recording 2026-11-27 at 06.15.00.mp4");
+        std::fs::write(&file, b"mp4").unwrap();
+
+        let kept =
+            super::super::kept_failed::KeptFailed::in_flight("a", CaptureKind::Recording, CaptureDestination::own("Work", "Work"), false, None);
+        let mut card = super::super::kept_failed::card(1, &file, kept, true).unwrap();
+        card.status = PreviewStatus::Uploading;
+        card.link = LinkState::Public { copied: true };
+        card.share_url = Some("https://console.example/share/t#s=x".into());
+        card.share_token = Some("t".into());
+        let card = card.refreshed();
+        let finished = super::super::preview::finished_by_link_while_direct(&card).expect("finished by its link");
+        assert!(finished.settled);
+
+        let state = CaptureState::default();
+        settle_closed_card(&state, finished.clone());
+        assert!(file.exists(), "the drive copy is still reading it");
+        assert!(lock(&state.parked).is_none(), "nothing failed yet");
+
+        let mut failed = finished.clone();
+        failed.status = PreviewStatus::Failed {
+            message: "offline".into(),
+            reason: super::super::preview::FailureReason::Offline,
+            retryable: true,
+        };
+        failed.drive_copy_pending = false;
+        settle_closed_card(&state, failed.refreshed());
+        assert!(file.exists());
+        assert!(lock(&state.parked).is_some(), "a failed drive copy comes back with Retry");
+
+        let mut landed = finished;
+        landed.drive_copy_pending = false;
+        settle_closed_card(&state, landed.refreshed());
+        assert!(!dir.exists(), "once the drive has it, the temp copy goes with the card");
     }
 
     /// `hippius --capture` / `--record` that start the app run once the

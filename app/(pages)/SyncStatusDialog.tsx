@@ -374,7 +374,8 @@ const SyncFileItem = memo<SyncFileItemProps>(
                   : "leading-none text-grey-10/50 dark:text-white/50",
               )}
             >
-              {errorReason ?? getFileMetaText(file)}
+              {/* Rust's word for the row ("Backing up to Drive"), when it has one. */}
+              {errorReason ?? file.note ?? getFileMetaText(file)}
             </span>
 
             <SyncFileStatusBadge
@@ -400,6 +401,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
       previousFile.fileName === nextFile.fileName &&
       previousFile.totalBytes === nextFile.totalBytes &&
       previousFile.error === nextFile.error &&
+      previousFile.note === nextFile.note &&
       // Without this the row keeps its stale badge: the file fields are
       // identical across the frame where Rust first flags it as retrying.
       previous.isRetrying === next.isRetrying &&
