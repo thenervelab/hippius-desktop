@@ -177,7 +177,7 @@ fn captures_kept_in_the_chosen_folder_are_declared_when_its_drive_is_added() {
         config_ready < declared && declared < registered,
         "declared into its config folder before it can sync"
     );
-    let guard = init[..declared].rfind("if !identity.is_member").expect("never on a member drive");
+    let guard = init[..declared].rfind("if !is_member").expect("never on a member drive");
     assert!(init[guard..declared].lines().count() <= 2, "the member guard is the declaration's own");
 
     let setup = read("src/capture/setup.rs");

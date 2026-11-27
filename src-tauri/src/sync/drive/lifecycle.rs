@@ -1234,7 +1234,7 @@ pub(crate) async fn initialize_sync_inner(
     // not be added are declared before this drive can sync them, when the
     // folder is in it. Not on a member drive: the folder is never there, and
     // its recordings would count against the owner's plan.
-    if !identity.is_member {
+    if !is_member {
         crate::capture::setup::declare_kept_in_starting_drive(pool, &account_id, std::path::Path::new(&cfg.sync_path), &folder_dir).await;
     }
 
