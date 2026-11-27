@@ -40,6 +40,32 @@ pub fn capture_file_name(kind: CaptureKind, at: NaiveDateTime) -> String {
     format!("{stem} {} at {}.{ext}", at.format("%Y-%m-%d"), at.format("%H.%M.%S"))
 }
 
+/// Whether `name` is a recording this app named ([`capture_file_name`]),
+/// with or without the ` (N)` a move into a folder adds when the name is
+/// taken (`deliver::free_name`: 2 to 9999). A renamed recording is not one.
+///
+/// The name is rebuilt from the time it parses to and compared, so only a
+/// name [`capture_file_name`] could have written matches (no lenient
+/// widths), whatever its format becomes.
+#[must_use]
+pub fn is_app_recording_name(name: &str) -> bool {
+    let Some(stem) = name.strip_prefix("Recording ").and_then(|rest| rest.strip_suffix(".mp4")) else {
+        return false;
+    };
+    let (stamp, suffix) = match stem.rsplit_once(" (") {
+        Some((head, n)) => match n.strip_suffix(')') {
+            Some(n) => (head, Some(n)),
+            None => (stem, None),
+        },
+        None => (stem, None),
+    };
+    let suffix_ok = suffix.is_none_or(|n| !n.starts_with('0') && n.parse::<u16>().is_ok_and(|n| (2..=9_999).contains(&n)));
+    let Ok(at) = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%d at %H.%M.%S") else {
+        return false;
+    };
+    suffix_ok && capture_file_name(CaptureKind::Recording, at) == format!("Recording {stamp}.mp4")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,6 +89,28 @@ mod tests {
             capture_file_name(CaptureKind::Recording, at(9, 0, 5)),
             "Recording 2026-09-22 at 09.00.05.mp4"
         );
+    }
+
+    #[test]
+    fn an_app_recording_is_known_by_its_name() {
+        let name = capture_file_name(CaptureKind::Recording, at(9, 0, 5));
+        assert!(is_app_recording_name(&name));
+        assert!(is_app_recording_name("Recording 2026-09-22 at 09.00.05 (2).mp4"));
+        for other in [
+            capture_file_name(CaptureKind::Screenshot, at(9, 0, 5)).as_str(),
+            "Recording 2026-09-22 at 09.00.05.mov",
+            "Recording 2026-09-22.mp4",
+            "Holiday.mp4",
+            "Recording 2026-09-22 at 09.00.05 (x).mp4",
+            "Recording 2026-09-22 at 09.00.05 ().mp4",
+            "Recording 2026-09-22 at 09.00.05 (1).mp4",
+            "Recording 2026-09-22 at 09.00.05 (02).mp4",
+            "Recording 2026-09-22 at 09.00.05 (10000).mp4",
+            "Recording 2026-9-2 at 9.0.5.mp4",
+            "My Recording 2026-09-22 at 09.00.05.mp4",
+        ] {
+            assert!(!is_app_recording_name(other), "{other}");
+        }
     }
 
     /// A name Windows cannot write is a file a Windows user cannot download.

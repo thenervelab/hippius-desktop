@@ -5109,6 +5109,12 @@ async fn keep_here(app: &AppHandle, path: &Path, card_id: Option<u64>, kept_as: 
     let kept = match kept {
         Ok(kept) => {
             remove_temp_dir(path);
+            // Its drive may have been added while it was moving in.
+            if !kept_as.ask
+                && let Ok(account_id) = state.current_account_id()
+            {
+                super::setup::declare_kept_since_added(app, &account_id, &kept).await;
+            }
             kept
         }
         Err(e) => {
