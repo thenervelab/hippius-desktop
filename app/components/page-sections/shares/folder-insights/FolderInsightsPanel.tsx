@@ -55,6 +55,8 @@ import {
 } from "./folderInsightsTarget";
 
 export const FOLDER_INSIGHTS_PANEL_WIDTH_PX = 400;
+/** Where the width the owner dragged the panel to is kept. */
+export const FOLDER_INSIGHTS_PANEL_WIDTH_KEY = "hippius:folder-insights-panel-width";
 
 /** The switch's line, by plan. */
 export const SWITCH_LINE = "Count views of the files in this folder. Viewers see a short note.";
@@ -70,6 +72,7 @@ export default function FolderInsightsPanel() {
       open={target !== null}
       onClose={onClose}
       width={FOLDER_INSIGHTS_PANEL_WIDTH_PX}
+      resizable={{ storageKey: FOLDER_INSIGHTS_PANEL_WIDTH_KEY }}
       label={target ? `Insights for ${target.name}` : "Insights"}
       focusKey={target?.tokenHash}
     >

@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { BarChart3, ChevronDown, Download, Eye, EyeOff, FileText, Link2, Settings, SmilePlus, Sparkles, X } from "lucide-react";
-import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -41,15 +40,25 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
-import { CommentsTab, PersonName, useCommentModeration } from "./CommentThreads";
+import { CommentsTab, useCommentModeration } from "./CommentThreads";
 import { EmptyLine } from "./EmptyLine";
-import { InsightsAvatar } from "./InsightsAvatar";
+import { ViewerIdentity } from "./ViewerIdentity";
 import { LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
 import { MediaPreview, usePanelMedia } from "./PanelMedia";
 import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
 import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
-import { commentsQueryKey, insightsQueryKey, linkSettingsQueryKey, reactionsQueryKey, PANEL_QUERY } from "./queryKeys";
+import {
+  commentsQueryKey,
+  groupInsightsQueryKey,
+  insightsQueryKey,
+  linkSettingsQueryKey,
+  ndaAcceptsQueryKey,
+  reactionsQueryKey,
+  PANEL_QUERY,
+} from "./queryKeys";
+import { useUnlockCount } from "./useUnlockCount";
 import { RetentionChart } from "./RetentionChart";
+import { PageBars } from "./PageBars";
 import { InsightsTabs, type InsightsTabItem } from "./InsightsTabs";
 import { saveInsightsCsv } from "./exportCsv";
 import { NdaTab, useNdaAccepts } from "./NdaTab";
@@ -88,13 +97,12 @@ import {
   pageReachSummary,
   pageTimeSummary,
   longestPage,
-  timeShares,
   pagesTabShown,
   switchOffLine,
   switchesOffLine,
   type InsightsTab,
 } from "./insightsView";
-import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
+import { BAR_FILL, BAR_TRACK, CARD, CHART_LABEL, DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /**
  * The console's Insights width. Wider than File Details' 305 and Manage
@@ -102,6 +110,8 @@ import { BAR_FILL, BAR_TRACK, CARD, DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED,
  * tabs with their counts in one row.
  */
 export const INSIGHTS_PANEL_WIDTH_PX = 440;
+/** Where the width the owner dragged the panel to is kept. */
+export const INSIGHTS_PANEL_WIDTH_KEY = "hippius:insights-panel-width";
 
 /**
  * The NDA tab's slot. `InsightsPanelFor` fills it itself from the link's NDA
@@ -138,6 +148,7 @@ export default function ShareInsightsSheet() {
       open={target !== null}
       onClose={onClose}
       width={INSIGHTS_PANEL_WIDTH_PX}
+      resizable={{ storageKey: INSIGHTS_PANEL_WIDTH_KEY }}
       label={target ? `Insights for ${target.fileName}` : "Insights"}
       focusKey={target ? panelFocusKey(target) : undefined}
     >
@@ -550,6 +561,22 @@ function InsightsPanelFor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Unlocked while open: read again what needed the account's key (comment
+  // texts, viewer emails, names, the NDA text), so it shows without reopening.
+  const queryClient = useQueryClient();
+  const unlocks = useUnlockCount();
+  useEffect(() => {
+    if (unlocks === 0) return;
+    for (const queryKey of [
+      insightsQueryKey(shareToken),
+      commentsQueryKey(shareToken),
+      ndaAcceptsQueryKey(shareToken),
+      groupInsightsQueryKey(shareToken),
+    ]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
+  }, [unlocks, shareToken, queryClient]);
+
   // Link settings: open or not, where it sits, and what opened it.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTop, setSettingsTop] = useState(56);
@@ -622,6 +649,10 @@ function InsightsPanelFor({
     () => Object.fromEntries((viewers ?? []).map((v) => [v.viewerId, v.name ?? v.email ?? null])),
     [viewers],
   );
+  const viewerIds = useMemo(
+    () => Object.fromEntries((viewers ?? []).map((v) => [v.viewerId, { name: v.name, email: v.email ?? null }])),
+    [viewers],
+  );
   // The NDA tab, once the link has a text or any accepts (Rust says whether
   // the server has NDAs). A slot handed in by the caller wins.
   const nda: NdaTabSlot | undefined =
@@ -629,7 +660,7 @@ function InsightsPanelFor({
     (ndaAccepts.shown
       ? {
           count: ndaAccepts.query.hasNextPage ? null : ndaAccepts.count,
-          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} shareToken={shareToken} fileName={fileName} />,
+          content: <NdaTab state={ndaAccepts} viewerNames={viewerNames} viewers={viewerIds} shareToken={shareToken} fileName={fileName} />,
         }
       : undefined);
   const tabs: InsightsTabItem[] = [];
@@ -1147,7 +1178,6 @@ function PageCharts({ pages }: { pages: InsightsPages }) {
   }
   const drop = biggestPageDrop(reach);
   const longest = longestPage(medianMs);
-  const maxMs = Math.max(0, ...medianMs);
   const ends = ["Page 1", `Page ${n}`] as const;
   return (
     <div className="flex flex-col gap-5" data-testid="insights-pages">
@@ -1162,13 +1192,12 @@ function PageCharts({ pages }: { pages: InsightsPages }) {
         />
       </Section>
       <Section title="Time per page" aside={longest !== null ? `Longest on page ${longest}` : undefined}>
-        <RetentionChart
-          values={timeShares(medianMs)}
-          durationMs={null}
+        <PageBars
+          values={medianMs}
+          listLabel="Time per page"
           summary={pageTimeSummary(medianMs)}
-          pointLabel={(i) => ({ at: `Page ${i + 1}`, value: formatWatched(medianMs[i] ?? 0) })}
-          endLabels={ends}
-          scaleLabels={[formatWatched(maxMs), formatWatched(maxMs / 2), "0:00"]}
+          label={(i) => `Page ${i + 1}`}
+          valueText={(i) => formatWatched(medianMs[i] ?? 0)}
           testId="insights-page-time"
         />
       </Section>
@@ -1309,7 +1338,7 @@ function ViewerRows({
   const shown = paged ? viewers.slice(0, limit) : viewers;
   return (
     <>
-      <ul className={cn("flex flex-col divide-y", DIVIDE)} aria-label="Viewers">
+      <ul className={cn("@container flex flex-col divide-y", DIVIDE)} aria-label="Viewers">
         {shown.map((v) => (
           <ViewerRow key={v.viewerId} viewer={v} video={video} shareToken={shareToken} />
         ))}
@@ -1329,38 +1358,34 @@ function ViewerRows({
 }
 
 /**
- * One viewer, most recent first: their avatar, name and when they last
- * looked, and for a recording how much of it they watched. A viewer who
- * confirmed an email on a link that asks for one is named by it when they
- * chose no name; with a name, the email goes under it. No mark says it is
- * verified, as on the console: Rust drops every email that fails the
- * server's check, so an email on screen is always a proven one.
+ * One viewer, most recent first: their avatar, who they are
+ * (`ViewerIdentity`: the name, the email under it, or the email alone) and
+ * when they last looked, and for a recording how much of it they watched.
+ * No mark says the email is verified, as on the console: Rust drops every
+ * email that fails the server's check, so an email on screen is always a
+ * proven one. A wide panel gives the last visit a column of its own.
  */
 function ViewerRow({ viewer: v, video, shareToken }: { viewer: InsightsViewer; video: boolean; shareToken?: string }) {
   const watched = formatWatched(v.watchedMs);
-  const email = v.email ?? null;
-  const shownName = v.name ?? email;
-  const emailLine = v.name !== null && email !== null;
   const caps = useAtomValue(serverCapabilitiesAtom);
   // Only real viewers on a server with Insights open into their visits.
   const opens = shareToken !== undefined && caps?.share_insights === true;
   const [open, setOpen] = useState(false);
   const detailId = useId();
+  const ago = v.lastViewedAt ? formatAgo(v.lastViewedAt) : null;
   const row = (
     <div className="flex min-w-0 flex-1 items-center gap-3">
-      <InsightsAvatar name={shownName} size="md" />
-      <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-center gap-1.5">
-          <PersonName name={shownName} className="text-[13px]" />
-          {v.visits > 1 && <span className={cn("shrink-0 whitespace-nowrap text-xs", MUTED)}>{v.visits} visits</span>}
+      <ViewerIdentity
+        name={v.name}
+        email={v.email ?? null}
+        aside={v.visits > 1 && <span className={cn("shrink-0 whitespace-nowrap text-xs", MUTED)}>{v.visits} visits</span>}
+        meta={ago && <p className={cn("mt-px text-xs @md:hidden", MUTED)}>{ago}</p>}
+      />
+      {ago && (
+        <p className={cn("hidden w-16 shrink-0 text-right text-xs tabular-nums @md:block", MUTED)} aria-hidden>
+          {ago}
         </p>
-        {emailLine && (
-          <p className={cn("mt-px block min-w-0 overflow-hidden text-xs", MUTED)}>
-            <MiddleTruncate text={email} kind="email" />
-          </p>
-        )}
-        {v.lastViewedAt && <p className={cn("mt-px text-xs", MUTED)}>{formatAgo(v.lastViewedAt)}</p>}
-      </div>
+      )}
       {/* A document's viewer: how many of its pages they saw. */}
       {!video && v.pagesSeen != null && v.pageCount != null && (
         <p className={cn("shrink-0 whitespace-nowrap text-xs tabular-nums", MUTED)}>
@@ -1369,7 +1394,7 @@ function ViewerRow({ viewer: v, video, shareToken }: { viewer: InsightsViewer; v
       )}
       {video && v.completion !== null && (
         <>
-          <div className={cn(BAR_TRACK, "w-[72px] shrink-0")} aria-hidden>
+          <div className={cn(BAR_TRACK, "w-[72px] shrink-0 @lg:w-[120px]")} aria-hidden>
             <div className={BAR_FILL} style={{ width: formatPercent(v.completion) }} />
           </div>
           <p className={cn("w-9 shrink-0 text-right text-xs tabular-nums", MUTED)} title={`Watched ${watched}`}>
@@ -1443,13 +1468,10 @@ function ReactionsTab({
           {sorted.map(({ emoji, count }) => (
             <li key={emoji} className="grid grid-cols-[22px_minmax(0,1fr)_28px] items-center gap-2.5">
               <span className="text-base leading-none">{emoji}</span>
-              <span aria-hidden className="h-2 overflow-hidden rounded-[4px] bg-grey-90 dark:bg-[#333]">
-                <span
-                  className="block h-full rounded-[4px] bg-primary-50 dark:bg-primary-brand-dark"
-                  style={{ width: max > 0 ? `${(count / max) * 100}%` : 0 }}
-                />
+              <span aria-hidden className={cn(BAR_TRACK, "h-1.5")}>
+                <span className={BAR_FILL} style={{ width: max > 0 ? `${(count / max) * 100}%` : 0, display: "block" }} />
               </span>
-              <span className="text-right text-[12.5px] font-medium tabular-nums text-grey-30 dark:text-grey-dark-700">
+              <span className={cn("text-right text-xs font-medium", CHART_LABEL)}>
                 {count}
                 <span className="sr-only">{count === 1 ? " reaction" : " reactions"}</span>
               </span>

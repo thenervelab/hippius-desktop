@@ -17,12 +17,20 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The Insights panel can be made wider.** Drag its left edge (or use the arrow keys on it) to widen it; it remembers the width, and a double click puts it back.
+- **Insights charts are calmer and easier to read.** Softer bars and curves with one baseline, one label where it matters, and the exact number when you point at any part of a chart.
+- **Viewers show by name and email.** A viewer who gave a name shows it with their confirmed email under it, one who gave only an email shows the email, and only someone who gave neither shows as "Anonymous viewer". Long names are no longer cut to a few letters.
+- **Allow and block lists take emails and whole domains as chips.** Type or paste several at once; a mistyped entry is marked on the spot.
+- **Link settings say when your Drive needs unlocking, with an Unlock button.** Settings that need your Drive unlocked show a small lock, and pressing one unlocks first and then carries on.
+- **Link settings read more clearly.** Rules that are off say what that means ("Not asked", "None") instead of describing what they would do, and the Allow list and Expiry show their value without an On or Off beside it.
+
 - **Links per person show how to upgrade on the free plan.** Links per person come with paid Drive plans, so on the free plan the box for adding people is replaced by an upgrade card, and any links already made stay listed to copy or turn off.
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
 - **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading, and the chat shows its preview picture right away; the card shows how far the upload has got, and if the upload fails the card and the notification tell you the copied link won't open, and the card offers Retry. Long recordings also upload faster.
 
 ### Added
 
+- **More choices for emails about your links.** Settings can turn on or off emails for return visits, accepted NDAs and people your allow list turned away, and each file link can send an email after every visit, only the first, or none. They appear once Hippius starts sending these emails.
 - **Ask for an email and an NDA on folder links.** A folder link's Insights now show its rules as cards, like a file link: ask viewers to confirm their email with a code, let in only certain addresses or company domains, and ask them to accept your NDA before any file in the folder opens. A folder link with an NDA gets an NDA tab of who accepted and when, with Export and a Record for each accept. On paid Drive plans.
 - **A notification when an update is ready, even when Hippius sits in the tray.** The update used to be offered only inside the main window, which is easy to miss when the app is minimized, behind other windows or in the tray. Now you also get a system notification, and the tray popover shows "Hippius x.y.z is ready to install" until you update.
 - **Star files, folders and drives.** Choose Star from any file, folder or drive menu, the preview or the selection bar, and find everything you starred on the new Starred page in the sidebar. It looks and works like your Drive, in list or card view: starred folders and drives expand with their arrow or open right there on the Starred page, and each item says where it is. Starred items show a small star beside their name, and your stars are the same in the phone app and on the web.
@@ -265,6 +273,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.
 - **A recording's card shows one upload, its link's.** Once the link is ready the card says it was copied and closes as usual, also when your captures go to a drive that isn't synced on this computer, where it used to start uploading again from 0. An info icon on the card explains that the link has its own encrypted copy and a backup goes to your Drive, and the upload list shows that backup as "Backing up to Drive", then "Backed up to Drive". If the backup fails, it says "Couldn't back up to Drive", the card or a notification tells you, and Retry sends it again.
 - **Expiry in Link settings opens its list.** Choosing how long a link lasts no longer closes Link settings; the list opens and the choice is saved, in a narrow window too.

@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { getDefaultStore } from "jotai";
 import { toast } from "sonner";
+
+import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 
 import ShareLinkEmailsSetting from "../ShareLinkEmailsSetting";
 import { LINK_EMAILS_NEED_SIGN_IN } from "../../drive/SecureLinkSection";
@@ -13,6 +17,14 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const PREFS = { firstViews: true, comments: true, digest: "weekly" };
+/** What a server with the newer emails sends back. */
+const NEWER = { returnVisits: true, ndaAccepts: false, gateRefusals: true };
+
+const NEWER_ROWS = ["Return visits", "NDA accepted", "Refused viewers"];
+
+function setCaps(caps: Partial<ServerCapabilities> | null) {
+  act(() => getDefaultStore().set(serverCapabilitiesAtom, caps as ServerCapabilities | null));
+}
 
 /** Answers `share_can_receive_link_emails` itself; every other command from `invokeMock`. */
 const canReceive = vi.hoisted(() => ({ value: true as boolean | Error }));
@@ -30,6 +42,7 @@ describe("ShareLinkEmailsSetting", () => {
     invokeMock.mockReset();
     vi.mocked(toast.error).mockReset();
     canReceive.value = true;
+    setCaps({ shares: true, share_notifications: true });
   });
 
   it("shows an access-key account one line instead of the switches", async () => {
@@ -80,6 +93,70 @@ describe("ShareLinkEmailsSetting", () => {
     fireEvent.click(await screen.findByRole("switch", { name: "First views" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't save that. Nope."));
     expect(screen.getByRole("switch", { name: "First views" })).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("shows none of the newer emails while the server does not send them, even when the preferences carry them", async () => {
+    invokeMock.mockResolvedValueOnce({ ...PREFS, ...NEWER });
+    render(<ShareLinkEmailsSetting />);
+
+    await screen.findByRole("switch", { name: "First views" });
+    for (const name of NEWER_ROWS) expect(screen.queryByRole("switch", { name })).toBeNull();
+    expect(screen.getByText("An email when one of your links is opened for the first time.")).toBeInTheDocument();
+  });
+
+  it("shows Return visits only with share_link_notifications", async () => {
+    setCaps({ shares: true, share_notifications: true, share_link_notifications: true });
+    invokeMock.mockResolvedValueOnce({ ...PREFS, ...NEWER });
+    render(<ShareLinkEmailsSetting />);
+
+    expect(await screen.findByRole("switch", { name: "Return visits" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("switch", { name: "NDA accepted" })).toBeNull();
+    expect(screen.queryByRole("switch", { name: "Refused viewers" })).toBeNull();
+    // First views also decides the every-visit emails, so it says so.
+    expect(screen.getByText(/after each visit on links set to Every visit/)).toBeInTheDocument();
+  });
+
+  it("shows NDA accepted and Refused viewers only with share_event_notifications", async () => {
+    setCaps({ shares: true, share_notifications: true, share_event_notifications: true });
+    invokeMock.mockResolvedValueOnce({ ...PREFS, ...NEWER });
+    render(<ShareLinkEmailsSetting />);
+
+    expect(await screen.findByRole("switch", { name: "NDA accepted" })).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("switch", { name: "Refused viewers" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByRole("switch", { name: "Return visits" })).toBeNull();
+  });
+
+  it("shows no switch for an email the server advertises but did not send a choice for", async () => {
+    setCaps({
+      shares: true,
+      share_notifications: true,
+      share_link_notifications: true,
+      share_event_notifications: true,
+    });
+    invokeMock.mockResolvedValueOnce(PREFS);
+    render(<ShareLinkEmailsSetting />);
+
+    await screen.findByRole("switch", { name: "First views" });
+    for (const name of NEWER_ROWS) expect(screen.queryByRole("switch", { name })).toBeNull();
+  });
+
+  it("saves a newer email with the rest, and never adds one the server did not send", async () => {
+    setCaps({
+      shares: true,
+      share_notifications: true,
+      share_link_notifications: true,
+      share_event_notifications: true,
+    });
+    invokeMock.mockResolvedValueOnce({ ...PREFS, ndaAccepts: true }).mockResolvedValueOnce(undefined);
+    render(<ShareLinkEmailsSetting />);
+
+    fireEvent.click(await screen.findByRole("switch", { name: "NDA accepted" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_set_notification_preferences", {
+        preferences: { firstViews: true, comments: true, digest: "weekly", ndaAccepts: false },
+      }),
+    );
+    expect(screen.getByRole("switch", { name: "NDA accepted" })).toHaveAttribute("aria-checked", "false");
   });
 
   it("says so when the preferences cannot be read", async () => {
