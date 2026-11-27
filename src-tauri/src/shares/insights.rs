@@ -1145,27 +1145,48 @@ pub struct NotificationPreferences {
     /// New comments, batched, counted (never quoted: they are encrypted).
     pub comments: bool,
     pub digest: Digest,
+    /// "Viewers came back": viewers back on a link a day or more after their
+    /// last visit, counted. `None` from a server that does not have this
+    /// email: the row is not shown and the key is never sent back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_visits: Option<bool>,
+    /// "People accepted your NDA", counted. `None` as for `return_visits`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nda_accepts: Option<bool>,
+    /// The addresses a link's email allow list turned away, each with an
+    /// Allow link. `None` as for `return_visits`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_refusals: Option<bool>,
 }
 
 impl Default for NotificationPreferences {
     /// The server's defaults: first views and comments on, a weekly summary.
+    /// The newer emails are unknown until a server names them.
     fn default() -> Self {
         Self {
             first_views: true,
             comments: true,
             digest: Digest::Weekly,
+            return_visits: None,
+            nda_accepts: None,
+            gate_refusals: None,
         }
     }
 }
 
-/// The wire shape (snake_case), read leniently: a missing field is the
-/// server's default and an unknown digest is the default digest.
+/// The wire shape (snake_case), read leniently: a missing first-view,
+/// comment or digest field is the server's default and an unknown digest is
+/// the default digest. A missing newer field stays missing, so a server
+/// without that email never shows a switch for it.
 fn parse_preferences(body: &str) -> Result<NotificationPreferences> {
     #[derive(Deserialize)]
     struct Wire {
         first_views: Option<bool>,
         comments: Option<bool>,
         digest: Option<String>,
+        return_visits: Option<bool>,
+        nda_accepts: Option<bool>,
+        gate_refusals: Option<bool>,
     }
     let wire: Wire = serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("notification preferences parse failed: {e}")))?;
     let d = NotificationPreferences::default();
@@ -1178,6 +1199,9 @@ fn parse_preferences(body: &str) -> Result<NotificationPreferences> {
             Some("weekly") => Digest::Weekly,
             _ => d.digest,
         },
+        return_visits: wire.return_visits,
+        nda_accepts: wire.nda_accepts,
+        gate_refusals: wire.gate_refusals,
     })
 }
 
@@ -1205,12 +1229,27 @@ pub fn can_receive_link_emails(identity: &crate::auth::auth_session_repo::Sessio
         .is_some_and(|p| !p.is_empty() && p != "mnemonic")
 }
 
+/// The `PUT` body. The server refuses a key it does not know, so a newer
+/// field goes only when it is set, which it is only when this server sent it.
 fn preferences_body(prefs: NotificationPreferences) -> serde_json::Value {
-    serde_json::json!({
+    let mut body = serde_json::json!({
         "first_views": prefs.first_views,
         "comments": prefs.comments,
         "digest": prefs.digest,
-    })
+    });
+    let newer = [
+        ("return_visits", prefs.return_visits),
+        ("nda_accepts", prefs.nda_accepts),
+        ("gate_refusals", prefs.gate_refusals),
+    ];
+    if let Some(map) = body.as_object_mut() {
+        for (key, value) in newer {
+            if let Some(on) = value {
+                map.insert(key.into(), on.into());
+            }
+        }
+    }
+    body
 }
 
 // ─── HTTP ──────────────────────────────────────────────────────────────────
@@ -1947,11 +1986,27 @@ pub async fn share_switches_in_plan(state: tauri::State<'_, AppState>) -> Result
 #[tauri::command]
 pub async fn share_get_notification_preferences(state: tauri::State<'_, AppState>) -> Result<NotificationPreferences> {
     let account_id = state.current_account_id()?;
-    if !capabilities_or_none(&state, &account_id).await.share_notifications {
+    let caps = capabilities_or_none(&state, &account_id).await;
+    if !caps.share_notifications {
         return Err(AppError::Validation("Email updates about your links aren't available yet.".into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
-    get_preferences(&state.api_client, &api).await
+    Ok(offered_preferences(get_preferences(&state.api_client, &api).await?, &caps))
+}
+
+/// `prefs` with each newer email kept only while the server advertises it
+/// (`share_link_notifications` for return visits, `share_event_notifications`
+/// for NDA accepts and refused viewers). The server answers those fields
+/// whether or not it sends the emails, so without this Settings would offer a
+/// switch for an email that never goes out. A dropped field is also left out
+/// of the next `PUT`, which only changes the fields it carries.
+fn offered_preferences(prefs: NotificationPreferences, caps: &ServerCapabilities) -> NotificationPreferences {
+    NotificationPreferences {
+        return_visits: prefs.return_visits.filter(|_| caps.share_link_notifications),
+        nda_accepts: prefs.nda_accepts.filter(|_| caps.share_event_notifications),
+        gate_refusals: prefs.gate_refusals.filter(|_| caps.share_event_notifications),
+        ..prefs
+    }
 }
 
 /// Whether the share-link emails can reach the signed-in account
@@ -2931,7 +2986,8 @@ pub(super) mod tests {
             NotificationPreferences {
                 first_views: false,
                 comments: true,
-                digest: Digest::Daily
+                digest: Digest::Daily,
+                ..NotificationPreferences::default()
             }
         );
         assert_eq!(parse_preferences("{}").unwrap(), NotificationPreferences::default());
@@ -2940,13 +2996,95 @@ pub(super) mod tests {
             preferences_body(NotificationPreferences {
                 first_views: true,
                 comments: false,
-                digest: Digest::Off
+                digest: Digest::Off,
+                ..NotificationPreferences::default()
             }),
             serde_json::json!({"first_views": true, "comments": false, "digest": "off"})
         );
         // The IPC side is camelCase.
         let ipc = serde_json::to_value(NotificationPreferences::default()).unwrap();
         assert_eq!(ipc, serde_json::json!({"firstViews": true, "comments": true, "digest": "weekly"}));
+    }
+
+    #[test]
+    fn newer_emails_are_offered_only_while_the_server_sends_them() {
+        let all = parse_preferences(r#"{"return_visits":true,"nda_accepts":false,"gate_refusals":true}"#).unwrap();
+        let caps = |link: bool, event: bool| ServerCapabilities {
+            share_notifications: true,
+            share_link_notifications: link,
+            share_event_notifications: event,
+            ..ServerCapabilities::default()
+        };
+        let off = offered_preferences(all, &caps(false, false));
+        assert_eq!((off.return_visits, off.nda_accepts, off.gate_refusals), (None, None, None));
+        assert_eq!((off.first_views, off.comments, off.digest), (all.first_views, all.comments, all.digest));
+        let visits = offered_preferences(all, &caps(true, false));
+        assert_eq!((visits.return_visits, visits.nda_accepts, visits.gate_refusals), (Some(true), None, None));
+        let events = offered_preferences(all, &caps(false, true));
+        assert_eq!(
+            (events.return_visits, events.nda_accepts, events.gate_refusals),
+            (None, Some(false), Some(true))
+        );
+        assert_eq!(offered_preferences(all, &caps(true, true)), all);
+        // A server that advertises the email but does not send the field
+        // still shows nothing for it.
+        let old = parse_preferences("{}").unwrap();
+        assert_eq!(offered_preferences(old, &caps(true, true)), old);
+    }
+
+    #[test]
+    fn newer_email_preferences_stay_missing_when_the_server_has_none() {
+        // An older server: none of the newer keys, so none is read as on and
+        // none goes back in the PUT, which would refuse an unknown key.
+        let old = parse_preferences(r#"{"first_views":true,"comments":true,"digest":"weekly"}"#).unwrap();
+        assert_eq!((old.return_visits, old.nda_accepts, old.gate_refusals), (None, None, None));
+        assert_eq!(
+            preferences_body(old),
+            serde_json::json!({"first_views": true, "comments": true, "digest": "weekly"})
+        );
+        let ipc = serde_json::to_value(old).unwrap();
+        for key in ["returnVisits", "ndaAccepts", "gateRefusals"] {
+            assert!(ipc.get(key).is_none(), "{key} crosses IPC only when the server sent it");
+        }
+
+        // A server with them: read as sent, false included, and written back.
+        let new = parse_preferences(
+            r#"{"first_views":true,"comments":false,"digest":"daily","return_visits":false,"nda_accepts":true,"gate_refusals":false}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            (new.return_visits, new.nda_accepts, new.gate_refusals),
+            (Some(false), Some(true), Some(false))
+        );
+        assert_eq!(
+            preferences_body(new),
+            serde_json::json!({
+                "first_views": true, "comments": false, "digest": "daily",
+                "return_visits": false, "nda_accepts": true, "gate_refusals": false
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(new).unwrap(),
+            serde_json::json!({
+                "firstViews": true, "comments": false, "digest": "daily",
+                "returnVisits": false, "ndaAccepts": true, "gateRefusals": false
+            })
+        );
+
+        // Only some of them (a server with the visit emails but not the
+        // others): each one on its own.
+        let some = parse_preferences(r#"{"return_visits":true}"#).unwrap();
+        assert_eq!((some.return_visits, some.nda_accepts, some.gate_refusals), (Some(true), None, None));
+        assert_eq!(preferences_body(some)["return_visits"], serde_json::json!(true));
+        assert!(preferences_body(some).get("nda_accepts").is_none());
+
+        // From the UI: a missing key is missing, never on.
+        let from_ui: NotificationPreferences =
+            serde_json::from_value(serde_json::json!({"firstViews": true, "comments": true, "digest": "off", "ndaAccepts": false})).unwrap();
+        assert_eq!(
+            (from_ui.return_visits, from_ui.nda_accepts, from_ui.gate_refusals),
+            (None, Some(false), None)
+        );
     }
 
     // ─── Against a mock server ─────────────────────────────────────────────

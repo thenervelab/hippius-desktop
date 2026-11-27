@@ -107,6 +107,9 @@ describe("the NDA tab", () => {
     await screen.findByTestId("nda-current-text");
     const rows = screen.getAllByTestId("nda-accept");
     expect(rows[0]).toHaveTextContent("Alice Moreno");
+    // Name and email both given: the name first, the email under it.
+    expect(within(rows[0]).getByTestId("viewer-primary")).toHaveTextContent("Alice Moreno");
+    expect(within(rows[0]).getByTestId("viewer-email")).toHaveTextContent("alice@acme.com");
     expect(rows[1]).toHaveTextContent("Dana Reyes");
     expect(rows[1]).not.toHaveTextContent("Ahmad");
   });

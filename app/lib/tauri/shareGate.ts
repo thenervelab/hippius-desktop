@@ -65,3 +65,18 @@ export function setLinkGate(shareToken: string, allow: string, block: string, ki
 export function removeLinkGate(shareToken: string, kind: LinkKind = "file"): Promise<void> {
   return invoke<void>("share_remove_gate", { shareToken, ...kindArg(kind) });
 }
+
+/** One entry of a list box, as Rust would store it, and why it can't be if it can't. */
+export interface GateEntry {
+  value: string;
+  /** Rust's sentence for an entry a save would refuse; `null` when it is fine. */
+  error: string | null;
+}
+
+/**
+ * What the owner typed or pasted into a list box, split into entries and
+ * checked by Rust exactly as saving would. Nothing is sent.
+ */
+export function parseGateEntries(text: string): Promise<GateEntry[]> {
+  return invoke<GateEntry[]>("share_parse_gate_entries", { text });
+}

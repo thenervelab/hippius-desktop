@@ -188,7 +188,20 @@ export interface NotificationPreferences {
   firstViews: boolean;
   comments: boolean;
   digest: Digest;
+  /**
+   * The newer emails. Each is present only while the server sends that
+   * email (Rust leaves it out otherwise), and is sent back only when present.
+   */
+  returnVisits?: boolean;
+  ndaAccepts?: boolean;
+  gateRefusals?: boolean;
 }
+
+/**
+ * Which visit emails the owner gets about one file link: every visit, the
+ * first visit only (the server's default), or none at all.
+ */
+export type VisitEmails = "every" | "first" | "off";
 
 export function getShareInsights(shareToken: string): Promise<ShareInsights> {
   return invoke<ShareInsights>("share_get_insights", { shareToken });
@@ -292,6 +305,18 @@ export function getNotificationPreferences(): Promise<NotificationPreferences> {
 
 export function setNotificationPreferences(preferences: NotificationPreferences): Promise<void> {
   return invoke<void>("share_set_notification_preferences", { preferences });
+}
+
+/**
+ * A file link's own email setting; `null` when the server has none for it
+ * (Rust's `share_get_link_visit_emails`), and then nothing is shown.
+ */
+export function getLinkVisitEmails(shareToken: string): Promise<VisitEmails | null> {
+  return invoke<VisitEmails | null>("share_get_link_visit_emails", { shareToken });
+}
+
+export function setLinkVisitEmails(shareToken: string, visits: VisitEmails): Promise<void> {
+  return invoke<void>("share_set_link_visit_emails", { shareToken, visits });
 }
 
 /**

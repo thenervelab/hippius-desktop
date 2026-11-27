@@ -35,6 +35,7 @@ import {
 import {
   BAR_FILL,
   BAR_TRACK,
+  CHART_LABEL,
   DIVIDE,
   FOCUS,
   HAIRLINE,
@@ -166,7 +167,7 @@ function PageRows({ pages }: { pages: InsightsPages }) {
   const shown = all.slice(0, limit);
   return (
     <section aria-label="Pages">
-      <div aria-hidden className={cn("mb-1 flex items-center gap-3 text-[11.5px]", MUTED)}>
+      <div aria-hidden className={cn("mb-1 flex items-center gap-3", CHART_LABEL)}>
         <span className="w-14 shrink-0">Page</span>
         <span className="min-w-0 flex-1">Reached</span>
         <span className="w-11 shrink-0 text-right">Time</span>
@@ -176,15 +177,15 @@ function PageRows({ pages }: { pages: InsightsPages }) {
           <li key={page} className="flex items-center gap-3 py-1">
             <span className={cn("w-14 shrink-0 text-[12.5px] tabular-nums", STRONG)}>Page {page}</span>
             <div className="flex min-w-0 flex-1 items-center gap-2">
-              <div className={cn(BAR_TRACK, "min-w-0 flex-1")} aria-hidden>
+              <div className={cn(BAR_TRACK, "min-w-0 flex-1")} aria-hidden title={`Page ${page}: ${Math.round(reach)}% reached it, ${formatWatched(ms)}`}>
                 <div className={BAR_FILL} style={{ width: `${Math.round(reach)}%` }} />
               </div>
-              <span className={cn("w-9 shrink-0 text-right text-xs tabular-nums", MUTED)}>
+              <span className={cn("w-9 shrink-0 text-right", CHART_LABEL)}>
                 <span className="sr-only">reached by </span>
                 {Math.round(reach)}%
               </span>
             </div>
-            <span className={cn("w-11 shrink-0 text-right text-xs tabular-nums", MUTED)}>
+            <span className={cn("w-11 shrink-0 text-right", CHART_LABEL)}>
               <span className="sr-only">, median time </span>
               {formatWatched(ms)}
             </span>

@@ -159,6 +159,30 @@ fn lists_from_text(allow: &str, block: &str) -> Result<GateLists> {
     Ok(lists)
 }
 
+/// One entry the owner typed or pasted into a list box, as a chip shows it:
+/// the entry as it will be stored, and why it can't be, if it can't.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GateEntry {
+    pub value: String,
+    pub error: Option<String>,
+}
+
+/// What the owner typed or pasted, as the entries the lists would store,
+/// each with the sentence `share_set_gate` would refuse it with. The same
+/// splitting and checks as saving (`parse_entries`, `is_gate_entry`), so a
+/// chip marked fine is one the save takes.
+#[must_use]
+pub fn gate_entries(text: &str) -> Vec<GateEntry> {
+    parse_entries(text)
+        .into_iter()
+        .map(|value| {
+            let error = (!is_gate_entry(&value)).then(|| not_an_entry(&value));
+            GateEntry { value, error }
+        })
+        .collect()
+}
+
 /// The entry a server `400` names (`allow[3] ...`), from the lists sent.
 fn entry_named_by(message: &str, lists: &GateLists) -> Option<String> {
     static NAMED: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b(allow|block)\[(\d+)\]").expect("a fixed pattern"));
@@ -373,6 +397,13 @@ pub async fn share_get_gate(state: tauri::State<'_, AppState>, share_token: Stri
     Ok(gate_on(&wire, lists, in_plan))
 }
 
+/// The allow and block boxes' chips: what the owner typed or pasted, split,
+/// lowercased and checked as a save would (`gate_entries`). Nothing is sent.
+#[tauri::command]
+pub fn share_parse_gate_entries(text: String) -> Vec<GateEntry> {
+    gate_entries(&text)
+}
+
 /// Turn the gate on or save its lists, from what the owner typed in each
 /// box (empty for anyone with an email). Needs a paid Drive plan.
 #[tauri::command]
@@ -496,6 +527,36 @@ mod tests {
             long.as_str(),
         ] {
             assert!(!is_gate_entry(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn chips_split_and_check_like_a_save() {
+        assert_eq!(
+            gate_entries("Alice@Acme.com, acme.com;nope\n acme.com"),
+            vec![
+                GateEntry {
+                    value: "alice@acme.com".into(),
+                    error: None
+                },
+                GateEntry {
+                    value: "acme.com".into(),
+                    error: None
+                },
+                GateEntry {
+                    value: "nope".into(),
+                    error: Some("\"nope\" isn't an email address or a domain.".into())
+                },
+            ]
+        );
+        assert!(gate_entries(" ,; \n").is_empty());
+        // A chip marked fine is one the save takes, and a bad one is refused in the same words.
+        for entry in gate_entries("a@b.co x.io +y@z.io") {
+            match (entry.error, lists_from_text(&entry.value, "")) {
+                (None, Ok(_)) => {}
+                (Some(said), Err(AppError::Validation(refused))) => assert_eq!(said, refused),
+                other => panic!("chip and save disagree on {}: {other:?}", entry.value),
+            }
         }
     }
 

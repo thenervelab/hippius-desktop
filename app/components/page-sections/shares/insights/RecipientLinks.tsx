@@ -20,6 +20,8 @@ import {
   type RecipientLinks as RecipientLinksView,
   type RecipientPerson,
 } from "@/app/lib/tauri/shareRecipients";
+import { LockMark, useDriveLocked, useDriveUnlock } from "./DriveUnlock";
+import { useUnlockCount } from "./useUnlockCount";
 import { actionErrorLine } from "./insightsView";
 import { FOCUS } from "./panelStyles";
 
@@ -120,6 +122,9 @@ export default function RecipientLinks({
   const [error, setError] = useState<string | null>(null);
   // The server refused a link for the plan after Rust could not read it.
   const [refusedForPlan, setRefusedForPlan] = useState(false);
+  // People can be added only once the Drive is unlocked here (Rust's `canAdd`).
+  const driveLocked = useDriveLocked();
+  const unlocks = useUnlockCount();
 
   const load = () =>
     Promise.resolve()
@@ -142,6 +147,12 @@ export default function RecipientLinks({
       alive = false;
     };
   }, [shareToken]);
+
+  // Unlocked while open: read again, so the box to add people appears.
+  useEffect(() => {
+    if (unlocks > 0) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlocks]);
 
   if (!view?.offered) return null;
   const people = mergePeople(view.people, made)
@@ -228,6 +239,7 @@ export default function RecipientLinks({
           body={RECIPIENTS_UPGRADE_BODY}
         />
       )}
+      {!view.canAdd && driveLocked && <LockedAddRow onUnlocked={() => void load()} />}
       {view.canAdd && !locked && (
         <form className="flex min-w-0 items-center gap-2" onSubmit={(e) => void add(e)}>
           <input
@@ -394,5 +406,25 @@ function PersonRow({
         <X className="size-4" aria-hidden />
       </button>
     </li>
+  );
+}
+
+/**
+ * In place of the box while the Drive is locked: it looks like the box, with
+ * a lock, and pressing it unlocks, then reads the list again so the real box
+ * appears.
+ */
+function LockedAddRow({ onUnlocked }: { onUnlocked: () => void }) {
+  const unlock = useDriveUnlock();
+  return (
+    <button
+      type="button"
+      onClick={() => unlock(onUnlocked)}
+      data-testid="recipient-links-locked"
+      className={cn(INPUT, "flex h-[38px] w-full flex-none items-center justify-between gap-2 text-left text-grey-60 dark:text-grey-dark-600", FOCUS)}
+    >
+      <span className="truncate">Unlock your Drive to add people</span>
+      <LockMark />
+    </button>
   );
 }

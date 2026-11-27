@@ -10,6 +10,7 @@ import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { formatWatched, loadErrorLine, pagesSeenLabel } from "./insightsView";
 import { LoadError } from "./LoadError";
 import { PANEL_QUERY, viewerVisitsQueryKey } from "./queryKeys";
+import { PageBars } from "./PageBars";
 import { MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /** "Nov 20, 9:12 AM" in the owner's own zone. */
@@ -58,38 +59,21 @@ export function ViewerVisits({ shareToken, viewerId }: { shareToken: string; vie
     return <LoadError line={loadErrorLine("this viewer's visits", query.error, online)} onRetry={() => void query.refetch()} />;
   }
   const pages = first.pageTimeMs;
-  const maxMs = pages ? Math.max(0, ...pages) : 0;
   return (
     <div className="flex flex-col gap-3" data-testid="viewer-visits">
       <p className={cn("text-xs tabular-nums", MUTED)}>{visitsSummary(first)}</p>
       {pages && pages.length > 1 && (
         <div>
-          <p className={cn("mb-1.5 text-xs font-medium", STRONG)}>Time per page</p>
-          <ol className="flex h-10 items-end gap-px" aria-label="Time per page">
-            {pages.map((ms, i) => (
-              <li
-                key={i}
-                title={`Page ${i + 1}: ${formatWatched(ms)}`}
-                className="flex h-full min-w-0 flex-1 items-end"
-              >
-                <span className="sr-only">
-                  Page {i + 1}, {ms > 0 ? formatWatched(ms) : "not seen"}
-                </span>
-                <span
-                  aria-hidden
-                  className={cn(
-                    "block w-full rounded-t-[2px]",
-                    ms > 0 ? "bg-primary-50 dark:bg-primary-brand-dark" : "bg-grey-90 dark:bg-[#333]",
-                  )}
-                  style={{ height: ms > 0 && maxMs > 0 ? `${Math.max(8, (ms / maxMs) * 100)}%` : "8%" }}
-                />
-              </li>
-            ))}
-          </ol>
-          <div className={cn("mt-1 flex justify-between text-[11px] tabular-nums", MUTED)} aria-hidden>
-            <span>Page 1</span>
-            <span>Page {pages.length}</span>
-          </div>
+          <p className={cn("text-xs font-medium", STRONG)}>Time per page</p>
+          <PageBars
+            values={pages}
+            height={48}
+            listLabel="Time per page"
+            summary={`Time per page over ${pages.length} pages.`}
+            label={(i) => `Page ${i + 1}`}
+            valueText={(i) => ((pages[i] ?? 0) > 0 ? formatWatched(pages[i] ?? 0) : "not seen")}
+            testId="viewer-page-time"
+          />
         </div>
       )}
       <ul className="flex flex-col gap-1.5" aria-label="Visits">
