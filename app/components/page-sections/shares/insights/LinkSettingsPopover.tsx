@@ -290,7 +290,7 @@ export function LinkSettingsPopover({
       )}
       {/* Drawn only where Rust offers it: a server with links per person. */}
       <div className="mt-2.5 empty:hidden">
-        <RecipientLinks layout="list" shareToken={shareToken} />
+        <RecipientLinks layout="list" shareToken={shareToken} onUpgrade={upgrade} />
       </div>
       <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
         <HowWeCountViews />

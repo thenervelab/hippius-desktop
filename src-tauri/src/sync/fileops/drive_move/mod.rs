@@ -821,6 +821,7 @@ impl Rows {
             total_bytes: *total,
             status: status.to_string(),
             error,
+            note: None,
         });
     }
 

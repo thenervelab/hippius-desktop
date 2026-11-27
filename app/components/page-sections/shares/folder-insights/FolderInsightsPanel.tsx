@@ -11,8 +11,13 @@
 // file link's Insights and Manage access. Read by the listing's token hash,
 // so it works for a link made on another device. Every number, and whether
 // it is locked, comes from Rust.
+//
+// Under the switch sit the link's rules as cards (`FolderLinkRules`): Ask for
+// email, Allow list and NDA, where the server has them for folder links. A
+// card's editor opens in place of the panel's numbers, with a back arrow. A
+// link with an NDA text, or any accepts, gets an NDA tab of who accepted.
 
-import { useId, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useAtom } from "jotai";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,6 +43,8 @@ import {
 } from "@/components/page-sections/shares/insights/insightsView";
 import { CARD, FILL, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG } from "@/components/page-sections/shares/insights/panelStyles";
 import { PANEL_MUTATION, PANEL_QUERY } from "@/components/page-sections/shares/insights/queryKeys";
+import { NdaTab, NDA_TAB, useNdaAccepts } from "@/components/page-sections/shares/insights/NdaTab";
+import { FolderLinkRules } from "@/components/page-sections/shares/rules/LinkRules";
 import { saveFolderInsightsCsv } from "./exportFolderCsv";
 import { FolderFilesTab, FolderLocked, FolderPeopleTab, type FolderInsightsTab } from "./FolderInsightsBody";
 import {
@@ -83,9 +90,13 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
   const tabsId = useId();
   const online = useIsOnline();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [tab, setTab] = useState<FolderInsightsTab>("files");
+  const router = useRouter();
+  const [tab, setTab] = useState<FolderInsightsTab | "nda">("files");
   const [insightsOn, setInsightsOn] = useState<boolean | null>(target.insightsOn);
   const [exporting, setExporting] = useState(false);
+  // A rule card's editor is open: it takes the place of the numbers below.
+  const [rulePushed, setRulePushed] = useState(false);
+  const ndaAccepts = useNdaAccepts(target.tokenHash, "folder");
 
   const insights = useQuery({
     queryKey: folderInsightsQueryKey(target.tokenHash),
@@ -109,12 +120,27 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
     }
   };
 
+  // Folder viewers are anonymous: an accept without a typed name shows by
+  // the label the People tab gives the same viewer.
+  const viewerNames = useMemo(() => {
+    const names: Record<string, string | null> = {};
+    if (data?.people.state === "shown") for (const p of data.people.value) names[p.viewerId] = p.label;
+    return names;
+  }, [data]);
+  const activeTab = tab === "nda" && !ndaAccepts.shown ? "files" : tab;
+
   const tabs = data
     ? [
         { tabKey: "files", tabName: tabLabel("Files", data.files.length) },
         { tabKey: "people", tabName: tabLabel("People", data.people.state === "shown" ? data.people.value.length : null) },
+        ...(ndaAccepts.shown ? [{ tabKey: "nda", tabName: tabLabel(NDA_TAB, ndaAccepts.count) }] : []),
       ]
     : [];
+
+  const upgrade = () => {
+    onClose();
+    router.push(BILLING_ROUTE);
+  };
 
   return (
     <div className="relative flex h-full min-h-0 flex-col font-geist" data-testid="folder-insights-panel">
@@ -150,7 +176,7 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
             <X className="size-4" />
           </button>
         </div>
-        {!target.revoked && (
+        {!target.revoked && !rulePushed && (
           <FolderInsightsSwitch
             target={target}
             on={insightsOn === true}
@@ -161,7 +187,18 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
         )}
       </header>
 
-      {insights.isPending ? (
+      {/* One place in the tree whether a card's editor is open or not, so
+          opening one keeps its state. */}
+      {!target.revoked && (
+        <div
+          className={rulePushed ? "min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4" : "shrink-0 px-6"}
+          data-testid="folder-link-rules"
+        >
+          <FolderLinkRules tokenHash={target.tokenHash} onUpgrade={upgrade} onPushedChange={setRulePushed} className="mt-3" />
+        </div>
+      )}
+
+      {rulePushed ? null : insights.isPending ? (
         <div className="min-h-0 flex-1 px-6 pt-5" data-testid="folder-insights-loading" aria-busy="true">
           <div className={cn(SKELETON, "h-[68px] rounded-[10px]")} />
           <div className={cn(SKELETON, "mt-5 h-[30px] rounded-[9px]")} />
@@ -199,9 +236,9 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
                 idBase={tabsId}
                 ariaLabel="Insights"
                 tabs={tabs}
-                activeTab={tab}
+                activeTab={activeTab}
                 onTabChange={(key) => {
-                  setTab(key as FolderInsightsTab);
+                  setTab(key as FolderInsightsTab | "nda");
                   scrollRef.current?.scrollTo?.({ top: 0 });
                 }}
                 className={cn("flex w-full rounded-[9px] p-[3px]", FILL)}
@@ -214,12 +251,17 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
               />
             </div>
             <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-3" data-testid="folder-insights-body">
-              <TabPanel idBase={tabsId} tabKey="files" activeTab={tab}>
+              <TabPanel idBase={tabsId} tabKey="files" activeTab={activeTab}>
                 <FolderFilesTab insights={data} />
               </TabPanel>
-              <TabPanel idBase={tabsId} tabKey="people" activeTab={tab}>
+              <TabPanel idBase={tabsId} tabKey="people" activeTab={activeTab}>
                 <FolderPeopleTab insights={data} notCounting={insightsOn === false} onUpgrade={onClose} />
               </TabPanel>
+              {ndaAccepts.shown && (
+                <TabPanel idBase={tabsId} tabKey="nda" activeTab={activeTab}>
+                  <NdaTab state={ndaAccepts} viewerNames={viewerNames} shareToken={target.tokenHash} fileName={target.name} kind="folder" />
+                </TabPanel>
+              )}
             </div>
           </>
         )

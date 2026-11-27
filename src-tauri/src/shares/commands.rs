@@ -1700,7 +1700,7 @@ pub(crate) fn mint_path_for_prefix(folder_label: &str, path_prefix: &str) -> Res
 /// Index the keystore's stored tokens by their blake3 hex — the join key
 /// the folder-share listing speaks. File-share tokens share the table and
 /// get hashed too; their hashes simply never appear in the folder listing.
-fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
+pub(super) fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
     let entries = keystore.all_entries().map_err(|e| AppError::Hcfs(format!("keystore scan: {e}")))?;
     Ok(entries
         .into_iter()

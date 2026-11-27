@@ -3,7 +3,15 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import "@testing-library/jest-dom";
 import { toast } from "sonner";
 
-import RecipientLinks, { allLinksText, COPY_ALL, mergePeople, NDA_PENDING_NOTE, UNNAMED_LINK } from "../RecipientLinks";
+import RecipientLinks, {
+  allLinksText,
+  COPY_ALL,
+  mergePeople,
+  NDA_PENDING_NOTE,
+  RECIPIENTS_LOCKED_PROMPT,
+  RECIPIENTS_UPGRADE_LABEL,
+  UNNAMED_LINK,
+} from "../RecipientLinks";
 import type { RecipientLinks as View, RecipientPerson } from "@/app/lib/tauri/shareRecipients";
 
 const invokeMock = vi.fn();
@@ -33,7 +41,7 @@ function answer(replies: Record<string, (args: Record<string, unknown>) => unkno
   });
 }
 
-const view = (v: Partial<View>): View => ({ offered: true, canAdd: true, people: [], ...v });
+const view = (v: Partial<View>): View => ({ offered: true, canAdd: true, people: [], inPlan: true, ...v });
 
 describe("RecipientLinks", () => {
   beforeEach(() => {
@@ -73,6 +81,32 @@ describe("RecipientLinks", () => {
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     expect(box).toHaveValue("Carol");
     expect(screen.getByRole("alert")).toHaveTextContent("A file can have up to 100 links.");
+  });
+
+  it("shows the upgrade card in place of the box on the free plan, and keeps the links already made", async () => {
+    answer({ share_recipient_links: () => view({ inPlan: false, people: [ALICE] }) });
+    const onUpgrade = vi.fn();
+    render(<RecipientLinks shareToken="tok" onUpgrade={onUpgrade} />);
+    const card = await screen.findByRole("region", { name: RECIPIENTS_UPGRADE_LABEL });
+    expect(card).toHaveTextContent(RECIPIENTS_LOCKED_PROMPT);
+    expect(screen.queryByRole("textbox", { name: "Names or emails" })).toBeNull();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button"));
+    expect(onUpgrade).toHaveBeenCalled();
+  });
+
+  it("turns a refusal for the plan into the upgrade card, not an error line", async () => {
+    answer({
+      share_recipient_links: () => view({ inPlan: null }),
+      share_add_recipient_links: () => {
+        throw { kind: "Validation", message: "Links per person are available on paid Drive plans." };
+      },
+    });
+    render(<RecipientLinks shareToken="tok" onUpgrade={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Names or emails" }), { target: { value: "Alice" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("region", { name: RECIPIENTS_UPGRADE_LABEL })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("copies one link, opens an email in the mail app, and copies them all", async () => {

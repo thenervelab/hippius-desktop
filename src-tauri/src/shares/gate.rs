@@ -44,6 +44,7 @@ use zeroize::Zeroizing;
 use super::insights::{
     Api, LINK_GONE, PLAN_UNREADABLE, REQUEST_TIMEOUT, UNREACHABLE, capabilities_checked, read_ok, read_switches_in_plan, transport,
 };
+use super::link_ref::{LinkKind, LinkRef};
 use super::owner_wrap::{WrapKey, derive_wrap_key};
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
@@ -251,9 +252,9 @@ fn parse_gate(body: &str) -> Result<WireGate> {
 }
 
 /// The link's gate, or `None` when it has none (the bodiless 404).
-async fn get_gate(http: &reqwest::Client, api: &Api, token: &str) -> Result<Option<WireGate>> {
+async fn get_gate(http: &reqwest::Client, api: &Api, link: LinkRef<'_>) -> Result<Option<WireGate>> {
     let resp = http
-        .get(api.share_url(token, "/gate")?)
+        .get(api.link_url(link, "/gate")?)
         .bearer_auth(&api.bearer)
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -265,9 +266,9 @@ async fn get_gate(http: &reqwest::Client, api: &Api, token: &str) -> Result<Opti
     parse_gate(&read_ok(resp).await?).map(Some)
 }
 
-async fn put_gate(http: &reqwest::Client, api: &Api, token: &str, lists: &GateLists, sealed_lists: &str) -> Result<WireGate> {
+async fn put_gate(http: &reqwest::Client, api: &Api, link: LinkRef<'_>, lists: &GateLists, sealed_lists: &str) -> Result<WireGate> {
     let resp = http
-        .put(api.share_url(token, "/gate")?)
+        .put(api.link_url(link, "/gate")?)
         .bearer_auth(&api.bearer)
         .timeout(REQUEST_TIMEOUT)
         .json(&serde_json::json!({ "allow": lists.allow, "block": lists.block, "sealed_lists": sealed_lists }))
@@ -279,9 +280,9 @@ async fn put_gate(http: &reqwest::Client, api: &Api, token: &str, lists: &GateLi
 }
 
 /// Remove the gate. A link that already has none is what was asked for.
-async fn delete_gate(http: &reqwest::Client, api: &Api, token: &str) -> Result<()> {
+async fn delete_gate(http: &reqwest::Client, api: &Api, link: LinkRef<'_>) -> Result<()> {
     let resp = http
-        .delete(api.share_url(token, "/gate")?)
+        .delete(api.link_url(link, "/gate")?)
         .bearer_auth(&api.bearer)
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -339,18 +340,18 @@ fn gate_on(wire: &WireGate, lists: Option<GateLists>, in_plan: Option<bool>) -> 
     }
 }
 
-/// A file link's email gate, for the share dialog and Link settings.
+/// A link's email gate, for the share dialog and Link settings: a file
+/// link by its token, or a folder link by its token hash (`kind: "folder"`,
+/// behind `folder_share_gates`).
 #[tauri::command]
-pub async fn share_get_gate(state: tauri::State<'_, AppState>, share_token: String) -> Result<LinkGate> {
+pub async fn share_get_gate(state: tauri::State<'_, AppState>, share_token: String, kind: Option<LinkKind>) -> Result<LinkGate> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_gates {
+    if !link.gates_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Ok(LinkGate::default());
     }
     let api = Api::for_account(&state, &account_id).await?;
-    let (gate, in_plan) = tokio::join!(
-        get_gate(&state.api_client, &api, &share_token),
-        read_switches_in_plan(&state, &account_id)
-    );
+    let (gate, in_plan) = tokio::join!(get_gate(&state.api_client, &api, link), read_switches_in_plan(&state, &account_id));
     let Some(wire) = gate? else {
         return Ok(LinkGate {
             offered: true,
@@ -362,7 +363,7 @@ pub async fn share_get_gate(state: tauri::State<'_, AppState>, share_token: Stri
         None
     } else {
         match wrap_key_for(&state, &account_id).await {
-            Some(key) => open_lists(&key, &account_id, &share_token, &wire.sealed_lists),
+            Some(key) => open_lists(&key, &account_id, link.id(), &wire.sealed_lists),
             None => None,
         }
     };
@@ -375,9 +376,16 @@ pub async fn share_get_gate(state: tauri::State<'_, AppState>, share_token: Stri
 /// Turn the gate on or save its lists, from what the owner typed in each
 /// box (empty for anyone with an email). Needs a paid Drive plan.
 #[tauri::command]
-pub async fn share_set_gate(state: tauri::State<'_, AppState>, share_token: String, allow: String, block: String) -> Result<LinkGate> {
+pub async fn share_set_gate(
+    state: tauri::State<'_, AppState>,
+    share_token: String,
+    allow: String,
+    block: String,
+    kind: Option<LinkKind>,
+) -> Result<LinkGate> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_gates {
+    if !link.gates_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Err(AppError::Validation(GATE_UNAVAILABLE.into()));
     }
     let lists = lists_from_text(&allow, &block)?;
@@ -388,10 +396,14 @@ pub async fn share_set_gate(state: tauri::State<'_, AppState>, share_token: Stri
     let key = wrap_key_for(&state, &account_id)
         .await
         .ok_or_else(|| AppError::Validation(LISTS_NOT_HERE.into()))?;
-    let sealed = seal_lists(&key, &account_id, &share_token, &lists).map_err(|_| AppError::Validation(LISTS_NOT_HERE.into()))?;
-    keep_file_link_key(&state, &account_id, &share_token).await?;
+    let sealed = seal_lists(&key, &account_id, link.id(), &lists).map_err(|_| AppError::Validation(LISTS_NOT_HERE.into()))?;
+    // A folder link's key is the drive's (or its copy's), never handed out
+    // by `/link-key` to its owner, so a gate costs it nothing here.
+    if let LinkRef::File(token) = link {
+        keep_file_link_key(&state, &account_id, token).await?;
+    }
     let api = Api::for_account(&state, &account_id).await?;
-    let wire = put_gate(&state.api_client, &api, &share_token, &lists, &sealed).await?;
+    let wire = put_gate(&state.api_client, &api, link, &lists, &sealed).await?;
     Ok(gate_on(&wire, Some(lists), in_plan))
 }
 
@@ -418,13 +430,14 @@ async fn keep_file_link_key(state: &AppState, account_id: &str, share_token: &st
 /// Remove the gate, on any plan, so an owner who downgraded can always open
 /// a link back up.
 #[tauri::command]
-pub async fn share_remove_gate(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
+pub async fn share_remove_gate(state: tauri::State<'_, AppState>, share_token: String, kind: Option<LinkKind>) -> Result<()> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_gates {
+    if !link.gates_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Err(AppError::Validation(GATE_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
-    delete_gate(&state.api_client, &api, &share_token).await.map_err(|e| match e {
+    delete_gate(&state.api_client, &api, link).await.map_err(|e| match e {
         AppError::NotFound(_) => AppError::NotFound(LINK_GONE.into()),
         other => other,
     })
@@ -560,13 +573,17 @@ mod tests {
         .await;
         let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
 
-        assert_eq!(get_gate(&http, &api, "ungated").await.unwrap(), None, "no gate is the bodiless 404");
-        let got = get_gate(&http, &api, "tok_1").await.unwrap().unwrap();
+        assert_eq!(
+            get_gate(&http, &api, LinkRef::File("ungated")).await.unwrap(),
+            None,
+            "no gate is the bodiless 404"
+        );
+        let got = get_gate(&http, &api, LinkRef::File("tok_1")).await.unwrap().unwrap();
         assert_eq!((got.allow_count, got.block_count, got.sealed_lists.as_str()), (2, 1, "AQ=="));
 
-        put_gate(&http, &api, "tok_1", &lists(), "SEALED").await.unwrap();
-        delete_gate(&http, &api, "tok_1").await.unwrap();
-        delete_gate(&http, &api, "ungated").await.unwrap();
+        put_gate(&http, &api, LinkRef::File("tok_1"), &lists(), "SEALED").await.unwrap();
+        delete_gate(&http, &api, LinkRef::File("tok_1")).await.unwrap();
+        delete_gate(&http, &api, LinkRef::File("ungated")).await.unwrap();
 
         let seen = seen.lock().unwrap().clone();
         let put = seen.iter().find(|s| s.method == "PUT").unwrap();
@@ -577,6 +594,36 @@ mod tests {
             serde_json::json!({ "allow": ["alice@acme.com", "acme.com"], "block": ["mallory@acme.com"], "sealed_lists": "SEALED" })
         );
         assert!(seen.iter().any(|s| s.method == "DELETE" && s.path == "/v1/shares/tok_1/gate"));
+    }
+
+    /// A folder link's gate is the file link's, on its by-hash route, and its
+    /// sealed copy is bound to the hash (as the console seals it), so a copy
+    /// made for one link never opens as another's.
+    #[tokio::test]
+    async fn a_folder_links_gate_goes_to_its_by_hash_route() {
+        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let (base, seen) = mock(|s| match s.method.as_str() {
+            "GET" | "PUT" => (200, r#"{"allow_count":1,"block_count":0,"sealed_lists":""}"#.into()),
+            _ => (204, String::new()),
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
+        let link = LinkRef::Folder(HASH);
+        assert_eq!(get_gate(&http, &api, link).await.unwrap().unwrap().allow_count, 1);
+        put_gate(&http, &api, link, &lists(), "SEALED").await.unwrap();
+        delete_gate(&http, &api, link).await.unwrap();
+        let seen = seen.lock().unwrap().clone();
+        let route = format!("/v1/folder-shares/by-hash/{HASH}/gate");
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|s| s.path == route), "{seen:?}");
+        assert!(
+            get_gate(&http, &api, LinkRef::Folder("not-a-hash")).await.is_err(),
+            "nothing else is reachable"
+        );
+
+        let sealed = seal_lists(&key(7), OWNER, link.id(), &lists()).unwrap();
+        assert_eq!(open_lists(&key(7), OWNER, HASH, &sealed), Some(lists()));
+        assert_eq!(open_lists(&key(7), OWNER, TOKEN, &sealed), None);
     }
 
     #[test]

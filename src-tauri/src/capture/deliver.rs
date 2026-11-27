@@ -89,6 +89,21 @@ pub struct Placed {
     pub file_name: String,
 }
 
+/// The destination drive's folder on this machine, where [`place`] moves a
+/// capture for the sync engine to upload; `None` when the capture is
+/// uploaded to the drive directly (a drive that is not synced here, a
+/// paused one, or another account's).
+///
+/// # Errors
+///
+/// When the database cannot be read.
+pub async fn local_root(state: &AppState, account_id: &str, destination: &CaptureDestination) -> Result<Option<std::path::PathBuf>> {
+    if destination.owner_ss58.is_some() {
+        return Ok(None);
+    }
+    super::destination::own_local_path(state.pool()?, account_id, &destination.label).await
+}
+
 /// Put `file` in the destination's capture folder: moved into the drive's
 /// folder on this machine (the sync engine uploads it), or uploaded
 /// directly to a drive that is only on the server.
@@ -102,16 +117,23 @@ pub struct Placed {
 /// A failed upload is an `Err` and leaves `file` where it is: a long recording
 /// must not be lost because the network dropped at the end.
 ///
+/// `backup`: the capture's link already made its own copy on the server, so
+/// a direct upload here is its backup into the drive, and the upload list
+/// says so ("Backing up to Drive") rather than showing a second upload.
+///
 /// # Errors
 ///
 /// Whatever the upload refused with, including `NotReady(StorageLimitReached)`
 /// from the storage gate, which the UI answers with the plans dialog.
-pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, destination: &CaptureDestination, file: &Path) -> Result<Placed> {
-    let local_root = if destination.owner_ss58.is_none() {
-        super::destination::own_local_path(state.pool()?, account_id, &destination.label).await?
-    } else {
-        None
-    };
+pub async fn place(
+    state: &AppState,
+    app: tauri::AppHandle,
+    account_id: &str,
+    destination: &CaptureDestination,
+    file: &Path,
+    backup: bool,
+) -> Result<Placed> {
+    let local_root = local_root(state, account_id, destination).await?;
 
     // Read before the move, while the file is still the one recorded.
     let capture = tokio::task::spawn_blocking({
@@ -160,6 +182,7 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
             destination.owner_ss58.clone(),
             destination.folder_hash.clone(),
             capture,
+            backup,
         )
         .await?;
         if let Some(failure) = failures.into_iter().next() {

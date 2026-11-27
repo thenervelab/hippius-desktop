@@ -4,7 +4,7 @@ import { useAtomValue } from "jotai";
 import { AlertCircle, Loader2 } from "lucide-react";
 import { remoteUploadsAtom } from "@/app/lib/remote-upload/remoteUploadFeed";
 import { snapshotAtom } from "@/app/lib/hooks/useSyncSnapshot";
-import { rowPercent, uploadsInFolder } from "./uploadingHere";
+import { rowPercent, rowText, uploadsInFolder } from "./uploadingHere";
 
 /** At most this many rows; the sync widget has the full list. */
 const MAX_ROWS = 3;
@@ -37,7 +37,7 @@ export default function UploadingHereStrip({ label, subPath }: { label: string |
               <Loader2 className="size-4 shrink-0 animate-spin text-primary-50 motion-reduce:animate-none" />
             )}
             <span className="min-w-0 flex-1 truncate text-grey-10 dark:text-grey-light-100" title={row.fileName}>
-              {failed ? `Couldn't upload ${row.fileName}` : `Uploading ${row.fileName}`}
+              {rowText(row, failed)}
             </span>
             {!failed && (
               <span className="flex w-28 shrink-0 items-center gap-2 max-sm:w-16">

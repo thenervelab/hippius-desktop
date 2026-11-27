@@ -331,7 +331,7 @@ fn the_limit_dialog_uses_rusts_words() {
 fn a_delivered_recording_is_placed_as_usual_and_counted() {
     let src = read("src/capture/commands.rs");
     let body = fn_body(&src, "async fn deliver_and_announce(");
-    assert!(body.contains("super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?"));
+    assert!(body.contains("super::deliver::place(&state, app.clone(), &account_id, &destination, path, backup).await?"));
     for gone in ["place_unless_held", "Delivery::Held", "hold_and_announce", "recording_gate("] {
         assert!(!src.contains(gone), "nothing holds a recording after the fact ({gone})");
     }
@@ -428,6 +428,36 @@ fn the_link_is_made_from_the_capture_before_it_is_placed() {
     assert!(facts.contains("same_drive_path("), "the row is matched by its path in the drive");
     let follow = fn_body(&src, "fn spawn_sync_follow(");
     assert!(follow.contains("link_finishes_card("), "only its own folder");
+    // A direct upload is finished by its public link too, after the link's
+    // upload and before the drive copy starts, never after it landed.
+    let deliver_fn = fn_body(&src, "async fn deliver_and_announce(");
+    let linked = deliver_fn.find("link_first(").expect("the link comes first");
+    let finished = deliver_fn
+        .find("finish_card_by_link_while_direct(")
+        .expect("a direct upload's card is finished by its link");
+    let placing = deliver_fn.find("deliver::place(").expect("then the drive copy");
+    assert!(linked < finished && finished < placing);
+    assert!(deliver_fn.contains("deliver::local_root("), "only where the drive is not synced here");
+    assert!(
+        deliver_fn.contains("!shown && !finished_by_link"),
+        "no second \"Link copied\" once the drive copy lands"
+    );
+    let finish = fn_body(&src, "fn finish_card_by_link_while_direct(");
+    assert!(finish.contains("finished_by_link_while_direct("), "the rule lives in preview.rs");
+    // The temp file the direct upload reads outlives the finished card.
+    let preview = read("src/capture/preview.rs");
+    assert!(fn_body(&preview, "pub fn temp_copy_done_with(").contains("!self.drive_copy_pending"));
+    assert!(fn_body(&src, "fn announce_placed(").contains("drive_copy_pending = false"));
+    assert!(fn_body(&src, "fn announce_failed(").contains("drive_copy_pending = false"));
+    assert!(
+        fn_body(&deliver, "pub async fn place(").contains("local_root("),
+        "one answer for where it goes"
+    );
+    // With a link out, the direct upload is worded as the capture's backup.
+    assert!(deliver_fn.contains("path, backup)"), "the drive copy is the backup when a link is out");
+    assert!(fn_body(&deliver, "pub async fn place(").contains("backup,"));
+    let remote = read("src/sync/fileops/remote_upload.rs");
+    assert!(remote.contains("UploadBatch::capture_backup(app)"));
 }
 
 /// On a server that says "still uploading" to whoever opens a link still
