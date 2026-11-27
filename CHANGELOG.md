@@ -17,6 +17,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **The Insights panel can be made wider.** Drag its left edge (or use the arrow keys on it) to widen it; it remembers the width, and a double click puts it back.
+- **Insights charts are calmer and easier to read.** Softer bars and curves with one baseline, one label where it matters, and the exact number when you point at any part of a chart.
+- **Viewers show by name and email.** A viewer who gave a name shows it with their confirmed email under it, one who gave only an email shows the email, and only someone who gave neither shows as "Anonymous viewer". Long names are no longer cut to a few letters.
+- **Allow and block lists take emails and whole domains as chips.** Type or paste several at once; a mistyped entry is marked on the spot.
+- **Link settings say when your Drive needs unlocking, with an Unlock button.** Settings that need your Drive unlocked show a small lock, and pressing one unlocks first and then carries on.
+- **Link settings read more clearly.** Rules that are off say what that means ("Not asked", "None") instead of describing what they would do, and the Allow list and Expiry show their value without an On or Off beside it.
+
 - **Links per person show how to upgrade on the free plan.** Links per person come with paid Drive plans, so on the free plan the box for adding people is replaced by an upgrade card, and any links already made stay listed to copy or turn off.
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
 - **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading, and the chat shows its preview picture right away; the card shows how far the upload has got, and if the upload fails the card and the notification tell you the copied link won't open, and the card offers Retry. Long recordings also upload faster.

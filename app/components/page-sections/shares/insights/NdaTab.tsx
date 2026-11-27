@@ -8,9 +8,9 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { getNdaAccepts, type NdaAccept, type NdaAccepts } from "@/app/lib/tauri/shareNda";
 import type { LinkKind } from "@/app/lib/tauri/shareGate";
-import { PersonName } from "./CommentThreads";
 import { EmptyLine } from "./EmptyLine";
-import { InsightsAvatar } from "./InsightsAvatar";
+import { ViewerIdentity, viewerIdentity } from "./ViewerIdentity";
+import { DriveLockedLine, useDriveLocked } from "./DriveUnlock";
 import { ndaAcceptsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { saveNdaAcceptsCsv, saveNdaRecord } from "./exportNda";
 import { actionErrorLine } from "./insightsView";
@@ -21,6 +21,7 @@ export const NDA_TAB = "NDA";
 export const EARLIER_TEXT = "Earlier text";
 export const NO_ACCEPTS = "No one has accepted yet";
 export const TEXT_NOT_HERE = "This text can't be opened here.";
+export const NDA_TEXT_LOCKED = "Unlock your Drive to see the text.";
 export const EXPORT_ACCEPTS = "Export";
 export const RECORD = "Record";
 
@@ -63,11 +64,12 @@ export type NdaAcceptsState = ReturnType<typeof useNdaAccepts>;
 
 /**
  * The NDA tab: the link's current text, then a table of who accepted and
- * when, newest first. A person shows by the name they typed when they
- * accepted, else the email they proved on a link that asks for one (Rust
- * shows it only when it matches the server's check), else by the name the
- * Viewers tab gives them, else as an anonymous viewer. An
- * accept of a text the owner has since replaced says so.
+ * when, newest first. A person shows as the Viewers tab shows them
+ * (`ViewerIdentity`): the name they typed when they accepted (else the one
+ * the Viewers tab has for them) with the email they proved under it (Rust
+ * shows it only when it matches the server's check), the email alone, or
+ * "Anonymous viewer" when there is neither. An accept of a text the owner
+ * has since replaced says so.
  *
  * Export saves every accept as CSV, and each accept has a Record: both built
  * and written by Rust where the owner chooses, through the native save
@@ -77,13 +79,16 @@ export type NdaAcceptsState = ReturnType<typeof useNdaAccepts>;
 export function NdaTab({
   state,
   viewerNames,
+  viewers = {},
   shareToken,
   fileName,
   kind = "file",
 }: {
   state: NdaAcceptsState;
-  /** The Viewers tab's names, by viewer id. */
+  /** The Viewers tab's names, by viewer id: for the CSV, and shown when `viewers` has no entry. */
   viewerNames: Readonly<Record<string, string | null>>;
+  /** Who the Viewers tab says each viewer is (name and proven email), by viewer id. */
+  viewers?: Readonly<Record<string, { name: string | null; email: string | null }>>;
   /** A file link's token, or a folder link's token hash. */
   shareToken: string;
   fileName: string;
@@ -93,6 +98,7 @@ export function NdaTab({
   const first = pages[0] ?? null;
   const accepts = useMemo(() => acceptsNewestFirst(pages), [pages]);
   const online = useIsOnline();
+  const driveLocked = useDriveLocked();
   // What is being saved: the export, or one accept's record by id.
   const [saving, setSaving] = useState<"export" | number | null>(null);
 
@@ -124,6 +130,8 @@ export function NdaTab({
             >
               {first.text}
             </div>
+          ) : driveLocked ? (
+            <DriveLockedLine text={NDA_TEXT_LOCKED} />
           ) : (
             <p className={cn("text-xs", MUTED)}>{TEXT_NOT_HERE}</p>
           )}
@@ -168,21 +176,24 @@ export function NdaTab({
             </thead>
             <tbody>
               {accepts.map((a) => {
-                const name = a.signerName ?? a.email ?? viewerNames[a.viewerId] ?? null;
+                const seen = viewers[a.viewerId];
+                const email = a.email ?? seen?.email ?? null;
+                const name = a.signerName ?? (seen ? seen.name : (viewerNames[a.viewerId] ?? null));
+                const who = viewerIdentity(name, email);
                 const recordable = a.earlier || first?.text != null;
                 return (
                   <tr key={a.id} data-testid="nda-accept" className={cn("border-b last:border-b-0", HAIRLINE)}>
                     <td className="py-2.5 pr-2 align-middle">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        <InsightsAvatar name={name} size="md" />
-                        <div className="min-w-0 flex-1">
-                          <PersonName name={name} className="min-w-0 text-[13px]" />
+                      <ViewerIdentity
+                        name={name}
+                        email={email}
+                        meta={
                           <p className={cn("truncate text-xs @sm:hidden", MUTED)}>
                             {formatAcceptedAt(a.acceptedAt)}
                             {a.earlier && ` · ${EARLIER_TEXT}`}
                           </p>
-                        </div>
-                      </div>
+                        }
+                      />
                     </td>
                     <td className="hidden py-2.5 pr-2 align-middle @sm:table-cell">
                       <p className="truncate text-xs text-grey-20 dark:text-grey-dark-800">{formatAcceptedAt(a.acceptedAt)}</p>
@@ -193,7 +204,7 @@ export function NdaTab({
                         <button
                           type="button"
                           className={cn(TEXT_LINK, "ml-auto")}
-                          aria-label={`${RECORD} for ${name ?? "this accept"}`}
+                          aria-label={`${RECORD} for ${who.primary}`}
                           disabled={saving !== null}
                           onClick={() =>
                             run(a.id, "save the record", "Record saved", () => saveNdaRecord(shareToken, fileName, a.id, kind))

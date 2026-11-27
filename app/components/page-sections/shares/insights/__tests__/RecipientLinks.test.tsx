@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { toast } from "sonner";
+import { Provider, createStore } from "jotai";
+import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { activeRecoveryCheckAtom, type RecoveryCheck } from "@/app/lib/global-atoms/recoveryAtoms";
 
 import RecipientLinks, {
   allLinksText,
@@ -19,6 +22,26 @@ const openUrlMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...args: unknown[]) => openUrlMock(...args) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+
+const unlockCalls = vi.hoisted(() => ({ n: 0 }));
+const UNLOCK_CHECK: RecoveryCheck = {
+  hasServerBlob: true,
+  hasLocalMnemonic: false,
+  canDecryptLocal: false,
+  updatedAt: null,
+  recommendedFlow: "unlock",
+};
+let store: ReturnType<typeof createStore>;
+vi.mock("@/app/lib/hooks/useUnlockFlow", () => ({
+  useUnlockFlow: () => ({
+    unlock: async () => {
+      unlockCalls.n += 1;
+      store.set(activeRecoveryCheckAtom, UNLOCK_CHECK);
+    },
+    busy: false,
+    isOAuth: true,
+  }),
+}));
 
 const ALICE: RecipientPerson = { shareToken: "a", name: "Alice", url: "https://c/share/a#s=AA", mailto: null, ndaPending: false };
 const BOB: RecipientPerson = {
@@ -218,5 +241,29 @@ describe("recipient link helpers", () => {
   it("keeps a just-made link's URL when the listing has not caught up", () => {
     const listed = [{ ...ALICE, url: null }];
     expect(mergePeople(listed, [ALICE, BOB])).toEqual([ALICE, BOB]);
+  });
+
+  it("while the Drive is locked, the box says so with a lock, and after the unlock it is the real box", async () => {
+    let unlocked = false;
+    answer({ share_recipient_links: () => view({ canAdd: unlocked }) });
+    store = createStore();
+    store.set(syncRequiresReauthAtom, true);
+    render(
+      <Provider store={store}>
+        <RecipientLinks shareToken="tok" />
+      </Provider>,
+    );
+    const locked = await screen.findByTestId("recipient-links-locked");
+    expect(locked).toHaveTextContent("Unlock your Drive to add people");
+    expect(screen.queryByRole("textbox", { name: "Names or emails" })).toBeNull();
+    fireEvent.click(locked);
+    await waitFor(() => expect(unlockCalls.n).toBe(1));
+    unlocked = true;
+    await act(async () => {
+      store.set(syncRequiresReauthAtom, false);
+      store.set(activeRecoveryCheckAtom, null);
+    });
+    expect(await screen.findByRole("textbox", { name: "Names or emails" })).toBeInTheDocument();
+    expect(screen.queryByTestId("recipient-links-locked")).toBeNull();
   });
 });

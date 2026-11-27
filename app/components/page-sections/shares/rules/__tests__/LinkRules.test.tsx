@@ -8,6 +8,7 @@ import { LinkRules } from "../LinkRules";
 import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import { WATERMARK_UPGRADE_LABEL } from "@/components/page-sections/drive/LinkEngagementSwitches";
+import { SAVE_TURNS_GATE_ON } from "@/components/page-sections/shares/insights/EmailGateSettings";
 
 const invokeMock = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeMock(...args) }));
@@ -20,11 +21,17 @@ function answer(gate: unknown, nda: unknown = NO_NDA) {
   invokeMock.mockImplementation((cmd: string, args?: { allow?: string; block?: string }) => {
     if (cmd === "share_get_gate") return Promise.resolve(gate);
     if (cmd === "share_get_nda") return Promise.resolve(nda);
+    if (cmd === "share_parse_gate_entries") return Promise.resolve(chips((args as { text?: string })?.text ?? ""));
     if (cmd === "share_expiry_day_range") return Promise.resolve({ min: "2026-11-24", max: "2027-11-22" });
     if (cmd === "share_set_gate")
       return Promise.resolve({ ...GATE_OFF, on: true, allowCount: 1, lists: { allow: [args?.allow ?? ""], block: [] } });
     return Promise.resolve(undefined);
   });
+}
+
+/** Rust's split of a list box (`gate_entries`), for the chips: every entry fine. */
+function chips(text: string) {
+  return [...new Set(text.split(/[\s,;]+/).map((e) => e.trim().toLowerCase()).filter(Boolean))].map((value) => ({ value, error: null }));
 }
 
 function renderRules(more: Partial<Parameters<typeof LinkRules>[0]> = {}) {
@@ -47,7 +54,9 @@ describe("a link's rule cards", () => {
     // Today's watermark: a PDF with downloads off. It only reads.
     expect(screen.getByTestId("rule-watermark")).toHaveTextContent("On");
     expect(within(screen.getByTestId("rule-watermark")).queryByRole("button")).toBeNull();
-    expect(screen.getByTestId("rule-password")).toHaveTextContent("Set when the link was made");
+    // No password: it says so, never "Set when the link was made" beside Off.
+    expect(screen.getByTestId("rule-password")).toHaveTextContent("None");
+    expect(screen.getByTestId("rule-password")).not.toHaveTextContent("Set when the link was made");
   });
 
   it("hides Ask for email and Allow list where the server has no email gates", async () => {
@@ -83,8 +92,11 @@ describe("a link's rule cards", () => {
     answer(GATE_OFF);
     renderRules();
     fireEvent.click(within(await screen.findByTestId("rule-allowList")).getByRole("button"));
-    fireEvent.change(screen.getByRole("textbox", { name: "Only allow" }), { target: { value: "acme.com" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    const box = screen.getByRole("textbox", { name: "Only allow" });
+    fireEvent.change(box, { target: { value: "acme.com" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+    expect(await screen.findByText(SAVE_TURNS_GATE_ON, { exact: false })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("share_set_gate", { shareToken: "tok", allow: "acme.com", block: "" }),
     );

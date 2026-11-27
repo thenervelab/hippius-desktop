@@ -596,6 +596,7 @@ fn main() {
             crate::shares::viewer_visits::share_viewer_visits,
             crate::shares::gate::share_get_gate,
             crate::shares::gate::share_set_gate,
+            crate::shares::gate::share_parse_gate_entries,
             crate::shares::gate::share_remove_gate,
             crate::shares::nda::share_get_nda,
             crate::shares::nda::share_set_nda,

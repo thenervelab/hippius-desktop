@@ -5,14 +5,37 @@ import { ArrowLeft, ChevronRight } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED, STRONG } from "@/components/page-sections/shares/insights/panelStyles";
+import { LockMark, useDriveUnlock } from "@/components/page-sections/shares/insights/DriveUnlock";
 
 export interface LinkRule {
   id: string;
   label: string;
-  on: boolean;
+  /** On or Off; `null` for a rule whose value says it all (Allow list, Expiry). */
+  on: boolean | null;
   value: string;
   /** What opens when the card is pressed; none draws a card that only reads. */
   editor?: ReactNode;
+  /**
+   * It can't be changed until the Drive is unlocked on this computer: it
+   * shows a lock, and pressing it opens the unlock first, then its editor.
+   */
+  locked?: boolean;
+}
+
+const CARD_BUTTON = cn(
+  "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
+  "first:rounded-t-[12px] hover:bg-grey-90/60 dark:hover:bg-white/[0.04]",
+  FOCUS,
+);
+
+/** A locked card: pressing it unlocks the Drive, then opens its editor. */
+function LockedCardButton({ rule, onOpen, children }: { rule: LinkRule; onOpen: () => void; children: ReactNode }) {
+  const unlock = useDriveUnlock();
+  return (
+    <button type="button" data-rule={rule.id} onClick={() => unlock(onOpen)} className={CARD_BUTTON}>
+      {children}
+    </button>
+  );
 }
 
 /**
@@ -77,6 +100,8 @@ export function RuleCards({
     );
   }
 
+  const open = (id: string) => setPushedId(id);
+
   return (
     <ul
       ref={listRef}
@@ -88,16 +113,22 @@ export function RuleCards({
         const body = (
           <>
             <span className="min-w-0 flex-1">
-              <span className={cn("block text-[13px] font-medium", STRONG)}>{rule.label}</span>
-              <span className={cn("block truncate text-xs", MUTED)}>{rule.value}</span>
+              <span className={cn("flex items-center gap-1.5 text-[13px] font-medium", STRONG)}>
+                {rule.label}
+                {rule.locked && <LockMark />}
+              </span>
+              <span className={cn("line-clamp-2 break-words text-xs", MUTED)} title={rule.value}>
+                {rule.value}
+              </span>
             </span>
+            {/* A rule that is not a switch keeps the room, so every On and Off lines up. */}
             <span
               className={cn(
-                "shrink-0 text-xs font-medium",
+                "w-6 shrink-0 text-right text-xs font-medium",
                 rule.on ? "text-primary-50 dark:text-primary-brand-dark" : MUTED,
               )}
             >
-              {rule.on ? "On" : "Off"}
+              {rule.on === null ? "" : rule.on ? "On" : "Off"}
             </span>
             {/* A card that only reads keeps the chevron's room, so every On and Off lines up. */}
             {rule.editor ? (
@@ -109,17 +140,12 @@ export function RuleCards({
         );
         return (
           <li key={rule.id} data-testid={`rule-${rule.id}`}>
-            {rule.editor ? (
-              <button
-                type="button"
-                data-rule={rule.id}
-                onClick={() => setPushedId(rule.id)}
-                className={cn(
-                  "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
-                  "first:rounded-t-[12px] hover:bg-grey-90/60 dark:hover:bg-white/[0.04]",
-                  FOCUS,
-                )}
-              >
+            {rule.editor && rule.locked ? (
+              <LockedCardButton rule={rule} onOpen={() => open(rule.id)}>
+                {body}
+              </LockedCardButton>
+            ) : rule.editor ? (
+              <button type="button" data-rule={rule.id} onClick={() => open(rule.id)} className={CARD_BUTTON}>
                 {body}
               </button>
             ) : (

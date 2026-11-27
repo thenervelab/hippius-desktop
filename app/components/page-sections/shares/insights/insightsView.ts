@@ -395,9 +395,16 @@ export function nameHash(name: string): number {
   return h >>> 0;
 }
 
-/** First letter of the first and last word: `Maya Chen` reads `MC`, `Maya` reads `M`. */
+/**
+ * First letter of the first and last word: `Maya Chen` reads `MC`, `Maya`
+ * reads `M`. An email is read by the part before its `@`, split at dots,
+ * dashes and underscores: `maya.chen@acme.com` reads `MC`.
+ */
 export function initials(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  const trimmed = name.trim();
+  const at = trimmed.indexOf("@");
+  const source = at > 0 ? trimmed.slice(0, at).replace(/\+.*$/, "").replace(/[._-]+/g, " ") : trimmed;
+  const words = source.split(/\s+/).filter(Boolean);
   if (words.length === 0) return "";
   const first = Array.from(words[0])[0] ?? "";
   const last = words.length > 1 ? (Array.from(words[words.length - 1])[0] ?? "") : "";
@@ -562,7 +569,7 @@ export const DEFINITIONS: ReadonlyArray<{ term: string; meaning: string }> = [
   { term: "Pictures", meaning: "Screenshots and other pictures have views and viewers, but no completion or retention." },
   {
     term: "Privacy",
-    meaning: "Viewers stay anonymous unless they comment under a name. Only numbers are kept, never what they saw.",
+    meaning: "Viewers show by the name or confirmed email they gave. Only numbers are kept, never what they saw.",
   },
 ];
 
