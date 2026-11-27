@@ -156,21 +156,48 @@ fn delivery_reuses_the_existing_upload_and_share_paths() {
 }
 
 /// The recordings kept in the chosen folder while its drive could not be
-/// added are declared when it is, on both ways `add_drive` adds it, and on
-/// the new drive measured before it is added and declared after.
-/// `setup::tests` covers which files; this pins the calls.
+/// added are declared when a drive over it starts, before it is registered
+/// and can sync: the captures drive made of the folder, a drive the user
+/// adds over it later, and one whose first start failed and the next launch
+/// starts again all start through `initialize_sync_inner`. A folder found
+/// inside a drive that already existed is declared by `add_drive` itself.
+/// Either way, once the captures drive is set, they count for the free
+/// plan's gate before the server lists them. `setup::tests` covers which
+/// files; this pins the calls.
 #[test]
 fn captures_kept_in_the_chosen_folder_are_declared_when_its_drive_is_added() {
+    let lifecycle = read("src/sync/drive/lifecycle.rs");
+    let init = fn_body(&lifecycle, "pub(crate) async fn initialize_sync_inner(");
+    let declared = init
+        .find("declare_kept_in_starting_drive(")
+        .expect("a starting drive declares the captures kept in it");
+    let config_ready = init.find("prepare_config_dir(").expect("the config folder is prepared");
+    let registered = init.find("register_drive(").expect("the drive is registered");
+    assert!(
+        config_ready < declared && declared < registered,
+        "declared into its config folder before it can sync"
+    );
+    let guard = init[..declared].rfind("if !identity.is_member").expect("never on a member drive");
+    assert!(init[guard..declared].lines().count() <= 2, "the member guard is the declaration's own");
+
     let setup = read("src/capture/setup.rs");
     let add = fn_body(&setup, "async fn add_drive(");
-    assert_eq!(add.matches("measure_kept(").count(), 2, "both ways in measure them");
-    assert_eq!(add.matches("declare_kept(").count(), 2, "both ways in declare them");
+    let pending = add.find("was_pending").expect("only a folder that was pending counts");
     let added = add.find("add_local_sync_folder(").expect("a new drive is added");
-    let measured = add.rfind("measure_kept(").expect("measured for the new drive");
-    let declared = add.rfind("declare_kept(").expect("declared on the new drive");
-    assert!(measured < added && added < declared, "measured before the add, declared after");
-    let pending = add.find("was_pending").expect("only a folder that was pending is measured");
-    assert!(pending < add.find("measure_kept(").unwrap(), "decided before either branch measures");
+    assert_eq!(add.matches("measure_kept(").count(), 1, "measured only inside an existing drive");
+    assert_eq!(add.matches("declare_kept(").count(), 1, "declared only inside an existing drive");
+    let measured = add.find("measure_kept(").unwrap();
+    assert!(pending < measured && measured < added, "the existing drive's branch, decided first");
+    assert_eq!(add.matches("note_kept(").count(), 2, "both ways in count them");
+    assert!(added < add.rfind("note_kept(").unwrap(), "counted once the new drive is the destination");
+
+    // A keep that was still moving while the drive was added.
+    let commands = read("src/capture/commands.rs");
+    let keep = fn_body(&commands, "async fn keep_here(");
+    assert!(keep.contains("declare_kept_since_added("), "a keep that lands after the add is declared");
+    let since = fn_body(&setup, "pub async fn declare_kept_since_added(");
+    let locked = since.find("ENSURE_LOCK.lock()").expect("waits for the add");
+    assert!(locked < since.find("destination::load(").unwrap(), "reads the destination after the add");
 }
 
 /// Both ways a capture reaches a drive tell the server what it is, so a Free

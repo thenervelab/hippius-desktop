@@ -1230,6 +1230,14 @@ pub(crate) async fn initialize_sync_inner(
         .mass_delete_holds
         .arm(&label, &account_id, is_member, std::path::Path::new(&cfg.sync_path), &seed);
 
+    // Recordings kept in the chosen captures folder while its drive could
+    // not be added are declared before this drive can sync them, when the
+    // folder is in it. Not on a member drive: the folder is never there, and
+    // its recordings would count against the owner's plan.
+    if !identity.is_member {
+        crate::capture::setup::declare_kept_in_starting_drive(pool, &account_id, std::path::Path::new(&cfg.sync_path), &folder_dir).await;
+    }
+
     // Create drive and set HCFS config
     let mut manager = DriveManager::new(PathBuf::from(&cfg.sync_path), folder_dir.clone());
 
