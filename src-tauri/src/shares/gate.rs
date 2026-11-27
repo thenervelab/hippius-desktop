@@ -453,9 +453,22 @@ async fn keep_file_link_key(state: &AppState, account_id: &str, share_token: &st
         return Ok(());
     };
     let client = super::client::build_account_client(pool, account_id).await?;
-    super::file_link_key::keep_before_gate(&client, &super::file_link_key::FileLinkKeys::new(pool.clone()), share_token, &link_secret)
-        .await
-        .map_err(|e| held_back(&e))
+    // A link already gated (lists changed on a link made elsewhere) opens
+    // only through the owner's route.
+    let api = Api::for_account(state, account_id).await?;
+    let owner = super::file_link_key::OwnerRoute {
+        http: &state.api_client,
+        api: &api,
+    };
+    super::file_link_key::keep_before_gate(
+        &client,
+        Some(&owner),
+        &super::file_link_key::FileLinkKeys::new(pool.clone()),
+        share_token,
+        &link_secret,
+    )
+    .await
+    .map_err(|e| held_back(&e))
 }
 
 /// Remove the gate, on any plan, so an owner who downgraded can always open

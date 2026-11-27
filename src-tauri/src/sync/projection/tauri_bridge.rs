@@ -931,6 +931,9 @@ fn handle_engine_sync_completed(app: &AppHandle, event: SyncEvent) {
         conflicts_resolved,
         conflicts_skipped,
         files_failed,
+        // `files_trashed_remotely` (how many of the remote deletes went to
+        // Trash) and any later count: the variant is non-exhaustive.
+        ..
     } = event
     else {
         // `on_event` routes only this variant here.

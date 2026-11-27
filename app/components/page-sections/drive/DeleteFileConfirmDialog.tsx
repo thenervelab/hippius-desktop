@@ -8,7 +8,7 @@ import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
 import TurnOffLinksOption from "./TurnOffLinksOption";
 import { useCaptureLinkTokens } from "./useCaptureInsightsItem";
-import { useDeleteMode, useSkipTrash } from "@/app/lib/trash/deleteMode";
+import { useDeleteMode, useDeleteRules } from "@/app/lib/trash/deleteMode";
 import { DELETE_FOREVER_BUTTON, DELETE_FOREVER_TITLE, deleteForeverText } from "@/app/lib/trash/copy";
 
 /**
@@ -38,8 +38,9 @@ export default function DeleteFileConfirmDialog({
   const linkTokens = useCaptureLinkTokens();
   const links = useMemo(() => (file ? linkTokens(file) : []), [file, linkTokens]);
   const [turnOff, setTurnOff] = useState(true);
-  const mode = useDeleteMode();
-  const { loaded: skipKnown } = useSkipTrash();
+  const mode = useDeleteMode(file ? [file] : []);
+  // The mode waits for Rust's rules (Skip Trash, who may delete forever).
+  const skipKnown = useDeleteRules().rules !== null;
   // The mode the file arrived under: Option let go later changes nothing.
   const [arrivedMode, setArrivedMode] = useState<typeof mode | null>(null);
   const trashed = useRef<FormattedUserFile | null>(null);

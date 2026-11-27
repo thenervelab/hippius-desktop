@@ -15,12 +15,18 @@ import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   deleteForeverPromptAtom,
   deleteLabel,
+  deleteScope,
   resolveDeleteMode,
+  rowDriveLabel,
+  useDeleteRules,
   useOptionKeyHeld,
-  useSkipTrash,
   type DeleteMode,
 } from "@/app/lib/trash/deleteMode";
+import { toast } from "sonner";
 import { trashShortcutHint, useTrashShortcuts } from "@/app/lib/hooks/useTrashShortcuts";
+
+/** Rust's sentence for the same refusal (`trash::NOT_YOURS_TO_DELETE`). */
+const NOT_YOURS_TO_DELETE = "Only the drive's owner or a manager can delete items forever.";
 
 interface SelectionActionBarProps {
   /**
@@ -49,12 +55,14 @@ const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
   const starrable = selectedFiles.filter((f) => canStar(f, basePath));
   const selectionStarred = stars.allStarred(starrable, basePath);
   // With Trash on, the button moves to Trash (no confirm, Undo); Option, or
-  // the "Skip Trash" setting, makes it Delete forever, which asks first.
-  // With Trash off it is today's Delete, word for word.
+  // the "Skip Trash" setting, makes it Delete forever, which asks first, but
+  // only in drives this account owns or manages (Rust's rules). With Trash
+  // off it is today's Delete, word for word.
   const trashEnabled = useAtomValue(driveTrashEnabledAtom);
-  const { skipTrash } = useSkipTrash();
+  const { rules } = useDeleteRules();
   const optionHeld = useOptionKeyHeld();
-  const mode = resolveDeleteMode(trashEnabled, skipTrash, optionHeld);
+  const scope = deleteScope(rules?.drives, selectedFiles.map(rowDriveLabel));
+  const mode = resolveDeleteMode(trashEnabled, scope.skipsTrash, optionHeld, scope.canDeleteForever);
   // Which confirmation is open: frozen when it opens, so releasing Option
   // while it is up does not change what it asks.
   const [dialogForever, setDialogForever] = useState(false);
@@ -96,8 +104,8 @@ const SelectionActionBar: React.FC<SelectionActionBarProps> = ({
 
   useTrashShortcuts({
     enabled: trashEnabled && selectedFiles.length > 0 && !showDeleteDialog,
-    onTrash: () => (skipTrash ? openForever() : moveSelectionToTrash()),
-    onForever: openForever,
+    onTrash: () => (scope.skipsTrash && scope.canDeleteForever ? openForever() : moveSelectionToTrash()),
+    onForever: () => (scope.canDeleteForever ? openForever() : toast.error(NOT_YOURS_TO_DELETE)),
   });
 
   // Cmd/Shift-click selects without the mode, and gets the bar too.

@@ -492,6 +492,18 @@ struct FolderWrapRow {
     owner_wrap: Option<String>,
 }
 
+/// What [`sync_file_wraps`] could do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WrapsSynced {
+    /// The listing was read, and every wrap that opened is in the keystore.
+    Read,
+    /// The account's phrase is not loaded (the Drive is locked here), so no
+    /// wrap could be opened. Unlocking is what brings the keys.
+    Locked,
+    /// Nothing was read: no server, no bearer, or the listing failed.
+    Unread,
+}
+
 /// Reconcile this device's keystore with the server's file-share wraps,
 /// from a single listing fetch.
 ///
@@ -512,15 +524,21 @@ pub(crate) async fn sync_file_wraps(
     keystore: &SqliteShareKeystore,
     key_map: &mut HashMap<String, ShareSecret>,
     tokens: &[&str],
-) {
+) -> WrapsSynced {
     if tokens.is_empty() {
-        return;
+        return WrapsSynced::Read;
     }
     let Some(t) = transport_for(state, account_id).await else {
-        return;
+        // Asked again only on this failure path, so an unlocked read costs
+        // no second phrase lookup.
+        return if crate::sync::mnemonic::get_mnemonic_for_account(state, account_id).await.is_err() {
+            WrapsSynced::Locked
+        } else {
+            WrapsSynced::Unread
+        };
     };
     let Ok(key) = derive_wrap_key(t.mnemonic.as_str()) else {
-        return;
+        return WrapsSynced::Unread;
     };
     let url = t.base_url.join(SHARES_LISTING_PATH);
     let rows = match fetch_json::<Vec<FileWrapRow>>(&state.api_client, &url, &t.bearer).await {
@@ -529,7 +547,7 @@ pub(crate) async fn sync_file_wraps(
             // Without the listing there is nothing to hydrate and no way to
             // tell which rows still need a wrap, so both halves are skipped.
             warn!(url = %url, error = %e, "share owner-wrap listing failed; wraps not synced");
-            return;
+            return WrapsSynced::Unread;
         }
     };
 
@@ -564,6 +582,7 @@ pub(crate) async fn sync_file_wraps(
         .filter_map(|token| key_map.get(&token).map(|secret| (token, secret.clone())))
         .collect();
     upload_file_wraps(&state.api_client, &t.base_url, &t.bearer, &key, account_id, &to_push).await;
+    WrapsSynced::Read
 }
 
 /// The folder-share twin of [`sync_file_wraps`], addressed by `token_hash`
