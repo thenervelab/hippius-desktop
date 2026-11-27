@@ -41,6 +41,7 @@ import {
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { CommentsTab, useCommentModeration } from "./CommentThreads";
+import { DriveLockedLine, useDriveLocked } from "./DriveUnlock";
 import { EmptyLine } from "./EmptyLine";
 import { ViewerIdentity } from "./ViewerIdentity";
 import { LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
@@ -1051,6 +1052,7 @@ function ViewersTab({
   comments: ShareComment[];
 }) {
   const { retention, viewers } = insights;
+  const driveLocked = useDriveLocked();
 
   if (anyLocked(insights)) {
     // Everything here is drawn from SAMPLE data, blurred, with no real value
@@ -1095,6 +1097,7 @@ function ViewersTab({
 
   const retentionValues = retention.state === "shown" ? retention.value : null;
   const viewerRows = viewers.state === "shown" ? viewers.value : [];
+  const identitiesLine = insights.identitiesUnreadable ?? null;
   const drop = retentionValues ? biggestDrop(retentionValues) : null;
   return (
     <div className="flex flex-col gap-5">
@@ -1104,6 +1107,9 @@ function ViewersTab({
           <RetentionChart values={retentionValues} durationMs={durationMs} comments={comments} />
         </Section>
       )}
+      {identitiesLine &&
+        viewerRows.length > 0 &&
+        (driveLocked ? <DriveLockedLine text={identitiesLine} /> : <p className={cn("text-sm", MUTED)}>{identitiesLine}</p>)}
       {viewerRows.length === 0 ? (
         <EmptyLine icon={<Eye />} text="No viewers listed yet" />
       ) : (
