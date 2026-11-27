@@ -6,6 +6,7 @@ import { ArrowLeft, ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DIVIDE, FOCUS, HAIRLINE, ICON_BUTTON, MUTED, STRONG } from "@/components/page-sections/shares/insights/panelStyles";
 import { LockMark, useDriveUnlock } from "@/components/page-sections/shares/insights/DriveUnlock";
+import { useRuleStack } from "./ruleStack";
 
 export interface LinkRule {
   id: string;
@@ -20,6 +21,12 @@ export interface LinkRule {
    * shows a lock, and pressing it opens the unlock first, then its editor.
    */
   locked?: boolean;
+  /**
+   * Its editor is short (a switch, a list to pick from): drawn in its row
+   * rather than pushed, for a host that draws rows that way (Link settings
+   * in the side panel). The editor draws its own label.
+   */
+  inline?: boolean;
 }
 
 const CARD_BUTTON = cn(
@@ -43,6 +50,11 @@ function LockedCardButton({ rule, onOpen, children }: { rule: LinkRule; onOpen: 
  * value. Pressing a card with an editor pushes that editor in its place,
  * under a back arrow; one editor at a time. `onPushedChange` lets a host
  * hide what sits around the cards while an editor is open.
+ *
+ * Inside a `RuleStackContext` (the side panel's Link settings) the host
+ * keeps which editor is open and draws its header and the way back; the
+ * cards then draw only the editor, and an `inline` rule's editor sits in
+ * its own row instead of being pushed.
  */
 export function RuleCards({
   rules,
@@ -53,29 +65,46 @@ export function RuleCards({
   onPushedChange?: (pushed: boolean) => void;
   className?: string;
 }) {
-  const [pushedId, setPushedId] = useState<string | null>(null);
-  const pushed = rules.find((r) => r.id === pushedId && r.editor) ?? null;
+  const stack = useRuleStack();
+  const [ownPushedId, setOwnPushedId] = useState<string | null>(null);
+  const pushedId = stack ? stack.rule : ownPushedId;
+  const pushed = rules.find((r) => r.id === pushedId && r.editor && !(stack && r.inline)) ?? null;
   const backRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   // The card to give focus back to after Back.
   const returnTo = useRef<string | null>(null);
 
   const isPushed = pushed !== null;
+  const shownId = pushed?.id ?? null;
   const onPushedChangeRef = useRef(onPushedChange);
   onPushedChangeRef.current = onPushedChange;
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
   useEffect(() => {
     onPushedChangeRef.current?.(isPushed);
+    stackRef.current?.shown(shownId);
     if (isPushed) {
-      backRef.current?.focus({ preventScroll: true });
+      // A host's own header takes focus there.
+      if (!stackRef.current) backRef.current?.focus({ preventScroll: true });
     } else if (returnTo.current) {
       listRef.current
         ?.querySelector<HTMLElement>(`[data-rule="${returnTo.current}"]`)
         ?.focus({ preventScroll: true });
       returnTo.current = null;
     }
-  }, [isPushed]);
+  }, [isPushed, shownId]);
+  // Gone with the cards (the view closed): nothing of theirs is drawn.
+  useEffect(() => () => stackRef.current?.shown(null), []);
 
   if (rules.length === 0) return null;
+
+  if (pushed && stack) {
+    return (
+      <div className={cn("flex flex-col", className)} data-testid="rule-editor">
+        {pushed.editor}
+      </div>
+    );
+  }
 
   if (pushed) {
     return (
@@ -87,7 +116,7 @@ export function RuleCards({
             aria-label="Back"
             onClick={() => {
               returnTo.current = pushed.id;
-              setPushedId(null);
+              setOwnPushedId(null);
             }}
             className={cn(ICON_BUTTON, "-ml-1.5 size-7")}
           >
@@ -100,7 +129,11 @@ export function RuleCards({
     );
   }
 
-  const open = (id: string) => setPushedId(id);
+  const open = (id: string) => {
+    returnTo.current = id;
+    if (stack) stack.push(id);
+    else setOwnPushedId(id);
+  };
 
   return (
     <ul
@@ -110,6 +143,13 @@ export function RuleCards({
       data-testid="rule-cards"
     >
       {rules.map((rule) => {
+        if (stack && rule.inline && rule.editor) {
+          return (
+            <li key={rule.id} data-testid={`rule-${rule.id}`} data-inline="">
+              {rule.editor}
+            </li>
+          );
+        }
         const body = (
           <>
             <span className="min-w-0 flex-1">

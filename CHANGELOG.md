@@ -17,12 +17,17 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- Deleting a whole drive now shows the share links reminder in its own card, with a link straight to Shared Links.
+- Side panels such as Insights now line up exactly with the edge of the file list, including the resize line.
+
+- **Sync notifications say when files went to Trash.** Files you delete in your Drive folder that go to Trash now read "Moved 12 files to Trash" instead of "Deleted", and a folder link that is off while its folder is in Trash shows a Paused badge in Shared Links.
 - **The Insights panel can be made wider.** Drag its left edge (or use the arrow keys on it) to widen it; it remembers the width, and a double click puts it back.
 - **Insights charts are calmer and easier to read.** Softer bars and curves with one baseline, one label where it matters, and the exact number when you point at any part of a chart.
 - **Viewers show by name and email.** A viewer who gave a name shows it with their confirmed email under it, one who gave only an email shows the email, and only someone who gave neither shows as "Anonymous viewer". Long names are no longer cut to a few letters.
 - **Allow and block lists take emails and whole domains as chips.** Type or paste several at once; a mistyped entry is marked on the spot.
 - **Link settings say when your Drive needs unlocking, with an Unlock button.** Settings that need your Drive unlocked show a small lock, and pressing one unlocks first and then carries on.
 - **Link settings read more clearly.** Rules that are off say what that means ("Not asked", "None") instead of describing what they would do, and the Allow list and Expiry show their value without an On or Off beside it.
+- **Link settings open in the Insights panel itself.** The gear slides Link settings in over the panel, for file and folder links alike, with a back arrow that returns you to the same tab and place. The Allow list and NDA open a step further in, Escape goes back one step, and closing the panel and opening it again for the same link brings you back where you were.
 
 - **Links per person show how to upgrade on the free plan.** Links per person come with paid Drive plans, so on the free plan the box for adding people is replaced by an upgrade card, and any links already made stay listed to copy or turn off.
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
@@ -274,6 +279,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Move to Trash works on files and folders you browse from Hippius.** In a drive or folder that isn't synced on this computer, the row menu, the right-click menu, the viewer and the selection bar now offer Move to Trash (and Delete forever where you own or manage the drive), with Undo like everywhere else.
+- **Deleting a whole drive now says plainly that it doesn't go to Trash.** The confirmation reads "Drives don't go to Trash. This deletes every file in it for good." before you type the drive's name.
+- **Show in folder on a recording or screenshot opens Captures.** From the sync queue, the capture's card or the menu bar, a capture now opens on the Captures page with it highlighted, also when your captures are kept in a folder inside another drive.
 - **Viewer names and emails show in Insights on links made on another computer.** On a link that asks for an email, its viewers' names and confirmed emails, its comments and its NDA accepts now open on any of your computers, not only the one that made the link. While your Drive is locked, Insights says so and offers Unlock.
 - **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.

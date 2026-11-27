@@ -552,6 +552,14 @@ export interface FolderShareSummary {
    * envelopes.
    */
   reshareOffered: boolean;
+  /**
+   * The link is off while its folder is in Drive Trash; a restore in place
+   * turns it back on. Read by Rust from the server's listing; `false` (or
+   * absent) when the server does not say, and on a revoked row.
+   */
+  paused?: boolean;
+  /** Off until the owner revokes it: its folder left Trash another way. Implies `paused`. */
+  held?: boolean;
 }
 
 /**

@@ -13,7 +13,10 @@ vi.mock("@/app/lib/capture/useCaptureAvailability", () => ({ useCaptureAvailabil
 const openFileInEditor = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@/app/lib/tauri/captureEditor", () => ({ openFileInEditor }));
 const memberLabels = vi.hoisted(() => ({ set: new Set<string>() }));
-vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({ useMemberDriveLabels: () => memberLabels.set }));
+vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({
+  useMemberDriveLabels: () => memberLabels.set,
+  useWritableMemberDriveLabels: () => new Set<string>(),
+}));
 vi.mock("@/app/lib/wallet-auth-context", () => ({ useWalletAuth: () => ({ polkadotAddress: "5Acct" }) }));
 vi.mock("@/app/contexts/FileSelectionContext", () => ({ useFileSelection: () => ({ enterSelectionModeAndSelectFile: vi.fn() }) }));
 vi.mock("../FileViewerThumbnailStrip", () => ({ default: () => null }));

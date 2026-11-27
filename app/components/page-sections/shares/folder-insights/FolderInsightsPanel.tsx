@@ -4,7 +4,7 @@
 // files were opened and by how many people, which files (a document's pages
 // and the time on them), and who opened what. Export CSV saves the same
 // activity, one row per person and file. The link's one switch, Insights on
-// or off, sits under the header.
+// or off, sits in Link settings.
 //
 // Opened from a folder link's row on Shared Links (`folderInsightsAtom`), in
 // the side panels' one slot (`SidePanel`), so it closes File Details, the
@@ -12,16 +12,17 @@
 // so it works for a link made on another device. Every number, and whether
 // it is locked, comes from Rust.
 //
-// Under the switch sit the link's rules as cards (`FolderLinkRules`): Ask for
-// email, Allow list and NDA, where the server has them for folder links. A
-// card's editor opens in place of the panel's numbers, with a back arrow. A
+// The header's gear opens Link settings as a view of the same panel
+// (`LinkSettingsView`, as for a file link): the Insights switch, then the
+// link's rules (`FolderLinkRules`): Ask for email as a row, Allow list and
+// NDA a level further in, where the server has them for folder links. A
 // link with an NDA text, or any accepts, gets an NDA tab of who accepted.
 
 import { useId, useMemo, useRef, useState } from "react";
 import { useAtom } from "jotai";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Loader2, X } from "lucide-react";
+import { Download, Loader2, Settings, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ import TabList from "@/components/ui/tabs/TabList";
 import TabPanel from "@/components/ui/tabs/TabPanel";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import { cn } from "@/lib/utils";
+import { PAUSED_BADGE, pausedTooltip } from "@/app/lib/utils/folderLinkPause";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { getFolderInsights, setFolderInsights, type FolderInsights } from "@/app/lib/tauri/folderInsights";
@@ -45,6 +47,16 @@ import { CARD, FILL, HAIRLINE, ICON_BUTTON, MUTED, RING, SKELETON, STRONG } from
 import { PANEL_MUTATION, PANEL_QUERY } from "@/components/page-sections/shares/insights/queryKeys";
 import { NdaTab, NDA_TAB, useNdaAccepts } from "@/components/page-sections/shares/insights/NdaTab";
 import { FolderLinkRules } from "@/components/page-sections/shares/rules/LinkRules";
+import {
+  LINK_SETTINGS,
+  LinkSettingsView,
+  PanelViews,
+  SETTINGS_TRIGGER_ATTR,
+} from "@/components/page-sections/shares/insights/LinkSettingsView";
+import {
+  folderLinkViewKey,
+  useLinkSettingsView,
+} from "@/components/page-sections/shares/insights/linkSettingsViewState";
 import { saveFolderInsightsCsv } from "./exportFolderCsv";
 import { FolderFilesTab, FolderLocked, FolderPeopleTab, type FolderInsightsTab } from "./FolderInsightsBody";
 import {
@@ -93,12 +105,13 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
   const tabsId = useId();
   const online = useIsOnline();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const router = useRouter();
   const [tab, setTab] = useState<FolderInsightsTab | "nda">("files");
   const [insightsOn, setInsightsOn] = useState<boolean | null>(target.insightsOn);
   const [exporting, setExporting] = useState(false);
-  // A rule card's editor is open: it takes the place of the numbers below.
-  const [rulePushed, setRulePushed] = useState(false);
+  // Link settings, a view of this panel, kept open or not per link.
+  const settingsView = useLinkSettingsView(folderLinkViewKey(target.tokenHash));
+  const settingsOpener = useRef<HTMLElement | null>(null);
+  const settingsOpen = settingsView.isOpen && !target.revoked;
   const ndaAccepts = useNdaAccepts(target.tokenHash, "folder");
 
   const insights = useQuery({
@@ -140,19 +153,14 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
       ]
     : [];
 
-  const upgrade = () => {
-    onClose();
-    router.push(BILLING_ROUTE);
-  };
-
-  return (
-    <div className="relative flex h-full min-h-0 flex-col font-geist" data-testid="folder-insights-panel">
+  const insightsBase = (
+    <>
       <header className="shrink-0 px-6 pt-5">
         <div className="flex items-start gap-1">
           <div className="min-w-0 flex-1 pr-1">
             <h2
               tabIndex={-1}
-              data-panel-autofocus
+              data-panel-autofocus={!settingsOpen || undefined}
               title={target.name}
               className={cn("line-clamp-2 break-words text-[16px] font-semibold leading-[22px] tracking-[-0.2px] outline-none", STRONG)}
             >
@@ -162,6 +170,16 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
             <p className={cn("mt-1 text-[13px] leading-[18px]", MUTED)} data-testid="folder-insights-subtitle">
               {folderSubtitle(target, insightsOn)}
             </p>
+            {target.paused === true && !target.revoked && (
+              <span
+                className="mt-1.5 inline-flex items-center rounded-[4px] bg-grey-90 px-2 py-0.5 text-xs font-medium text-grey-30 dark:bg-black-400 dark:text-grey-dark-500"
+                title={pausedTooltip(target)}
+                data-testid="folder-link-paused"
+              >
+                {PAUSED_BADGE}
+                <span className="sr-only">: {pausedTooltip(target)}</span>
+              </span>
+            )}
           </div>
           {canExport && (
             <button
@@ -175,33 +193,27 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
               {exporting ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Download className="size-4" aria-hidden />}
             </button>
           )}
+          {!target.revoked && (
+            <button
+              type="button"
+              {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
+              aria-label={LINK_SETTINGS}
+              onClick={(e) => {
+                settingsOpener.current = e.currentTarget;
+                settingsView.show();
+              }}
+              className={ICON_BUTTON}
+            >
+              <Settings className="size-4" aria-hidden />
+            </button>
+          )}
           <button type="button" aria-label="Close" onClick={onClose} className={ICON_BUTTON}>
             <X className="size-4" />
           </button>
         </div>
-        {!target.revoked && !rulePushed && (
-          <FolderInsightsSwitch
-            target={target}
-            on={insightsOn === true}
-            plan={data?.plan ?? null}
-            onChange={setInsightsOn}
-            onLeave={onClose}
-          />
-        )}
       </header>
 
-      {/* One place in the tree whether a card's editor is open or not, so
-          opening one keeps its state. */}
-      {!target.revoked && (
-        <div
-          className={rulePushed ? "min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-4" : "shrink-0 px-6"}
-          data-testid="folder-link-rules"
-        >
-          <FolderLinkRules tokenHash={target.tokenHash} onUpgrade={upgrade} onPushedChange={setRulePushed} className="mt-3" />
-        </div>
-      )}
-
-      {rulePushed ? null : insights.isPending ? (
+      {insights.isPending ? (
         <div className="min-h-0 flex-1 px-6 pt-5" data-testid="folder-insights-loading" aria-busy="true">
           <div className={cn(SKELETON, "h-[68px] rounded-[10px]")} />
           <div className={cn(SKELETON, "mt-5 h-[30px] rounded-[9px]")} />
@@ -269,6 +281,55 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
           </>
         )
       )}
+    </>
+  );
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden font-geist" data-testid="folder-insights-panel">
+      <PanelViews
+        open={settingsOpen}
+        opener={settingsOpener}
+        base={insightsBase}
+        settings={
+          <LinkSettingsView view={settingsView}>
+            <FolderLinkSettings target={target} insightsOn={insightsOn} plan={data?.plan ?? null} onInsightsChange={setInsightsOn} onLeave={onClose} />
+          </LinkSettingsView>
+        }
+      />
+    </div>
+  );
+}
+
+/**
+ * A folder link's Link settings: its Insights switch, then its rules (Ask
+ * for email as a row; Allow list and NDA open a level further in, and while
+ * one is open only its editor shows).
+ */
+function FolderLinkSettings({
+  target,
+  insightsOn,
+  plan,
+  onInsightsChange,
+  onLeave,
+}: {
+  target: FolderInsightsTarget;
+  insightsOn: boolean | null;
+  plan: "free" | "paid" | null;
+  onInsightsChange: (on: boolean) => void;
+  onLeave: () => void;
+}) {
+  const router = useRouter();
+  const [rulePushed, setRulePushed] = useState(false);
+  const upgrade = () => {
+    onLeave();
+    router.push(BILLING_ROUTE);
+  };
+  return (
+    <div className="flex flex-col gap-3" data-testid="folder-link-rules">
+      {!rulePushed && (
+        <FolderInsightsSwitch target={target} on={insightsOn === true} plan={plan} onChange={onInsightsChange} onLeave={onLeave} />
+      )}
+      <FolderLinkRules tokenHash={target.tokenHash} onUpgrade={upgrade} onPushedChange={setRulePushed} />
     </div>
   );
 }
@@ -311,7 +372,7 @@ function FolderInsightsSwitch({
     onError: (err) => toast.error(actionErrorLine("change that setting", err, online)),
   });
   return (
-    <div className={cn("mt-4 flex flex-col gap-2 px-3.5 py-3", CARD)} data-testid="folder-insights-switch">
+    <div className={cn("flex flex-col gap-2 px-3.5 py-3", CARD)} data-testid="folder-insights-switch">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className={cn("text-[13px] font-medium", STRONG)}>Insights</p>

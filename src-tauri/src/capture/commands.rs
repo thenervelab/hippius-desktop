@@ -6351,27 +6351,71 @@ pub fn capture_preview_discard(state: tauri::State<'_, AppState>, app: AppHandle
 struct ShowInFolderPayload {
     label: String,
     remote: bool,
+    /// With `captures_drive`, the folder relative to the Captures page's
+    /// root (empty for a capture at its top); otherwise the folder from the
+    /// drive's root, for the Drive page.
     subfolder: String,
     file_name: String,
-    /// The capture is in the captures drive (at its root): the Captures page
-    /// shows it, rather than Drive.
+    /// The capture is where captures go now: the Captures page shows it,
+    /// whether captures have a drive of their own or a folder inside another
+    /// drive, rather than Drive.
     captures_drive: bool,
 }
 
-/// Show in folder: bring Hippius forward where the capture is.
+fn trim_folder(folder: &str) -> &str {
+    folder.trim_matches('/')
+}
+
+/// Pure: whether a capture shows on the Captures page, and in which folder
+/// of it. It does when it is in the captures drive, inside the captures
+/// folder (a drive of their own has the root, so anything in it), and was
+/// not kept on this computer. `None` opens it on Drive, as a capture from
+/// an earlier captures location does. `captures`: the label and folder
+/// captures go to now.
+fn captures_page_folder(label: &str, folder: &str, kept_locally: bool, captures: Option<(&str, &str)>) -> Option<String> {
+    let (captures_label, captures_folder) = captures?;
+    if kept_locally || label != captures_label {
+        return None;
+    }
+    let (folder, root) = (trim_folder(folder), trim_folder(captures_folder));
+    if root.is_empty() {
+        return Some(folder.to_string());
+    }
+    if folder == root {
+        return Some(String::new());
+    }
+    folder.strip_prefix(root).and_then(|rest| rest.strip_prefix('/')).map(str::to_string)
+}
+
+/// Show in folder: bring Hippius forward where the capture is. The Captures
+/// page when it sits where captures go, else Drive in its folder.
 #[tauri::command]
-pub fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
+pub async fn capture_preview_show_in_folder(state: tauri::State<'_, AppState>, app: AppHandle) -> Result<()> {
     let card = lock(&state.capture.preview)
         .clone()
         .ok_or_else(|| AppError::Validation("There is no capture to show.".into()))?;
+    // Asked now, so a captures folder moved since the capture was taken is
+    // the one compared with; an unreadable answer opens Drive.
+    let captures = match state.current_account_id() {
+        Ok(account_id) => match state.pool() {
+            Ok(pool) => super::setup::status_for(pool, &account_id).await.ok(),
+            Err(_) => None,
+        },
+        Err(_) => None,
+    };
+    let captures = match &captures {
+        Some(super::setup::CaptureDriveStatus::Ready { label, folder, .. }) => Some((label.as_str(), folder.as_str())),
+        _ => None,
+    };
+    let on_captures_page = captures_page_folder(&card.drive_label, &card.destination.folder, card.kept_locally, captures);
     show_main_window(&app);
     let _ = app.emit(
         SHOW_IN_FOLDER_EVENT,
         ShowInFolderPayload {
             label: card.drive_label,
             remote: card.remote,
-            captures_drive: card.destination.folder.is_empty() && !card.kept_locally,
-            subfolder: card.destination.folder.clone(),
+            captures_drive: on_captures_page.is_some(),
+            subfolder: on_captures_page.unwrap_or_else(|| card.destination.folder.clone()),
             file_name: card.file_name,
         },
     );
@@ -8055,6 +8099,65 @@ pub async fn capture_camera_toggle(state: tauri::State<'_, AppState>, app: AppHa
 /// The session's lifecycle over `CaptureState` with a fake recorder: what
 /// happens between the phase moving and the windows following it. The
 /// `AppHandle` half (windows, events) is pinned in `tests/capture_wiring.rs`.
+#[cfg(test)]
+mod captures_page_tests {
+    use super::captures_page_folder;
+
+    #[test]
+    fn a_capture_where_captures_go_opens_the_captures_page() {
+        // A captures drive of its own.
+        assert_eq!(captures_page_folder("Captures", "", false, Some(("Captures", ""))), Some(String::new()));
+        assert_eq!(
+            captures_page_folder("Captures", "Work", false, Some(("Captures", ""))),
+            Some("Work".into())
+        );
+        // A captures folder inside another drive: the page is rooted there.
+        let documents = Some(("Documents", "hippius-captures"));
+        assert_eq!(
+            captures_page_folder("Documents", "hippius-captures", false, documents),
+            Some(String::new())
+        );
+        assert_eq!(
+            captures_page_folder("Documents", "/hippius-captures/", false, documents),
+            Some(String::new())
+        );
+        assert_eq!(
+            captures_page_folder("Documents", "hippius-captures/Demos", false, documents),
+            Some("Demos".into())
+        );
+    }
+
+    #[test]
+    fn anything_else_opens_drive() {
+        let documents = Some(("Documents", "hippius-captures"));
+        assert_eq!(
+            captures_page_folder("Documents", "", false, documents),
+            None,
+            "the drive's root is not the Captures page"
+        );
+        assert_eq!(
+            captures_page_folder("Documents", "hippius-captures-old", false, documents),
+            None,
+            "a lookalike folder is not inside it"
+        );
+        assert_eq!(
+            captures_page_folder("Old Captures", "", false, documents),
+            None,
+            "an earlier captures drive"
+        );
+        assert_eq!(
+            captures_page_folder("Documents", "hippius-captures", true, documents),
+            None,
+            "kept on this computer"
+        );
+        assert_eq!(
+            captures_page_folder("Documents", "hippius-captures", false, None),
+            None,
+            "the captures drive is gone"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

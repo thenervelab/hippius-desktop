@@ -140,6 +140,8 @@ describe("Shared Links insight columns", () => {
       createdAt: FOLDER.createdAt,
       expiresAt: null,
       revoked: false,
+      paused: false,
+      held: false,
       insightsOn: false,
     });
   });

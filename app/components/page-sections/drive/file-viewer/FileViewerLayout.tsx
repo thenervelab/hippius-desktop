@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
+import { offersDeleteOnRow, useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
 import React, {
   ReactNode,
   useEffect,
@@ -15,9 +15,9 @@ import { toast } from "sonner";
 import { offersImageEditor } from "@/app/lib/capture/editor/driveEntry";
 import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
 import { openFileInEditor } from "@/app/lib/tauri/captureEditor";
-import { useMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
+import { useMemberDriveLabels, useWritableMemberDriveLabels } from "@/app/lib/hooks/useSharedDriveRoles";
 import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
-import { isMemberDriveLabel } from "@/app/lib/utils/folderShareGating";
+import { isMemberDriveLabel, offersWriteAction } from "@/app/lib/utils/folderShareGating";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
@@ -33,6 +33,7 @@ import {
   getViewableFiles,
 } from "@/app/lib/utils/mediaNavigation";
 import {
+  driveTrashEnabledAtom,
   shareFeatureEnabledAtom,
   shareModalFileAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
@@ -147,6 +148,8 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
   const setShareModalFile = useSetAtom(shareModalFileAtom);
   const { enterSelectionModeAndSelectFile } = useFileSelection();
   const memberDriveLabels = useMemberDriveLabels();
+  const writableMemberDriveLabels = useWritableMemberDriveLabels();
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
   // The screenshot editor is offered where capture is.
   const imageEditorEnabled = useCaptureAvailability() === "available";
 
@@ -387,7 +390,12 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   >
                     <Download className="size-[17px]" strokeWidth={1.8} />
                   </ActionButton>
-                  {file.isAssigned && (
+                  {file.isAssigned &&
+                    offersDeleteOnRow(
+                      file,
+                      trashEnabled,
+                      offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels),
+                    ) && (
                     <ActionButton
                       onClick={handleDelete}
                       ariaLabel={deleteMenu.modeFor(file) === "legacy" ? "Delete file" : deleteMenu.labelFor(file)}

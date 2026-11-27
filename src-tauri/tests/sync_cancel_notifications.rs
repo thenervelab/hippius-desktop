@@ -23,7 +23,11 @@ use tauri_project_lib::sync::events::CANCELLED_MARKER;
 /// The success path always knows the cycle's file count; the error and
 /// folder-restored paths send neither list nor count.
 fn summary(details_json: &str, file_count: Option<u32>) -> SyncFileSummary<'_> {
-    SyncFileSummary { details_json, file_count }
+    SyncFileSummary {
+        details_json,
+        file_count,
+        counts: None,
+    }
 }
 
 /// Mirrors `utils::schema::ensure_table_schema` for the `notifications` table,

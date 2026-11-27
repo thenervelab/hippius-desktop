@@ -117,9 +117,11 @@ export default function LinkEngagementSwitches({
 }: {
   /**
    * `stack` (the share dialog): rows one under another. `list` (the Insights
-   * sheet's "On this link"): a bordered list, one row per switch.
+   * sheet's "On this link"): a bordered list, one row per switch. `row`:
+   * the list's rows without its border, for a row in someone else's list
+   * (a short rule drawn inline in Link settings).
    */
-  layout?: "stack" | "list";
+  layout?: "stack" | "list" | "row";
   offered: OfferedSwitches;
   value: LinkSettings;
   disabled?: boolean;
@@ -146,15 +148,19 @@ export default function LinkEngagementSwitches({
   const watermarkShown = watermark !== null && onWatermarkChange !== undefined;
   if (shown.length === 0 && !downloadShown && !watermarkShown) return null;
   const locked = switchesInPlan === false;
-  const list = layout === "list";
+  const list = layout !== "stack";
+  const row = layout === "row";
+  const notice = row ? "mb-3" : list ? "mt-3" : undefined;
   return (
     <div className={cn("flex flex-col", !list && "mt-3 gap-2")} role="group" aria-label="Viewer activity">
       <div
         className={cn(
           "flex flex-col",
-          list
-            ? "divide-y divide-grey-80 rounded-[12px] border border-grey-80 dark:divide-[#333] dark:border-[#494949]"
-            : "gap-2",
+          row
+            ? "divide-y divide-grey-80 dark:divide-[#333]"
+            : list
+              ? "divide-y divide-grey-80 rounded-[12px] border border-grey-80 dark:divide-[#333] dark:border-[#494949]"
+              : "gap-2",
         )}
       >
         {shown.map(({ key, label, description, locked: lockedDescription }) => {
@@ -254,14 +260,14 @@ export default function LinkEngagementSwitches({
           {FREE_OFF_NOTE}
         </p>
       )}
-      <div aria-live="polite">
+      <div aria-live="polite" className={row ? "px-3" : undefined}>
         {asking === "switches" && locked && (
-          <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={list ? "mt-3" : undefined} />
+          <SwitchesUpgradeNotice onUpgrade={onUpgrade} className={notice} />
         )}
         {downloadShown && (downloadRefused || (asking === "download" && locked)) && (
           <SwitchesUpgradeNotice
             onUpgrade={onUpgrade}
-            className={list ? "mt-3" : undefined}
+            className={notice}
             label={DOWNLOAD_UPGRADE_LABEL}
             prompt={DOWNLOAD_LOCKED_PROMPT}
             body={DOWNLOAD_UPGRADE_BODY}
@@ -270,7 +276,7 @@ export default function LinkEngagementSwitches({
         {watermarkShown && (watermarkRefused || (asking === "watermark" && locked)) && (
           <SwitchesUpgradeNotice
             onUpgrade={onUpgrade}
-            className={list ? "mt-3" : undefined}
+            className={notice}
             label={WATERMARK_UPGRADE_LABEL}
             prompt={WATERMARK_LOCKED_PROMPT}
             body={WATERMARK_UPGRADE_BODY}

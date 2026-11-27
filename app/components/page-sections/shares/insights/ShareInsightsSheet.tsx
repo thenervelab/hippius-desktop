@@ -47,7 +47,9 @@ import { ViewerIdentity } from "./ViewerIdentity";
 import { LinkField, ListingKeeper, useAppLocked } from "./PanelLink";
 import { MediaPreview, usePanelMedia } from "./PanelMedia";
 import { locationOf, panelLink, type DriveLocation } from "./panelLinkMedia";
-import { LinkSettingsPopover, SETTINGS_TRIGGER_ATTR, SwitchOffNotice, useLinkSwitches } from "./LinkSettingsPopover";
+import { FileLinkSettings, SwitchOffNotice, useLinkSwitches } from "./LinkSettings";
+import { LINK_SETTINGS, LinkSettingsView, PanelViews, SETTINGS_TRIGGER_ATTR } from "./LinkSettingsView";
+import { fileLinkViewKey, useLinkSettingsView } from "./linkSettingsViewState";
 import {
   commentsQueryKey,
   groupInsightsQueryKey,
@@ -458,22 +460,23 @@ function TitleRow({
   onClose,
   titleId,
   settings,
-  rowRef,
+  autofocus = true,
 }: {
   fileName: string;
   subtitle: ReactNode;
   onClose: () => void;
   titleId?: string;
   settings?: ReactNode;
-  rowRef?: React.Ref<HTMLDivElement>;
+  /** Where the panel puts focus as it opens: not while Link settings is over it. */
+  autofocus?: boolean;
 }) {
   return (
-    <div ref={rowRef} className="flex items-start gap-1">
+    <div className="flex items-start gap-1">
       <div className="min-w-0 flex-1 pr-1">
         <h2
           id={titleId}
           tabIndex={-1}
-          data-panel-autofocus
+          data-panel-autofocus={autofocus || undefined}
           title={fileName}
           className={cn(
             "line-clamp-2 break-words text-[16px] font-semibold leading-[22px] tracking-[-0.2px] outline-none",
@@ -551,11 +554,8 @@ function InsightsPanelFor({
   const commentsEnabled = useAtomValue(shareCommentsEnabledAtom);
   const tabsId = useId();
   const titleId = useId();
-  const popoverId = useId();
   const [chosenTab, setChosenTab] = useState<InsightsTab | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const titleRowRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (focusHeading) document.getElementById(titleId)?.focus();
     // Once, on mount: later renders must not pull focus back.
@@ -578,16 +578,13 @@ function InsightsPanelFor({
     }
   }, [unlocks, shareToken, queryClient]);
 
-  // Link settings: open or not, where it sits, and what opened it.
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTop, setSettingsTop] = useState(56);
+  // Link settings: a view of the panel, kept open or not per link, and
+  // what opened it, for focus on the way back.
+  const settingsView = useLinkSettingsView(fileLinkViewKey(shareToken));
   const settingsOpener = useRef<HTMLElement | null>(null);
   const openSettings = (from: HTMLElement) => {
     settingsOpener.current = from;
-    const root = rootRef.current?.getBoundingClientRect();
-    const row = titleRowRef.current?.getBoundingClientRect();
-    if (root && row && row.bottom > 0) setSettingsTop(Math.round(row.bottom - root.top + 6));
-    setSettingsOpen(true);
+    settingsView.show();
   };
 
   // The recording's length, read off the capture's preview when it is on
@@ -735,15 +732,15 @@ function InsightsPanelFor({
     }
   };
 
-  return (
-    <div ref={rootRef} className="relative flex h-full min-h-0 flex-col font-geist" data-testid="insights-panel">
-      <ListingKeeper />
+  const settingsOpen = settingsView.isOpen && !turnedOff;
+  const insightsBase = (
+    <>
       <header className={HEADER}>
         {source}
         <TitleRow
           fileName={fileName}
           titleId={titleId}
-          rowRef={titleRowRef}
+          autofocus={!settingsOpen}
           onClose={onClose}
           subtitle={turnedOff ? LINK_TURNED_OFF : [subtitle, offLine].filter(Boolean).join(" · ")}
           settings={
@@ -753,12 +750,9 @@ function InsightsPanelFor({
             <button
               type="button"
               {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
-              aria-label="Link settings"
-              aria-haspopup="dialog"
-              aria-expanded={settingsOpen}
-              aria-controls={settingsOpen ? popoverId : undefined}
-              onClick={(e) => (settingsOpen ? setSettingsOpen(false) : openSettings(e.currentTarget))}
-              className={cn(ICON_BUTTON, settingsOpen && "bg-grey-90 text-grey-10 dark:bg-white/10 dark:text-white")}
+              aria-label={LINK_SETTINGS}
+              onClick={(e) => openSettings(e.currentTarget)}
+              className={ICON_BUTTON}
             >
               <Settings className="size-4" aria-hidden />
             </button>
@@ -773,20 +767,6 @@ function InsightsPanelFor({
           </div>
         )}
       </header>
-
-      {settingsOpen && !turnedOff && (
-        <LinkSettingsPopover
-          id={popoverId}
-          shareToken={shareToken}
-          fileName={fileName}
-          share={summary}
-          switches={switches}
-          top={settingsTop}
-          opener={settingsOpener}
-          onClose={() => setSettingsOpen(false)}
-          onLeave={onClose}
-        />
-      )}
 
       {turnedOff ? (
         <div className={BODY}>
@@ -820,6 +800,28 @@ function InsightsPanelFor({
           </div>
         </>
       )}
+    </>
+  );
+
+  return (
+    <div className="relative flex h-full min-h-0 flex-col overflow-hidden font-geist" data-testid="insights-panel">
+      <ListingKeeper />
+      <PanelViews
+        open={settingsOpen}
+        opener={settingsOpener}
+        base={insightsBase}
+        settings={
+          <LinkSettingsView view={settingsView}>
+            <FileLinkSettings
+              shareToken={shareToken}
+              fileName={fileName}
+              share={summary}
+              switches={switches}
+              onLeave={onClose}
+            />
+          </LinkSettingsView>
+        }
+      />
     </div>
   );
 }

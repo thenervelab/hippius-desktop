@@ -3,7 +3,10 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 
+import { useState } from "react";
+
 import { RuleCards, type LinkRule } from "../RuleCards";
+import { RuleStackContext, type RuleStack } from "../ruleStack";
 import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import { activeRecoveryCheckAtom, type RecoveryCheck } from "@/app/lib/global-atoms/recoveryAtoms";
 import { LOCKED_LABEL } from "@/components/page-sections/shares/insights/DriveUnlock";
@@ -103,5 +106,56 @@ describe("rule cards", () => {
       store.set(activeRecoveryCheckAtom, null);
     });
     expect(await screen.findByText("lists editor")).toBeInTheDocument();
+  });
+
+  describe("inside a host's rule stack (the side panel's Link settings)", () => {
+    const STACKED: LinkRule[] = [
+      { id: "gate", label: "Ask for email", on: true, value: "Code by email", inline: true, editor: <p>gate switch row</p> },
+      { id: "allowList", label: "Allow list", on: null, value: "Anyone", editor: <p>lists editor</p> },
+    ];
+    function Host({ initial = null, shown = () => undefined }: { initial?: string | null; shown?: (id: string | null) => void }) {
+      const [rule, setRule] = useState<string | null>(initial);
+      const stack: RuleStack = { rule, push: setRule, shown, dirty: () => undefined };
+      return (
+        <RuleStackContext.Provider value={stack}>
+          <button type="button" onClick={() => setRule(null)}>
+            host back
+          </button>
+          <RuleCards rules={STACKED} />
+        </RuleStackContext.Provider>
+      );
+    }
+
+    it("draws a short rule's editor in its row, and pushes a long one through the host", async () => {
+      const shown = vi.fn();
+      render(<Host shown={shown} />);
+      // Inline: the editor itself, no card button or chevron.
+      const gate = screen.getByTestId("rule-gate");
+      expect(gate).toHaveTextContent("gate switch row");
+      expect(within(gate).queryByRole("button")).toBeNull();
+
+      fireEvent.click(within(screen.getByTestId("rule-allowList")).getByRole("button"));
+      expect(await screen.findByText("lists editor")).toBeInTheDocument();
+      // The host draws the header and the way back: the cards draw none.
+      expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+      await waitFor(() => expect(shown).toHaveBeenLastCalledWith("allowList"));
+
+      fireEvent.click(screen.getByRole("button", { name: "host back" }));
+      await waitFor(() => expect(shown).toHaveBeenLastCalledWith(null));
+      // Focus goes back to the row the editor was opened from.
+      await waitFor(() => expect(within(screen.getByTestId("rule-allowList")).getByRole("button")).toHaveFocus());
+    });
+
+    it("opens on the rule the host kept, and never pushes an inline one", async () => {
+      const shown = vi.fn();
+      const { unmount } = render(<Host initial="allowList" shown={shown} />);
+      expect(screen.getByText("lists editor")).toBeInTheDocument();
+      await waitFor(() => expect(shown).toHaveBeenLastCalledWith("allowList"));
+      unmount();
+
+      render(<Host initial="gate" />);
+      expect(screen.getByTestId("rule-cards")).toBeInTheDocument();
+      expect(screen.getByText("gate switch row")).toBeInTheDocument();
+    });
   });
 });

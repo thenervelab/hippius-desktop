@@ -27,6 +27,11 @@ export function parseFileDetails(type: string, releaseNotes: string): SyncedFile
   return [];
 }
 
+/** A remote delete Rust marked as moved to Trash (`SyncedFileDetail.trashed`). */
+export function isTrashedDetail(file: SyncedFileDetail): boolean {
+  return file.action === "remote_delete" && file.trashed === true;
+}
+
 const ICON_BG: Record<string, string> = {
   Subscription: "#fc7d73",
   Balance:      "#fc7d73",
@@ -78,10 +83,13 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
     if (selectedNotification.type !== "Files" || fileDetails.length === 0) return null;
     const uploaded = fileDetails.filter((f) => f.action === "upload");
     const downloaded = fileDetails.filter((f) => f.action === "download");
+    // A delete Rust marked as moved to Trash is counted apart: it can be
+    // restored, so it must not read as deleted.
+    const trashed = fileDetails.filter(isTrashedDetail);
     const deleted = fileDetails.filter(
-      (f) => f.action === "local_delete" || f.action === "remote_delete"
+      (f) => (f.action === "local_delete" || f.action === "remote_delete") && !isTrashedDetail(f)
     );
-    return { uploaded, downloaded, deleted };
+    return { uploaded, downloaded, trashed, deleted };
   }, [selectedNotification]);
 
   if (!selectedNotification) {
@@ -205,6 +213,15 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                       {fileSummary.downloaded.length} downloaded
                     </span>
                   )}
+                  {fileSummary.trashed.length > 0 && (
+                    <span
+                      data-testid="sync-summary-trashed"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-grey-90 dark:bg-[#2a2a2a] border border-grey-80 dark:border-[#3a3a3a] rounded-full text-xs font-medium text-grey-30 dark:text-grey-dark-400"
+                    >
+                      <Trash2 className="size-3.5" />
+                      {fileSummary.trashed.length} moved to Trash
+                    </span>
+                  )}
                   {fileSummary.deleted.length > 0 && (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#fef2f2] dark:bg-[#2b100d] border border-[#fecaca] dark:border-[#6b1c18] rounded-full text-xs font-medium text-[#dc2626] dark:text-[#ff7d7d]">
                       <Trash2 className="size-3.5" />
@@ -218,6 +235,7 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                     const { fileFormat } = getFilePartsFromFileName(file.fileName);
                     const fileType = getFileTypeFromExtension(fileFormat || null);
                     const { icon: FileIcon, color } = getFileIcon(fileType ?? undefined, false);
+                    const isTrashed = isTrashedDetail(file);
                     const isDeleted = file.action === "local_delete" || file.action === "remote_delete";
                     const isUpload = file.action === "upload";
                     return (
@@ -239,7 +257,11 @@ const NotificationDetailView: React.FC<NotificationDetailViewProps> = ({
                           )}
                         </div>
                         <div className="flex-shrink-0">
-                          {isDeleted ? (
+                          {isTrashed ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-grey-90 dark:bg-[#2a2a2a] text-grey-30 dark:text-grey-dark-400">
+                              <Trash2 className="size-3" /> Moved to Trash
+                            </span>
+                          ) : isDeleted ? (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-[#fef2f2] dark:bg-[#2b100d] text-[#dc2626] dark:text-[#ff7d7d]">
                               <Trash2 className="size-3" /> Deleted
                             </span>

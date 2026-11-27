@@ -12,6 +12,7 @@ import {
   LINK_VISIT_EMAILS,
   LinkVisitEmailsSelect,
   VISIT_EMAILS_NEED_FIRST_VIEWS,
+  VISIT_EMAILS_NEED_INSIGHTS,
 } from "../SecureLinkSection";
 
 const invokeMock = vi.fn();
@@ -64,7 +65,39 @@ describe("LinkVisitEmailsSelect", () => {
     expect(invokeMock).not.toHaveBeenCalled();
   });
 
-  it("shows nothing while the link does not count views", async () => {
+  it("stays on a link that does not count views, keeping only None, with the reason under the others", async () => {
+    answers.visits = "every";
+    render(<LinkVisitEmailsSelect shareToken="tok" viewsCounted={false} layout="list" />);
+
+    // What the link has stays shown, even a choice that does nothing now.
+    const select = await screen.findByLabelText(LINK_VISIT_EMAILS);
+    expect(select).toHaveTextContent("Every visit");
+    fireEvent.click(select);
+    for (const name of [/^Every visit/, /^First visit/]) {
+      const option = await screen.findByRole("option", { name });
+      expect(option).toHaveAttribute("data-disabled");
+      expect(option).toHaveTextContent(VISIT_EMAILS_NEED_INSIGHTS);
+      expect(option).toHaveAttribute("title", VISIT_EMAILS_NEED_INSIGHTS);
+    }
+    // None also silences the link's NDA and refused viewer emails, so it stays.
+    const none = screen.getByRole("option", { name: "None" });
+    expect(none).not.toHaveAttribute("data-disabled");
+    fireEvent.click(none);
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_set_link_visit_emails", { shareToken: "tok", visits: "off" }),
+    );
+    expect(screen.getByLabelText(LINK_VISIT_EMAILS)).toHaveTextContent("None");
+  });
+
+  it("says why views come first when the link counts none and First views is off too", async () => {
+    render(<LinkVisitEmailsSelect shareToken="tok" viewsCounted={false} firstViews={false} />);
+    fireEvent.click(await screen.findByLabelText(LINK_VISIT_EMAILS));
+    const every = await screen.findByRole("option", { name: /^Every visit/ });
+    expect(every).toHaveAttribute("title", VISIT_EMAILS_NEED_INSIGHTS);
+  });
+
+  it("still shows nothing on a link that counts no views where the server has no per-link setting", async () => {
+    setCaps({ shares: true, share_notifications: true });
     const { container } = render(<LinkVisitEmailsSelect shareToken="tok" viewsCounted={false} />);
     await act(async () => {});
     expect(container).toBeEmptyDOMElement();

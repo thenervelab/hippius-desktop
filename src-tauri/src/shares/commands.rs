@@ -1641,6 +1641,13 @@ pub struct FolderShareSummary {
     /// drive key off the URL ([`reshare_folder_link_inner`]). Decided in
     /// Rust by [`reshare_offered`].
     pub reshare_offered: bool,
+    /// The link is off while its folder is in Drive Trash: recipients get a
+    /// dead link until a restore in place turns it back on. `false` when
+    /// the server does not say, and on a revoked row ([`super::link_pause`]).
+    pub paused: bool,
+    /// Off for the owner to revoke: its folder left Trash another way, so
+    /// no restore turns it back on. Implies `paused`.
+    pub held: bool,
 }
 
 /// Whether a listing row may be reshared from this device: a live legacy
@@ -1741,6 +1748,9 @@ fn resolve_folder_share_rows(
                 expires_at: row.expires_at.map(|e| e.to_rfc3339()),
                 revoked_at: row.revoked_at.map(|e| e.to_rfc3339()),
                 source: row.source.into(),
+                // Laid on afterwards from the raw listing (`link_pause`).
+                paused: false,
+                held: false,
             }
         })
         .collect()
@@ -1775,17 +1785,19 @@ pub async fn hcfs_list_folder_shares(state: tauri::State<'_, AppState>) -> Resul
 pub async fn list_folder_shares_inner(state: &AppState, account_id: &str) -> Result<Vec<FolderShareSummary>> {
     let pool = state.pool()?;
     let client = build_account_client(pool, account_id).await?;
-    let rows = client
-        .list_folder_shares()
-        .await
-        .map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
+    // hcfs-client's listing drops the Drive Trash pause, so the same route
+    // is read once more for it, alongside; its failure pauses nothing.
+    let (rows, pauses) = tokio::join!(client.list_folder_shares(), super::link_pause::fetch_pauses(state, account_id));
+    let rows = rows.map_err(|e| AppError::Hcfs(format!("list_folder_shares: {e}")))?;
 
     let keystore = SqliteShareKeystore::new(pool.clone());
     let mut secrets_by_hash = folder_share_secrets_by_hash(&keystore)?;
     let hashes: Vec<String> = rows.iter().map(|row| row.token_hash.clone()).collect();
     super::owner_wrap::sync_folder_wraps(state, account_id, &keystore, &mut secrets_by_hash, &hashes).await;
     let reshare = reshare_context(state, account_id, &rows, &secrets_by_hash).await;
-    Ok(resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url(), &reshare))
+    let mut summaries = resolve_folder_share_rows(rows, &secrets_by_hash, &console_base_url(), &reshare);
+    super::link_pause::apply_pauses(&mut summaries, &pauses);
+    Ok(summaries)
 }
 
 /// What [`reshare_offered`] needs beyond the row itself.
@@ -2958,6 +2970,8 @@ mod tests {
             source: FolderShareOrigin::Drive,
             link_format: FolderLinkKind::Legacy,
             reshare_offered: false,
+            paused: false,
+            held: false,
         };
         let json = serde_json::to_value(&summary).expect("serialize FolderShareSummary");
         let keys: BTreeSet<String> = json.as_object().expect("object").keys().cloned().collect();
@@ -2976,11 +2990,41 @@ mod tests {
             "source",
             "linkFormat",
             "reshareOffered",
+            "paused",
+            "held",
         ]
         .into_iter()
         .map(String::from)
         .collect();
         assert_eq!(keys, expected, "FolderShareSummary wire keys drifted — FE shares.ts reads these");
+    }
+
+    /// The Drive Trash pause reaches the FE on the row the server marked,
+    /// `held` with it, and never on a revoked row or one the server said
+    /// nothing about.
+    #[test]
+    fn a_paused_listing_row_reaches_the_fe_paused() {
+        let mut revoked = mk_folder_row(&"c".repeat(64), "old");
+        revoked.revoked_at = Some(Utc::now());
+        let rows = vec![
+            mk_folder_row(&"a".repeat(64), "trip"),
+            mk_folder_row(&"b".repeat(64), "team"),
+            revoked,
+            mk_folder_row(&"d".repeat(64), "live"),
+        ];
+        let body = serde_json::json!([
+            { "token_hash": "a".repeat(64), "paused": true, "held": false },
+            { "token_hash": "b".repeat(64), "paused": true, "held": true },
+            { "token_hash": "c".repeat(64), "paused": true, "held": false },
+            { "token_hash": "d".repeat(64) },
+        ])
+        .to_string();
+        let mut out = resolve_folder_share_rows(rows, &HashMap::new(), "https://x.io", &no_reshare());
+        super::super::link_pause::apply_pauses(&mut out, &super::super::link_pause::parse_pauses(&body));
+        let state: Vec<(bool, bool)> = out.iter().map(|r| (r.paused, r.held)).collect();
+        assert_eq!(state, [(true, false), (true, true), (false, false), (false, false)]);
+        let json = serde_json::to_value(&out[1]).expect("serialize");
+        assert_eq!((json["paused"].as_bool(), json["held"].as_bool()), (Some(true), Some(true)));
     }
 
     /// An uploaded-copy row reaches the FE as `"uploadedCopy"`: Rust picks

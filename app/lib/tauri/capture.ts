@@ -444,9 +444,10 @@ export interface CapturePreviewCard {
 export interface CaptureShowInFolder {
   label: string;
   remote: boolean;
+  /** With `capturesDrive`, relative to the Captures page's root; else from the drive's root. */
   subfolder: string;
   fileName: string;
-  /** In the captures drive: the Captures page shows it, not Drive. */
+  /** Where captures go now (their own drive, or a folder inside another): the Captures page shows it, not Drive. */
   capturesDrive?: boolean;
 }
 

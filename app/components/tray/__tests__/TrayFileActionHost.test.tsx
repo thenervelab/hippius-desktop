@@ -39,6 +39,13 @@ vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({
   useWritableMemberDriveLabels: () => writableLabels,
 }));
 
+// Where captures go, as Rust answers `capture_drive_status` at the click.
+let captureStatus: unknown = null;
+vi.mock("@/app/lib/tauri/capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/app/lib/tauri/capture")>()),
+  getCaptureDriveStatus: () => (captureStatus ? Promise.resolve(captureStatus) : Promise.reject(new Error("no capture"))),
+}));
+
 const downloadFile = vi.fn();
 vi.mock("@/app/lib/utils/downloadFile", () => ({
   downloadFile: (...args: unknown[]) => downloadFile(...args),
@@ -125,24 +132,45 @@ beforeEach(() => {
   toastError.mockClear();
   memberLabels = new Set();
   writableLabels = new Set();
+  captureStatus = null;
 });
 
 describe("tray file actions in the main window", () => {
   it("opens the Drive at the file's folder and points at the file", async () => {
     mount();
     await send({ action: "show-in-drive", file: file() });
-    expect(push).toHaveBeenCalledWith(
-      "/files?openLabel=Docs&openSubfolder=Work&openFile=report.pdf",
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith(
+        "/files?openLabel=Docs&openSubfolder=Work&openFile=report.pdf",
+      ),
     );
   });
 
   it("opens a drive not synced here as a remote drive", async () => {
     mount();
     await send({ action: "show-in-drive", file: file({ source: "", actualFileName: "a.png", name: "a.png" }) });
-    expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openRemote=1&openFile=a.png");
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openRemote=1&openFile=a.png"));
+  });
+
+  it("opens a capture kept in a folder of another drive on the Captures page", async () => {
+    captureStatus = { state: "ready", label: "Docs", name: "Docs", folder: "Captures", remote: false };
+    mount();
+    const capture = file({ name: "Shot.png", actualFileName: "Captures/Shot.png", source: "/Users/me/Docs/Captures/Shot.png" });
+    await send({ action: "show-in-drive", file: capture });
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/captures?openLabel=Docs&openFile=Shot.png"));
+  });
+
+  it("opens the rest of that drive on Drive", async () => {
+    captureStatus = { state: "ready", label: "Docs", name: "Docs", folder: "Captures", remote: false };
+    mount();
+    await send({ action: "show-in-drive", file: file() });
+    await waitFor(() =>
+      expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openSubfolder=Work&openFile=report.pdf"),
+    );
   });
 
   it("opens the Captures page at a capture with its Insights panel, before any link is known", async () => {
+    captureStatus = { state: "ready", label: "Hippius Captures", name: "Hippius Captures", folder: "", remote: false };
     const store = mount({ shares: true, share_insights: true } as ServerCapabilities);
     const capture = file({
       name: "Recording 1.mp4",
@@ -151,7 +179,7 @@ describe("tray file actions in the main window", () => {
       source: "/Users/me/hippius-recording/Recording 1.mp4",
     });
     await send({ action: "insights", file: capture });
-    expect(push).toHaveBeenCalledWith("/captures?openLabel=Hippius+Captures&openFile=Recording+1.mp4");
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/captures?openLabel=Hippius+Captures&openFile=Recording+1.mp4"));
     // The panel finds the newest link in the listing, or offers to make one.
     expect(store.get(insightsSheetAtom)).toEqual({
       shareToken: null,
@@ -162,10 +190,11 @@ describe("tray file actions in the main window", () => {
   });
 
   it("opens a capture kept in a folder of another drive where Show in Hippius would", async () => {
+    captureStatus = { state: "ready", label: "Docs", name: "Docs", folder: "Captures", remote: false };
     const store = mount({ shares: true, share_insights: true } as ServerCapabilities);
     const capture = file({ name: "Shot.png", actualFileName: "Captures/Shot.png", source: "/Users/me/Docs/Captures/Shot.png" });
     await send({ action: "insights", file: capture });
-    expect(push).toHaveBeenCalledWith("/files?openLabel=Docs&openSubfolder=Captures&openFile=Shot.png");
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/captures?openLabel=Docs&openFile=Shot.png"));
     expect(store.get(insightsSheetAtom)?.capture).toEqual({ label: "Docs", relativePath: "Captures/Shot.png", fileId: null, size: 1 });
   });
 

@@ -997,14 +997,20 @@ finished file) delivers what the recorder saved when it holds a fragment
 folder. Pinned by `capture_wiring::a_capture_the_app_quits_on_is_offered_again`
 and `a_recording_whose_stop_fails_is_salvaged_not_discarded`. On success there is NO
 system notification (the card says it); a failure notifies as well. Show in
-folder emits `capture_show_in_folder`; a capture in the captures drive
-(`capturesDrive`: the destination's folder is the root) goes to
-`capturesRoute(label, remote, fileName)`, the Captures page, whose pinned
-container takes the same `openLabel` / `openFile` params; an older one in a
-folder goes to `driveFolderRoute(label, remote, folder, fileName)` → the Drive
-page steps into the folder with the row's own `generateFolderUrl`, then
-points the file out (see "Show in folder points
-the file out" below). Retry re-runs `deliver_and_announce` on the kept file, to
+folder emits `capture_show_in_folder`; a capture where captures go now
+(`capturesDrive`, Rust's `captures_page_folder` against `capture_drive_status`:
+that drive, inside its captures folder, not kept locally) goes to
+`capturesRoute(label, remote, fileName, subfolder)`, the Captures page, with
+`subfolder` relative to its root, whose pinned container takes the same
+`openLabel` / `openSubfolder` / `openFile` params; one from an earlier
+captures location goes to `driveFolderRoute(label, remote, folder, fileName)`
+→ the Drive page steps into the folder with the row's own `generateFolderUrl`,
+then points the file out (see "Show in folder points
+the file out" below). On a page rooted at a folder (`PinnedDrive.folder`) the
+request's subfolder is joined onto that folder (`openSubfolderInDrive`,
+`highlightRequestFromUrl`'s `root`) and the page jumps straight there
+(`pinnedOpenFolder`) instead of stepping in from the drive's root, which it
+never shows. Retry re-runs `deliver_and_announce` on the kept file, to
 the card's own `destination` (not whatever the capture drive is now).
 `DriveContainer` handles each open request once (`shouldOpenFromUrl`, keyed on
 the params, not the mount: the page stays mounted across clicks) and waits
@@ -1194,8 +1200,9 @@ pages keep the "an event beats a late first read" rule; the pill compares
 
 **Sync queue Show in folder:** each row's folder button fires
 `requestOpenDriveFolder(syncQueueFolderRoute(...))` (a window event, so the
-widget needs no router): the captures drive opens the Captures page, never a
-My Drive path built from its folder (see `.claude/rules/sync-widget.md`);
+widget needs no router): a capture opens the Captures page, also when
+captures live in a folder inside another drive, never a My Drive path (see
+`.claude/rules/sync-widget.md`);
 `TrayNavigationListener` navigates and `folderUrlForPath` opens a multi-level
 path.
 
