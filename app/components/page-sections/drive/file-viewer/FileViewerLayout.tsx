@@ -390,7 +390,7 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                   {file.isAssigned && (
                     <ActionButton
                       onClick={handleDelete}
-                      ariaLabel={deleteMenu.mode === "legacy" ? "Delete file" : deleteMenu.label}
+                      ariaLabel={deleteMenu.modeFor(file) === "legacy" ? "Delete file" : deleteMenu.labelFor(file)}
                     >
                       <Trash2 className="size-[17px]" strokeWidth={1.8} />
                     </ActionButton>

@@ -25,3 +25,20 @@ export function clashDestinationName(rows: Pick<TrashRow, "driveName" | "parentP
   const folders = first.parentPath.split("/").filter(Boolean);
   return `“${folders.length > 0 ? folders[folders.length - 1] : first.driveName}”`;
 }
+
+/**
+ * What a row in the middle of something says instead of its date: a
+ * folder still being moved in (its trash stopped part way; Restore puts it
+ * back), or a restore that stopped part way (Restore finishes it, the way
+ * it started).
+ */
+export function rowStatus(row: Pick<TrashRow, "state">): string | null {
+  if (row.state === "trashing") return "Still moving to Trash";
+  if (row.state === "restoring") return "Restore not finished";
+  return null;
+}
+
+/** The Restore action's words for a row. */
+export function restoreLabel(row: Pick<TrashRow, "state">): string {
+  return row.state === "restoring" ? "Finish restoring" : "Restore";
+}

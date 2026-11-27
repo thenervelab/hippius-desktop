@@ -30,7 +30,7 @@ import {
 import { isMacPlatform } from "@/app/lib/capture/shortcutLabel";
 import Link from "next/link";
 import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { ENGINE_SENDS_DELETES_TO_TRASH } from "@/app/lib/trash/engine";
+import { engineSendsDeletesToTrash, useDeleteRules } from "@/app/lib/trash/deleteMode";
 import { TRASH_ROUTE } from "@/app/lib/routes";
 import { tauriErrorMessage } from "@/lib/utils/dispatchTauriError";
 
@@ -112,10 +112,12 @@ function MassDeleteBannerRow({ holdKey, hold }: { holdKey: string; hold: MassDel
   });
   const { busy, answer, decideLater } = useMassDeleteAnswer(holdKey, hold, focus);
   const trashEnabled = useAtomValue(driveTrashEnabledAtom);
+  // The engine sends released deletes to Trash unless this drive skips it.
+  const { rules } = useDeleteRules();
   const confirm = removeConfirmCopy(
     { ...hold, count: confirmCount ?? hold.count },
     device,
-    trashEnabled && ENGINE_SENDS_DELETES_TO_TRASH,
+    engineSendsDeletesToTrash(trashEnabled, rules?.drives, hold.label),
   );
 
   return (
