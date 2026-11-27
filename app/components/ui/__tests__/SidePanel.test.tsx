@@ -182,6 +182,15 @@ describe("a resizable panel", () => {
     }
   });
 
+  // `<main>` keeps a 4px right margin; the panel takes it back so its left
+  // edge, and the resize line drawn on it, sit on the content column's edge.
+  it("starts exactly where the content column ends", () => {
+    render(<Resizable />);
+    const aside = screen.getByRole("complementary", { name: "Insights" });
+    expect(aside.className).toMatch(/(^|\s)-ml-1(\s|$)/);
+    expect(screen.getByRole("separator").className).toMatch(/(^|\s)left-0(\s|$)/);
+  });
+
   it("has no edge to drag when it is not resizable", () => {
     render(
       <SidePanel open onClose={() => {}} width={320} label="Details">

@@ -81,8 +81,11 @@ export function SidePanel({
             animate={{ width: sized.width, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             // Follows the pointer while it is dragged, with no easing behind it.
+            // `-ml-1` takes back `<main>`'s 4px right margin, so the panel's
+            // left edge, and the resize line drawn on it, sit exactly on the
+            // edge of the content column rather than 4px past it.
             transition={sized.dragging ? { duration: 0 } : { duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="relative h-full shrink-0 overflow-hidden"
+            className="relative -ml-1 h-full shrink-0 overflow-hidden"
           >
             {resizable && <ResizeHandle sized={sized} label={label} />}
             <InlineFocus key={focusKey ?? ""} onClose={onClose} opener={opener}>
