@@ -165,6 +165,10 @@ pub struct ShareInsights {
     /// only on a server with document views (`share_document_views`).
     /// `Shown(None)` for a block that holds no readable page count.
     pub pages: Option<Gated<Option<InsightsPages>>>,
+    /// Why the viewers' sealed names and emails could not be opened here
+    /// ([`identities_unreadable`]); absent when they opened or none needed to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identities_unreadable: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -404,6 +408,7 @@ fn parse_insights_with(
         retention,
         viewers,
         pages,
+        identities_unreadable: None,
     })
 }
 
@@ -601,6 +606,10 @@ pub enum KeyUnavailable {
     NotFetchable,
     /// A `#s=` link's share key could not be fetched: no answer, or an error.
     Unreachable,
+    /// The key is not here yet and only the account's phrase can bring it
+    /// (the owner wrap), but the phrase is not loaded: the Drive is locked
+    /// on this computer, and unlocking it brings the key.
+    Locked,
 }
 
 impl KeyUnavailable {
@@ -608,11 +617,35 @@ impl KeyUnavailable {
         match self {
             Self::Password => "This link has a password, so its comments can only be read on the link's page.",
             Self::NotOnDevice => "Comments can't be read on this computer because the link's key isn't here.",
-            Self::NotFetchable => {
-                "Comments can't be read on this computer: this link's key can no longer be fetched, because it asks for an email or has ended."
-            }
+            Self::NotFetchable => "Comments can't be read on this computer: this link's key can no longer be fetched, because the link has ended.",
             Self::Unreachable => "Couldn't reach Hippius to open this link's comments. Try again.",
+            Self::Locked => "Unlock your Drive to read this link's comments.",
         }
+    }
+
+    /// The same, for the viewers' names and emails on the Viewers tab.
+    fn identities_sentence(self) -> &'static str {
+        match self {
+            Self::Password => "This link has a password, so viewers' names and emails can only be read on the link's page.",
+            Self::NotOnDevice => "Viewers' names and emails can't be read on this computer because the link's key isn't here.",
+            Self::NotFetchable => {
+                "Viewers' names and emails can't be read on this computer: this link's key can no longer be fetched, because the link has ended."
+            }
+            Self::Unreachable => "Couldn't reach Hippius to show viewers' names and emails. Try again.",
+            Self::Locked => "Unlock your Drive to see viewers' names and emails.",
+        }
+    }
+}
+
+/// Why the Viewers tab's names and emails could not be opened, when a row
+/// carries one sealed and the link's key was not had. `None` when none was
+/// needed, the key opened, or the viewers are locked by the plan (they carry
+/// nothing to open). Without it the rows would read as viewers who gave no
+/// email, which on an "Ask for email" link is never true.
+fn identities_unreadable(insights: &ShareInsights, key: Option<&std::result::Result<CommentKey, KeyUnavailable>>) -> Option<String> {
+    match (&insights.viewers, key) {
+        (Gated::Shown(rows), Some(Err(why))) if !rows.is_empty() => Some(why.identities_sentence().to_string()),
+        _ => None,
     }
 }
 
@@ -1532,12 +1565,14 @@ pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &st
     let mut keys: HashMap<String, ShareSecret> = HashMap::new();
     if let Ok(Some(secret)) = keystore.get(token) {
         keys.insert(token.to_string(), secret);
-    } else {
-        super::owner_wrap::sync_file_wraps(state, account_id, &keystore, &mut keys, &[token]).await;
+    } else if super::owner_wrap::sync_file_wraps(state, account_id, &keystore, &mut keys, &[token]).await == super::owner_wrap::WrapsSynced::Locked {
+        // Not "isn't here": the owner wrap may well hold it, and unlocking
+        // the Drive is what reads it, which the panel offers.
+        return Err(KeyUnavailable::Locked);
     }
     match keys.remove(token) {
         Some(ShareSecret::Public(share_key)) => Ok(Zeroizing::new(share_key)),
-        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(pool, account_id, token, &link_secret).await,
+        Some(ShareSecret::FileLink(link_secret)) => file_link_share_key(state, pool, account_id, token, &link_secret).await,
         Some(ShareSecret::Private(_) | ShareSecret::FileLinkPrivate(_)) => Err(KeyUnavailable::Password),
         // A folder link's secret is not a file link's key and opens no
         // comments; a file token never holds one, so this is a stray row.
@@ -1545,8 +1580,11 @@ pub(super) async fn share_key_for(state: &AppState, account_id: &str, token: &st
     }
 }
 
-/// The share key of a `#s=` link: the one kept at its mint, else fetched once.
+/// The share key of a `#s=` link: the one kept at its mint, else fetched
+/// once, through the owner's route when the link's own refuses (an email
+/// gate on a link made on another device), and kept.
 async fn file_link_share_key(
+    state: &AppState,
     pool: &sqlx::SqlitePool,
     account_id: &str,
     token: &str,
@@ -1558,11 +1596,17 @@ async fn file_link_share_key(
     if let Ok(Some(kept)) = keys.get(token).await {
         return Ok(Zeroizing::new(kept));
     }
-    let client = super::client::build_account_client(pool, account_id).await.map_err(|e| {
+    let no_client = |e: AppError| {
         debug!(error = %e, "no client to fetch the file link's key");
         KeyUnavailable::Unreachable
-    })?;
-    match super::file_link_key::share_key(&client, &keys, token, link_secret).await {
+    };
+    let client = super::client::build_account_client(pool, account_id).await.map_err(no_client)?;
+    let api = Api::for_account(state, account_id).await.map_err(no_client)?;
+    let owner = super::file_link_key::OwnerRoute {
+        http: &state.api_client,
+        api: &api,
+    };
+    match super::file_link_key::share_key(&client, Some(&owner), &keys, token, link_secret).await {
         Ok(share_key) => Ok(Zeroizing::new(share_key)),
         Err(e) => Err(file_link_key_refusal(&e)),
     }
@@ -1572,7 +1616,7 @@ async fn file_link_share_key(
 /// is the server refusing the envelope (an email gate, an ended link); a
 /// keystore failure is the key not being here; anything else did not reach a
 /// verdict.
-fn file_link_key_refusal(error: &ShareError) -> KeyUnavailable {
+pub(super) fn file_link_key_refusal(error: &ShareError) -> KeyUnavailable {
     match error {
         ShareError::NotFound => KeyUnavailable::NotFetchable,
         ShareError::Keystore(_) => KeyUnavailable::NotOnDevice,
@@ -1790,19 +1834,19 @@ pub async fn share_get_insights(state: tauri::State<'_, AppState>, share_token: 
     // email only on a link that asks for one, so the key is only looked for
     // when some row needs it.
     let key = if body.contains("\"name_ct\":\"") || body.contains("\"email_ct\":\"") {
-        comment_key_for(&state, &account_id, &share_token).await.ok()
+        Some(comment_key_for(&state, &account_id, &share_token).await)
     } else {
         None
     };
-    parse_insights_with(
+    let opened = key.as_ref().and_then(|k| k.as_ref().ok());
+    let mut insights = parse_insights_with(
         &body,
         caps.share_document_views,
-        |nonce, ct| {
-            key.as_ref()
-                .and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten())
-        },
-        |row| key.as_ref().and_then(|k| verified_email(k, &share_token, row)),
-    )
+        |nonce, ct| opened.and_then(|k| comment_crypto::open_viewer_name(k, &share_token, nonce, ct).ok().flatten()),
+        |row| opened.and_then(|k| verified_email(k, &share_token, row)),
+    )?;
+    insights.identities_unreadable = identities_unreadable(&insights, key.as_ref());
+    Ok(insights)
 }
 
 /// A file link's comments, opened with its key.
@@ -2053,6 +2097,83 @@ pub(super) mod tests {
 
     fn no_names(_: &str, _: &str) -> Option<String> {
         None
+    }
+
+    /// Viewers whose sealed names and emails did not open say why, so a
+    /// locked Drive reads as locked (with Unlock), never as viewers who gave
+    /// no email. Nothing is said when the key opened, none was needed, or the
+    /// plan locks the viewers.
+    #[test]
+    fn viewers_whose_names_and_emails_did_not_open_say_why() {
+        let shown = parse_insights(PAID, false, no_names).unwrap();
+        let locked: std::result::Result<CommentKey, KeyUnavailable> = Err(KeyUnavailable::Locked);
+        assert_eq!(
+            identities_unreadable(&shown, Some(&locked)).as_deref(),
+            Some("Unlock your Drive to see viewers' names and emails.")
+        );
+        let not_here: std::result::Result<CommentKey, KeyUnavailable> = Err(KeyUnavailable::NotOnDevice);
+        assert!(identities_unreadable(&shown, Some(&not_here)).unwrap().contains("key isn't here"));
+        let opened = Ok(CommentKey::derive(&[1; 32]));
+        assert_eq!(identities_unreadable(&shown, Some(&opened)), None);
+        assert_eq!(identities_unreadable(&shown, None), None, "no row needed the key");
+        let free = parse_insights(FREE, false, no_names).unwrap();
+        assert_eq!(identities_unreadable(&free, Some(&locked)), None, "the plan locks the rows");
+
+        let mut json = serde_json::to_value(&shown).unwrap();
+        assert!(json.get("identitiesUnreadable").is_none(), "absent when nothing is missing");
+        let mut with_line = shown.clone();
+        with_line.identities_unreadable = identities_unreadable(&shown, Some(&locked));
+        json = serde_json::to_value(&with_line).unwrap();
+        assert_eq!(json["identitiesUnreadable"], "Unlock your Drive to see viewers' names and emails.");
+    }
+
+    /// Each reason the key is missing reads differently, for the comments
+    /// and for the viewers.
+    #[test]
+    fn each_missing_key_has_its_own_sentences() {
+        let all = [
+            KeyUnavailable::Password,
+            KeyUnavailable::NotOnDevice,
+            KeyUnavailable::NotFetchable,
+            KeyUnavailable::Unreachable,
+            KeyUnavailable::Locked,
+        ];
+        let comments: HashSet<&str> = all.iter().map(|k| k.sentence()).collect();
+        let viewers: HashSet<&str> = all.iter().map(|k| k.identities_sentence()).collect();
+        assert_eq!((comments.len(), viewers.len()), (5, 5));
+        assert_eq!(KeyUnavailable::Locked.sentence(), "Unlock your Drive to read this link's comments.");
+    }
+
+    /// A link this computer holds no secret for, while the account's phrase is
+    /// not loaded: the Drive is locked, which is what the panel's Unlock line
+    /// answers. Never "not here", and never a request.
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "HOME_LOCK is held across awaits so no other test changes $HOME mid-test; the test future is block_on'd, never moved, see test_helpers.rs"
+    )]
+    // Multi-threaded: the keystore reads through `block_in_place`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_locked_drive_reads_as_locked_not_as_a_missing_key() {
+        let home = tempfile::TempDir::new().expect("home");
+        let _home = crate::test_helpers::set_test_home(home.path());
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(home.path().join("k.db"))
+            .create_if_missing(true);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await
+            .expect("pool");
+        crate::utils::schema::ensure_table_schema(&pool).await.expect("schema");
+        let state = AppState::new();
+        state.set_pool(pool);
+
+        let refused = share_key_for(&state, "5LockedOwner", "abcdefghijabcdefghijab").await.expect_err("locked");
+        assert_eq!(refused, KeyUnavailable::Locked);
+        assert_eq!(
+            comment_key_for(&state, "5LockedOwner", "abcdefghijabcdefghijab").await.err(),
+            Some(KeyUnavailable::Locked)
+        );
     }
 
     #[test]

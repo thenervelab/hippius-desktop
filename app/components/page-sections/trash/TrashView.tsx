@@ -52,7 +52,7 @@ import {
   retentionDays,
   retentionNotice,
 } from "@/app/lib/trash/copy";
-import { clashDestinationName, rowKey, sizeLabel } from "./trashRows";
+import { clashDestinationName, restoreLabel, rowKey, rowStatus, sizeLabel } from "./trashRows";
 
 export const TRASH_QUERY_KEY = "drive-trash";
 const ALL_DRIVES = "__all__";
@@ -158,9 +158,13 @@ export default function TrashView() {
               label: r.label,
               itemId: r.itemId,
               path: r.path,
+              storedPath: r.storedPath,
               isFolder: r.isFolder,
               fileCount: r.fileCount,
               onClash: answers?.get(rowKey(r)) ?? "ask",
+              // A restore under way finishes the way it started (Rust decides).
+              restoreMode: r.restoreMode,
+              restoreNewPath: r.restoreNewPath,
             })),
           ),
         );
@@ -537,13 +541,15 @@ function TrashListRow({
 }) {
   const location = locationOf(row.driveName, row.parentPath);
   const days = daysUntilDeleted(row, retention);
+  const status = rowStatus(row);
+  const restoreText = restoreLabel(row);
   const exact = `Moved to Trash ${deletedExact(row.trashedAt)}`;
   const type = row.isFolder ? undefined : getFileTypeFromExtension(row.name.includes(".") ? (row.name.split(".").pop() ?? null) : null);
   const { icon: Icon, color } = getFileIcon(type ?? undefined, row.isFolder);
   const items: ActionItem[] = [
     {
       icon: <RotateCcw className="size-4" />,
-      itemTitle: "Restore",
+      itemTitle: restoreText,
       disabled: busy,
       onItemClick: () => onRestore(row),
     },
@@ -588,7 +594,7 @@ function TrashListRow({
           </span>
           {/* Below `lg` the other columns fold into one muted line. */}
           <span className="truncate text-xs text-grey-50 dark:text-grey-dark-600 lg:hidden" title={`${location} · ${exact}`}>
-            {location} · {deletedForeverPhrase(days)}
+            {location} · {status ?? deletedForeverPhrase(days)}
           </span>
         </span>
       </span>
@@ -596,7 +602,7 @@ function TrashListRow({
         {location}
       </span>
       <span role="cell" className="hidden truncate text-grey-50 dark:text-grey-dark-600 lg:block" title={exact}>
-        {deletedForeverIn(days)}
+        {status ?? deletedForeverIn(days)}
       </span>
       <span role="cell" className="hidden text-right tabular-nums text-grey-50 dark:text-grey-dark-600 lg:block">
         {sizeLabel(row, formatBytes)}
@@ -604,8 +610,8 @@ function TrashListRow({
       <span role="cell" className="flex items-center justify-end gap-1">
         <button
           type="button"
-          aria-label={`Restore ${row.name}`}
-          title="Restore"
+          aria-label={`${restoreText} ${row.name}`}
+          title={restoreText}
           disabled={busy}
           onClick={() => onRestore(row)}
           className="hidden size-7 items-center justify-center rounded-md text-grey-50 opacity-0 transition-opacity hover:bg-grey-90 hover:text-grey-10 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-50 disabled:cursor-not-allowed group-hover:opacity-100 dark:text-grey-dark-600 dark:hover:bg-white/10 dark:hover:text-white lg:flex"

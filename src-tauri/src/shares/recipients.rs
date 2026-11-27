@@ -101,9 +101,10 @@ const SOURCE_GONE: &str = "This link has expired or was revoked. Make a new link
 const PASSWORD_LINK: &str = "A link with a password can't have links per person.";
 const KEY_NOT_HERE: &str = "This link's key isn't on this computer, so people can't be added here.";
 /// A `#s=` link whose share key was never kept here and that the server no
-/// longer hands out (it asks for an email, or it has ended).
+/// longer hands out, to the owner either: it has ended.
 const KEY_NOT_FETCHABLE: &str = "This link's key can no longer be fetched on this computer, so people can't be added here.";
 const KEY_UNREACHABLE: &str = "Couldn't reach Hippius to get this link ready. Try again.";
+const KEY_LOCKED: &str = "Unlock your Drive to add people to this link.";
 const NAME_TOO_LONG: &str = "A name is too long. Use a shorter one.";
 const COULDNT_MAKE: &str = "Couldn't make the link. Try again.";
 
@@ -1176,6 +1177,7 @@ fn key_refusal(reason: KeyUnavailable) -> &'static str {
         KeyUnavailable::NotOnDevice => KEY_NOT_HERE,
         KeyUnavailable::NotFetchable => KEY_NOT_FETCHABLE,
         KeyUnavailable::Unreachable => KEY_UNREACHABLE,
+        KeyUnavailable::Locked => KEY_LOCKED,
     }
 }
 
@@ -1190,11 +1192,12 @@ mod tests {
             KeyUnavailable::NotOnDevice,
             KeyUnavailable::NotFetchable,
             KeyUnavailable::Unreachable,
+            KeyUnavailable::Locked,
         ]
         .into_iter()
         .map(key_refusal)
         .collect();
-        assert_eq!(sentences.len(), 4);
+        assert_eq!(sentences.len(), 5);
         assert_eq!(key_refusal(KeyUnavailable::Password), PASSWORD_LINK);
     }
 
