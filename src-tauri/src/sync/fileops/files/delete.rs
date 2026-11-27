@@ -46,7 +46,7 @@ pub struct DeleteFilesResult {
 /// The links to turn off after a batch: those of the files that were
 /// deleted (`deleted[i]` for `files[i]`), each once. A file that could not
 /// be deleted keeps its links: the link still has a file to show.
-fn links_to_turn_off(files: &[FileDeleteRequest], deleted: &[bool]) -> Vec<String> {
+pub(crate) fn links_to_turn_off(files: &[FileDeleteRequest], deleted: &[bool]) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     files
         .iter()
@@ -149,24 +149,8 @@ pub async fn delete_files(
         }
     }
 
-    // "Also turn off its links": only now that the files are gone, each
-    // link's chat preview first (it is reached by the link's token), then
-    // the link itself. A failure is counted for the user, never raised: the
-    // files are deleted either way.
-    let mut links_turned_off = 0u32;
-    let mut links_failed = 0u32;
-    for token in links_to_turn_off(&files, &deleted_flags) {
-        if let Err(e) = crate::shares::preview::remove(&state, &account_id, &token).await {
-            warn!(error = %e, "chat preview not removed before turning off a deleted file's link");
-        }
-        match crate::shares::commands::hcfs_revoke_share(state.clone(), token).await {
-            Ok(()) => links_turned_off += 1,
-            Err(e) => {
-                warn!(error = %e, "a deleted file's link could not be turned off");
-                links_failed += 1;
-            }
-        }
-    }
+    // "Also turn off its links": only now that the files are gone.
+    let (links_turned_off, links_failed) = turn_off_links(&state, &account_id, links_to_turn_off(&files, &deleted_flags)).await;
 
     // Trigger sync so server picks up the deletions
     {
@@ -206,6 +190,28 @@ pub async fn delete_files(
         links_turned_off,
         links_failed,
     })
+}
+
+/// Turn off share links whose files were just deleted: each link's chat
+/// preview first (it is reached by the link's token), then the link
+/// itself. A failure is counted for the user, never raised: the files are
+/// deleted either way. Returns (turned off, failed).
+pub(crate) async fn turn_off_links(state: &tauri::State<'_, crate::app_state::AppState>, account_id: &str, tokens: Vec<String>) -> (u32, u32) {
+    let mut links_turned_off = 0u32;
+    let mut links_failed = 0u32;
+    for token in tokens {
+        if let Err(e) = crate::shares::preview::remove(state, account_id, &token).await {
+            warn!(error = %e, "chat preview not removed before turning off a deleted file's link");
+        }
+        match crate::shares::commands::hcfs_revoke_share(state.clone(), token).await {
+            Ok(()) => links_turned_off += 1,
+            Err(e) => {
+                warn!(error = %e, "a deleted file's link could not be turned off");
+                links_failed += 1;
+            }
+        }
+    }
+    (links_turned_off, links_failed)
 }
 
 /// What a single delete actually removed.

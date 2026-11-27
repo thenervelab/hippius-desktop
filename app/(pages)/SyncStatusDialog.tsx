@@ -1,10 +1,11 @@
 "use client";
 
 import { ChevronDown, ChevronUp, FolderOpen } from "lucide-react";
-import { driveFolderRoute } from "@/app/lib/routes";
 import { requestOpenDriveFolder } from "@/app/lib/drive/openDriveFolder";
+import { capturesDriveFromStatus, syncQueueFolderRoute, type CapturesDrive } from "@/app/lib/drive/syncQueueLocation";
 import { driveStatusesAtom } from "@/app/lib/global-atoms/unpinAtoms";
-import { baseNameOf, parentOf } from "@/app/components/page-sections/drive/uploadingHere";
+import { useCaptureAvailability } from "@/app/lib/capture/useCaptureAvailability";
+import { getCaptureDriveStatus } from "@/app/lib/tauri/capture";
 import React, {
   memo,
   useCallback,
@@ -79,7 +80,7 @@ interface SyncFileItemProps {
    * rather than derived here: the classification is Rust's (the reason string
    * is display copy, not a contract), and the row only joins by path. */
   isRetrying?: boolean;
-  /** Open the folder this file is in, on the Drive page. Absent: no button. */
+  /** Open the folder this file is in (Drive, or Captures for a capture). Absent: no button. */
   onShowInFolder?: (file: FileProgress) => void;
 }
 
@@ -374,7 +375,8 @@ const SyncFileItem = memo<SyncFileItemProps>(
                   : "leading-none text-grey-10/50 dark:text-white/50",
               )}
             >
-              {errorReason ?? getFileMetaText(file)}
+              {/* Rust's word for the row ("Backing up to Drive"), when it has one. */}
+              {errorReason ?? file.note ?? getFileMetaText(file)}
             </span>
 
             <SyncFileStatusBadge
@@ -400,6 +402,7 @@ const SyncFileItem = memo<SyncFileItemProps>(
       previousFile.fileName === nextFile.fileName &&
       previousFile.totalBytes === nextFile.totalBytes &&
       previousFile.error === nextFile.error &&
+      previousFile.note === nextFile.note &&
       // Without this the row keeps its stale badge: the file fields are
       // identical across the frame where Rust first flags it as retrying.
       previous.isRetrying === next.isRetrying &&
@@ -419,18 +422,27 @@ const SyncStatusDialog: React.FC<SyncStatusDialogProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const engineHealth = useAtomValue(syncEngineHealthAtom);
   const driveStatuses = useAtomValue(driveStatusesAtom);
-  // A drive with a status here is synced on this machine; any other drive in
-  // the queue was uploaded straight to the server, which opens remotely.
+  const captureAvailability = useCaptureAvailability();
+  // Which page and folder the row's file is in (`syncQueueFolderRoute`): the
+  // Captures page for the captures drive, else the Drive page. The captures
+  // drive is asked of Rust at the click, so a folder moved a moment ago is
+  // the one used; without capture (or an answer) every file opens on Drive.
   const showInFolder = useCallback(
     (file: FileProgress) => {
       if (!file.label) return;
-      const remote = !driveStatuses.has(file.label);
-      // The file's own name too, so the folder opens with its row pointed out.
-      requestOpenDriveFolder(
-        driveFolderRoute(file.label, remote, parentOf(file.path) || undefined, baseNameOf(file.path) || undefined),
-      );
+      const captures: Promise<CapturesDrive | null> =
+        captureAvailability === "unavailable"
+          ? Promise.resolve(null)
+          : Promise.resolve()
+              .then(getCaptureDriveStatus)
+              .then(capturesDriveFromStatus)
+              .catch(() => null);
+      void captures.then((capturesDrive) => {
+        const url = syncQueueFolderRoute(file, { drives: driveStatuses, captures: capturesDrive });
+        if (url) requestOpenDriveFolder(url);
+      });
     },
-    [driveStatuses],
+    [driveStatuses, captureAvailability],
   );
 
   // Rust flags the errored rows that retry themselves; the row joins by path.

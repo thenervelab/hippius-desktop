@@ -38,6 +38,7 @@ use super::insights::{
     Api, KeyUnavailable, LINK_GONE, PLAN_UNREADABLE, REQUEST_TIMEOUT, UNREACHABLE, capabilities_checked, comment_key_for, read_ok,
     read_switches_in_plan, transport,
 };
+use super::link_ref::{LinkKind, LinkRef};
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 
@@ -260,8 +261,8 @@ fn parse_accepts_page(body: &str) -> Result<WireAcceptsPage> {
     serde_json::from_str(body).map_err(|e| AppError::Hcfs(format!("nda accepts parse failed: {e}")))
 }
 
-async fn get_accepts(http: &reqwest::Client, api: &Api, token: &str, after: u64) -> Result<WireAcceptsPage> {
-    let mut url = api.share_url(token, "/nda/accepts")?;
+async fn get_accepts(http: &reqwest::Client, api: &Api, link: LinkRef<'_>, after: u64) -> Result<WireAcceptsPage> {
+    let mut url = api.link_url(link, "/nda/accepts")?;
     if after > 0 {
         url = format!("{url}?after={after}");
     }
@@ -275,9 +276,9 @@ async fn get_accepts(http: &reqwest::Client, api: &Api, token: &str, after: u64)
     parse_accepts_page(&read_ok(resp).await?)
 }
 
-async fn put_nda(http: &reqwest::Client, api: &Api, token: &str, sealed: &SealedText) -> Result<()> {
+async fn put_nda(http: &reqwest::Client, api: &Api, link: LinkRef<'_>, sealed: &SealedText) -> Result<()> {
     let resp = http
-        .put(api.share_url(token, "/nda")?)
+        .put(api.link_url(link, "/nda")?)
         .bearer_auth(&api.bearer)
         .timeout(REQUEST_TIMEOUT)
         .json(sealed)
@@ -288,9 +289,9 @@ async fn put_nda(http: &reqwest::Client, api: &Api, token: &str, sealed: &Sealed
 }
 
 /// Remove the text. A link that already has none is what was asked for.
-async fn delete_nda(http: &reqwest::Client, api: &Api, token: &str) -> Result<()> {
+async fn delete_nda(http: &reqwest::Client, api: &Api, link: LinkRef<'_>) -> Result<()> {
     let resp = http
-        .delete(api.share_url(token, "/nda")?)
+        .delete(api.link_url(link, "/nda")?)
         .bearer_auth(&api.bearer)
         .timeout(REQUEST_TIMEOUT)
         .send()
@@ -325,7 +326,7 @@ fn nda_refusal(err: AppError) -> AppError {
 /// `Ok(None)` when the link has no text, has a locked one, does not open
 /// here, or is no longer live.
 pub(super) async fn read_link_text(http: &reqwest::Client, api: &Api, token: &str, key: &CommentKey) -> Result<Option<String>> {
-    match get_accepts(http, api, token, 0).await {
+    match get_accepts(http, api, LinkRef::File(token), 0).await {
         Ok(page) => Ok(page.current().and_then(|n| open_text(key, token, &n.ct, &n.nonce))),
         Err(AppError::NotFound(_)) => Ok(None),
         Err(e) => Err(e),
@@ -336,7 +337,7 @@ pub(super) async fn read_link_text(http: &reqwest::Client, api: &Api, token: &st
 /// exactly as the NDA editor sets a text on any link.
 pub(super) async fn set_link_text(http: &reqwest::Client, api: &Api, token: &str, key: &CommentKey, text: &str) -> Result<()> {
     let sealed = seal_text(key, token, text)?;
-    put_nda(http, api, token, &sealed).await
+    put_nda(http, api, LinkRef::File(token), &sealed).await
 }
 
 // ─── What the owner sees ───────────────────────────────────────────────────
@@ -421,21 +422,32 @@ fn may_set(in_plan: Option<bool>, key: std::result::Result<&CommentKey, KeyUnava
 
 // ─── Commands ──────────────────────────────────────────────────────────────
 
-/// A file link's NDA setting, for the share dialog and Link settings.
+/// The comment key of a file or folder link, which seals and opens its text.
+async fn link_comment_key(state: &AppState, account_id: &str, link: LinkRef<'_>) -> std::result::Result<CommentKey, KeyUnavailable> {
+    match link {
+        LinkRef::File(token) => comment_key_for(state, account_id, token).await,
+        LinkRef::Folder(hash) => super::folder_link_key::folder_comment_key_for(state, account_id, hash).await,
+    }
+}
+
+/// A link's NDA setting, for the share dialog and Link settings: a file link
+/// by its token, or a folder link by its token hash (`kind: "folder"`, behind
+/// `folder_share_nda`).
 #[tauri::command]
-pub async fn share_get_nda(state: tauri::State<'_, AppState>, share_token: String) -> Result<LinkNda> {
+pub async fn share_get_nda(state: tauri::State<'_, AppState>, share_token: String, kind: Option<LinkKind>) -> Result<LinkNda> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_nda {
+    if !link.nda_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Ok(LinkNda::default());
     }
     let api = Api::for_account(&state, &account_id).await?;
     let (page, in_plan, key) = tokio::join!(
-        get_accepts(&state.api_client, &api, &share_token, 0),
+        get_accepts(&state.api_client, &api, link, 0),
         read_switches_in_plan(&state, &account_id),
-        comment_key_for(&state, &account_id, &share_token)
+        link_comment_key(&state, &account_id, link)
     );
     let page = page?;
-    let view = link_nda(page.current(), &share_token, key.as_ref().map_err(|e| *e), in_plan);
+    let view = link_nda(page.current(), link.id(), key.as_ref().map_err(|e| *e), in_plan);
     if view.on && view.text.is_none() {
         debug!("share nda: the text could not be opened here");
     }
@@ -444,23 +456,21 @@ pub async fn share_get_nda(state: tauri::State<'_, AppState>, share_token: Strin
 
 /// Set or replace the link's text, sealed here. Needs a paid Drive plan.
 #[tauri::command]
-pub async fn share_set_nda(state: tauri::State<'_, AppState>, share_token: String, text: String) -> Result<LinkNda> {
+pub async fn share_set_nda(state: tauri::State<'_, AppState>, share_token: String, text: String, kind: Option<LinkKind>) -> Result<LinkNda> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_nda {
+    if !link.nda_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Err(AppError::Validation(NDA_UNAVAILABLE.into()));
     }
     let text = text_to_send(&text)?;
-    let (in_plan, key) = tokio::join!(
-        read_switches_in_plan(&state, &account_id),
-        comment_key_for(&state, &account_id, &share_token)
-    );
+    let (in_plan, key) = tokio::join!(read_switches_in_plan(&state, &account_id), link_comment_key(&state, &account_id, link));
     may_set(in_plan, key.as_ref().map_err(|e| *e))?;
     let Ok(key) = key else {
         return Err(AppError::Validation(KEY_NOT_HERE.into()));
     };
-    let sealed = seal_text(&key, &share_token, text)?;
+    let sealed = seal_text(&key, link.id(), text)?;
     let api = Api::for_account(&state, &account_id).await?;
-    put_nda(&state.api_client, &api, &share_token, &sealed).await?;
+    put_nda(&state.api_client, &api, link, &sealed).await?;
     Ok(LinkNda {
         offered: true,
         on: true,
@@ -474,13 +484,14 @@ pub async fn share_set_nda(state: tauri::State<'_, AppState>, share_token: Strin
 /// Remove the link's text, on any plan, so an owner who left the paid plan
 /// can always open a link back up. The accepts already recorded stay.
 #[tauri::command]
-pub async fn share_remove_nda(state: tauri::State<'_, AppState>, share_token: String) -> Result<()> {
+pub async fn share_remove_nda(state: tauri::State<'_, AppState>, share_token: String, kind: Option<LinkKind>) -> Result<()> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_nda {
+    if !link.nda_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Err(AppError::Validation(NDA_UNAVAILABLE.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
-    delete_nda(&state.api_client, &api, &share_token).await.map_err(|e| match e {
+    delete_nda(&state.api_client, &api, link).await.map_err(|e| match e {
         AppError::NotFound(_) => AppError::NotFound(LINK_GONE.into()),
         other => other,
     })
@@ -489,19 +500,25 @@ pub async fn share_remove_nda(state: tauri::State<'_, AppState>, share_token: St
 /// A page of the link's accepts, after the accept `after` (0 for the
 /// first), with its current text.
 #[tauri::command]
-pub async fn share_nda_accepts(state: tauri::State<'_, AppState>, share_token: String, after: Option<u64>) -> Result<NdaAccepts> {
+pub async fn share_nda_accepts(
+    state: tauri::State<'_, AppState>,
+    share_token: String,
+    after: Option<u64>,
+    kind: Option<LinkKind>,
+) -> Result<NdaAccepts> {
+    let link = LinkRef::new(kind, &share_token)?;
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_nda {
+    if !link.nda_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?) {
         return Ok(NdaAccepts::default());
     }
     let api = Api::for_account(&state, &account_id).await?;
-    let page = get_accepts(&state.api_client, &api, &share_token, after.unwrap_or(0)).await?;
+    let page = get_accepts(&state.api_client, &api, link, after.unwrap_or(0)).await?;
     let key = if needs_key(&page) {
-        comment_key_for(&state, &account_id, &share_token).await.ok()
+        link_comment_key(&state, &account_id, link).await.ok()
     } else {
         None
     };
-    Ok(accepts_view(&page, &share_token, key.as_ref()))
+    Ok(accepts_view(&page, link.id(), key.as_ref()))
 }
 
 // ─── The whole log, for its export and records ─────────────────────────────
@@ -511,11 +528,11 @@ const MAX_LOG_PAGES: usize = 200;
 
 /// Every accept of `token`, oldest first, with its current text, each page
 /// read as the NDA tab reads it (`accepts_view`).
-pub(super) async fn read_whole_log(http: &reqwest::Client, api: &Api, token: &str, key: Option<&CommentKey>) -> Result<NdaAccepts> {
+pub(super) async fn read_whole_log(http: &reqwest::Client, api: &Api, link: LinkRef<'_>, key: Option<&CommentKey>) -> Result<NdaAccepts> {
     let mut log: Option<NdaAccepts> = None;
     let mut after = 0;
     for _ in 0..MAX_LOG_PAGES {
-        let page = accepts_view(&get_accepts(http, api, token, after).await?, token, key);
+        let page = accepts_view(&get_accepts(http, api, link, after).await?, link.id(), key);
         let next = page.next_after;
         match log.as_mut() {
             None => log = Some(page),
@@ -532,14 +549,14 @@ pub(super) async fn read_whole_log(http: &reqwest::Client, api: &Api, token: &st
 }
 
 /// A link's whole accept log, for the owner signed in here.
-pub(super) async fn link_log(state: &AppState, share_token: &str) -> Result<NdaAccepts> {
+pub(super) async fn link_log(state: &AppState, link: LinkRef<'_>) -> Result<NdaAccepts> {
     let account_id = state.current_account_id()?;
-    if !capabilities_checked(state, &account_id, UNREACHABLE).await?.share_nda {
+    if !link.nda_on(&capabilities_checked(state, &account_id, UNREACHABLE).await?) {
         return Ok(NdaAccepts::default());
     }
     let api = Api::for_account(state, &account_id).await?;
-    let key = comment_key_for(state, &account_id, share_token).await.ok();
-    read_whole_log(&state.api_client, &api, share_token, key.as_ref()).await
+    let key = link_comment_key(state, &account_id, link).await.ok();
+    read_whole_log(&state.api_client, &api, link, key.as_ref()).await
 }
 
 #[cfg(test)]
@@ -777,7 +794,7 @@ mod tests {
             serde_json::json!({ "nda": nda, "accepts": accepts, "next_after": next }).to_string()
         };
         let (base, seen) = mock(move |s| (200, page(s.query.as_deref()))).await;
-        let log = read_whole_log(&reqwest::Client::new(), &Api::new(&base, "b"), "tok_1", Some(&key(1)))
+        let log = read_whole_log(&reqwest::Client::new(), &Api::new(&base, "b"), LinkRef::File("tok_1"), Some(&key(1)))
             .await
             .unwrap();
         assert_eq!(log.accepts.iter().map(|a| a.id).collect::<Vec<_>>(), [1, 2, 3]);
@@ -799,12 +816,12 @@ mod tests {
         let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
         let sealed = seal_text_with_nonce(&key(1), "tok_1", "Keep it quiet.", &[7; NONCE_LEN]).unwrap();
 
-        put_nda(&http, &api, "tok_1", &sealed).await.unwrap();
-        assert!(matches!(put_nda(&http, &api, "free_plan", &sealed).await, Err(AppError::Validation(m)) if m == NDA_NOT_IN_PLAN));
-        get_accepts(&http, &api, "tok_1", 0).await.unwrap();
-        get_accepts(&http, &api, "tok_1", 500).await.unwrap();
-        delete_nda(&http, &api, "tok_1").await.unwrap();
-        delete_nda(&http, &api, "no_text").await.unwrap();
+        put_nda(&http, &api, LinkRef::File("tok_1"), &sealed).await.unwrap();
+        assert!(matches!(put_nda(&http, &api, LinkRef::File("free_plan"), &sealed).await, Err(AppError::Validation(m)) if m == NDA_NOT_IN_PLAN));
+        get_accepts(&http, &api, LinkRef::File("tok_1"), 0).await.unwrap();
+        get_accepts(&http, &api, LinkRef::File("tok_1"), 500).await.unwrap();
+        delete_nda(&http, &api, LinkRef::File("tok_1")).await.unwrap();
+        delete_nda(&http, &api, LinkRef::File("no_text")).await.unwrap();
 
         let seen = seen.lock().unwrap().clone();
         let put = seen.iter().find(|s| s.method == "PUT").unwrap();
@@ -828,6 +845,39 @@ mod tests {
             ]
         );
         assert!(seen.iter().any(|s| s.method == "DELETE" && s.path == "/v1/shares/tok_1/nda"));
+    }
+
+    /// A folder link's text goes to its by-hash routes, sealed to the hash
+    /// (`<token_hash>:nda-text`), which is what the share page opens it with.
+    #[tokio::test]
+    async fn a_folder_links_text_is_sealed_to_its_hash_on_its_by_hash_routes() {
+        const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let (base, seen) = mock(|s| match s.method.as_str() {
+            "GET" => (200, r#"{"nda":null,"accepts":[],"next_after":null}"#.into()),
+            _ => (204, String::new()),
+        })
+        .await;
+        let (http, api) = (reqwest::Client::new(), Api::new(&base, "owner-bearer"));
+        let link = LinkRef::Folder(HASH);
+        let sealed = seal_text(&key(1), link.id(), "Keep it quiet.").unwrap();
+        put_nda(&http, &api, link, &sealed).await.unwrap();
+        get_accepts(&http, &api, link, 0).await.unwrap();
+        delete_nda(&http, &api, link).await.unwrap();
+        let paths: Vec<_> = seen.lock().unwrap().iter().map(|s| s.path.clone()).collect();
+        assert_eq!(
+            paths,
+            [
+                format!("/v1/folder-shares/by-hash/{HASH}/nda"),
+                format!("/v1/folder-shares/by-hash/{HASH}/nda/accepts"),
+                format!("/v1/folder-shares/by-hash/{HASH}/nda"),
+            ]
+        );
+        assert_eq!(open_text(&key(1), HASH, &sealed.ct, &sealed.nonce).as_deref(), Some("Keep it quiet."));
+        assert_eq!(
+            open_text(&key(1), TOKEN, &sealed.ct, &sealed.nonce),
+            None,
+            "bound to the hash, not to any token"
+        );
     }
 
     #[test]
@@ -894,7 +944,7 @@ mod tests {
     /// Offline, the capabilities read fails: every command must say Hippius
     /// couldn't be reached, never that the feature is missing.
     #[test]
-    fn every_command_reads_the_capabilities_strictly_and_is_gated_on_share_nda() {
+    fn every_command_reads_the_capabilities_strictly_and_is_gated_on_its_kinds_nda() {
         let src = include_str!("nda.rs");
         for name in [
             "pub async fn share_get_nda(",
@@ -905,7 +955,7 @@ mod tests {
             let start = src.find(name).unwrap_or_else(|| panic!("{name} is defined"));
             let body = &src[start..start + src[start..].find("\n}\n").expect("the body ends")];
             assert!(
-                body.contains("capabilities_checked(&state, &account_id, UNREACHABLE).await?.share_nda"),
+                body.contains("link.nda_on(&capabilities_checked(&state, &account_id, UNREACHABLE).await?)"),
                 "{name}"
             );
             assert!(!body.contains("capabilities_or_none("), "{name}");

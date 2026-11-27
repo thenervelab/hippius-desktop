@@ -75,11 +75,12 @@ export function cardView(
     case "uploading": {
       // The link is made first, from the capture itself, before the file
       // goes into the drive: while it is, Rust's line says how far it is.
-      if (card.link.state === "creating" && card.linkText) {
+      // It is out (copied) before its upload ends, and the line says both.
+      if ((card.link.state === "creating" || card.link.state === "uploading") && card.linkText) {
         return {
           percent: card.linkPercent ?? null,
           text: card.linkText,
-          announce: "Making link",
+          announce: card.link.state === "uploading" ? (card.link.copied ? "Link copied" : "Link ready") : "Making link",
           done: false,
           settled: false,
           failed: false,
@@ -87,8 +88,9 @@ export function cardView(
         };
       }
       const percent = remoteRow && sameFile(card, remoteRow) ? cappedPercent(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
-      // A link already made goes on saying so while the file goes into the drive.
-      const linkOut = card.link.state === "public" ? card.linkText : undefined;
+      // A link already made goes on saying so while the file goes into the
+      // drive, and so does a copied link that won't open.
+      const linkOut = card.link.state === "public" || card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
         text: joinLink(percent === null ? "Preparing upload…" : `Uploading · ${percent}%`, linkOut),
@@ -102,10 +104,13 @@ export function cardView(
     case "syncing": {
       const row = syncFiles.find((f) => sameFile(card, f));
       const percent = row ? cappedPercent(row.bytesTransferred, row.totalBytes) : null;
+      // A copied link that won't open is said while the file syncs too: the
+      // sync line alone would hide that the link in chat is dead.
+      const broken = card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
-        text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
-        announce: percent === null ? "Saved · waiting for sync" : "Uploading",
+        text: joinLink(percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`, broken),
+        announce: joinLink(percent === null ? "Saved · waiting for sync" : "Uploading", broken),
         done: false,
         settled: false,
         failed: false,

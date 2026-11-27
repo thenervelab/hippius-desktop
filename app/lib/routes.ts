@@ -54,12 +54,14 @@ export const TRASH_ROUTE = "/trash";
 
 /**
  * The Captures page pointing out one capture ("Show in folder" on a capture's
- * card). The same params as `driveFolderRoute`, read by the same Drive
- * container, which the Captures page pins to the captures drive.
+ * card or a sync queue row). The same params as `driveFolderRoute`, read by
+ * the same Drive container, which the Captures page pins to the captures
+ * drive. `subfolder` is a folder the user made inside the captures drive.
  */
-export function capturesRoute(label: string, remote: boolean, openFile?: string): string {
+export function capturesRoute(label: string, remote: boolean, openFile?: string, subfolder?: string): string {
   const params = new URLSearchParams({ openLabel: label });
   if (remote) params.set("openRemote", "1");
+  if (subfolder) params.set("openSubfolder", subfolder);
   if (openFile) params.set("openFile", openFile);
   return `${CAPTURES_ROUTE}?${params.toString()}`;
 }

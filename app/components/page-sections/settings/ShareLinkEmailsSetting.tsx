@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 
 import { Select } from "@/components/ui/select/Select";
@@ -13,6 +14,10 @@ import {
   type NotificationPreferences,
 } from "@/app/lib/tauri/shareInsights";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
+import {
+  shareEventNotificationsEnabledAtom,
+  shareLinkNotificationsEnabledAtom,
+} from "@/app/lib/global-atoms/sharesAtoms";
 import { SettingsCard } from "./SettingsCard";
 import { SettingsToggle } from "./SettingsToggle";
 
@@ -23,13 +28,18 @@ const DIGEST_OPTIONS: ReadonlyArray<{ value: Digest; label: string }> = [
 ];
 
 /**
- * The emails about share links (the same three the console offers): a
- * link's first views, new comments, and a summary. Each change is saved at
+ * The emails about share links (the ones the console offers): a link's first
+ * views, new comments, and a summary, plus return visits
+ * (`share_link_notifications`) and NDA accepts and refused viewers
+ * (`share_event_notifications`), each shown only while the server says it
+ * sends that email and the preferences carry it. Each change is saved at
  * once, and put back if the server refuses it. Shown only when the server
  * sends these emails (`share_notifications`). An account with no email
  * address (an access-key sign-in) gets one line instead of the switches.
  */
 export default function ShareLinkEmailsSetting() {
+  const visitEmails = useAtomValue(shareLinkNotificationsEnabledAtom);
+  const eventEmails = useAtomValue(shareEventNotificationsEnabledAtom);
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [noEmail, setNoEmail] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -84,7 +94,11 @@ export default function ShareLinkEmailsSetting() {
         <div className="flex flex-col">
           <Row
             title="First views"
-            description="An email when one of your links is opened for the first time."
+            description={
+              visitEmails
+                ? "An email when one of your links is opened for the first time, and after each visit on links set to Every visit."
+                : "An email when one of your links is opened for the first time."
+            }
           >
             <SettingsToggle
               ariaLabel="First views"
@@ -93,6 +107,16 @@ export default function ShareLinkEmailsSetting() {
               onCheckedChange={(firstViews) => void change({ firstViews })}
             />
           </Row>
+          {visitEmails && prefs.returnVisits !== undefined && (
+            <Row title="Return visits" description="An email when people come back to one of your links a day or more later.">
+              <SettingsToggle
+                ariaLabel="Return visits"
+                checked={prefs.returnVisits}
+                disabled={saving}
+                onCheckedChange={(returnVisits) => void change({ returnVisits })}
+              />
+            </Row>
+          )}
           <Row
             title="New comments"
             description="An email when people comment on your links. Comments are encrypted, so it says how many, not what they say."
@@ -104,6 +128,29 @@ export default function ShareLinkEmailsSetting() {
               onCheckedChange={(comments) => void change({ comments })}
             />
           </Row>
+          {eventEmails && prefs.ndaAccepts !== undefined && (
+            <Row title="NDA accepted" description="An email when people accept the NDA on one of your links.">
+              <SettingsToggle
+                ariaLabel="NDA accepted"
+                checked={prefs.ndaAccepts}
+                disabled={saving}
+                onCheckedChange={(ndaAccepts) => void change({ ndaAccepts })}
+              />
+            </Row>
+          )}
+          {eventEmails && prefs.gateRefusals !== undefined && (
+            <Row
+              title="Refused viewers"
+              description="An email when your allow list turns someone away, with a link to let them in."
+            >
+              <SettingsToggle
+                ariaLabel="Refused viewers"
+                checked={prefs.gateRefusals}
+                disabled={saving}
+                onCheckedChange={(gateRefusals) => void change({ gateRefusals })}
+              />
+            </Row>
+          )}
           <Row title="Summary" description="Views and comments across all your links.">
             <div className="w-[120px]">
               <Select

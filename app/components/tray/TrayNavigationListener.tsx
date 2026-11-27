@@ -55,7 +55,8 @@ export default function TrayNavigationListener() {
 
     const handleOpenFiles = () => goTo("/files");
     const handleOpenVm = () => goTo("/vm");
-    // "Show in folder" from the sync queue: a `/files?openLabel=…` URL.
+    // "Show in folder" from the sync queue: a `/files?openLabel=…` URL, or
+    // `/captures?openLabel=…` for the captures drive.
     const handleOpenFolder = (e: Event) => {
       const url = (e as CustomEvent<OpenDriveFolderDetail>).detail?.url;
       if (url) push(url);

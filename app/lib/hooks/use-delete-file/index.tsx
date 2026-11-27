@@ -9,8 +9,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { toast } from "sonner";
 import { useRef } from "react";
-import { moveToTrash, newTrashJobId, onTrashProgress, type MoveToTrashResult } from "@/app/lib/tauri/trash";
-import { movingToTrashMessage } from "@/app/lib/trash/copy";
+import { deleteFilesForever, moveToTrash, newTrashJobId, onTrashProgress, type MoveToTrashResult } from "@/app/lib/tauri/trash";
+import { movingToTrashMessage, progressMessage } from "@/app/lib/trash/copy";
 import { showMovedToTrashToast } from "@/app/lib/trash/trashToast";
 import type { DeleteMode } from "@/app/lib/trash/deleteMode";
 
@@ -24,8 +24,9 @@ export interface DeleteFilesOptions {
    */
   turnOffLinks?: Map<FormattedUserFile, string[]>;
   /**
-   * `trash`: Move to Trash, with Undo. Anything else is today's permanent
-   * delete (`forever` only changes the words around it).
+   * `trash`: Move to Trash, with Undo. `forever` (only offered while the
+   * server has Trash): Rust's `delete_files_forever`, since the sync engine
+   * would send a plain local delete to Trash. `legacy`: today's delete.
    */
   mode?: DeleteMode;
 }
@@ -190,19 +191,28 @@ export const useDeleteFile = ({
 
             // Single Rust call handles path resolution, deletion, and sync trigger
             const turnOffLinks = options ? options.turnOffLinks : undefined;
-            const result = await invoke<DeleteFilesResult>(
-                "delete_files",
-                {
-                    accountId: polkadotAddress,
-                    files: files.map((f) => ({
-                        name: f.actualFileName || f.name,
-                        source: f.source ?? null,
-                        label: f.label ?? null,
-                        size: f.size ?? 0,
-                        turnOffLinks: turnOffLinks?.get(f) ?? [],
-                    })),
+            const requests = files.map((f) => ({
+                name: f.actualFileName || f.name,
+                source: f.source ?? null,
+                label: f.label ?? null,
+                size: f.size ?? 0,
+                turnOffLinks: turnOffLinks?.get(f) ?? [],
+            }));
+            let result: DeleteFilesResult;
+            if (options && options.mode === "forever") {
+                const jobId = newTrashJobId();
+                const loadingId = loadingToastRef.current;
+                const stop = await onTrashProgress(jobId, (progress) => {
+                    if (loadingId !== null) toast.loading(progressMessage("delete", progress, files.length), { id: loadingId });
+                }).catch(() => null);
+                try {
+                    result = await deleteFilesForever(polkadotAddress, jobId, requests);
+                } finally {
+                    stop?.();
                 }
-            );
+            } else {
+                result = await invoke<DeleteFilesResult>("delete_files", { accountId: polkadotAddress, files: requests });
+            }
 
             if (result.failed.length > 0) {
                 const errorMessages = result.failed.map((f) => `${f.name}: ${f.error}`).join("; ");

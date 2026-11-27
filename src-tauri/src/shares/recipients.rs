@@ -67,7 +67,7 @@ use super::capabilities::ServerCapabilities;
 use super::comment_crypto::{self, CommentKey};
 use super::insights::{
     Api, KeyUnavailable, LINK_GONE, OfferedSwitches, PLAN_UNREADABLE, REQUEST_TIMEOUT, SettingsPatch, UNREACHABLE, WireEmail, capabilities_checked,
-    get_meta_body, patch_settings, read_ok, share_key_for, transport,
+    get_meta_body, patch_settings, read_ok, read_switches_in_plan, share_key_for, transport,
 };
 use super::nda::{read_link_text, set_link_text};
 use super::owner_wrap::{WrapKey, derive_wrap_key, open_file_link_secret, push_file_link_secrets};
@@ -101,9 +101,10 @@ const SOURCE_GONE: &str = "This link has expired or was revoked. Make a new link
 const PASSWORD_LINK: &str = "A link with a password can't have links per person.";
 const KEY_NOT_HERE: &str = "This link's key isn't on this computer, so people can't be added here.";
 /// A `#s=` link whose share key was never kept here and that the server no
-/// longer hands out (it asks for an email, or it has ended).
+/// longer hands out, to the owner either: it has ended.
 const KEY_NOT_FETCHABLE: &str = "This link's key can no longer be fetched on this computer, so people can't be added here.";
 const KEY_UNREACHABLE: &str = "Couldn't reach Hippius to get this link ready. Try again.";
+const KEY_LOCKED: &str = "Unlock your Drive to add people to this link.";
 const NAME_TOO_LONG: &str = "A name is too long. Use a shorter one.";
 const COULDNT_MAKE: &str = "Couldn't make the link. Try again.";
 
@@ -460,6 +461,11 @@ pub struct RecipientLinks {
     pub can_add: bool,
     /// Oldest first.
     pub people: Vec<RecipientPerson>,
+    /// Whether the plan includes links per person (paid Drive plans only):
+    /// `Some(false)` on the free plan, where the app shows the upgrade prompt
+    /// in place of adding people; `None` when the plan could not be read
+    /// (nothing is locked, and the server still checks).
+    pub in_plan: Option<bool>,
 }
 
 /// What adding people did.
@@ -982,7 +988,7 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
     if source.link_label.is_some() {
         return Ok(RecipientLinks::default());
     }
-    let (label_key, wrap_key) = account_keys(&state, &account_id).await;
+    let ((label_key, wrap_key), in_plan) = tokio::join!(account_keys(&state, &account_id), read_switches_in_plan(&state, &account_id));
     let can_add = label_key.is_some() && share_key_for(&state, &account_id, &share_token).await.is_ok();
     let origin = super::commands::console_base_url();
     let recipients = recipient_rows(&rows, &source, Utc::now());
@@ -1002,6 +1008,7 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
         offered: can_add || !people.is_empty(),
         can_add,
         people,
+        in_plan,
     })
 }
 
@@ -1013,6 +1020,11 @@ pub async fn share_add_recipient_links(state: tauri::State<'_, AppState>, share_
     let caps = capabilities_checked(&state, &account_id, UNREACHABLE).await?;
     if !caps.share_recipient_links {
         return Err(AppError::Validation(UNAVAILABLE.into()));
+    }
+    // Paid Drive plans only: a known free plan is refused before anything is
+    // minted, in the upgrade prompt's words. The server checks too.
+    if read_switches_in_plan(&state, &account_id).await == Some(false) {
+        return Err(AppError::Validation(RECIPIENTS_NOT_IN_PLAN.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
     let rows = get_listing(&state.api_client, &api).await?;
@@ -1165,6 +1177,7 @@ fn key_refusal(reason: KeyUnavailable) -> &'static str {
         KeyUnavailable::NotOnDevice => KEY_NOT_HERE,
         KeyUnavailable::NotFetchable => KEY_NOT_FETCHABLE,
         KeyUnavailable::Unreachable => KEY_UNREACHABLE,
+        KeyUnavailable::Locked => KEY_LOCKED,
     }
 }
 
@@ -1179,11 +1192,12 @@ mod tests {
             KeyUnavailable::NotOnDevice,
             KeyUnavailable::NotFetchable,
             KeyUnavailable::Unreachable,
+            KeyUnavailable::Locked,
         ]
         .into_iter()
         .map(key_refusal)
         .collect();
-        assert_eq!(sentences.len(), 4);
+        assert_eq!(sentences.len(), 5);
         assert_eq!(key_refusal(KeyUnavailable::Password), PASSWORD_LINK);
     }
 

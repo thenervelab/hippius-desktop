@@ -1,8 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { Provider, createStore } from "jotai";
 
 import { RuleCards, type LinkRule } from "../RuleCards";
+import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { activeRecoveryCheckAtom, type RecoveryCheck } from "@/app/lib/global-atoms/recoveryAtoms";
+import { LOCKED_LABEL } from "@/components/page-sections/shares/insights/DriveUnlock";
+
+const unlockCalls = vi.hoisted(() => ({ n: 0 }));
+const UNLOCK_CHECK: RecoveryCheck = {
+  hasServerBlob: true,
+  hasLocalMnemonic: false,
+  canDecryptLocal: false,
+  updatedAt: null,
+  recommendedFlow: "unlock",
+};
+let store: ReturnType<typeof createStore>;
+vi.mock("@/app/lib/hooks/useUnlockFlow", () => ({
+  useUnlockFlow: () => ({
+    unlock: async () => {
+      unlockCalls.n += 1;
+      store.set(activeRecoveryCheckAtom, UNLOCK_CHECK);
+    },
+    busy: false,
+    isOAuth: true,
+  }),
+}));
 
 const RULES: LinkRule[] = [
   { id: "gate", label: "Ask for email", on: true, value: "Code by email", editor: <p>gate editor</p> },
@@ -45,5 +69,39 @@ describe("rule cards", () => {
     fireEvent.click(within(screen.getByTestId("rule-gate")).getByRole("button"));
     rerender(<RuleCards rules={RULES.slice(1)} />);
     expect(screen.getByTestId("rule-cards")).toBeInTheDocument();
+  });
+
+  it("draws no On or Off for a rule that is not a switch, and keeps the whole value on hover", () => {
+    render(<RuleCards rules={[{ id: "allowList", label: "Allow list", on: null, value: "acme.com, globex.com +3, 2 emails" }]} />);
+    const card = screen.getByTestId("rule-allowList");
+    expect(card).not.toHaveTextContent(/\b(On|Off)\b/);
+    expect(within(card).getByText("acme.com, globex.com +3, 2 emails")).toHaveAttribute("title", "acme.com, globex.com +3, 2 emails");
+  });
+
+  it("a locked rule shows a lock, unlocks first, then opens; a cancelled unlock opens nothing", async () => {
+    store = createStore();
+    store.set(syncRequiresReauthAtom, true);
+    unlockCalls.n = 0;
+    render(
+      <Provider store={store}>
+        <RuleCards rules={[{ id: "allowList", label: "Allow list", on: null, value: "2 allowed", locked: true, editor: <p>lists editor</p> }]} />
+      </Provider>,
+    );
+    const card = screen.getByTestId("rule-allowList");
+    expect(within(card).getByText(LOCKED_LABEL)).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByRole("button"));
+    await waitFor(() => expect(unlockCalls.n).toBe(1));
+    expect(screen.queryByText("lists editor")).toBeNull();
+    await act(async () => store.set(activeRecoveryCheckAtom, null));
+    expect(screen.queryByText("lists editor")).toBeNull();
+
+    fireEvent.click(within(screen.getByTestId("rule-allowList")).getByRole("button"));
+    await waitFor(() => expect(unlockCalls.n).toBe(2));
+    await act(async () => {
+      store.set(syncRequiresReauthAtom, false);
+      store.set(activeRecoveryCheckAtom, null);
+    });
+    expect(await screen.findByText("lists editor")).toBeInTheDocument();
   });
 });

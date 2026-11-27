@@ -236,6 +236,7 @@ mod tests {
             retention: Gated::Shown(None),
             viewers,
             pages: None,
+            identities_unreadable: None,
         }
     }
 

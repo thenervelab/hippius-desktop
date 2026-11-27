@@ -845,8 +845,32 @@ connection with the synced drive's upload of the same file, or wait for a
 direct upload to finish. While it is made the card shows its upload in Rust's
 words (`LinkProgress`, `card_link_progress`: "Uploading link 40%, about 30 s
 left", `linkPercent` for the bar), one update per step or percent
-(`link_progress_moved`). The chat preview is read from the same file while
-the link is made and awaited before the file can move. Once placed,
+(`link_progress_moved`). **The link is handed out the moment it exists,
+before its upload ends, only where `/v1/capabilities` reports
+`share_open_while_uploading`** (`deliver::server_shows_uploading`, asked
+while the file is read and never awaited; an answer not in by the time the
+link exists counts as no): hcfs-client's `create_share_reporting_link`
+offers it right after `init` to `OnLink`, which answers whether it took it,
+and `link_first` then copies it, sends its switches (`spawn_apply`,
+registered before the card holds the token) and opens it, the card goes to
+`LinkState::Uploading { copied }` ("Link copied, uploading 40%, about 30 s
+left", note "Keep Hippius open until the upload finishes", which wins the
+line over a `notice`; Copy link only, no Revoke or Manage until it is up),
+and the chat preview is sent as soon as it is read, since that server takes
+the switches and the preview during the upload (and answers `/meta`,
+`/link-key`, `/blob` with `409 share_uploading`). Without the capability all
+of that waits for the upload, as on an older server, where such a link
+answers 404. `link_first` returns only when the upload has finished, so the
+drive's upload never shares the connection. A link handed out and then
+failed is revoked by hcfs-client, never re-minted by the retry
+(`LINK_BROKEN`; one offered but not taken is retried as usual), and the
+card says `LinkState::Broken` ("Copied link won't open", also joined to the
+`uploading` and `syncing` status lines) with Retry in Create link's place;
+`announce_link` keeps it through placement, and a capture with no card says
+`LINK_BROKEN` in its notification (`delivered_notice`). Pinned by
+`capture_wiring::the_link_is_copied_while_its_upload_runs`. The chat preview
+is read from the same file while the link is made and awaited before the
+file can move. Once placed,
 `remember_placed_origin` records the link as the placed file's
 (`shares::origin`, plus the Finder badge for a synced one), which is what
 `share_synced_file` did when the link was minted after placing.
@@ -862,11 +886,50 @@ and NFD, never scanned), matched by label + `preview::same_drive_path` (NFC,
 `\` → `/`, leading `/` dropped, absolute paths ending in `relPath`, never
 trimmed). A row whose upload is still encrypting reads `Encrypt`, so both
 actions count. The card waits for its own upload, never for the rest of the
-sync: a `syncing` card with a public link whose file the engine has not
-started on (no row yet, or `SyncRow::Queued`, a `Pending` row behind other
-files) is marked uploaded at once (`link_finishes_card`), because minting the
-link uploads the capture's own encrypted copy. A file the engine is uploading
-right now (`Working`) shows that upload's progress instead. `PreviewCard.settled` (uploaded and the
+sync: a `syncing` card with a public link is marked uploaded at once
+(`link_finishes_card`) whether the engine has not started on the file (no row
+yet, or `SyncRow::Queued`, a `Pending` row behind other files) or is uploading
+it right now (`Working`), because minting the link uploads the capture's own
+encrypted copy, and the drive copy's progress on the card reads as a second
+upload of the same file. That copy goes on in the sync queue, where a failure
+is reported like any sync failure; only a `Failed` row still fails the card,
+and a card without a public link follows the drive upload, its only copy.
+**The same rule holds for a direct upload** (a drive not synced here):
+`link_finishes_card(card, DriveCopy::Direct)` is an `uploading` card with a
+public link, and `deliver_and_announce` asks it after `link_first` and before
+`deliver::place` (`finish_card_by_link_while_direct`, where `deliver::local_root`
+is `None`), so the card is `uploaded` and settled while the drive copy uploads
+in the upload list; otherwise the card drew the direct upload's percent from
+0 again beside "Public link copied". The drive copy cannot reuse the link's
+ciphertext (a file link would hand out the drive key; per-file keys are the
+real fix), so the second upload stays. Such a card carries
+`drive_copy_pending` until `announce_placed` or `announce_failed`, and
+`temp_copy_done_with` is false meanwhile, so a card closed by its countdown,
+Show in folder (the remote folder, where the file shows as uploading) or a
+new capture keeps the temp file; a failed drive copy fails the card with
+Retry, or with the card gone writes its marker and notifies, as any failed
+capture upload; a success after the card closed posts no "Link copied"
+notification (the card said it). **The card shows only the link's upload**:
+while a recording's link is made it carries `linkInfo` (`LINK_COPY_INFO`,
+"Your link has its own encrypted copy. A backup also goes to your Drive,
+so the recording shows in Captures."), drawn as an info button after the
+status line (`aria-label` "About this upload", the card's own tooltip via
+`data-card-tip`, never a native `title`); none for a screenshot, whose link
+is up at once. **The drive copy reads as a backup where the app words the
+row**: `deliver::place(.., backup)` (a link is out) makes the direct
+upload's batch `UploadBatch::capture_backup`, whose rows carry
+`RemoteUploadProgress.note` (`BACKUP_UPLOADING` / `BACKUP_DONE` /
+`BACKUP_FAILED`, the failure also as the row's `error`; `stamped`), which
+the sync widget shows in the size's place and the folder's "Uploading
+here" strip before the name (`rowText`); every other upload has no note.
+The synced path's rows are the hcfs-client engine's snapshot, which has no
+per-row label the app sets, so they still read as an ordinary sync upload.
+Pinned by
+`preview::tests::a_direct_upload_card_is_finished_by_its_link_not_restarted_by_the_drive_copy`,
+`preview::tests::a_recordings_link_being_made_explains_its_own_copy_and_the_backup`,
+`commands::tests::closing_a_card_its_link_finished_keeps_the_file_its_drive_copy_reads`,
+`remote_upload::tests::a_captures_drive_copy_reads_as_a_backup_and_nothing_else_does`,
+`previewPage.test.tsx` and `SyncStatusDialog.test.tsx`. `PreviewCard.settled` (uploaded and the
 link neither `Creating` nor `Failed`) is what the card's auto-hide waits for, so
 it never slides away before it can say the link was copied, and a card whose
 link failed stays up with Create link. `deliver::mint` tries a link three
@@ -1130,8 +1193,9 @@ pages keep the "an event beats a late first read" rule; the pill compares
 `seq`.
 
 **Sync queue Show in folder:** each row's folder button fires
-`requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path),
-baseNameOf(path)))` (a window event, so the widget needs no router);
+`requestOpenDriveFolder(syncQueueFolderRoute(...))` (a window event, so the
+widget needs no router): the captures drive opens the Captures page, never a
+My Drive path built from its folder (see `.claude/rules/sync-widget.md`);
 `TrayNavigationListener` navigates and `folderUrlForPath` opens a multi-level
 path.
 

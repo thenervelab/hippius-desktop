@@ -29,6 +29,24 @@ export interface RecipientLinks {
   canAdd: boolean;
   /** Oldest first. */
   people: RecipientPerson[];
+  /**
+   * Links per person come with paid Drive plans: `false` on the free plan,
+   * where the upgrade prompt takes the place of adding people; `null` when
+   * the plan could not be read.
+   */
+  inPlan: boolean | null;
+}
+
+/**
+ * Rust's refusal on the free plan (its `RECIPIENTS_NOT_IN_PLAN`, word for
+ * word), which shows the upgrade prompt instead of an error line.
+ */
+export const RECIPIENTS_NOT_IN_PLAN = "Links per person are available on paid Drive plans.";
+
+export function isRecipientsNotInPlan(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const { kind, message } = err as { kind?: unknown; message?: unknown };
+  return kind === "Validation" && message === RECIPIENTS_NOT_IN_PLAN;
 }
 
 /** What adding people did. */

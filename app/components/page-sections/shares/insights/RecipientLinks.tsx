@@ -9,14 +9,19 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
+import { SwitchesUpgradeNotice } from "@/components/page-sections/drive/LinkEngagementSwitches";
 import {
   addRecipientLinks,
   getRecipientLinks,
+  isRecipientsNotInPlan,
+  RECIPIENTS_NOT_IN_PLAN,
   retryRecipientNda,
   revokeRecipientLink,
   type RecipientLinks as RecipientLinksView,
   type RecipientPerson,
 } from "@/app/lib/tauri/shareRecipients";
+import { LockMark, useDriveLocked, useDriveUnlock } from "./DriveUnlock";
+import { useUnlockCount } from "./useUnlockCount";
 import { actionErrorLine } from "./insightsView";
 import { FOCUS } from "./panelStyles";
 
@@ -24,6 +29,10 @@ export const RECIPIENTS_TITLE = "Links per person";
 export const UNNAMED_LINK = "Unnamed link";
 export const COPY_ALL = "Copy all links";
 export const NDA_PENDING_NOTE = "NDA not added yet, so this link won't open.";
+/** The upgrade card's words on the free plan: links per person are paid only. */
+export const RECIPIENTS_LOCKED_PROMPT = "Links per person are available on paid Drive plans";
+export const RECIPIENTS_UPGRADE_BODY = "Upgrade to give each person their own link and see who opened it.";
+export const RECIPIENTS_UPGRADE_LABEL = "Upgrade for links per person";
 
 const INPUT = cn(
   "h-[38px] min-w-0 flex-1 rounded-[8px] border px-3 text-[13px] outline-none disabled:opacity-60",
@@ -86,8 +95,21 @@ async function copyText(text: string, message: string): Promise<boolean> {
  *
  * `layout` matches what it sits with: `stack` in the share dialog, `list` (a
  * bordered box) in the Insights sheet's Link settings.
+ *
+ * Paid Drive plans only: on the free plan (Rust's `inPlan: false`, or the
+ * server refusing a link for the plan) the upgrade card takes the place of
+ * the box. Links already made stay listed, to copy or revoke.
  */
-export default function RecipientLinks({ shareToken, layout = "stack" }: { shareToken: string; layout?: "stack" | "list" }) {
+export default function RecipientLinks({
+  shareToken,
+  layout = "stack",
+  onUpgrade,
+}: {
+  shareToken: string;
+  layout?: "stack" | "list";
+  /** Opens the plans page (and closes whatever this sits in). */
+  onUpgrade?: () => void;
+}) {
   // Optional: the share dialog has no query cache; the Insights panel does.
   const queryClient = useContext(QueryClientContext);
   const [view, setView] = useState<RecipientLinksView | null>(null);
@@ -98,6 +120,11 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The server refused a link for the plan after Rust could not read it.
+  const [refusedForPlan, setRefusedForPlan] = useState(false);
+  // People can be added only once the Drive is unlocked here (Rust's `canAdd`).
+  const driveLocked = useDriveLocked();
+  const unlocks = useUnlockCount();
 
   const load = () =>
     Promise.resolve()
@@ -110,6 +137,7 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
     setMade([]);
     setGone(new Set());
     setUnlocked(new Set());
+    setRefusedForPlan(false);
     let alive = true;
     Promise.resolve()
       .then(() => getRecipientLinks(shareToken))
@@ -119,6 +147,12 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
       alive = false;
     };
   }, [shareToken]);
+
+  // Unlocked while open: read again, so the box to add people appears.
+  useEffect(() => {
+    if (unlocks > 0) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unlocks]);
 
   if (!view?.offered) return null;
   const people = mergePeople(view.people, made)
@@ -140,13 +174,19 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
       const added = await addRecipientLinks(shareToken, input);
       setMade((prev) => [...prev, ...added.people]);
       setInput(added.left);
-      setError(added.error);
+      if (added.error === RECIPIENTS_NOT_IN_PLAN) {
+        setRefusedForPlan(true);
+        setError(null);
+      } else {
+        setError(added.error);
+      }
       if (added.people.length > 0) {
         refreshElsewhere();
         void load();
       }
     } catch (err) {
-      setError(actionErrorLine("make the link", err, navigator.onLine));
+      if (isRecipientsNotInPlan(err)) setRefusedForPlan(true);
+      else setError(actionErrorLine("make the link", err, navigator.onLine));
     } finally {
       setBusy(false);
     }
@@ -174,6 +214,7 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
   };
 
   const allText = allLinksText(people);
+  const locked = view.inPlan === false || refusedForPlan;
 
   return (
     <section
@@ -190,7 +231,16 @@ export default function RecipientLinks({ shareToken, layout = "stack" }: { share
       >
         {RECIPIENTS_TITLE}
       </h3>
-      {view.canAdd && (
+      {view.canAdd && locked && (
+        <SwitchesUpgradeNotice
+          onUpgrade={onUpgrade ?? (() => undefined)}
+          label={RECIPIENTS_UPGRADE_LABEL}
+          prompt={RECIPIENTS_LOCKED_PROMPT}
+          body={RECIPIENTS_UPGRADE_BODY}
+        />
+      )}
+      {!view.canAdd && driveLocked && <LockedAddRow onUnlocked={() => void load()} />}
+      {view.canAdd && !locked && (
         <form className="flex min-w-0 items-center gap-2" onSubmit={(e) => void add(e)}>
           <input
             aria-label="Names or emails"
@@ -356,5 +406,25 @@ function PersonRow({
         <X className="size-4" aria-hidden />
       </button>
     </li>
+  );
+}
+
+/**
+ * In place of the box while the Drive is locked: it looks like the box, with
+ * a lock, and pressing it unlocks, then reads the list again so the real box
+ * appears.
+ */
+function LockedAddRow({ onUnlocked }: { onUnlocked: () => void }) {
+  const unlock = useDriveUnlock();
+  return (
+    <button
+      type="button"
+      onClick={() => unlock(onUnlocked)}
+      data-testid="recipient-links-locked"
+      className={cn(INPUT, "flex h-[38px] w-full flex-none items-center justify-between gap-2 text-left text-grey-60 dark:text-grey-dark-600", FOCUS)}
+    >
+      <span className="truncate">Unlock your Drive to add people</span>
+      <LockMark />
+    </button>
   );
 }

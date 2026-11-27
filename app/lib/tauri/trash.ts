@@ -33,14 +33,22 @@ export interface TrashRow {
   name: string;
   parentPath: string;
   path: string;
+  /** The path as the server stores it; a keep-both restore is signed over it. */
+  storedPath: string | null;
   fileCount: number;
   totalBytes: number;
   /** Unix seconds. */
   trashedAt: number;
-  /** Unix seconds: when the server deletes it forever. `null` from an older server. */
-  purgeAt: number | null;
+  /** Unix seconds: when the server deletes it forever. */
+  purgeAt: number;
   trashedBy: string | null;
   nameTaken: boolean;
+  /** `trashing`: a folder still being moved in; `restoring`: a restore under way. */
+  state: "trashing" | "ready" | "restoring";
+  /** While `restoring`, how it started; it finishes the same way. */
+  restoreMode: "inPlace" | "rename" | null;
+  /** While `restoring` as a copy, where it is going. */
+  restoreNewPath: string | null;
 }
 
 export interface TrashDrive {
@@ -105,7 +113,17 @@ export function listTrash(accountId: string): Promise<TrashListing> {
 export function restoreTrashItems(
   accountId: string,
   jobId: string,
-  items: Array<{ label: string; itemId: string; path: string; isFolder: boolean; fileCount: number; onClash: RestoreChoice }>,
+  items: Array<{
+    label: string;
+    itemId: string;
+    path: string;
+    storedPath: string | null;
+    isFolder: boolean;
+    fileCount: number;
+    onClash: RestoreChoice;
+    restoreMode: TrashRow["restoreMode"];
+    restoreNewPath: string | null;
+  }>,
 ): Promise<RestoreItemResult[]> {
   return invoke<RestoreItemResult[]>("restore_trash_items", { accountId, jobId, items });
 }
@@ -120,6 +138,54 @@ export function deleteTrashItemsForever(
 
 export function emptyTrash(accountId: string, jobId: string, labels?: string[]): Promise<TrashDeleteResult> {
   return invoke<TrashDeleteResult>("empty_trash", { accountId, jobId, labels: labels ?? null });
+}
+
+/** A row to delete forever, as `delete_files` names it. */
+export interface DeleteForeverRequest {
+  name: string;
+  source: string | null;
+  label: string | null;
+  size: number;
+  turnOffLinks: string[];
+}
+
+/** `delete_files`' answer, from Delete forever while the server has Trash. */
+export interface DeleteForeverResult {
+  deleted: number;
+  failed: Array<{ name: string; error: string }>;
+  linksTurnedOff: number;
+  linksFailed: number;
+}
+
+/**
+ * Delete synced items forever while the server has Trash. Never
+ * `delete_files` then: the sync engine would send that delete to Trash.
+ */
+export function deleteFilesForever(accountId: string, jobId: string, files: DeleteForeverRequest[]): Promise<DeleteForeverResult> {
+  return invoke<DeleteForeverResult>("delete_files_forever", { accountId, jobId, files });
+}
+
+/** One synced drive's delete rules (Rust `DriveDeleteRule`). */
+export interface DriveDeleteRule {
+  label: string;
+  /** The account owns or manages the drive. */
+  canDeleteForever: boolean;
+  /** Delete removes for good here ("Skip Trash", own drive). */
+  skipsTrash: boolean;
+}
+
+export interface TrashDeleteRules {
+  skipTrash: boolean;
+  drives: DriveDeleteRule[];
+}
+
+export function getTrashDeleteRules(accountId: string): Promise<TrashDeleteRules> {
+  return invoke<TrashDeleteRules>("get_trash_delete_rules", { accountId });
+}
+
+/** Save "Skip Trash when deleting"; Rust applies it to every drive's sync too. */
+export function setSkipTrash(accountId: string, skip: boolean): Promise<void> {
+  return invoke("set_skip_trash", { accountId, skip });
 }
 
 /** Hear one job's progress until the returned function is called. */

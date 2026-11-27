@@ -986,7 +986,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     // Delete in the row menu: Move to Trash runs at once (Undo in its
     // toast); Delete, and Delete forever, select the row for the bar's
     // confirmation as before.
-    const { run: runDeleteMenu, label: deleteMenuLabel } = useDeleteMenuAction();
+    const { run: runDeleteMenu, labelFor: deleteMenuLabelFor } = useDeleteMenuAction();
     const handleDeleteFile = useCallback(
       (file: FormattedUserFile) => {
         // Don't allow re-entering delete flow for a row that's already
@@ -1503,7 +1503,7 @@ const FilesTable: FC<FilesTableProps> = memo(
                     ? "Delete (Syncing in progress...)"
                     : itemDeleting
                       ? "Deleting..."
-                      : deleteMenuLabel,
+                      : deleteMenuLabelFor(file),
                   disabled: !file.isAssigned || itemDeleting,
                   tooltip: !file.isAssigned
                     ? "This file is currently being synced and cannot be deleted yet. Please wait for the sync to complete."
@@ -1527,7 +1527,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         handleSetSelectedFile,
         localHandleShowFileDetails,
         handleDeleteFile,
-        deleteMenuLabel,
+        deleteMenuLabelFor,
         getParam,
         drivePagePath,
         driveRoute,

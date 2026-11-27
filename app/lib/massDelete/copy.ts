@@ -28,8 +28,8 @@ export function removeLabel(side: MassDeleteSide, device: string): string {
 
 /**
  * The Remove confirmation's title and description. `toTrash`: the engine
- * moves a released server-side delete to Hippius Trash (Trash on, and an
- * engine that trashes, `ENGINE_SENDS_DELETES_TO_TRASH`); the files can then
+ * moves a released server-side delete to Hippius Trash (Trash on, and the
+ * drive not skipping it, `engineSendsDeletesToTrash`); the files can then
  * be restored, and the words say so.
  */
 export function removeConfirmCopy(

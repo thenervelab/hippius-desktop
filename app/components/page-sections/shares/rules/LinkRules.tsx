@@ -1,16 +1,20 @@
 "use client";
 
+import { useState } from "react";
+
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
-import EmailGateSettings, { useLinkGate } from "@/components/page-sections/shares/insights/EmailGateSettings";
-import NdaSettings, { useLinkNda } from "@/components/page-sections/shares/insights/NdaSettings";
+import EmailGateSettings, { useLinkGate, type LinkGateStore } from "@/components/page-sections/shares/insights/EmailGateSettings";
+import NdaSettings, { useLinkNda, type LinkNdaStore } from "@/components/page-sections/shares/insights/NdaSettings";
+import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { MUTED } from "@/components/page-sections/shares/insights/panelStyles";
+import { DriveLockedLine, useDriveLocked } from "@/components/page-sections/shares/insights/DriveUnlock";
 import { RuleCards, type LinkRule } from "./RuleCards";
 import { ExpiryEditor, TTL_OPTIONS, type ExpiryEdit } from "./ExpiryEditor";
 import {
   allowListSummary,
   downloadSummary,
   expirySummary,
-  GATE_VALUE,
+  gateSummary,
   isWatermarkable,
   NDA_PASSWORD_REASON,
   NDA_PASSWORD_VALUE,
@@ -54,7 +58,7 @@ export function LinkRules({
   onPushedChange,
   className,
 }: {
-  /** A file link's token; `null` for a folder link, which has no gate or NDA. */
+  /** A file link's token; `null` for a folder link, whose rules are `FolderLinkRules`. */
   shareToken: string | null;
   fileName: string;
   mimeType?: string | null;
@@ -80,49 +84,12 @@ export function LinkRules({
 }) {
   const gateStore = useLinkGate(shareToken);
   const ndaStore = useLinkNda(shareToken);
-  const rules: LinkRule[] = [];
-
-  const gate = gateStore.gate;
-  if (shareToken !== null && gate?.offered) {
-    rules.push({
-      id: "gate",
-      label: RULE_LABELS.gate,
-      on: gate.on,
-      value: GATE_VALUE,
-      editor: <EmailGateSettings shareToken={shareToken} onUpgrade={onUpgrade} layout="list" store={gateStore} part="switch" />,
-    });
-    rules.push({
-      id: "allowList",
-      label: RULE_LABELS.allowList,
-      ...allowListSummary(gate),
-      editor: <EmailGateSettings shareToken={shareToken} onUpgrade={onUpgrade} layout="list" store={gateStore} part="lists" />,
-    });
-  }
-
-  const nda = ndaStore.nda;
-  if (shareToken !== null && nda && !nda.offered && nda.passwordLink) {
-    rules.push({
-      id: "nda",
-      label: RULE_LABELS.nda,
-      on: false,
-      value: NDA_PASSWORD_VALUE,
-      editor: (
-        <p className={`text-xs ${MUTED}`} data-testid="nda-password-reason">
-          {NDA_PASSWORD_REASON}
-        </p>
-      ),
-    });
-  } else if (shareToken !== null && nda?.offered) {
-    rules.push({
-      id: "nda",
-      label: RULE_LABELS.nda,
-      ...ndaSummary(nda),
-      editor: <NdaSettings shareToken={shareToken} onUpgrade={onUpgrade} layout="list" store={ndaStore} />,
-    });
-  }
+  const driveLocked = useDriveLocked();
+  const rules: LinkRule[] =
+    shareToken !== null ? accessRules({ shareToken, kind: "file", gateStore, ndaStore, onUpgrade, driveLocked }) : [];
 
   if (shareToken !== null) {
-    const summary = watermarkSummary(fileName, mimeType, download, watermark);
+    const summary = watermarkSummary(fileName, mimeType, download, watermark, gateStore.gate?.on === true);
     // A switch only for a PDF, the one file the share page draws it on.
     const editable = watermark !== null && onWatermarkChange !== undefined && isWatermarkable(fileName, mimeType);
     rules.push({
@@ -182,5 +149,132 @@ export function LinkRules({
     rules.push({ id: "password", label: RULE_LABELS.password, ...passwordSummary(passwordOn) });
   }
 
-  return <RuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
+  return <LockableRuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
+}
+
+/**
+ * The rule cards, under one line with Unlock while any of them needs the
+ * Drive unlocked (hidden while a card's editor is open).
+ */
+function LockableRuleCards({
+  rules,
+  onPushedChange,
+  className,
+}: {
+  rules: LinkRule[];
+  onPushedChange?: (pushed: boolean) => void;
+  className?: string;
+}) {
+  const [pushed, setPushed] = useState(false);
+  const anyLocked = rules.some((r) => r.locked);
+  if (rules.length === 0) return null;
+  return (
+    <div className={className}>
+      {anyLocked && !pushed && <DriveLockedLine className="mb-2" />}
+      <RuleCards
+        rules={rules}
+        onPushedChange={(p) => {
+          setPushed(p);
+          onPushedChange?.(p);
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Who may open the link: Ask for email and Allow list where Rust says the
+ * server has email gates for this kind of link, and NDA where Rust offers it
+ * (on a password link without a text, a card that says why it can't). The
+ * file and folder links' cards, built once so both read the same.
+ */
+export function accessRules({
+  shareToken,
+  kind,
+  gateStore,
+  ndaStore,
+  onUpgrade,
+  driveLocked = false,
+}: {
+  /** A file link's token, or a folder link's token hash. */
+  shareToken: string;
+  kind: LinkKind;
+  gateStore: LinkGateStore;
+  ndaStore: LinkNdaStore;
+  onUpgrade: () => void;
+  /**
+   * The Drive is locked on this computer: what needs the account's key to
+   * open or seal (turning the gate on, the lists, an NDA text made
+   * elsewhere) shows a lock and unlocks first.
+   */
+  driveLocked?: boolean;
+}): LinkRule[] {
+  const rules: LinkRule[] = [];
+  const gate = gateStore.gate;
+  if (gate?.offered) {
+    rules.push({
+      id: "gate",
+      label: RULE_LABELS.gate,
+      ...gateSummary(gate.on),
+      // Turning it off needs no key; turning it on seals the (empty) lists.
+      locked: driveLocked && !gate.on,
+      editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="switch" />,
+    });
+    rules.push({
+      id: "allowList",
+      label: RULE_LABELS.allowList,
+      ...allowListSummary(gate),
+      locked: driveLocked,
+      editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="lists" />,
+    });
+  }
+
+  const nda = ndaStore.nda;
+  if (nda && !nda.offered && nda.passwordLink) {
+    rules.push({
+      id: "nda",
+      label: RULE_LABELS.nda,
+      on: false,
+      value: NDA_PASSWORD_VALUE,
+      editor: (
+        <p className={`text-xs ${MUTED}`} data-testid="nda-password-reason">
+          {NDA_PASSWORD_REASON}
+        </p>
+      ),
+    });
+  } else if (nda?.offered) {
+    rules.push({
+      id: "nda",
+      label: RULE_LABELS.nda,
+      ...ndaSummary(nda),
+      // A text can't be written, or one made elsewhere read, until the Drive is unlocked.
+      locked: driveLocked && (!nda.editable || (nda.on && nda.text === null)),
+      editor: <NdaSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={ndaStore} />,
+    });
+  }
+  return rules;
+}
+
+/**
+ * A folder link's rules as cards, in its Insights panel: Ask for email,
+ * Allow list and NDA, each where Rust says the server has it for folder
+ * links (`folder_share_gates`, `folder_share_nda`). Named by the listing's
+ * token hash, so they work for a link made on another device.
+ */
+export function FolderLinkRules({
+  tokenHash,
+  onUpgrade,
+  onPushedChange,
+  className,
+}: {
+  tokenHash: string;
+  onUpgrade: () => void;
+  onPushedChange?: (pushed: boolean) => void;
+  className?: string;
+}) {
+  const gateStore = useLinkGate(tokenHash, "folder");
+  const ndaStore = useLinkNda(tokenHash, "folder");
+  const driveLocked = useDriveLocked();
+  const rules = accessRules({ shareToken: tokenHash, kind: "folder", gateStore, ndaStore, onUpgrade, driveLocked });
+  return <LockableRuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
 }

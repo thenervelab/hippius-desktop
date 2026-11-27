@@ -1,9 +1,23 @@
 // Typed wrappers around the email gate commands (`src-tauri/src/shares/gate.rs`):
-// "Ask for email" on a file link, with its allow and block lists. Rust reads
+// "Ask for email" on a file or folder link, with its allow and block lists. Rust reads
 // the lists, checks them, seals the owner's copy and decides what the plan
 // allows; these types only describe what crosses IPC.
 
 import { invoke } from "@tauri-apps/api/core";
+
+/**
+ * Which kind of link a gate or NDA call is for. A folder link is named by
+ * its listing's token hash, a file link by its token.
+ */
+export type LinkKind = "file" | "folder";
+
+/**
+ * The `kind` argument for a gate or NDA command: sent only for a folder
+ * link, since Rust reads an absent one as a file link.
+ */
+export function kindArg(kind: LinkKind): { kind?: "folder" } {
+  return kind === "folder" ? { kind } : {};
+}
 
 export interface GateLists {
   allow: string[];
@@ -35,8 +49,8 @@ export function isGateNotInPlan(err: unknown): boolean {
   return kind === "Validation" && message === GATE_NOT_IN_PLAN;
 }
 
-export function getLinkGate(shareToken: string): Promise<LinkGate> {
-  return invoke<LinkGate>("share_get_gate", { shareToken });
+export function getLinkGate(shareToken: string, kind: LinkKind = "file"): Promise<LinkGate> {
+  return invoke<LinkGate>("share_get_gate", { shareToken, ...kindArg(kind) });
 }
 
 /**
@@ -44,10 +58,25 @@ export function getLinkGate(shareToken: string): Promise<LinkGate> {
  * (both empty: anyone who confirms an email). Rust reads and checks the
  * entries and answers the gate as stored.
  */
-export function setLinkGate(shareToken: string, allow: string, block: string): Promise<LinkGate> {
-  return invoke<LinkGate>("share_set_gate", { shareToken, allow, block });
+export function setLinkGate(shareToken: string, allow: string, block: string, kind: LinkKind = "file"): Promise<LinkGate> {
+  return invoke<LinkGate>("share_set_gate", { shareToken, allow, block, ...kindArg(kind) });
 }
 
-export function removeLinkGate(shareToken: string): Promise<void> {
-  return invoke<void>("share_remove_gate", { shareToken });
+export function removeLinkGate(shareToken: string, kind: LinkKind = "file"): Promise<void> {
+  return invoke<void>("share_remove_gate", { shareToken, ...kindArg(kind) });
+}
+
+/** One entry of a list box, as Rust would store it, and why it can't be if it can't. */
+export interface GateEntry {
+  value: string;
+  /** Rust's sentence for an entry a save would refuse; `null` when it is fine. */
+  error: string | null;
+}
+
+/**
+ * What the owner typed or pasted into a list box, split into entries and
+ * checked by Rust exactly as saving would. Nothing is sent.
+ */
+export function parseGateEntries(text: string): Promise<GateEntry[]> {
+  return invoke<GateEntry[]>("share_parse_gate_entries", { text });
 }

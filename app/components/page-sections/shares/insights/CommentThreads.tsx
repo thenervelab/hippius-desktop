@@ -8,7 +8,6 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
-import MiddleTruncate from "@/components/ui/MiddleTruncate";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -29,6 +28,7 @@ import {
 } from "@/app/lib/tauri/shareInsights";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { InsightsAvatar } from "./InsightsAvatar";
+import { DriveLockedLine, useDriveLocked } from "./DriveUnlock";
 import { commentsQueryKey, insightsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import {
   actionErrorLine,
@@ -137,6 +137,7 @@ export function CommentsTab({
   const filtering = onlyMentions && mentioning.length > 0;
   const sorted = useMemo(() => sortThreads(filtering ? mentioning : list, order), [filtering, mentioning, list, order]);
   const shown = sorted.slice(0, limit);
+  const driveLocked = useDriveLocked();
 
   return (
     <div>
@@ -151,7 +152,12 @@ export function CommentsTab({
         <LoadError line={loadErrorLine("comments", comments.error, online)} onRetry={() => void comments.refetch()} />
       ) : (
         <>
-          {comments.data.unreadable && <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>}
+          {comments.data.unreadable &&
+            (driveLocked ? (
+              <DriveLockedLine text={comments.data.unreadable} className="mb-2" />
+            ) : (
+              <p className={cn("mb-2 text-sm", MUTED)}>{comments.data.unreadable}</p>
+            ))}
           {list.length === 0 ? (
             <EmptyLine icon={<MessageSquare />} text="No comments yet" />
           ) : (
@@ -307,11 +313,11 @@ function SortToggle({ order, onChange }: { order: CommentOrder; onChange: (next:
   );
 }
 
-/** A person's name on one line, cut in the middle when it does not fit. */
+/** A person's name on one line, cut at the end only when it does not fit, whole on hover. */
 export function PersonName({ name, muted = false, className }: { name: string | null; muted?: boolean; className?: string }) {
   return (
-    <bdi className={cn("block min-w-0 overflow-hidden font-semibold", muted ? MUTED : STRONG, className)}>
-      <MiddleTruncate text={viewerName(name)} kind="name" />
+    <bdi title={viewerName(name)} className={cn("block min-w-0 truncate font-semibold", muted ? MUTED : STRONG, className)}>
+      {viewerName(name)}
     </bdi>
   );
 }
@@ -556,8 +562,8 @@ function CommentRow({
                   <span className="flex min-w-0 flex-col">
                     <span className={cn("flex min-w-0 gap-1 text-[13px] font-medium", STRONG)}>
                       <span className="shrink-0">Block</span>
-                      <bdi className="block min-w-0 overflow-hidden">
-                        <MiddleTruncate text={name} kind="name" />
+                      <bdi title={name} className="block min-w-0 truncate">
+                        {name}
                       </bdi>
                     </span>
                     <span className={cn("text-[11.5px] leading-4", MUTED)}>{BLOCK_EXPLAINER}</span>

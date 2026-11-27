@@ -59,12 +59,18 @@ export interface ServerCapabilities {
   upload_folder_shares?: boolean;
   /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
   share_preview?: boolean;
+  /** A link opened while its file still uploads says so instead of "not found". Read by Rust only; listed so the type matches the wire. */
+  share_open_while_uploading?: boolean;
   /** A link's Insights and its Insights switch. Absent on older servers. */
   share_insights?: boolean;
   /** Encrypted comments and reactions on links. Absent on older servers. */
   share_comments?: boolean;
   /** Emails about views and comments on links. Absent on older servers. */
   share_notifications?: boolean;
+  /** The visit emails: a link's own email setting and the Return visits email. Absent on older servers. */
+  share_link_notifications?: boolean;
+  /** The NDA accepted and refused viewer emails. Absent on older servers. */
+  share_event_notifications?: boolean;
   /** Per-link view and comment counts on the share listing (hcfs #805). Absent on older servers. */
   share_listing_counts?: boolean;
   /** When the owner last looked at a link's Insights (hcfs #805). Absent on older servers. */

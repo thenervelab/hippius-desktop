@@ -172,6 +172,11 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
     let pool = state.pool()?;
     let home = home_dir()?;
     let drives = destination::drives_here(pool, account_id).await?;
+    // Captures were kept only in a folder whose drive could not be added
+    // before: on a first choice there is nothing kept to declare or count,
+    // and the app's recordings already in that folder (an old captures
+    // folder, copies from another drive) are not this setup's to count.
+    let was_pending = load_pending(pool, account_id).await?.is_some_and(|p| p.path == dir);
     if let Place::InDrive { label, folder } = check_location(dir, &home, &drives)? {
         let root = drives
             .iter()
@@ -182,6 +187,18 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
             ..CaptureDestination::own(&label, &drive_name(&root, &label))
         };
         destination::save(pool, account_id, &chosen).await?;
+        // The drive exists and may have synced them already; a declaration
+        // still marks their later uploads. Measured from the drive's own
+        // root, not `dir`, which may reach it through a symlink and would
+        // then not strip against it (`deliver::declare_placed`).
+        let kept = if was_pending {
+            measure_kept(&root.join(&folder)).await
+        } else {
+            Vec::new()
+        };
+        let names: Vec<String> = kept.iter().filter_map(|(file, _)| file_name_of(file)).collect();
+        declare_kept(account_id, &root, &label, kept).await;
+        note_kept(state, account_id, &chosen, &names).await;
         clear_pending(pool, account_id).await?;
         // Made now, so the folder is there to open before the first capture
         // lands in it. Delivery makes it too, so a failure here costs nothing.
@@ -211,10 +228,18 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
     // The label is the captures drive's whatever the folder is called: the
     // web console and the extension find the captures drive by it.
     let base = CAPTURES_DIR_NAME.to_string();
+    // The recordings kept in a pending folder are declared inside the add,
+    // before the new drive is registered and can sync
+    // ([`declare_kept_in_starting_drive`], while the pending row still
+    // names this folder).
     match crate::sync::lifecycle::add_local_sync_folder(app.clone(), account_id.to_string(), path, base, None).await {
         Ok(label) => {
             let chosen = CaptureDestination::own(&label, &drive_name(dir, &label));
             destination::save(pool, account_id, &chosen).await?;
+            if was_pending {
+                let names = kept_names(dir).await;
+                note_kept(state, account_id, &chosen, &names).await;
+            }
             clear_pending(pool, account_id).await?;
             tracing::info!(label = %label, "captures drive added");
             Ok(Added::Ready(chosen))
@@ -228,6 +253,216 @@ async fn add_drive(app: &tauri::AppHandle, state: &AppState, account_id: &str, d
             tracing::warn!(error = %e, "captures drive could not be added yet");
             Ok(Added::Blocked(blocked_by(&e)))
         }
+    }
+}
+
+/// The recordings this app kept in `dir` while its drive could not be added
+/// (`kept_in_chosen`, and the waiting captures `capture_drive_create` moved
+/// in), with what each declares. Known by the name the app gave them
+/// (`naming::is_app_recording_name`), so a video of the user's own in the
+/// folder is never declared: it would count against the plan's recordings
+/// and the server would then refuse it. A recording the user renamed is
+/// missed, and uploads uncounted. One whose keep was still moving it in
+/// when this ran is declared by that keep ([`declare_kept_since_added`]).
+async fn measure_kept(dir: &Path) -> Vec<(PathBuf, hcfs_shared::network::Capture)> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || app_recordings_in(&dir)).await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "captures kept in the chosen folder not measured: task failed");
+        Vec::new()
+    })
+}
+
+/// [`measure_kept`]'s walk: the files directly in `dir` named like the
+/// app's recordings. Blocking.
+fn app_recordings_in(dir: &Path) -> Vec<(PathBuf, hcfs_shared::network::Capture)> {
+    app_recording_files_in(dir)
+        .into_iter()
+        .filter_map(|path| super::recording_length::capture_for(&path).map(|capture| (path, capture)))
+        .collect()
+}
+
+/// The files directly in `dir` named like the app's recordings, unread.
+/// Blocking.
+fn app_recording_files_in(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_name().to_str().is_some_and(super::naming::is_app_recording_name))
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .collect()
+}
+
+/// The names of the recordings kept in `dir` ([`app_recording_files_in`]).
+async fn kept_names(dir: &Path) -> Vec<String> {
+    let dir = dir.to_path_buf();
+    tokio::task::spawn_blocking(move || app_recording_files_in(&dir).iter().filter_map(|f| file_name_of(f)).collect())
+        .await
+        .unwrap_or_default()
+}
+
+fn file_name_of(file: &Path) -> Option<String> {
+    file.file_name().and_then(|n| n.to_str()).map(str::to_string)
+}
+
+/// The kept recordings `names`, now in the captures drive `destination`,
+/// count toward a free plan's recordings from now on, before the server
+/// lists them, as the waiting ones `capture_drive_create` moves in do. The
+/// gate counted them while their folder was pending
+/// (`recording_allowance::waiting_here`); without this they would count for
+/// nothing until their upload is listed, and the waiting recordings moved
+/// in right after would be given their room.
+async fn note_kept(state: &AppState, account_id: &str, destination: &CaptureDestination, names: &[String]) {
+    for name in names {
+        super::recording_allowance::note_delivered(state, account_id, destination, name).await;
+    }
+}
+
+/// Declare `kept` (from [`measure_kept`]) on the drive `label` rooted at
+/// `root`, a drive that already existed when the pending folder was found
+/// inside it, so the server counts them (thenervelab/hcfs#1133). That drive
+/// may have synced them already; a declaration still marks their later
+/// uploads. A failure is logged.
+///
+/// Every kept recording is declared, past the plan's room too: the server
+/// then refuses the ones over its limit, and their sync rows say why and
+/// offer Upgrade, where before they uploaded uncounted.
+async fn declare_kept(account_id: &str, root: &Path, label: &str, kept: Vec<(PathBuf, hcfs_shared::network::Capture)>) {
+    if kept.is_empty() {
+        return;
+    }
+    let config_dir = match crate::sync::mnemonic::config_dir_for_folder(account_id, label) {
+        Ok(dir) => dir,
+        Err(e) => {
+            tracing::warn!(error = %e, "captures kept in the chosen folder not declared: config folder unread");
+            return;
+        }
+    };
+    let root = root.to_path_buf();
+    let count = kept.len();
+    let declared = tokio::task::spawn_blocking(move || {
+        for (file, capture) in kept {
+            super::deliver::declare_placed(&root, &config_dir, &file, capture);
+        }
+    })
+    .await;
+    match declared {
+        // `declare_placed` logs each write that failed.
+        Ok(()) => tracing::info!(recordings = count, "captures kept in the chosen folder declared"),
+        Err(e) => tracing::warn!(error = %e, "captures kept in the chosen folder not declared: task failed"),
+    }
+}
+
+/// A drive of this account is starting, at `root` with its config folder
+/// `config_dir`, before it is registered and can sync
+/// (`sync::drive::lifecycle::initialize_sync_inner`): when the chosen
+/// captures folder whose drive could not be added is in it, the recordings
+/// kept there are declared now, before the drive's first cycle can upload
+/// them (thenervelab/hcfs#1133).
+///
+/// Every way such a drive starts comes through here: the captures drive
+/// [`add_drive`] makes of the folder, a drive the user adds over it later
+/// with Sync a Folder (the captures setup only runs again at the next
+/// capture or Retry, after that drive's first cycle), and a drive whose
+/// first start failed after its row was written, which the next launch
+/// starts again. A declaration is kept for its file whether or not the start
+/// then succeeds, and declaring a path again replaces it, so a later start
+/// only repeats the writes. Only while the folder is pending: once the
+/// captures drive is set up, delivery declares each capture as it lands.
+/// A failure is logged; the drive still starts.
+pub async fn declare_kept_in_starting_drive(pool: &sqlx::SqlitePool, account_id: &str, root: &Path, config_dir: &Path) {
+    let pending = match load_pending(pool, account_id).await {
+        Ok(Some(pending)) => pending,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!(error = %e, "captures folder pending unread; recordings kept there not declared");
+            return;
+        }
+    };
+    let (root, config_dir) = (root.to_path_buf(), config_dir.to_path_buf());
+    let declared = tokio::task::spawn_blocking(move || {
+        let Some(dir) = folder_in_drive(&root, &pending.path) else {
+            return 0;
+        };
+        let kept = app_recordings_in(&dir);
+        let count = kept.len();
+        for (file, capture) in kept {
+            super::deliver::declare_placed(&root, &config_dir, &file, capture);
+        }
+        count
+    })
+    .await;
+    match declared {
+        Ok(0) => {}
+        // `declare_placed` logs each write that failed.
+        Ok(count) => tracing::info!(recordings = count, "captures kept in the chosen folder declared as its drive starts"),
+        Err(e) => tracing::warn!(error = %e, "captures kept in the chosen folder not declared: task failed"),
+    }
+}
+
+/// `dir` as a path under the drive root `root`, when it is in that drive
+/// (its root included): as it is when it is spelt under `root`, else
+/// rebuilt under `root` when either reaches the other through a symlink, so
+/// its files strip against `root` (`deliver::declare_placed`). `None`
+/// outside the drive, or when either cannot be resolved. Blocking.
+fn folder_in_drive(root: &Path, dir: &Path) -> Option<PathBuf> {
+    if dir.starts_with(root) {
+        return Some(dir.to_path_buf());
+    }
+    let (real_root, real_dir) = (std::fs::canonicalize(root).ok()?, std::fs::canonicalize(dir).ok()?);
+    real_dir.strip_prefix(&real_root).ok().map(|rest| root.join(rest))
+}
+
+/// A capture `commands::keep_here` just kept at `kept`, in the chosen folder
+/// `ensure` said to keep it in. When that folder's drive was added while the
+/// keep was moving it (another capture or the user's answer took
+/// [`ENSURE_LOCK`] after `ensure` let it go), the add measured the folder
+/// without it, and it is now in a drive that uploads it: declared here,
+/// under the lock, so it waits for that add to finish. Still pending, it is
+/// left for the add to find.
+pub async fn declare_kept_since_added(app: &tauri::AppHandle, account_id: &str, kept: &Path) {
+    if !kept
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(super::naming::is_app_recording_name)
+    {
+        return;
+    }
+    let state = app.state::<AppState>();
+    let Ok(pool) = state.pool() else { return };
+    let _one_at_a_time = ENSURE_LOCK.lock().await;
+    let Ok(Some(destination)) = destination::load(pool, account_id).await else {
+        return;
+    };
+    if destination.owner_ss58.is_some() {
+        return;
+    }
+    let Ok(Some(root)) = destination::own_local_path(pool, account_id, &destination.label).await else {
+        return;
+    };
+    let Ok(config_dir) = crate::sync::mnemonic::config_dir_for_folder(account_id, &destination.label) else {
+        return;
+    };
+    let Some(name) = file_name_of(kept) else { return };
+    let file = kept.to_path_buf();
+    let declared = tokio::task::spawn_blocking(move || {
+        let Some(dir) = file.parent().and_then(|dir| folder_in_drive(&root, dir)) else {
+            return false;
+        };
+        let file = dir.join(file.file_name().unwrap_or_default());
+        let Some(capture) = super::recording_length::capture_for(&file) else {
+            return false;
+        };
+        super::deliver::declare_placed(&root, &config_dir, &file, capture);
+        true
+    })
+    .await
+    .unwrap_or(false);
+    if declared {
+        tracing::info!("a capture kept while its drive was added is declared");
+        super::recording_allowance::note_delivered(&state, account_id, &destination, &name).await;
     }
 }
 
@@ -1377,6 +1612,116 @@ mod tests {
         let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
         crate::utils::schema::ensure_table_schema(&pool).await.unwrap();
         pool
+    }
+
+    /// The recordings the app named in the chosen folder are measured; a
+    /// screenshot, any other video (renamed or the user's own) and anything
+    /// in a subfolder are not.
+    #[test]
+    fn only_the_app_s_recordings_in_the_chosen_folder_are_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("Hippius Captures");
+        std::fs::create_dir_all(dir.join("Old")).unwrap();
+        let kept = ["Recording 2026-09-22 at 09.00.05.mp4", "Recording 2026-09-22 at 09.00.05 (2).mp4"];
+        let others = [
+            "Screenshot 2026-09-22 at 09.00.05.png",
+            "Holiday.mp4",
+            "Old/Recording 2026-09-20 at 10.00.00.mp4",
+        ];
+        for name in kept.iter().chain(&others) {
+            std::fs::write(dir.join(name), b"recorded").unwrap();
+        }
+
+        let mut found: Vec<PathBuf> = app_recordings_in(&dir).into_iter().map(|(path, _)| path).collect();
+        found.sort();
+        let mut expected: Vec<PathBuf> = kept.iter().map(|name| dir.join(name)).collect();
+        expected.sort();
+        assert_eq!(found, expected);
+        assert!(app_recordings_in(&tmp.path().join("missing")).is_empty());
+    }
+
+    /// The declarations hcfs holds for a drive's config folder, by path.
+    fn declared_paths(config_dir: &Path) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(config_dir.join("captures")) else {
+            return Vec::new();
+        };
+        let mut paths: Vec<String> = entries
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+            .map(|e| {
+                let json: serde_json::Value = serde_json::from_slice(&std::fs::read(e.path()).unwrap()).unwrap();
+                json["relative_path"].as_str().unwrap().to_string()
+            })
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    /// A drive starting over the pending captures folder (the captures
+    /// drive made of it, or one added over it later) declares the app's
+    /// recordings kept there, at their path in that drive, before it syncs;
+    /// nothing else in the folder, and nothing when no folder is pending or
+    /// the pending one is elsewhere.
+    #[tokio::test]
+    async fn a_drive_starting_over_the_pending_folder_declares_what_was_kept_there() {
+        let pool = pool().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let drive = tmp.path().join("Work");
+        let dir = drive.join("Clips");
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "Recording 2026-09-22 at 09.00.05.mp4",
+            "Screenshot 2026-09-22 at 09.00.06.png",
+            "Holiday.mp4",
+        ] {
+            std::fs::write(dir.join(name), b"recorded").unwrap();
+        }
+        let config_dir = tmp.path().join("config");
+
+        declare_kept_in_starting_drive(&pool, "5Alice", &drive, &config_dir).await;
+        assert!(declared_paths(&config_dir).is_empty(), "no folder pending: nothing was kept");
+
+        save_pending(&pool, "5Alice", &tmp.path().join("Elsewhere"), SetupBlocked::Offline)
+            .await
+            .unwrap();
+        declare_kept_in_starting_drive(&pool, "5Alice", &drive, &config_dir).await;
+        assert!(declared_paths(&config_dir).is_empty(), "the pending folder is not in this drive");
+
+        save_pending(&pool, "5Alice", &dir, SetupBlocked::Offline).await.unwrap();
+        declare_kept_in_starting_drive(&pool, "5Bob", &drive, &config_dir).await;
+        assert!(declared_paths(&config_dir).is_empty(), "another account's pending folder");
+        declare_kept_in_starting_drive(&pool, "5Alice", &drive, &config_dir).await;
+        assert_eq!(declared_paths(&config_dir), ["Clips/Recording 2026-09-22 at 09.00.05.mp4"]);
+
+        // The captures drive made of the folder itself.
+        let own_config = tmp.path().join("own-config");
+        declare_kept_in_starting_drive(&pool, "5Alice", &dir, &own_config).await;
+        assert_eq!(declared_paths(&own_config), ["Recording 2026-09-22 at 09.00.05.mp4"]);
+
+        // Started again (the next launch): the same one declaration.
+        declare_kept_in_starting_drive(&pool, "5Alice", &dir, &own_config).await;
+        assert_eq!(declared_paths(&own_config), ["Recording 2026-09-22 at 09.00.05.mp4"]);
+    }
+
+    /// The pending folder is found in a drive whether it is spelt under the
+    /// drive's root or reaches it through a symlink, and the path returned
+    /// is always under the root as the drive spells it.
+    #[test]
+    fn the_pending_folder_is_found_in_its_drive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("Drive");
+        std::fs::create_dir_all(root.join("Clips")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("Other")).unwrap();
+        assert_eq!(folder_in_drive(&root, &root.join("Clips")), Some(root.join("Clips")));
+        assert_eq!(folder_in_drive(&root, &root), Some(root.clone()), "the drive's root itself");
+        assert_eq!(folder_in_drive(&root, &tmp.path().join("Other")), None);
+        assert_eq!(folder_in_drive(&root, &tmp.path().join("Missing")), None);
+        #[cfg(unix)]
+        {
+            let link = tmp.path().join("Link");
+            std::os::unix::fs::symlink(&root, &link).unwrap();
+            assert_eq!(folder_in_drive(&root, &link.join("Clips")), Some(root.join("Clips")), "through a symlink");
+        }
     }
 
     /// The chosen folder is remembered per account until its drive exists.

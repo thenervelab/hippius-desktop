@@ -1577,8 +1577,12 @@ function DoneBody({
           </div>
         )}
         {/* File links only; Rust offers it only on a server with links per person. */}
-        {engagement && <RecipientLinks shareToken={link.shareToken} />}
-        <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
+        {engagement && <RecipientLinks shareToken={link.shareToken} onUpgrade={onUpgrade} />}
+        {/* The link's own email setting is for file links only, like links per person. */}
+        <FirstViewEmailSwitch
+          viewsCounted={Boolean(switches?.insights)}
+          shareToken={engagement ? link.shareToken : undefined}
+        />
           </>
         )}
       </SecureLinkSection>

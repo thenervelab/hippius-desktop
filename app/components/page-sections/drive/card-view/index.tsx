@@ -542,7 +542,7 @@ const CardView: FC<CardViewProps> = ({
                                   icon: <Icons.Trash className="size-4" />,
                                   itemTitle: !file.isAssigned
                                     ? "Delete (Syncing in progress...)"
-                                    : deleteMenu.label,
+                                    : deleteMenu.labelFor(file),
                                   disabled: !file.isAssigned,
                                   className: !file.isAssigned
                                     ? "cursor-not-allowed opacity-60"

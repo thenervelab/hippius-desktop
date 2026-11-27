@@ -117,7 +117,7 @@ import { cn } from "@/app/lib/utils";
 import UploadingHereStrip from "./UploadingHereStrip";
 import { resolvePendingFolder, shouldOpenFromUrl, type PendingFolder } from "./openFolderPath";
 import { invoke } from "@tauri-apps/api/core";
-import { HIGHLIGHT_OPEN_LIMIT_MS, type HighlightRequest } from "./highlightEntry";
+import { highlightRequestFromUrl, type HighlightRequest } from "./highlightEntry";
 import { useDriveHighlight } from "./useDriveHighlight";
 import { useDriveRoute } from "./driveRoute";
 import { DROP_READ_ONLY, resolveDriveDropDestination } from "@/app/lib/drive/osDrop";
@@ -1708,14 +1708,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     // that never opens drops it after HIGHLIGHT_OPEN_LIMIT_MS, so it cannot
     // fire later when the user browses there on their own.
     setHighlightRequest(
-      urlOpenFile
-        ? {
-            label: urlOpenLabel,
-            folder: urlOpenSubfolder || "",
-            name: urlOpenFile,
-            until: Date.now() + HIGHLIGHT_OPEN_LIMIT_MS,
-          }
-        : null,
+      highlightRequestFromUrl({ label: urlOpenLabel, subfolder: urlOpenSubfolder, file: urlOpenFile }, Date.now()),
     );
     if (urlOpenRemote) {
       // A shared drive's browse label is not a name: show the one it came with.
