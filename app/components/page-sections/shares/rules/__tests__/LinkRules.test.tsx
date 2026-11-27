@@ -101,7 +101,7 @@ describe("a link's rule cards", () => {
       expect(invokeMock).toHaveBeenCalledWith("share_set_gate", { shareToken: "tok", allow: "acme.com", block: "" }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(screen.getByTestId("rule-allowList")).toHaveTextContent("acme.com");
+    expect(screen.getByTestId("rule-allowList")).toHaveTextContent("1 allowed");
     expect(screen.getByTestId("rule-gate")).toHaveTextContent("On");
   });
 

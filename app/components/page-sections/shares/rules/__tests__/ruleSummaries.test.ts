@@ -36,14 +36,16 @@ describe("rule card words", () => {
     expect(RULE_ORDER).toEqual(["gate", "allowList", "nda", "watermark", "download", "expiry", "password"]);
   });
 
-  it("names the allow list's domains and counts its emails and blocks", () => {
+  it("counts the allow list short enough never to be cut, the same whether the lists open here or not", () => {
     expect(allowListSummary(gate({ lists: { allow: ["acme.com", "bob@x.com"], block: [] } }))).toEqual({
       on: null,
-      value: "acme.com, 1 email",
+      value: "2 allowed",
     });
-    expect(
-      allowListSummary(gate({ lists: { allow: ["a.com", "b.com", "c.com", "x@y.com", "z@y.com"], block: ["bad.com"] } })),
-    ).toEqual({ on: null, value: "a.com, b.com +1, 2 emails, 1 blocked" });
+    const open = allowListSummary(
+      gate({ allowCount: 5, blockCount: 1, lists: { allow: ["a.com", "b.com", "c.com", "x@y.com", "z@y.com"], block: ["bad.com"] } }),
+    );
+    expect(open).toEqual({ on: null, value: "5 allowed, 1 blocked" });
+    expect(allowListSummary(gate({ allowCount: 5, blockCount: 1, lists: null }))).toEqual(open);
   });
 
   it("reads Anyone with nobody listed, or while the gate is off, and never says On or Off", () => {

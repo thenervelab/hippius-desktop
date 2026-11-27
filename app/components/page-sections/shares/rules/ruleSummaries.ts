@@ -55,33 +55,20 @@ export function gateSummary(on: boolean): RuleSummary {
   return { on, value: on ? GATE_VALUE : GATE_OFF_VALUE };
 }
 
-/** An entry with something before its `@` is an address; anything else a domain. */
-function isEmail(entry: string): boolean {
-  return /^[^@\s]+@/.test(entry);
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
-}
-
 /**
- * The allow list in a few words: "acme.com, 1 email", "2 blocked", or
- * "Anyone" with nobody listed. The lists, when they open here; else the
- * counts the server keeps. Never On or Off: the gate's own card says that.
+ * The allow list in a few words, short enough never to be cut: "2 allowed,
+ * 1 blocked", or "Anyone" with nobody listed. Counted from the lists when
+ * they open here, else from the counts the server keeps, so it reads the
+ * same whether or not the Drive is unlocked. Never On or Off: the gate's own
+ * card says that.
  */
 export function allowListSummary(gate: Pick<LinkGate, "on" | "allowCount" | "blockCount" | "lists">): RuleSummary {
   const parts: string[] = [];
-  if (gate.on && gate.lists) {
-    const domains = gate.lists.allow.filter((e) => !isEmail(e));
-    const emails = gate.lists.allow.length - domains.length;
-    if (domains.length > 0) {
-      parts.push(domains.length > 2 ? `${domains.slice(0, 2).join(", ")} +${domains.length - 2}` : domains.join(", "));
-    }
-    if (emails > 0) parts.push(plural(emails, "email"));
-    if (gate.lists.block.length > 0) parts.push(`${gate.lists.block.length} blocked`);
-  } else if (gate.on) {
-    if (gate.allowCount > 0) parts.push(`${gate.allowCount} allowed`);
-    if (gate.blockCount > 0) parts.push(`${gate.blockCount} blocked`);
+  if (gate.on) {
+    const allowed = gate.lists ? gate.lists.allow.length : gate.allowCount;
+    const blocked = gate.lists ? gate.lists.block.length : gate.blockCount;
+    if (allowed > 0) parts.push(`${allowed} allowed`);
+    if (blocked > 0) parts.push(`${blocked} blocked`);
   }
   return { on: null, value: parts.length > 0 ? parts.join(", ") : ANYONE };
 }
