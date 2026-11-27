@@ -17,6 +17,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Sync notifications say when files went to Trash.** Files you delete in your Drive folder that go to Trash now read "Moved 12 files to Trash" instead of "Deleted", and a folder link that is off while its folder is in Trash shows a Paused badge in Shared Links.
 - **The Insights panel can be made wider.** Drag its left edge (or use the arrow keys on it) to widen it; it remembers the width, and a double click puts it back.
 - **Insights charts are calmer and easier to read.** Softer bars and curves with one baseline, one label where it matters, and the exact number when you point at any part of a chart.
 - **Viewers show by name and email.** A viewer who gave a name shows it with their confirmed email under it, one who gave only an email shows the email, and only someone who gave neither shows as "Anonymous viewer". Long names are no longer cut to a few letters.

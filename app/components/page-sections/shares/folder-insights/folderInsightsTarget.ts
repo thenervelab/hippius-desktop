@@ -16,6 +16,13 @@ export interface FolderInsightsTarget {
   createdAt: string;
   expiresAt: string | null;
   revoked: boolean;
+  /**
+   * Off while its folder is in Trash, as the server's listing says
+   * (`isFolderLinkPaused`); absent from a target built before it was known.
+   */
+  paused?: boolean;
+  /** Off until the owner revokes it: its folder left Trash another way. */
+  held?: boolean;
   /** The link's switch from the listing; `null` when the server does not say. */
   insightsOn: boolean | null;
 }

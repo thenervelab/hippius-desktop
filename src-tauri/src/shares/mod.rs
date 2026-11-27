@@ -23,6 +23,7 @@ pub mod keystore;
 pub mod link_activity;
 pub mod link_alerts;
 pub mod link_emails;
+pub mod link_pause;
 pub mod link_ref;
 pub mod nda;
 pub mod nda_records;

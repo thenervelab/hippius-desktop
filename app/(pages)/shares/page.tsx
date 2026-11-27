@@ -96,6 +96,7 @@ import {
 } from "@/app/lib/utils/sharesPageLink";
 import { cn } from "@/lib/utils";
 import { LIVE_DATA_REFRESH_MS } from "@/lib/constants";
+import { isFolderLinkPaused, PAUSED_BADGE, pausedTooltip } from "@/app/lib/utils/folderLinkPause";
 import {
   activeShareRowId,
   folderShareRowPlan,
@@ -809,6 +810,9 @@ function ActiveSharesTable({
               if (plan.state === "revoked") {
                 return <Badge tone="error">Revoked</Badge>;
               }
+              if (isFolderLinkPaused(row.folder)) {
+                return <PausedBadge row={row.folder} />;
+              }
               if (plan.state === "expired") {
                 return <span className="font-medium text-error-50">Expired</span>;
               }
@@ -1042,6 +1046,8 @@ function folderInsightsTarget(row: FolderShareSummary, insightsOn: boolean | nul
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     revoked: row.revokedAt !== null,
+    paused: isFolderLinkPaused(row),
+    held: row.held === true,
     insightsOn: insightsOn ?? null,
   };
 }
@@ -1559,6 +1565,16 @@ function HistoryStatusBadge({ reason }: { reason: HistoryEndReason }) {
     case "revoked_elsewhere":
       return <Badge tone="muted-italic">Revoked elsewhere</Badge>;
   }
+}
+
+/** A folder link the server keeps off while its folder is in Trash. */
+function PausedBadge({ row }: { row: FolderShareSummary }) {
+  return (
+    <span title={pausedTooltip(row)} data-testid="folder-link-paused">
+      <Badge tone="muted">{PAUSED_BADGE}</Badge>
+      <span className="sr-only">{pausedTooltip(row)}</span>
+    </span>
+  );
 }
 
 function Badge({ tone, children }: { tone: "muted" | "muted-italic" | "error"; children: React.ReactNode }) {

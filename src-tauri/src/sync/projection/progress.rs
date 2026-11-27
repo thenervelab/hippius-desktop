@@ -544,6 +544,7 @@ pub fn collect_cycle_files_for_label(sync: &SyncRunner, label: &str, max_files: 
             file_name: f.file_name.to_string(),
             total_bytes: f.total_bytes,
             action: f.action.clone(),
+            trashed: false,
         })
         .collect()
 }

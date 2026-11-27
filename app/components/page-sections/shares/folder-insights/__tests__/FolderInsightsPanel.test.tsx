@@ -324,6 +324,30 @@ describe("FolderInsightsPanel", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("share_get_gate", expect.anything());
   });
 
+  // While its folder is in Drive Trash the server keeps the link off; the
+  // panel says so as Shared Links does, and only when the listing said so.
+  it("marks a link paused by Trash, and says why", async () => {
+    answer(PAID);
+    renderPanel({ ...TARGET, paused: true, held: true });
+    const badge = await screen.findByTestId("folder-link-paused");
+    expect(badge).toHaveTextContent("Paused");
+    expect(badge).toHaveAttribute("title", "Off until you revoke it: its folder left Trash another way");
+  });
+
+  it("shows no Paused badge on a link the server did not pause", async () => {
+    answer(PAID);
+    renderPanel();
+    await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByTestId("folder-link-paused")).toBeNull();
+  });
+
+  it("shows no Paused badge on a revoked link", async () => {
+    answer(PAID);
+    renderPanel({ ...TARGET, revoked: true, paused: true });
+    await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByTestId("folder-link-paused")).toBeNull();
+  });
+
   it("lists who accepted the folder link's NDA, by typed name, else the People tab's label", async () => {
     answer(PAID, {
       share_get_nda: () => ({ offered: true, on: true, text: "Keep it quiet.", editable: true, inPlan: true }),
