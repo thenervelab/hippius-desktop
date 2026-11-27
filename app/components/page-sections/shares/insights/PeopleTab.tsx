@@ -9,6 +9,7 @@ import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
 import { getGroupInsights, revokeRecipientLink, type GroupPerson } from "@/app/lib/tauri/shareRecipients";
 import { actionErrorLine, loadErrorLine } from "./insightsView";
 import { InsightsAvatar } from "./InsightsAvatar";
+import { DriveLockedLine, useDriveLocked } from "./DriveUnlock";
 import { LoadError } from "./LoadError";
 import { groupInsightsQueryKey, PANEL_QUERY } from "./queryKeys";
 import { DIVIDE, FOCUS, MUTED, STRONG } from "./panelStyles";
@@ -16,6 +17,7 @@ import { DIVIDE, FOCUS, MUTED, STRONG } from "./panelStyles";
 export const YOUR_LINK = "Your link";
 export const UNNAMED_LINK = "Unnamed link";
 export const NAMES_HIDDEN = "Some names can't be opened on this computer.";
+export const NAMES_LOCKED = "Unlock your Drive to see every name.";
 export const OVER_BUDGET = "This file has a lot of views, so only the counts are shown.";
 
 /** The row's one line of numbers: views, viewers and pages. */
@@ -56,6 +58,7 @@ export function PeopleTab({ state }: { state: GroupInsightsState }) {
   const queryClient = useQueryClient();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [revoking, setRevoking] = useState<string | null>(null);
+  const driveLocked = useDriveLocked();
 
   if (query.isError) {
     return <LoadError line={loadErrorLine("load people", query.error, navigator.onLine)} onRetry={() => void query.refetch()} />;
@@ -80,8 +83,11 @@ export function PeopleTab({ state }: { state: GroupInsightsState }) {
 
   return (
     <section aria-label="People" className="flex flex-col gap-3" data-testid="people-tab">
-      {(data.namesHidden || data.overVisitBudget) && (
-        <p className={cn("text-xs", MUTED)}>{[data.namesHidden && NAMES_HIDDEN, data.overVisitBudget && OVER_BUDGET].filter(Boolean).join(" ")}</p>
+      {data.namesHidden && driveLocked && <DriveLockedLine text={NAMES_LOCKED} />}
+      {((data.namesHidden && !driveLocked) || data.overVisitBudget) && (
+        <p className={cn("text-xs", MUTED)}>
+          {[data.namesHidden && !driveLocked && NAMES_HIDDEN, data.overVisitBudget && OVER_BUDGET].filter(Boolean).join(" ")}
+        </p>
       )}
       <ul className={cn("flex flex-col divide-y", DIVIDE)}>
         {data.people.map((person) => {
@@ -89,7 +95,7 @@ export function PeopleTab({ state }: { state: GroupInsightsState }) {
           const emails = person.emails.join(", ");
           return (
             <li key={person.shareToken} data-testid="people-row" className="flex min-w-0 items-center gap-3 py-3">
-              <InsightsAvatar name={person.recipient ? person.name : null} size="md" />
+              <InsightsAvatar name={person.recipient ? (person.name ?? person.emails[0] ?? null) : null} size="md" />
               <div className="grid min-w-0 flex-1 gap-0.5">
                 <span className={cn("truncate text-[13px] font-semibold", STRONG)} title={name}>
                   {name}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { QueryClientContext } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -12,6 +12,8 @@ import { getLinkNda, isNdaNotInPlan, removeLinkNda, setLinkNda, type LinkNda } f
 import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { actionErrorLine } from "./insightsView";
 import { ndaAcceptsQueryKey } from "./queryKeys";
+import { useUnlockCount } from "./useUnlockCount";
+import { DriveLockedLine, useDriveLocked } from "./DriveUnlock";
 
 export const NDA_LABEL = "Ask to accept an NDA";
 export const NDA_DESCRIPTION = "Viewers accept your text before it opens.";
@@ -22,6 +24,8 @@ export const NDA_UPGRADE_BODY = "Upgrade to have viewers accept your terms first
 export const NDA_UPGRADE_LABEL = "Upgrade to ask for an NDA";
 /** A text set elsewhere whose key is not on this computer: it can only be turned off. */
 export const NDA_NOT_HERE = "The text can't be opened on this computer.";
+/** The same, while the reason is the Drive being locked. */
+export const NDA_UNLOCK_TO_SEE = "Unlock your Drive to see or change the text.";
 
 const TEXTAREA = cn(
   "min-h-[96px] w-full resize-y rounded-[8px] border px-3 py-2 text-xs outline-none disabled:opacity-60",
@@ -36,9 +40,15 @@ const TEXTAREA = cn(
  */
 export function useLinkNda(shareToken: string | null, kind: LinkKind = "file") {
   const [nda, setNda] = useState<LinkNda | null>(null);
+  const unlocks = useUnlockCount();
+  const readFor = useRef<string | null>(null);
   useEffect(() => {
     let alive = true;
-    setNda(null);
+    // A new link starts empty; the same link read again after an unlock keeps
+    // what it shows until the answer lands.
+    const key = `${kind}:${shareToken}`;
+    if (readFor.current !== key) setNda(null);
+    readFor.current = key;
     if (shareToken === null) return;
     Promise.resolve()
       .then(() => getLinkNda(shareToken, kind))
@@ -47,7 +57,7 @@ export function useLinkNda(shareToken: string | null, kind: LinkKind = "file") {
     return () => {
       alive = false;
     };
-  }, [shareToken, kind]);
+  }, [shareToken, kind, unlocks]);
   return { nda, setNda };
 }
 
@@ -97,6 +107,7 @@ export default function NdaSettings({
   const [writing, setWriting] = useState(false);
   const [draft, setDraft] = useState("");
   const [textError, setTextError] = useState<string | null>(null);
+  const driveLocked = useDriveLocked();
 
   // The box follows the text as stored, after each read and save.
   useEffect(() => {
@@ -185,11 +196,13 @@ export default function NdaSettings({
           </div>
           <SettingsToggle ariaLabel={NDA_LABEL} checked={on} disabled={busy} onCheckedChange={(v) => void flip(v)} />
         </div>
-        {nda.on && saved === null && !writing && (
+        {nda.on && saved === null && !writing && (driveLocked ? (
+          <DriveLockedLine text={NDA_UNLOCK_TO_SEE} />
+        ) : (
           <p className="text-xs text-grey-50 dark:text-grey-dark-600" data-testid="nda-not-here">
             {NDA_NOT_HERE}
           </p>
-        )}
+        ))}
         {editable && (
           <div className="flex flex-col gap-2.5">
             <textarea

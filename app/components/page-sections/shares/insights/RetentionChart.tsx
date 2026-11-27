@@ -6,18 +6,19 @@ import { cn } from "@/lib/utils";
 import type { ShareComment } from "@/app/lib/tauri/shareInsights";
 import { InsightsAvatar } from "./InsightsAvatar";
 import { biggestDrop, formatMomentAt, formatWatched, retentionAt, viewerName } from "./insightsView";
+import { CHART_BASELINE, CHART_FOCUS, CHART_INK, CHART_LABEL, CHART_TOPLINE, CHART_TOOLTIP } from "./panelStyles";
 
 /** Comment avatars drawn on the curve, at most. The comment list has the rest. */
 const MAX_MARKERS = 12;
 
 /**
  * Minute ticks under the chart: a step of 1, 2, 5, 10, 15 or 30 minutes so
- * there are at most six. A recording under a minute gets its start and end.
+ * there are at most four. A recording under a minute gets its start and end.
  */
 function timeTicks(durationMs: number): number[] {
   const minutes = durationMs / 60_000;
   if (minutes < 1) return [0, durationMs];
-  const step = [1, 2, 5, 10, 15, 30, 60].find((s) => minutes / s <= 5) ?? 60;
+  const step = [1, 2, 5, 10, 15, 30, 60].find((s) => minutes / s <= 3) ?? 60;
   const ticks: number[] = [];
   for (let m = 0; m * 60_000 <= durationMs; m += step) ticks.push(m * 60_000);
   return ticks;
@@ -29,12 +30,16 @@ function timeTicks(durationMs: number): number[] {
  * `1:42 · 84% still watching` under the pointer or the arrow keys.
  *
  * Positions are percentages over a `preserveAspectRatio="none"` SVG, so the
- * avatars and the playhead (plain HTML on top) line up at any width.
+ * avatars and the playhead (plain HTML on top) line up at any width, and a
+ * wider panel simply draws it wider.
+ *
+ * Calm on purpose: one baseline, a faint line at 100%, a soft flat fill, and
+ * one value label, where the curve ends. The exact number at any point is
+ * the playhead's.
  *
  * A document's pages use it too, one point per page, as the console does:
  * `pointLabel` gives the playhead's words at each point (it then snaps to
- * the points), `endLabels` the axis, `scaleLabels` the gridlines and
- * `summary` the chart's name.
+ * the points), `endLabels` the axis and `summary` the chart's name.
  */
 export function RetentionChart({
   values,
@@ -43,7 +48,6 @@ export function RetentionChart({
   className,
   pointLabel,
   endLabels = ["Start", "End"],
-  scaleLabels = ["100%", "50%", "0%"],
   summary,
   testId,
 }: {
@@ -57,16 +61,12 @@ export function RetentionChart({
   pointLabel?: (i: number) => { at: string; value: string };
   /** Under the axis when it has no time ticks. */
   endLabels?: readonly [string, string];
-  /** Beside the top, middle and bottom gridlines. */
-  scaleLabels?: readonly [string, string, string];
   /** The chart's accessible name, in place of the recording's. */
   summary?: string;
   testId?: string;
 }) {
   const [at, setAt] = useState<number | null>(null);
   const liveId = useId();
-  // useId's colons are not safe inside url(#...), so the gradient gets its own.
-  const fillId = `retention-fill-${liveId.replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const n = Math.max(values.length - 1, 1);
   const y = (v: number) => 100 - Math.min(100, Math.max(0, v));
   const line = values.map((v, i) => `${((i / n) * 100).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
@@ -138,52 +138,43 @@ export function RetentionChart({
         onBlur={() => setAt(null)}
         onKeyDown={onKey}
         className={cn(
-          // Room above the top gridline for its label, clear of the heading.
-          "relative mt-5 h-[120px] touch-none select-none rounded-sm outline-none",
-          "focus-visible:ring-2 focus-visible:ring-primary-50/40 focus-visible:ring-offset-4",
-          "focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#1f1f1f]",
+          // Room above the top line for the end label and the avatars.
+          "relative mt-4 h-[112px] touch-none select-none",
+          CHART_FOCUS,
         )}
       >
-        {/* Gridlines at 100%, 50% and 0%, labelled at the right. */}
-        {([100, 50, 0] as const).map((v, i) => (
-          <div
-            key={v}
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-x-0 border-t",
-              v === 0
-                ? "border-grey-80 dark:border-[#494949]"
-                : "border-dashed border-grey-80/80 dark:border-[#3a3a3a]",
-            )}
-            style={{ top: `${y(v)}%` }}
-          >
-            <span className="absolute -top-4 right-0 font-mono text-[10px] text-grey-50 dark:text-grey-dark-600">
-              {scaleLabels[i]}
-            </span>
-          </div>
-        ))}
+        {/* A faint line at 100% and the one solid line at 0%. */}
+        <div aria-hidden className={cn("pointer-events-none absolute inset-x-0 top-0 border-t", CHART_TOPLINE)} />
+        <div aria-hidden className={cn("pointer-events-none absolute inset-x-0 bottom-0 border-t", CHART_BASELINE)} />
         <svg
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
           aria-hidden
-          className="absolute inset-0 size-full overflow-visible text-primary-50 dark:text-primary-brand-dark"
+          className={cn("absolute inset-0 size-full overflow-visible", CHART_INK)}
         >
-          <defs>
-            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="currentColor" stopOpacity={0.22} />
-              <stop offset="1" stopColor="currentColor" stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <polygon points={`0,100 ${line} 100,100`} fill={`url(#${fillId})`} />
+          <polygon points={`0,100 ${line} 100,100`} fill="currentColor" fillOpacity={0.08} />
           <polyline
             points={line}
             fill="none"
             stroke="currentColor"
-            strokeWidth={2}
+            strokeWidth={1.75}
             strokeLinejoin="round"
+            strokeLinecap="round"
             vectorEffect="non-scaling-stroke"
           />
         </svg>
+
+        {/* The one value label: where the curve ends. */}
+        {values.length > 0 && at === null && (
+          <span
+            aria-hidden
+            data-testid="chart-end-value"
+            className={cn("pointer-events-none absolute right-0 -translate-y-[calc(100%+3px)] font-medium", CHART_LABEL)}
+            style={{ top: `${y(values[values.length - 1])}%` }}
+          >
+            {end}%
+          </span>
+        )}
 
         {/* Who commented, on the curve at their moment. */}
         {markers.map((m) => (
@@ -203,7 +194,7 @@ export function RetentionChart({
           <>
             <div
               aria-hidden
-              className="pointer-events-none absolute inset-y-0 border-l border-dashed border-grey-50 dark:border-grey-dark-600"
+              className="pointer-events-none absolute inset-y-0 border-l border-grey-70 dark:border-white/20"
               style={{ left: `${at * 100}%` }}
             />
             <span
@@ -213,12 +204,8 @@ export function RetentionChart({
             />
             <span
               aria-hidden
-              className={cn(
-                "pointer-events-none absolute z-10 whitespace-nowrap rounded-[7px] px-2 py-1 text-[11.5px] font-medium",
-                "bg-grey-10 text-white dark:bg-white dark:text-grey-10",
-                at > 0.55 ? "-translate-x-[calc(100%+10px)]" : "translate-x-[10px]",
-              )}
-              style={{ left: `${at * 100}%`, top: `calc(${y(atValue)}% + 12px)` }}
+              className={cn(CHART_TOOLTIP, at > 0.55 ? "-translate-x-[calc(100%+10px)]" : "translate-x-[10px]")}
+              style={{ left: `${at * 100}%`, top: `calc(${Math.min(y(atValue), 70)}% + 8px)` }}
             >
               {readout}
             </span>
@@ -229,7 +216,7 @@ export function RetentionChart({
       <p id={liveId} aria-live="polite" className="sr-only">
         {readout ?? ""}
       </p>
-      <div aria-hidden className="relative mt-1.5 h-4 font-mono text-[10px] text-grey-50 dark:text-grey-dark-600">
+      <div aria-hidden className={cn("relative mt-1.5 h-4", CHART_LABEL)}>
         {ticks ? (
           ticks.map((t, i) => {
             const f = durationMs ? t / durationMs : 0;
