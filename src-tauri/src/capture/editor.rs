@@ -1009,7 +1009,7 @@ pub async fn capture_editor_save(state: tauri::State<'_, AppState>, app: AppHand
         EditorOrigin::Drive | EditorOrigin::Picked => None,
     };
     let card_now = card_id.and_then(|id| lock(&state.capture.preview).clone().filter(|c| c.id == id));
-    if card_now.as_ref().is_some_and(|c| c.link == LinkState::Creating) {
+    if card_now.as_ref().is_some_and(|c| c.link.is_being_made()) {
         return Err(AppError::Validation("The link is still being made. Save again in a moment.".into()));
     }
     let old_token = match &card_now {
@@ -1173,6 +1173,7 @@ async fn upload_remote_copy(
             destination.folder_hash.clone(),
             // A screenshot: the server counts none, so none is declared.
             None,
+            false,
         )
         .await
         {
@@ -1385,6 +1386,7 @@ async fn write_edited(state: &AppState, app: &AppHandle, account_id: &str, sessi
                 destination.folder_hash.clone(),
                 // A screenshot: the server counts none, so none is declared.
                 None,
+                false,
             )
             .await;
             let failure = match uploaded {
@@ -1419,7 +1421,7 @@ async fn replace_link(
     source: &super::deliver::LinkSource,
     old_token: Option<&str>,
 ) -> (LinkResult, Option<(String, String, bool)>) {
-    let minted = super::deliver::mint(state, account_id, source).await;
+    let minted = super::deliver::mint(state, account_id, source, None).await;
     let old_revoked = match old_token {
         Some(token) => match crate::shares::commands::hcfs_revoke_share(state.clone(), token.to_string()).await {
             Ok(()) => true,

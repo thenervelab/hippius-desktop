@@ -10,6 +10,7 @@ import {
   FolderPlus,
   Clock,
   FolderSearch,
+  Info,
   Link2,
   MonitorDown,
   MoreHorizontal,
@@ -562,6 +563,22 @@ export default function CapturePreviewPage() {
             <span aria-hidden className="truncate">
               {view.text}
             </span>
+            {card.linkInfo && (
+              // Why the card shows only the link's upload: the link has its
+              // own copy, and the backup to Drive is in the upload list.
+              // Named by its label and described by the card's tooltip, on
+              // hover (Rust's pointer) and keyboard focus alike.
+              <button
+                type="button"
+                aria-label="About this upload"
+                data-card-tip="link-info"
+                data-testid="capture-link-info"
+                {...tipProps("link-info", { label: card.linkInfo })}
+                className={`-my-1 grid size-5 shrink-0 place-items-center rounded-full text-white/60 hover:text-white ${GLASS_FOCUS}`}
+              >
+                <Info aria-hidden className="size-3.5" />
+              </button>
+            )}
             <span role="status" aria-live="polite" className="sr-only">
               {view.announce}
             </span>
@@ -588,9 +605,11 @@ export default function CapturePreviewPage() {
             >
               {desktopNote.text}
             </p>
-          ) : card.notice ? (
+          ) : card.notice && card.link.state !== "uploading" ? (
             // Rust's line about the capture (a Free plan recording stopped at
             // its limit) takes the destination's place, two lines at most.
+            // While a copied link still uploads, "Keep Hippius open" wins the
+            // slot: quitting then leaves a link that never opens.
             <p className="line-clamp-2 text-[11.5px] leading-4 text-white/85" data-testid="capture-notice">
               {card.notice}
             </p>
@@ -743,7 +762,15 @@ export default function CapturePreviewPage() {
               )}
               {actions.mintLink ? (
                 <button type="button" disabled={busy} onClick={() => run(mintCapturePreviewLink)} className={SECONDARY_ACTION}>
-                  <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                  {card.link.state === "broken" ? (
+                    <>
+                      <RotateCw aria-hidden className="size-3.5 shrink-0" /> Retry
+                    </>
+                  ) : (
+                    <>
+                      <Link2 aria-hidden className="size-3.5 shrink-0" /> Create link
+                    </>
+                  )}
                 </button>
               ) : (
                 <button type="button" disabled={!actions.copyLink} onClick={copy} className={SECONDARY_ACTION}>

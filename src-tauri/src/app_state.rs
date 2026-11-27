@@ -85,6 +85,10 @@ pub struct AppState {
     pub oauth: OAuthState,
     /// Team chat: pending OIDC sign-in flows and the HTTP client they use.
     pub chat: crate::chat::ChatState,
+    /// Link activity: the counts the last poll saw, and a notification's pending open.
+    pub link_alerts: crate::shares::link_alerts::LinkAlertsState,
+    /// When each long-lived webview went out of sight (`webview_refresh`).
+    pub webview_refresh: crate::webview_refresh::WebviewRefreshState,
     /// Screen capture: the one live capture session, if any.
     pub capture: crate::capture::commands::CaptureState,
     /// The file viewer's loopback video stream on Linux (`video_stream.rs`):
@@ -218,6 +222,12 @@ pub struct AppState {
     /// Cancel flags of the moves between drives running now, by the id the
     /// webview gave each. See `crate::sync::drive_move`.
     pub drive_moves: crate::sync::drive_move::DriveMoveJobs,
+    /// Move to Trash holds whose Undo toast is still up, by token. See
+    /// `crate::sync::trash`.
+    pub trash_holds: crate::sync::trash::TrashHolds,
+    /// This computer's device check, one loop per signed-in account. See
+    /// `crate::devices::registration`.
+    pub device_registration: crate::devices::registration::RegistrationLoops,
     /// Monotonically increasing counter, incremented on every
     /// `SyncStarted` event. The `UploadProcessingState` clear gate
     /// reads this to distinguish events from a cycle that began
@@ -419,6 +429,8 @@ impl AppState {
             block_sub: BlockSubscriptionState::new(),
             oauth: OAuthState::new(),
             chat: crate::chat::ChatState::new(),
+            link_alerts: crate::shares::link_alerts::LinkAlertsState::default(),
+            webview_refresh: crate::webview_refresh::WebviewRefreshState::default(),
             capture: crate::capture::commands::CaptureState::default(),
             video_stream: crate::video_stream::VideoStreams::default(),
             video_engine: crate::video_engine::VideoEngineState::default(),
@@ -438,6 +450,8 @@ impl AppState {
             remote_media_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(3)),
             remote_listing_cache: std::sync::Arc::default(),
             drive_moves: crate::sync::drive_move::DriveMoveJobs::default(),
+            trash_holds: crate::sync::trash::TrashHolds::default(),
+            device_registration: crate::devices::registration::RegistrationLoops::default(),
             sync_session_epoch: AtomicU64::new(0),
             tray_panel_hidden_at: AtomicU64::new(0),
             tray_panel_shown_at: AtomicU64::new(0),
@@ -899,7 +913,9 @@ impl<'de, R: tauri::Runtime> tauri::ipc::CommandArg<'de, R> for SessionAccount {
         // `message` is a `Copy` reference, so reading it does not move
         // `command`, which the deserializer below consumes.
         let message = command.message;
-        let state = message.state_ref().try_get::<AppState>().ok_or_else(|| {
+        // `Manager::try_state` on the calling webview: `InvokeMessage::state_ref`
+        // is deprecated since tauri 2.11.
+        let state = tauri::Manager::try_state::<AppState>(message.webview_ref()).ok_or_else(|| {
             tauri::ipc::InvokeError(serde_json::Value::String(format!(
                 "AppState is not managed (command `{name}`, arg `{key}`)"
             )))

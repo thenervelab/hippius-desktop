@@ -45,6 +45,7 @@ import AddButton, { type AddButtonRef } from "./AddFileButton";
 import usePageContextActions from "@/app/lib/hooks/usePageContextActions";
 import FolderUploadDialog from "./FolderUploadDialog";
 import { toFolderRows, type FolderRow } from "./folder-list/folderRows";
+import { useDriveStars } from "./folder-list/useDriveStars";
 import { buildFolderActions } from "./folder-list/buildFolderActions";
 import {
   SYNC_FOLDER_HINT,
@@ -233,9 +234,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   // server-side totals grow per committed file). Silent so the list updates in
   // place. See useRefreshWhileSyncing.
   useRefreshWhileSyncing(
-    useCallback(() => {
-      void loadFolders({ silent: true });
-    }, [loadFolders]),
+    useCallback(() => loadFolders({ silent: true }), [loadFolders]),
     !!polkadotAddress,
   );
 
@@ -548,6 +547,8 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
 
   // One list, built from the two sources the page already loads.
   const folderRows = toFolderRows(syncFolders, remoteFolders);
+  // Star / Unstar a whole drive from its row menu.
+  const driveStars = useDriveStars(folderRows);
   // Own drives only: a member drive's sharing is described by the role
   // badge, and asking the server for its members would be the owner's
   // question, not ours.
@@ -586,6 +587,7 @@ const DriveOnboarding: React.FC<DriveOnboardingProps> = ({
   const buildRowActions = (row: FolderRow) =>
     buildFolderActions(row, {
       planSupportsSharedDrives: sharedDrivesInPlan,
+      star: driveStars,
       // A manager reaches the mint on a drive they do not own; the row's
       // own `ownerSs58` cannot say which member drives those are.
       role: sharedDriveRoles.get(row.folderName),

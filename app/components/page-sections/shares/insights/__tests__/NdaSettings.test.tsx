@@ -79,7 +79,8 @@ describe("NdaSettings", () => {
   it("shows the stored text and removes it when turned off", async () => {
     answer({ share_get_nda: () => ON, share_remove_nda: () => undefined });
     renderIt();
-    expect(await screen.findByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it to yourself.");
+    // The box can mount a render before the stored text fills it.
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "NDA text" })).toHaveValue("Keep it to yourself."));
 
     fireEvent.click(screen.getByRole("switch", { name: NDA_LABEL }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("share_remove_nda", { shareToken: "tok" }));
@@ -136,7 +137,9 @@ describe("NdaSettings", () => {
     expect(screen.queryByRole("alert")).toBeNull();
 
     refusal = { kind: "Validation", message: "The text is too long." };
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Found again, not reused: the editor re-renders after the refusal, and on
+    // a slow runner the button is not back yet when the prompt appears.
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("The text is too long.");
   });
 

@@ -15,6 +15,7 @@ import { render, waitFor, act } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 
+import { listen } from "@tauri-apps/api/event";
 import RecoveryEventListener from "../RecoveryEventListener";
 import {
   activeRecoveryCheckAtom,
@@ -131,5 +132,47 @@ describe("RecoveryEventListener mount-time self-heal", () => {
     });
 
     expect(store.get(activeRecoveryCheckAtom)).toEqual(fresher);
+  });
+});
+
+describe("RecoveryEventListener listeners", () => {
+  it("listens once, however often the recovery check changes", async () => {
+    recoveryMocks.checkRecoveryState.mockResolvedValue(makeCheck("proceed"));
+    const store = renderListener();
+    await waitFor(() => expect(listen).toHaveBeenCalledWith("oauth_recovery_check_needed", expect.any(Function)));
+
+    act(() => store.set(activeRecoveryCheckAtom, makeCheck("unlock")));
+    act(() => store.set(activeRecoveryCheckAtom, null));
+    act(() => store.set(activeRecoveryCheckAtom, makeCheck("unknown")));
+
+    const registrations = vi.mocked(listen).mock.calls.filter(([name]) => name === "oauth_recovery_check_needed");
+    expect(registrations).toHaveLength(1);
+  });
+
+  it("drops both listeners when unmounted before they finished registering", async () => {
+    recoveryMocks.checkRecoveryState.mockResolvedValue(makeCheck("proceed"));
+    const unlisten = vi.fn();
+    const answers: Array<(u: () => void) => void> = [];
+    vi.mocked(listen).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const store = createStore();
+    const { unmount } = render(
+      <Provider store={store}>
+        <RecoveryEventListener />
+      </Provider>,
+    );
+    await waitFor(() => expect(answers).toHaveLength(2));
+    unmount();
+
+    await act(async () => {
+      for (const answer of answers) answer(unlisten);
+      await Promise.resolve();
+    });
+    expect(unlisten).toHaveBeenCalledTimes(2);
+    vi.mocked(listen).mockResolvedValue(() => {});
   });
 });

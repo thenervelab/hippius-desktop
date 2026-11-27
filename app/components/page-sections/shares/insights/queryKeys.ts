@@ -16,5 +16,9 @@ export const linkSettingsQueryKey = (shareToken: string) => ["share-link-setting
  */
 export const PANEL_QUERY = { retry: false, networkMode: "always" } as const;
 export const PANEL_MUTATION = { networkMode: "always" } as const;
-export const ndaAcceptsQueryKey = (shareToken: string) => ["share-nda-accepts", shareToken] as const;
+/** A folder link's accepts are keyed by its token hash, under its own kind. */
+export const ndaAcceptsQueryKey = (shareToken: string, kind: "file" | "folder" = "file") =>
+  ["share-nda-accepts", kind, shareToken] as const;
 export const groupInsightsQueryKey = (shareToken: string) => ["share-group-insights", shareToken] as const;
+export const viewerVisitsQueryKey = (shareToken: string, viewerId: string) =>
+  ["share-viewer-visits", shareToken, viewerId] as const;

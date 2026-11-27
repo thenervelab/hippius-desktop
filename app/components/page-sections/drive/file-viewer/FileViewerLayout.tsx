@@ -1,5 +1,6 @@
 "use client";
 
+import { useDeleteMenuAction } from "@/app/lib/trash/deleteMode";
 import React, {
   ReactNode,
   useEffect,
@@ -43,6 +44,9 @@ import FileViewerTitle from "./FileViewerTitle";
 import { copyLinkLabel, linkPathFor } from "../existingLink";
 import { useExistingLinks } from "../useExistingLinks";
 import { useCopyExistingLink } from "../useCopyExistingLink";
+import { useStars } from "@/app/lib/starred/useStars";
+import { canStar, starLabelOf } from "@/app/lib/starred/starState";
+import { StarMenuIcon, starMenuLabel } from "@/app/lib/starred/starMenu";
 
 /**
  * Stacking order of the full-screen file viewer overlay.
@@ -234,6 +238,17 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     }).catch((error) => toast.error(tauriErrorMessage(error)));
   }, [file, onClose]);
 
+  // Star / Unstar the file on screen; the viewer only opens files, whose id
+  // is all a star needs.
+  const stars = useStars([starLabelOf(file)]);
+  const starrable = canStar(file, "");
+  const starred = starrable && stars.isStarred(file, "");
+  const { toggleRow } = stars;
+  const handleStar = useCallback(() => {
+    void toggleRow(file, "");
+  }, [toggleRow, file]);
+
+  const deleteMenu = useDeleteMenuAction();
   const handleDelete = useCallback(() => {
     onClose();
     // A direct handler (sidebar search preview) deletes straight away via its
@@ -242,9 +257,11 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
     if (onDelete) {
       onDelete(file);
     } else {
-      enterSelectionModeAndSelectFile(file);
+      // Move to Trash runs at once; Delete and Delete forever select the
+      // row for the bar's confirmation.
+      deleteMenu.run(file, () => enterSelectionModeAndSelectFile(file));
     }
-  }, [onDelete, enterSelectionModeAndSelectFile, file, onClose]);
+  }, [onDelete, enterSelectionModeAndSelectFile, file, onClose, deleteMenu]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -350,6 +367,15 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                       <Link2 className="size-[17px]" strokeWidth={1.8} />
                     </ActionButton>
                   )}
+                  {starrable && (
+                    <ActionButton
+                      onClick={handleStar}
+                      ariaLabel={starMenuLabel(starred)}
+                      title={starMenuLabel(starred)}
+                    >
+                      <StarMenuIcon starred={starred} className="size-[17px]" />
+                    </ActionButton>
+                  )}
                   {canShare && (
                     <ActionButton onClick={handleShare} ariaLabel="Share file">
                       <Share2 className="size-[17px]" strokeWidth={1.8} />
@@ -362,7 +388,10 @@ const FileViewerLayout: React.FC<FileViewerLayoutProps> = ({
                     <Download className="size-[17px]" strokeWidth={1.8} />
                   </ActionButton>
                   {file.isAssigned && (
-                    <ActionButton onClick={handleDelete} ariaLabel="Delete file">
+                    <ActionButton
+                      onClick={handleDelete}
+                      ariaLabel={deleteMenu.mode === "legacy" ? "Delete file" : deleteMenu.label}
+                    >
                       <Trash2 className="size-[17px]" strokeWidth={1.8} />
                     </ActionButton>
                   )}

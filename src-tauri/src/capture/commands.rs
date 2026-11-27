@@ -27,7 +27,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::bar::{self, CameraShape, CameraSize, CaptureOptions};
 use super::camera::{self, CameraState};
 use super::destination::{self, CaptureDestination};
-use super::preview::{LinkState, PreviewCard, PreviewStatus};
+use super::preview::{LinkProgress, LinkState, PreviewCard, PreviewStatus};
 use super::recording::{self, Microphone, RecordOptions, Recorder};
 use super::screenshot::Selection;
 use super::session::{CaptureEvent, CaptureKind, CaptureMode, CapturePhase, TransitionError, transition};
@@ -393,6 +393,12 @@ pub type CameraDevice = recording::MediaDevice;
 impl CaptureState {
     pub fn current(&self) -> CapturePhase {
         lock(&self.phase).unwrap_or(CapturePhase::Idle)
+    }
+
+    /// Whether a picture is open in the screenshot editor. The editor keeps
+    /// its changes in memory until Save, so a restart would lose them.
+    pub fn editor_open(&self) -> bool {
+        lock(&self.editor).is_some()
     }
 
     fn take_recorder(&self) -> Option<Box<dyn Recorder>> {
@@ -4458,10 +4464,12 @@ async fn copy_new_capture_to_desktop(app: &AppHandle, path: &Path, kind: Capture
 /// card when one is showing (`card_id`), and as a system notification only
 /// when the upload failed, since the card already shows a success.
 ///
-/// Two steps, each told to the card as it happens: the file is put in the
-/// drive (a synced capture is then followed in the sync queue at once), and
-/// only then is its link made. The card used to hear nothing until both were
-/// done, so it said "Preparing upload" through the whole upload and the mint.
+/// The link comes FIRST, made from the capture's own file before it goes
+/// into the drive ([`link_first`]), and is copied the moment it exists: it is
+/// what the user is waiting for. Its upload used to share the connection
+/// with the drive's upload of the same file (a synced drive) or start only
+/// once that upload had finished (a drive only on the server). Then the file
+/// is put in the drive and the card follows that, keeping the link.
 ///
 /// A card goes to the drive it names (Retry included), even if the capture
 /// drive was changed since. A card opened before the captures drive was set
@@ -4478,6 +4486,9 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
     // never left in the temp folder with nothing to offer it again.
     let marked = mark_delivery(&state, path, card.as_ref(), card_destination.clone()).await;
     let mut sent_to: Option<CaptureDestination> = None;
+    // The card was finished by its link before the drive copy was sent, so
+    // it already told the user the link was copied.
+    let mut finished_by_link = false;
     let outcome = async {
         let account_id = state.current_account_id()?;
         let pool = state.pool()?;
@@ -4502,14 +4513,33 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
         let (mint_link, open_link, chat_preview, link_insights) = bar::load_options(pool)
             .await
             .map_or((true, true, true, true), |o| (o.copy_link, o.open_link, o.chat_preview, o.link_insights));
-        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path).await?;
+        let link = if mint_link {
+            let choices = LinkChoices {
+                open_link,
+                chat_preview,
+                link_insights,
+            };
+            Some(link_first(app, &account_id, path, card.as_ref(), card_id, choices).await)
+        } else {
+            None
+        };
+        // Uploaded directly (the drive is not synced here): a card whose
+        // link is public is finished now, and the drive copy goes on in the
+        // upload list rather than on the card (`link_finishes_card`). A
+        // synced capture is finished by its follower instead.
+        if let Some(id) = card_id
+            && matches!(super::deliver::local_root(&state, &account_id, &destination).await, Ok(None))
+        {
+            finished_by_link = finish_card_by_link_while_direct(app, &state.capture, id);
+        }
+        // With a link out, the drive copy is the capture's backup, and the
+        // upload list says so.
+        let backup = link.as_ref().is_some_and(|l| l.minted.share_url.is_some());
+        let placed = super::deliver::place(&state, app.clone(), &account_id, &destination, path, backup).await?;
         Ok::<_, AppError>(Delivery::Placed {
             account_id,
             destination,
-            mint_link,
-            open_link,
-            chat_preview,
-            link_insights,
+            link,
             placed,
         })
     }
@@ -4527,10 +4557,7 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
         Ok(Delivery::Placed {
             account_id,
             destination,
-            mint_link,
-            open_link,
-            chat_preview,
-            link_insights,
+            link,
             placed,
         }) => {
             // In the drive: a temp copy kept for the card (Edit, Create link)
@@ -4539,33 +4566,18 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             if !placed.via_sync {
                 super::screenshot::mark_delivered(&placed.placed);
             }
-            announce_placed(app, card_id, &destination, &placed, mint_link, started_ms);
+            let minted = link.as_ref().map(|l| l.minted.clone()).unwrap_or_default();
+            // The link was made from the capture before it had a place in the
+            // drive; now it has one, the link is recorded as that file's.
+            if let Some(token) = minted.share_token.as_deref() {
+                super::deliver::remember_placed_origin(&state, &account_id, &destination, &placed, token).await;
+            }
+            announce_placed(app, card_id, &destination, &placed, started_ms);
             // A recording counts toward the free plan's limit from now on,
             // before the server lists it (`recording_allowance`).
             super::recording_allowance::note_delivered(&state, &account_id, &destination, &placed.file_name).await;
-            // The chat preview (Settings, "Show a preview in chats") is read
-            // from the placed file while the link is minted, so it costs the
-            // link no time. A capture's link is always public, so the
-            // password rule cannot refuse it here.
-            let preview = (mint_link && chat_preview).then(|| {
-                crate::shares::preview::render_in_background(app.clone(), account_id.clone(), placed.placed.clone(), placed.file_name.clone())
-            });
-            let minted = if mint_link {
-                super::deliver::link_for(&state, &account_id, &destination, &placed).await
-            } else {
-                super::deliver::Minted::default()
-            };
             let delivered = super::deliver::Delivered::from_parts(&placed, &minted, &destination);
-            // Insights, Comments and Reactions (Settings, "Track views,
-            // comments and reactions"), sent in the background once the
-            // link exists; a failure never touches the link.
-            if let Some(token) = delivered.share_token.as_deref() {
-                crate::shares::insights::spawn_apply(app, &account_id, token, crate::shares::insights::for_capture(link_insights));
-            }
-            let copied = copy_link_to_clipboard(app, delivered.share_url.as_deref());
-            if open_link {
-                open_link_in_browser(app, delivered.share_url.as_deref());
-            }
+            let copied = link.as_ref().is_some_and(|l| l.copied);
             // The upload landed (or, synced, the file is in the drive's own
             // folder), so the temp copy has served its purpose, unless a
             // direct upload still needs it to make a link later.
@@ -4575,16 +4587,268 @@ async fn deliver_and_announce(app: &AppHandle, path: &Path, card_id: Option<u64>
             // the folder it was kept in on this computer is in the user's
             // drive folder, which holds their other captures.
             let temp = (!keep).then(|| path.to_path_buf());
-            spawn_preview_then_cleanup(app, &account_id, delivered.share_token.clone(), &delivered.file_name, preview, temp);
+            spawn_preview_then_cleanup(app, &account_id, None, &delivered.file_name, None, temp);
             let _ = app.emit(DELIVERED_EVENT, &delivered);
             let shown = card_id.is_some_and(|id| announce_link(app, &state.capture, id, &delivered, copied, keep));
-            if !shown {
+            // A card its link finished may have closed long before the drive
+            // copy landed: it said the link was copied, and saying it again
+            // now would read as a second capture.
+            if !shown && !finished_by_link {
                 let (title, body) = super::deliver::delivered_notice(&delivered);
                 notify(app, title, body);
             }
         }
         Err(e) => announce_failed(app, path, card_id, &e, marked, sent_to),
     }
+}
+
+/// The Settings choices that ride along with a capture's link.
+#[derive(Debug, Clone, Copy)]
+struct LinkChoices {
+    /// Open the link in the browser once it exists (`open_link`).
+    open_link: bool,
+    /// Send a chat preview with it (`CaptureOptions::chat_preview`).
+    chat_preview: bool,
+    /// Turn on its Insights, Comments and Reactions (`link_insights`).
+    link_insights: bool,
+}
+
+/// What [`link_first`] handed out.
+#[derive(Debug, Clone, Default)]
+struct LinkFirst {
+    minted: super::deliver::Minted,
+    /// It reached the clipboard.
+    copied: bool,
+}
+
+/// A chat preview being read from the capture while its link is made.
+type PreviewRead = tauri::async_runtime::JoinHandle<Option<Vec<u8>>>;
+
+/// Make the capture's link from its own file, before the file goes into the
+/// drive, and hand it out: copied, opened if Settings says so, with its
+/// switches (Insights, Comments, Reactions) and its chat preview, and on the
+/// card, which shows the link's upload as it goes ([`card_link_progress`]).
+///
+/// On a server that answers a link still uploading with "still uploading"
+/// (`share_open_while_uploading`) all of that happens the moment the link
+/// exists, before its upload has finished: a long recording's link is in
+/// the clipboard while the card says "Link copied, uploading 40%, about 30 s
+/// left", and a chat app that shows the link at once gets its picture,
+/// since that server takes the switches and the preview during the upload.
+/// Anywhere else a link that is still uploading answers "not found", so it
+/// all waits for the upload, as it always did. One capabilities read,
+/// started before the file is read, decides; one that has not answered by
+/// the time the link exists counts as no, so a slow read never holds the
+/// link, the card or the drive's upload.
+///
+/// This returns once the upload has finished or failed, so the drive's own
+/// upload never shares the connection with it. If the upload fails after
+/// the link was handed out, hcfs-client revokes it (its preview goes with
+/// it, and its switches no longer matter) and the card says the copied link
+/// won't open (`LinkState::Broken`), with Retry.
+///
+/// A Retry after the drive refused the file keeps the link the first try
+/// already handed out: it still opens (it is its own copy of the capture),
+/// and making another would be a second public link and a second upload.
+async fn link_first(
+    app: &AppHandle,
+    account_id: &str,
+    path: &Path,
+    card: Option<&PreviewCard>,
+    card_id: Option<u64>,
+    choices: LinkChoices,
+) -> LinkFirst {
+    let state = app.state::<AppState>();
+    if let Some(card) = card.filter(|c| c.share_url.is_some()) {
+        return LinkFirst {
+            minted: super::deliver::Minted {
+                share_url: card.share_url.clone(),
+                share_token: card.share_token.clone(),
+                link_error: None,
+            },
+            copied: card.link_fields().0,
+        };
+    }
+    let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    // A capture's link is always public, so the password rule that keeps a
+    // preview off a password link cannot refuse it here.
+    let wants_preview = choices.chat_preview;
+    let preview = wants_preview
+        .then(|| crate::shares::preview::render_in_background(app.clone(), account_id.to_string(), path.to_path_buf(), file_name.clone()));
+    if let Some(id) = card_id {
+        update_card(app, &state.capture, id, |c| {
+            c.link = LinkState::Creating;
+            c.link_progress = Some(LinkProgress::Preparing);
+        });
+    }
+    let progress = card_id.map(|id| card_link_progress(app, id));
+    let switches = crate::shares::insights::for_capture(choices.link_insights);
+    // Asked while the file is read, so the answer is almost always in by
+    // the time the link exists. Never awaited: the link only looks at it.
+    let shows_uploading = std::sync::Arc::new(std::sync::OnceLock::<bool>::new());
+    {
+        let (app, account_id, answer) = (app.clone(), account_id.to_string(), shows_uploading.clone());
+        tauri::async_runtime::spawn(async move {
+            let state = app.state::<AppState>();
+            let _ = answer.set(super::deliver::server_shows_uploading(&state, &account_id).await);
+        });
+    }
+    // The link is offered from inside the upload, so it is handed out here,
+    // alongside it: the sender lives as long as the mint does.
+    let (sender, mut reported) = tokio::sync::mpsc::unbounded_channel::<super::deliver::EarlyLink>();
+    let on_link: super::deliver::OnLink =
+        std::sync::Arc::new(move |link: super::deliver::EarlyLink| shows_uploading.get() == Some(&true) && sender.send(link).is_ok());
+    let hand_out = async {
+        let Some(link) = reported.recv().await else {
+            return (None, preview);
+        };
+        let copied = copy_link_to_clipboard(app, Some(&link.share_url));
+        // Registered before the card holds the link, so a read or change of
+        // its switches waits for these.
+        crate::shares::insights::spawn_apply(app, account_id, &link.share_token, switches);
+        if let Some(id) = card_id {
+            announce_uploading(app, &state.capture, id, &link, copied);
+        }
+        if choices.open_link {
+            open_link_in_browser(app, Some(&link.share_url));
+        }
+        send_preview_once_read(app, account_id, Some(&link.share_token), preview, &file_name).await;
+        (Some(copied), None)
+    };
+    let (minted, (copied_early, preview)) = tokio::join!(
+        super::deliver::link_from_file(&state, account_id, path, progress, Some(on_link)),
+        hand_out
+    );
+    let copied = if let Some(copied) = copied_early {
+        copied && minted.share_url.is_some()
+    } else {
+        // Not handed out early: all of it goes now that the upload is done.
+        if let Some(token) = minted.share_token.as_deref() {
+            crate::shares::insights::spawn_apply(app, account_id, token, switches);
+        }
+        let copied = copy_link_to_clipboard(app, minted.share_url.as_deref());
+        if choices.open_link {
+            open_link_in_browser(app, minted.share_url.as_deref());
+        }
+        send_preview_once_read(app, account_id, minted.share_token.as_deref(), preview, &file_name).await;
+        copied
+    };
+    if let Some(id) = card_id {
+        let link = minted_link_state(&minted, copied, copied_early.is_some());
+        announce_minted(app, &state.capture, id, &minted, link);
+    }
+    LinkFirst { minted, copied }
+}
+
+/// Wait for a capture's chat preview to be read (`preview`), then send it
+/// for `share_token` in the background. Awaited before the file can move
+/// into the drive, since the picture is read from it; it was read while
+/// the link was made, so this is almost always over already. With no link
+/// the picture is still waited for, and nothing is sent.
+async fn send_preview_once_read(app: &AppHandle, account_id: &str, share_token: Option<&str>, preview: Option<PreviewRead>, file_name: &str) {
+    let rendered = match preview {
+        Some(read) => read.await.ok().flatten(),
+        None => None,
+    };
+    let (Some(token), Some(jpeg)) = (share_token, rendered) else {
+        return;
+    };
+    let (app, account_id, token, file_name) = (app.clone(), account_id.to_string(), token.to_string(), file_name.to_string());
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        crate::shares::preview::send_rendered(&state, &account_id, &token, Some(jpeg), &file_name).await;
+    });
+}
+
+/// The link's upload, told to card `id` as it goes: preparing, how far the
+/// upload is with roughly how long is left, finishing. One card update per
+/// step the card shows ([`super::preview::link_progress_moved`]), so a long
+/// recording does not send the card a message per chunk. Cheap and
+/// panic-free, as hcfs-client asks of a progress callback: it can run on
+/// the blocking thread that encrypts.
+fn card_link_progress(app: &AppHandle, id: u64) -> hcfs_client::client::share::ShareProgressFn {
+    use hcfs_client::client::share::{SharePhase, ShareProgress};
+
+    struct Track {
+        upload_started: Option<std::time::Instant>,
+        shown: Option<LinkProgress>,
+    }
+    let track = Mutex::new(Track {
+        upload_started: None,
+        shown: None,
+    });
+    let app = app.clone();
+    std::sync::Arc::new(move |p: ShareProgress| {
+        let next = {
+            let mut t = lock(&track);
+            let next = match p.phase {
+                SharePhase::Encrypting => LinkProgress::Preparing,
+                SharePhase::Uploading => {
+                    let started = *t.upload_started.get_or_insert_with(std::time::Instant::now);
+                    LinkProgress::Uploading {
+                        percent: super::preview::percent_of(p.bytes_done, p.bytes_total),
+                        seconds_left: super::preview::upload_seconds_left(p.bytes_done, p.bytes_total, started.elapsed()),
+                    }
+                }
+                SharePhase::Finalizing => LinkProgress::Finishing,
+            };
+            if !super::preview::link_progress_moved(t.shown, next) {
+                return;
+            }
+            t.shown = Some(next);
+            next
+        };
+        let state = app.state::<AppState>();
+        update_card(&app, &state.capture, id, |card| {
+            if card.link.is_being_made() {
+                card.link_progress = Some(next);
+            }
+        });
+    })
+}
+
+/// What the card says about a link that was just made, or could not be.
+fn link_state_for(share_url: Option<&String>, link_error: Option<&String>) -> LinkState {
+    match (share_url, link_error) {
+        (Some(_), _) => LinkState::Public { copied: false },
+        (None, Some(message)) => LinkState::Failed { message: message.clone() },
+        (None, None) => LinkState::None,
+    }
+}
+
+/// The link exists and is out while its upload runs: the card keeps it
+/// (Copy link works), says it was copied, and goes on following the upload.
+fn announce_uploading(app: &AppHandle, state: &CaptureState, id: u64, link: &super::deliver::EarlyLink, copied: bool) {
+    update_card(app, state, id, |card| {
+        card.share_url = Some(link.share_url.clone());
+        card.share_token = Some(link.share_token.clone());
+        card.link = LinkState::Uploading { copied };
+    });
+}
+
+/// What the card says about a capture's link once its upload is over:
+/// `copied`, it reached the clipboard; `handed_out`, it was out before the
+/// upload ended, so a failure means the link already out won't open.
+fn minted_link_state(minted: &super::deliver::Minted, copied: bool, handed_out: bool) -> LinkState {
+    match link_state_for(minted.share_url.as_ref(), minted.link_error.as_ref()) {
+        LinkState::Public { .. } => LinkState::Public { copied },
+        LinkState::Failed { message } if handed_out => LinkState::Broken { message },
+        other => other,
+    }
+}
+
+/// The link is made (or not), before the file is in the drive: the card
+/// says so at once (`link`, from [`minted_link_state`]) and keeps the link,
+/// whatever the drive's upload does next. [`announce_link`] says it again
+/// once the file is placed.
+fn announce_minted(app: &AppHandle, state: &CaptureState, id: u64, minted: &super::deliver::Minted, link: LinkState) {
+    update_card(app, state, id, |card| {
+        card.share_url.clone_from(&minted.share_url);
+        card.share_token.clone_from(&minted.share_token);
+        card.link = link;
+        let (copied, link_error) = card.link_fields();
+        card.status = with_link_fields(&card.status, copied, link_error);
+    });
 }
 
 /// After a capture's link is out: send its chat preview, if one was being
@@ -4616,6 +4880,29 @@ fn spawn_preview_then_cleanup(
     });
 }
 
+/// Card `id`'s link is public and its capture is about to be uploaded
+/// directly into the drive: the card is finished by its link
+/// ([`super::preview::finished_by_link_while_direct`]), says it is uploaded
+/// with the link copied and closes on its usual countdown, while the drive
+/// copy goes on in the upload list. Closing it keeps the temp file that
+/// upload reads (`drive_copy_pending`); a failure of that upload still
+/// fails the card, or with the card gone keeps the capture for Retry and
+/// notifies ([`announce_failed`]). Any other card follows the upload.
+/// Returns whether the card was finished.
+fn finish_card_by_link_while_direct(app: &AppHandle, state: &CaptureState, id: u64) -> bool {
+    let mut finished = false;
+    update_card(app, state, id, |card| {
+        if let Some(done) = super::preview::finished_by_link_while_direct(card) {
+            *card = done;
+            finished = true;
+        }
+    });
+    if finished {
+        tracing::info!(card = id, "capture card finished by its link: the drive copy goes on in the upload list");
+    }
+    finished
+}
+
 /// A capture that could not be delivered: its card says why (when one is
 /// still on screen), its marker keeps it for Retry card or no card, and a
 /// notification says it was kept.
@@ -4637,6 +4924,7 @@ fn announce_failed(
                 reason: super::deliver::failure_reason(e),
                 retryable: path.exists(),
             };
+            card.drive_copy_pending = false;
         })
     });
     if path.exists()
@@ -4731,13 +5019,9 @@ enum Delivery {
     Placed {
         account_id: String,
         destination: CaptureDestination,
-        mint_link: bool,
-        open_link: bool,
-        /// Send a chat preview with the link (`CaptureOptions::chat_preview`).
-        chat_preview: bool,
-        /// Turn on the link's Insights, Comments and Reactions
-        /// (`CaptureOptions::link_insights`).
-        link_insights: bool,
+        /// The link made before the file was placed; `None` when copying
+        /// links is off (`CaptureOptions::copy_link`).
+        link: Option<LinkFirst>,
         placed: super::deliver::Placed,
     },
     /// No captures drive yet: keep it on this computer.
@@ -4931,30 +5215,22 @@ pub(super) fn copy_link_to_clipboard(app: &AppHandle, url: Option<&str>) -> bool
 /// `syncing` and its card follows the engine from now on (the upload may
 /// well finish before the link does); a direct upload is already on the
 /// server. The link, when one is wanted, shows as being made.
-fn announce_placed(
-    app: &AppHandle,
-    card_id: Option<u64>,
-    destination: &CaptureDestination,
-    placed: &super::deliver::Placed,
-    mint_link: bool,
-    started_ms: i64,
-) {
+fn announce_placed(app: &AppHandle, card_id: Option<u64>, destination: &CaptureDestination, placed: &super::deliver::Placed, started_ms: i64) {
     let Some(id) = card_id else { return };
     let state = app.state::<AppState>();
     let rel_path = destination.rel_path(&placed.file_name);
     update_card(app, &state.capture, id, |card| {
+        let (link_copied, link_error) = card.link_fields();
         card.status = if placed.via_sync {
-            PreviewStatus::Syncing {
-                link_copied: false,
-                link_error: None,
-            }
+            PreviewStatus::Syncing { link_copied, link_error }
         } else {
-            PreviewStatus::Uploaded {
-                link_copied: false,
-                link_error: None,
-            }
+            PreviewStatus::Uploaded { link_copied, link_error }
         };
-        card.link = if mint_link { LinkState::Creating } else { LinkState::None };
+        // A card its link finished has its drive copy now: closing it may
+        // give up the temp copy again.
+        card.drive_copy_pending = false;
+        // The link was made before the file was placed (`link_first`): the
+        // card keeps what it already says about it.
         card.placed_path = Some(placed.placed.clone());
         // A capture moved into a synced folder may have been renamed
         // ("Shot (2).png"); the card follows that name.
@@ -4969,17 +5245,21 @@ fn announce_placed(
 /// The link is made (or not): the card says which, keeping whatever the
 /// upload reached meanwhile. Returns whether a card window is there to show it.
 fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &super::deliver::Delivered, copied: bool, keep: bool) -> bool {
-    let link = match (&delivered.share_url, &delivered.link_error) {
-        (Some(_), _) => LinkState::Public { copied },
-        (None, Some(message)) => LinkState::Failed { message: message.clone() },
-        (None, None) => LinkState::None,
+    let link = match link_state_for(delivered.share_url.as_ref(), delivered.link_error.as_ref()) {
+        LinkState::Public { .. } => LinkState::Public { copied },
+        other => other,
     };
     let placed = (delivered.via_sync || keep).then(|| delivered.placed.clone());
     update_card(app, state, id, |card| {
         card.status = with_link_fields(&card.status, copied, delivered.link_error.clone());
         card.share_url.clone_from(&delivered.share_url);
         card.share_token.clone_from(&delivered.share_token);
-        card.link = link;
+        // A copied link whose upload failed goes on saying so: "No link yet"
+        // would hide that the link already in someone's chat won't open.
+        let still_broken = delivered.share_url.is_none() && matches!(card.link, LinkState::Broken { .. });
+        if !still_broken {
+            card.link = link;
+        }
         card.placed_path = placed;
     })
 }
@@ -4989,10 +5269,11 @@ fn announce_link(app: &AppHandle, state: &CaptureState, id: u64, delivered: &sup
 /// the drive and its path in it, never by its name alone, and the engine is
 /// asked everywhere it answers (`sync_facts`): the live row, the finished
 /// list (a small file finishes in seconds and leaves the session) and the
-/// set of files it knows are on the server. A card with a public link whose
-/// file the engine has not started on (queued behind other files, or not
-/// picked up) is finished by its link ([`super::preview::link_finishes_card`]):
-/// the capture waits for its own upload, never for the rest of the sync.
+/// set of files it knows are on the server. A card with a public link is
+/// finished by its link unless the drive copy already failed
+/// ([`super::preview::link_finishes_card`]): the capture waits for its own
+/// upload, never for the rest of the sync, and the drive copy goes on in the
+/// sync queue. The follower stops once the card is uploaded.
 fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, since_ms: i64) {
     tauri::async_runtime::spawn(async move {
         let started = tokio::time::Instant::now();
@@ -5015,11 +5296,11 @@ fn spawn_sync_follow(app: AppHandle, id: u64, label: String, rel_path: String, s
                 break;
             }
             let mut row = sync_facts(&state.sync, &label, &rel_path, since_ms).row();
-            if super::preview::link_finishes_card(&card, &row) {
+            if super::preview::link_finishes_card(&card, super::preview::DriveCopy::Synced(&row)) {
                 tracing::info!(
                     card = id,
                     ?row,
-                    "capture card finished by its link: the sync engine has not started on it"
+                    "capture card finished by its link: the drive copy goes on in the sync queue"
                 );
                 row = super::preview::SyncRow::Completed;
             }
@@ -5520,6 +5801,9 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         link: LinkState::None,
         link_text: None,
         link_note: None,
+        link_info: None,
+        link_progress: None,
+        link_percent: None,
         actions: super::preview::CardActions::default(),
         settled: false,
         share_url: None,
@@ -5530,6 +5814,7 @@ async fn open_preview(app: &AppHandle, kind: CaptureKind, path: &Path, thumbnail
         kept_locally: awaiting_setup,
         stopped_at_free_limit: false,
         notice: None,
+        drive_copy_pending: false,
     }
     .refreshed();
     let replaced = lock(&state.capture.preview).replace(card.clone());
@@ -5918,7 +6203,7 @@ pub async fn capture_preview_mint_link(state: tauri::State<'_, AppState>, app: A
             rel_path: card.rel_path.clone(),
         },
     };
-    match super::deliver::mint(&state, &account_id, &source).await {
+    match super::deliver::mint(&state, &account_id, &source, None).await {
         Ok(link) => {
             super::deliver::remember_origin(&state, &account_id, &source, &card.drive_label, &card.rel_path, &link.share_token).await;
             let copied = app.clipboard().write_text(link.share_url.clone()).is_ok();
@@ -7769,6 +8054,87 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+
+    /// The card's word for a link once its upload is over: a failure after
+    /// the link was out says the copied link won't open, one before it was
+    /// out says no link yet, and a link that made it says whether it was
+    /// copied.
+    #[test]
+    fn a_link_that_failed_after_it_was_out_reads_as_broken() {
+        let made = super::super::deliver::Minted {
+            share_url: Some("https://h/share/t#s=x".into()),
+            share_token: Some("t".into()),
+            link_error: None,
+        };
+        assert_eq!(minted_link_state(&made, true, true), LinkState::Public { copied: true });
+        assert_eq!(minted_link_state(&made, false, false), LinkState::Public { copied: false });
+        let failed = super::super::deliver::Minted {
+            link_error: Some(super::super::deliver::LINK_BROKEN.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            minted_link_state(&failed, false, true),
+            LinkState::Broken {
+                message: super::super::deliver::LINK_BROKEN.into()
+            }
+        );
+        let never = super::super::deliver::Minted {
+            link_error: Some("No link".into()),
+            ..Default::default()
+        };
+        assert_eq!(minted_link_state(&never, false, false), LinkState::Failed { message: "No link".into() });
+        assert_eq!(
+            minted_link_state(&super::super::deliver::Minted::default(), false, false),
+            LinkState::None
+        );
+    }
+
+    /// A card its public link finished while the capture is still being
+    /// uploaded directly into the drive closes (on its countdown, Show in
+    /// folder, a new capture) without removing the file that upload reads,
+    /// so a failure there is kept for Retry. Once the drive copy landed the
+    /// temp copy goes with the card as before, and a failed one is parked.
+    #[test]
+    fn closing_a_card_its_link_finished_keeps_the_file_its_drive_copy_reads() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let _home = crate::test_helpers::set_test_home(tmp.path());
+        let dir = super::super::screenshot::capture_tmp_root().unwrap().join("capture-direct");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Recording 2026-11-27 at 06.15.00.mp4");
+        std::fs::write(&file, b"mp4").unwrap();
+
+        let kept =
+            super::super::kept_failed::KeptFailed::in_flight("a", CaptureKind::Recording, CaptureDestination::own("Work", "Work"), false, None);
+        let mut card = super::super::kept_failed::card(1, &file, kept, true).unwrap();
+        card.status = PreviewStatus::Uploading;
+        card.link = LinkState::Public { copied: true };
+        card.share_url = Some("https://console.example/share/t#s=x".into());
+        card.share_token = Some("t".into());
+        let card = card.refreshed();
+        let finished = super::super::preview::finished_by_link_while_direct(&card).expect("finished by its link");
+        assert!(finished.settled);
+
+        let state = CaptureState::default();
+        settle_closed_card(&state, finished.clone());
+        assert!(file.exists(), "the drive copy is still reading it");
+        assert!(lock(&state.parked).is_none(), "nothing failed yet");
+
+        let mut failed = finished.clone();
+        failed.status = PreviewStatus::Failed {
+            message: "offline".into(),
+            reason: super::super::preview::FailureReason::Offline,
+            retryable: true,
+        };
+        failed.drive_copy_pending = false;
+        settle_closed_card(&state, failed.refreshed());
+        assert!(file.exists());
+        assert!(lock(&state.parked).is_some(), "a failed drive copy comes back with Retry");
+
+        let mut landed = finished;
+        landed.drive_copy_pending = false;
+        settle_closed_card(&state, landed.refreshed());
+        assert!(!dir.exists(), "once the drive has it, the temp copy goes with the card");
+    }
 
     /// `hippius --capture` / `--record` that start the app run once the
     /// signed-in app is up, unless that took so long it would surprise.

@@ -14,6 +14,8 @@ export interface RemoteUploadProgress {
   /** `cancelled` removes the row: a cancelled move between drives moved nothing. */
   status: "pending" | "encrypting" | "inProgress" | "completed" | "error" | "cancelled";
   error?: string | null;
+  /** Rust's word for the row ("Backing up to Drive" for a capture's drive copy); absent for a plain upload. */
+  note?: string | null;
 }
 
 /**
@@ -122,6 +124,7 @@ function toFileProgress(row: RemoteUploadProgress): FileProgress {
     bytesTransferred: sent,
     totalBytes: total,
     ...(row.error ? { error: row.error } : {}),
+    ...(row.note ? { note: row.note } : {}),
   };
 }
 

@@ -624,7 +624,7 @@ pub struct PreferenceUpdate {
 /// schema because the rows are per-account and the account set isn't known at
 /// schema-init time — the commands below seed them for the session account on
 /// demand.
-const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
+pub(crate) const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
     (
         "credits",
         "Credits",
@@ -636,6 +636,11 @@ const DEFAULT_PREFERENCES: &[(&str, &str, &str)] = &[
         "Notifications for file operations including sync completion and failures",
     ),
     ("chat", "Chat", "Desktop notifications for new team chat messages and mentions"),
+    (
+        "link_activity",
+        "Link activity",
+        "Desktop notifications when your shared links get new views",
+    ),
 ];
 
 /// Seed the default preference rows for `owner` if absent.

@@ -3,7 +3,15 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import "@testing-library/jest-dom";
 import { toast } from "sonner";
 
-import RecipientLinks, { allLinksText, COPY_ALL, mergePeople, UNNAMED_LINK } from "../RecipientLinks";
+import RecipientLinks, {
+  allLinksText,
+  COPY_ALL,
+  mergePeople,
+  NDA_PENDING_NOTE,
+  RECIPIENTS_LOCKED_PROMPT,
+  RECIPIENTS_UPGRADE_LABEL,
+  UNNAMED_LINK,
+} from "../RecipientLinks";
 import type { RecipientLinks as View, RecipientPerson } from "@/app/lib/tauri/shareRecipients";
 
 const invokeMock = vi.fn();
@@ -12,12 +20,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: (...args: unknown[]) => invokeM
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: (...args: unknown[]) => openUrlMock(...args) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-const ALICE: RecipientPerson = { shareToken: "a", name: "Alice", url: "https://c/share/a#s=AA", mailto: null };
+const ALICE: RecipientPerson = { shareToken: "a", name: "Alice", url: "https://c/share/a#s=AA", mailto: null, ndaPending: false };
 const BOB: RecipientPerson = {
   shareToken: "b",
   name: "bob@example.com",
   url: "https://c/share/b#s=BB",
   mailto: "mailto:bob@example.com?subject=f&body=x",
+  ndaPending: false,
 };
 
 function answer(replies: Record<string, (args: Record<string, unknown>) => unknown>) {
@@ -32,7 +41,7 @@ function answer(replies: Record<string, (args: Record<string, unknown>) => unkno
   });
 }
 
-const view = (v: Partial<View>): View => ({ offered: true, canAdd: true, people: [], ...v });
+const view = (v: Partial<View>): View => ({ offered: true, canAdd: true, people: [], inPlan: true, ...v });
 
 describe("RecipientLinks", () => {
   beforeEach(() => {
@@ -74,6 +83,32 @@ describe("RecipientLinks", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("A file can have up to 100 links.");
   });
 
+  it("shows the upgrade card in place of the box on the free plan, and keeps the links already made", async () => {
+    answer({ share_recipient_links: () => view({ inPlan: false, people: [ALICE] }) });
+    const onUpgrade = vi.fn();
+    render(<RecipientLinks shareToken="tok" onUpgrade={onUpgrade} />);
+    const card = await screen.findByRole("region", { name: RECIPIENTS_UPGRADE_LABEL });
+    expect(card).toHaveTextContent(RECIPIENTS_LOCKED_PROMPT);
+    expect(screen.queryByRole("textbox", { name: "Names or emails" })).toBeNull();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+    fireEvent.click(within(card).getByRole("button"));
+    expect(onUpgrade).toHaveBeenCalled();
+  });
+
+  it("turns a refusal for the plan into the upgrade card, not an error line", async () => {
+    answer({
+      share_recipient_links: () => view({ inPlan: null }),
+      share_add_recipient_links: () => {
+        throw { kind: "Validation", message: "Links per person are available on paid Drive plans." };
+      },
+    });
+    render(<RecipientLinks shareToken="tok" onUpgrade={vi.fn()} />);
+    fireEvent.change(await screen.findByRole("textbox", { name: "Names or emails" }), { target: { value: "Alice" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByRole("region", { name: RECIPIENTS_UPGRADE_LABEL })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("copies one link, opens an email in the mail app, and copies them all", async () => {
     answer({ share_recipient_links: () => view({ people: [ALICE, BOB] }) });
     render(<RecipientLinks shareToken="tok" />);
@@ -108,10 +143,60 @@ describe("RecipientLinks", () => {
   });
 
   it("names a link that can't be opened here, and offers no copy without its link", async () => {
-    answer({ share_recipient_links: () => view({ people: [{ shareToken: "x", name: null, url: null, mailto: null }] }) });
+    answer({ share_recipient_links: () => view({ people: [{ shareToken: "x", name: null, url: null, mailto: null, ndaPending: false }] }) });
     render(<RecipientLinks shareToken="tok" />);
     expect(await screen.findByText(UNNAMED_LINK)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Copy link/ })).toBeNull();
+  });
+
+  it("shows a link still waiting for its NDA with Try again instead of its link", async () => {
+    const locked = { ...BOB, ndaPending: true };
+    answer({ share_recipient_links: () => view({ people: [ALICE, locked] }), share_retry_recipient_nda: () => undefined });
+    render(<RecipientLinks shareToken="tok" />);
+    const row = (await screen.findByText(NDA_PENDING_NOTE)).closest("li")!;
+    expect(within(row).queryByRole("button", { name: /Copy link/ })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /Email link/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: COPY_ALL }));
+    await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenLastCalledWith(`Alice: ${ALICE.url}`));
+
+    fireEvent.click(within(row).getByRole("button", { name: "Try again" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_retry_recipient_nda", { shareToken: "tok", recipientToken: "b" }),
+    );
+    await waitFor(() => expect(screen.queryByText(NDA_PENDING_NOTE)).toBeNull());
+    expect(screen.getByRole("button", { name: "Copy link for bob@example.com" })).toBeInTheDocument();
+    expect(toast.success).toHaveBeenCalledWith("NDA added to the link for bob@example.com");
+  });
+
+  it("keeps the link waiting and says why when Try again fails", async () => {
+    answer({
+      share_recipient_links: () => view({ people: [{ ...ALICE, ndaPending: true }] }),
+      share_retry_recipient_nda: () => {
+        throw { kind: "Validation", message: "This file's NDA text couldn't be found." };
+      },
+    });
+    render(<RecipientLinks shareToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(screen.getByText(NDA_PENDING_NOTE)).toBeInTheDocument();
+  });
+
+  it("marks a just-made link whose NDA could not be added, with Rust's sentence", async () => {
+    answer({
+      share_recipient_links: () => view({}),
+      share_add_recipient_links: () => ({
+        people: [{ ...ALICE, ndaPending: true }],
+        left: "Carol",
+        error: "The new link was made, but its NDA couldn't be added, so it won't open yet. Try again.",
+      }),
+    });
+    render(<RecipientLinks shareToken="tok" />);
+    const box = await screen.findByRole("textbox", { name: "Names or emails" });
+    fireEvent.change(box, { target: { value: "Alice, Carol" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    expect(await screen.findByText(NDA_PENDING_NOTE)).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("its NDA couldn't be added");
+    expect(box).toHaveValue("Carol");
   });
 });
 
@@ -120,6 +205,14 @@ describe("recipient link helpers", () => {
     expect(allLinksText([ALICE, { ...BOB, url: null }, { ...ALICE, shareToken: "c", name: null }])).toBe(
       `Alice: ${ALICE.url}\n${UNNAMED_LINK}: ${ALICE.url}`,
     );
+  });
+
+  it("leaves out a link that won't open until its NDA is added", () => {
+    expect(allLinksText([ALICE, { ...BOB, ndaPending: true }])).toBe(`Alice: ${ALICE.url}`);
+  });
+
+  it("keeps a just-made link waiting for its NDA when the listing does not know yet", () => {
+    expect(mergePeople([ALICE], [{ ...ALICE, ndaPending: true }])[0].ndaPending).toBe(true);
   });
 
   it("keeps a just-made link's URL when the listing has not caught up", () => {

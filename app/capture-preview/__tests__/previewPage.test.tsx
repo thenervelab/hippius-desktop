@@ -504,6 +504,39 @@ describe("the preview card", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Work › Captures");
   });
 
+  // A recording's link uploads its own copy; the card shows that upload
+  // only, with an info icon saying why, and the backup to Drive that follows
+  // is in the upload list, never a second run on the card.
+  it("explains the link's own upload with an info icon, and drops it once the link is ready", async () => {
+    const info = "Your link has its own encrypted copy. A backup also goes to your Drive, so the recording shows in Captures.";
+    await setup(
+      card({ state: "uploading" }, 1, { copyLink: true }, {
+        kind: "recording",
+        link: { state: "uploading", copied: true },
+        linkText: "Link copied, uploading 42%",
+        linkPercent: 42,
+        linkInfo: info,
+      }),
+    );
+    expect(screen.getByText("Link copied, uploading 42%")).toBeInTheDocument();
+    const icon = screen.getByRole("button", { name: "About this upload" });
+    expect(icon).not.toHaveAttribute("title");
+    await pointAt(icon);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(info);
+    await pointAt(null);
+    // Keyboard focus shows the same words.
+    icon.focus();
+    fireEvent.focus(icon);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(info);
+
+    // The link is ready: Rust finishes the card (direct or synced), which
+    // says the link was copied and shows no second upload.
+    await act(() => tauri.emitEvent("capture_preview_changed", linked({ state: "uploaded", linkCopied: true }, 1)));
+    expect(screen.getAllByText("Uploaded · Public link copied")[0]).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "About this upload" })).toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
   it("keeps a long failure to one line, with the whole of it in the tooltip", async () => {
     const message = "The upload could not reach the server after several tries. It is kept, and Retry sends it again.";
     await setup(card(failed(message), 1, { retry: true, discard: true }));
@@ -595,6 +628,24 @@ describe("the card's actions (Rust decides which)", () => {
       await Promise.resolve();
     });
     expect(called("capture_preview_mint_link")).toBe(1);
+  });
+
+  it("offers Retry in Create link's place when the copied link's upload failed", async () => {
+    await setup(
+      card({ state: "uploaded", linkCopied: false }, 1, { mintLink: true }, {
+        link: { state: "broken", message: "The link you copied won't open because its upload failed. Retry to make a new link." },
+        linkText: "Copied link won't open",
+        linkNote: "Its upload failed. Retry to make a new link.",
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Create link" })).toBeNull();
+    expect(screen.getByText("Its upload failed. Retry to make a new link.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(called("capture_preview_mint_link")).toBe(1);
+    expect(called("capture_preview_retry")).toBe(0);
   });
 
   it("reveals the file in the system's file manager from the More menu", async () => {
@@ -857,6 +908,19 @@ describe("a recording stopped at the Free plan's limit", () => {
       expect(buttons.filter((b) => b.classList.contains("flex-1")).length, `state ${i}`).toBe(1);
       view.unmount();
     }
+  });
+
+  // Quitting while a copied link still uploads leaves a link that never
+  // opens, so that note takes the line until the upload is done.
+  it("lets a copied link's upload note take the line while it uploads", async () => {
+    await setup({
+      ...capped({ state: "uploading" }),
+      link: { state: "uploading", copied: true },
+      linkText: "Link copied, uploading 40%, about 30 s left",
+      linkNote: "Keep Hippius open until the upload finishes.",
+    });
+    expect(screen.queryByTestId("capture-notice")).toBeNull();
+    expect(screen.getByTestId("capture-link-note")).toHaveTextContent("Keep Hippius open until the upload finishes.");
   });
 
   it("shows the drive as before for any other card", async () => {

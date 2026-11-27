@@ -7,6 +7,11 @@ import { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { deleteShareLinksNote } from "./deleteShareLinksNote";
 import TurnOffLinksOption from "./TurnOffLinksOption";
 import { useCaptureLinkTokens } from "./useCaptureInsightsItem";
+import {
+  DELETE_FOREVER_BUTTON,
+  DELETE_FOREVER_TITLE,
+  deleteForeverText,
+} from "@/app/lib/trash/copy";
 
 interface DeleteConfirmationDialogProps {
   open: boolean;
@@ -18,6 +23,11 @@ interface DeleteConfirmationDialogProps {
    */
   onConfirm: (filesToDelete: FormattedUserFile[], turnOffLinks?: string[][]) => void;
   isLoading?: boolean;
+  /**
+   * `forever`: the server keeps a Trash, so this is the delete that skips
+   * it, and says so. Absent: today's words, unchanged.
+   */
+  forever?: boolean;
 }
 
 /**
@@ -35,6 +45,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
   onOpenChange,
   onConfirm,
   isLoading = false,
+  forever = false,
 }) => {
   const { selectedFiles, clearSelection } = useFileSelection();
   // A capture's links, found the way its Insights find them.
@@ -63,10 +74,13 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
 
   const fileCount = selectedFiles.length;
   const isMultiple = fileCount > 1;
-  const heading = isMultiple ? "Delete Files" : "Delete File";
+  const heading = forever ? DELETE_FOREVER_TITLE : isMultiple ? "Delete Files" : "Delete File";
   const confirmLabel = isLoading
     ? "Deleting..."
-    : `Delete ${isMultiple ? "Files" : "File"}`;
+    : forever
+      ? DELETE_FOREVER_BUTTON
+      : `Delete ${isMultiple ? "Files" : "File"}`;
+  const names = selectedFiles.map((f) => (f.actualFileName || f.name).split("/").pop() || f.name);
 
   return (
     <ConfirmationDialog
@@ -76,11 +90,15 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
       onConfirm={handleConfirm}
       heading={heading}
       text={
-        <>
-          Are you sure you want to delete{" "}
-          {isMultiple ? `these ${fileCount} files` : "this file"}? This action
-          cannot be undone.
-        </>
+        forever ? (
+          deleteForeverText(names)
+        ) : (
+          <>
+            Are you sure you want to delete{" "}
+            {isMultiple ? `these ${fileCount} files` : "this file"}? This action
+            cannot be undone.
+          </>
+        )
       }
       // The box says what happens to the links when there are any to find.
       helperText={linkCount > 0 ? undefined : deleteShareLinksNote(selectedFiles)}
@@ -94,7 +112,7 @@ const DeleteConfirmationDialog: React.FC<DeleteConfirmationDialogProps> = ({
       {selectedFiles.length > 0 && (
         <div className="mb-6 max-h-32 overflow-y-auto rounded-md border border-grey-80 bg-grey-95/40 px-3 py-2 dark:border-[#2c2c2c] dark:bg-[#1f1f1f]/60">
           <div className="mb-1.5 text-xs font-medium text-grey-50 dark:text-grey-dark-600">
-            Files to delete:
+            {forever ? "Deleting:" : "Files to delete:"}
           </div>
           <ul className="space-y-1 text-sm">
             {selectedFiles.slice(0, 5).map((file, index) => (

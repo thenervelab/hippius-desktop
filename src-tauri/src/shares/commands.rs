@@ -752,6 +752,27 @@ pub(crate) async fn share_external_file(
     choice: ShareChoice,
     progress: Option<ShareProgressFn>,
 ) -> Result<ShareLink> {
+    share_external_file_reporting_link(state, account_id, abs_path, ttl, choice, progress, None).await
+}
+
+/// [`share_external_file`], also handing the link to `on_link` the moment it
+/// exists: right after the server opens a chunked share, before its chunks
+/// go up (hcfs-client's `create_share_reporting_link`). A capture's link is
+/// copied from there while its file is still uploading.
+///
+/// Until the upload completes the link does not open, and if it then fails
+/// hcfs-client revokes the share and forgets its secret: the call returns
+/// the error and the link reported through `on_link` never works.
+#[cfg(any(unix, windows))]
+pub(crate) async fn share_external_file_reporting_link(
+    state: &AppState,
+    account_id: &str,
+    abs_path: &Path,
+    ttl: ShareTtl,
+    choice: ShareChoice,
+    progress: Option<ShareProgressFn>,
+    on_link: Option<hcfs_client::client::share::ShareLinkFn>,
+) -> Result<ShareLink> {
     require_shares_supported(state, account_id).await?;
 
     let pool = state.pool()?;
@@ -780,7 +801,7 @@ pub(crate) async fn share_external_file(
     let keystore = SqliteShareKeystore::new(pool.clone());
     let console_base = console_base_url();
     let result = client
-        .create_share(
+        .create_share_reporting_link(
             &mut reader,
             plaintext_size,
             &ShareOptions {
@@ -792,6 +813,7 @@ pub(crate) async fn share_external_file(
             },
             &keystore,
             progress,
+            on_link,
         )
         .await
         .map_err(|e| {
@@ -1151,7 +1173,9 @@ pub async fn create_folder_share_inner(
     // for a member drive reads the owner's seal or this account's grant: never
     // a key derived from this account's own master.
     if identity.is_member {
-        return create_member_folder_share(state, account_id, folder_label, path_prefix, ttl, choice, &identity).await;
+        let link = create_member_folder_share(state, account_id, folder_label, path_prefix, ttl, choice, &identity).await?;
+        super::folder_insights::apply_new_link_default(state, account_id, &link.share_token).await;
+        return Ok(link);
     }
 
     info!(label = %folder_label, path_prefix = %path_prefix, "Creating folder share");
@@ -1199,6 +1223,7 @@ pub async fn create_folder_share_inner(
     if let Ok(Some(secret)) = keystore.get(&result.share_token) {
         super::owner_wrap::push_folder_for_account(state, account_id, &[(result.share_token.clone(), secret)]).await;
     }
+    super::folder_insights::apply_new_link_default(state, account_id, &result.share_token).await;
 
     Ok(ShareLink {
         share_token: result.share_token,
@@ -1675,7 +1700,7 @@ pub(crate) fn mint_path_for_prefix(folder_label: &str, path_prefix: &str) -> Res
 /// Index the keystore's stored tokens by their blake3 hex — the join key
 /// the folder-share listing speaks. File-share tokens share the table and
 /// get hashed too; their hashes simply never appear in the folder listing.
-fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
+pub(super) fn folder_share_secrets_by_hash(keystore: &SqliteShareKeystore) -> Result<HashMap<String, (String, ShareSecret)>> {
     let entries = keystore.all_entries().map_err(|e| AppError::Hcfs(format!("keystore scan: {e}")))?;
     Ok(entries
         .into_iter()
@@ -2677,7 +2702,7 @@ mod tests {
 
         for sig in [
             "async fn create_share_inner(",
-            "async fn share_external_file(",
+            "async fn share_external_file_reporting_link(",
             "async fn mint_remote_share_at(",
         ] {
             let body = fn_body(&src, sig);

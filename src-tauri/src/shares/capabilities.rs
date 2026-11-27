@@ -75,6 +75,15 @@ pub struct ServerCapabilities {
     /// shows for a file link (`shares::preview`). Absent on older servers,
     /// which then get no preview and no request.
     pub share_preview: bool,
+    /// A file link opened while its file is still uploading answers
+    /// "still uploading" (`409 share_uploading` with the chunks received so
+    /// far, hcfs #1454) instead of the bodiless 404 an older server gives,
+    /// and the share page says so. Such a server also takes the link's
+    /// switches and chat preview during the upload. A capture's link is
+    /// handed out (copied, opened, its switches and preview sent) before its
+    /// upload finishes only against such a server
+    /// (`capture::commands::link_first`).
+    pub share_open_while_uploading: bool,
     /// Share link insights (hcfs #670): `GET /v1/shares/{token}/insights`
     /// and `PATCH /v1/shares/{token}/settings`. Absent on older servers,
     /// which then get no switches sent and show no Insights.
@@ -118,6 +127,28 @@ pub struct ServerCapabilities {
     /// file opens. Absent on older servers and on one without a gate key: no
     /// "Ask to accept an NDA" switch and no NDA tab, and nothing is sent.
     pub share_nda: bool,
+    /// Email gates on folder links (`PUT|GET|DELETE
+    /// /v1/folder-shares/by-hash/{token_hash}/gate`, hcfs #1414): the file
+    /// link's gate, addressed by the link's token hash. Tracks `share_gates`.
+    /// Absent on older servers: no "Ask for email" on a folder link.
+    pub folder_share_gates: bool,
+    /// NDA texts on folder links (`PUT|DELETE .../by-hash/{token_hash}/nda`,
+    /// `GET .../nda/accepts`, hcfs #1446), sealed under the link's content
+    /// key. Tracks `share_nda`. Absent on older servers: no NDA on a folder
+    /// link and no NDA tab in its Insights.
+    pub folder_share_nda: bool,
+    /// A file link can end on a chosen date (`expires_at` on the expiry
+    /// `PATCH`, hcfs #1412), not only after a preset. Absent on older
+    /// servers, which refuse the field: only the presets are offered.
+    pub share_expiry_date: bool,
+    /// The watermark is a link setting of its own (`watermark` in
+    /// `PATCH .../settings`, hcfs #1413). Absent on older servers, which
+    /// refuse the key and draw it on a PDF while downloads are off.
+    pub share_watermark_switch: bool,
+    /// An NDA accept carries the signer's typed name, sealed under the link
+    /// key (`name_ct` on `GET .../nda/accepts`, hcfs #1419). Absent on older
+    /// servers, which send no name.
+    pub share_nda_signer_names: bool,
     /// Links per person (`POST /v1/shares/{token}/recipients`, hcfs #1183):
     /// one link for each person over one stored copy, each with its own
     /// name, views and revoke. Absent on older servers and off in production
@@ -144,6 +175,16 @@ pub struct ServerCapabilities {
     /// Absent on older servers and off in production until it is turned
     /// on: Move to… shows no drive picker, and no move is sent.
     pub drive_moves: bool,
+    /// Drive Trash (`/v1/trash/...`, `HCFS_FEATURE_DRIVE_TRASH`). Absent on
+    /// older servers and off in production until it is turned on: Delete
+    /// stays a permanent delete, the Trash page is hidden, and no trash
+    /// request is sent.
+    pub drive_trash: bool,
+    /// Days an item stays in Trash before the server deletes it forever
+    /// (`HCFS_TRASH_RETENTION_DAYS`). Absent on older servers; read through
+    /// [`crate::sync::fileops::trash::wire::retention_days`], which falls
+    /// back to 30.
+    pub trash_retention_days: Option<u32>,
     /// Insights for folder links (`/v1/folder-shares/by-hash/{h}/insights`
     /// and `/settings`). Absent on older servers: no folder link Insights.
     pub folder_share_insights: bool,
@@ -264,6 +305,18 @@ mod tests {
     }
 
     #[test]
+    fn trash_retention_is_read_when_sent() {
+        let caps = parse_capabilities(r#"{"drive_trash":true,"trash_retention_days":14}"#).expect("parse");
+        assert_eq!(caps.trash_retention_days, Some(14));
+        let old = parse_capabilities(r#"{"drive_trash":true}"#).expect("parse");
+        assert_eq!(
+            old.trash_retention_days, None,
+            "a server that names no retention leaves the 30 day default"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // one flat list of every capability, read top to bottom
     fn full_capabilities_shape_round_trips() {
         let caps: ServerCapabilities = serde_json::from_str(concat!(
             r#"{"shares":true,"folder_shares":true,"folder_share_revoke_by_hash":true,"share_owner_wrap":true,"#,
@@ -272,8 +325,10 @@ mod tests {
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
+            r#""folder_share_gates":true,"folder_share_nda":true,"#,
             r#""share_recipient_links":true,"share_group_insights":true,"#,
-            r#""drive_moves":true,"folder_share_insights":true}"#,
+            r#""share_expiry_date":true,"share_watermark_switch":true,"share_nda_signer_names":true,"#,
+            r#""drive_moves":true,"folder_share_insights":true,"drive_trash":true,"share_open_while_uploading":true}"#,
         ))
         .expect("parse");
         assert!(caps.shares);
@@ -285,6 +340,7 @@ mod tests {
         assert!(caps.folder_grant_writes);
         assert!(caps.upload_folder_shares);
         assert!(caps.share_preview);
+        assert!(caps.share_open_while_uploading);
         assert!(caps.share_insights);
         assert!(caps.share_comments);
         assert!(caps.share_notifications);
@@ -296,9 +352,15 @@ mod tests {
         assert!(caps.share_download_switch);
         assert!(caps.share_gates);
         assert!(caps.share_nda);
+        assert!(caps.folder_share_gates);
+        assert!(caps.folder_share_nda);
+        assert!(caps.share_expiry_date);
+        assert!(caps.share_watermark_switch);
+        assert!(caps.share_nda_signer_names);
         assert!(caps.folder_share_link_envelopes);
         assert!(caps.drive_invite_link_envelopes);
         assert!(caps.drive_moves);
+        assert!(caps.drive_trash);
         assert!(caps.folder_share_insights);
 
         // The IPC serializes this struct straight to the FE, which reads the
@@ -311,10 +373,13 @@ mod tests {
             [
                 "drive_invite_link_envelopes",
                 "drive_moves",
+                "drive_trash",
                 "folder_grant_writes",
                 "folder_grants",
+                "folder_share_gates",
                 "folder_share_insights",
                 "folder_share_link_envelopes",
+                "folder_share_nda",
                 "folder_share_revoke_by_hash",
                 "folder_shares",
                 "member_folder_shares",
@@ -323,17 +388,22 @@ mod tests {
                 "share_comments",
                 "share_document_views",
                 "share_download_switch",
+                "share_expiry_date",
                 "share_gates",
                 "share_group_insights",
                 "share_insights",
                 "share_insights_seen",
                 "share_listing_counts",
                 "share_nda",
+                "share_nda_signer_names",
                 "share_notifications",
+                "share_open_while_uploading",
                 "share_preview",
                 "share_reaction_moments",
                 "share_recipient_links",
+                "share_watermark_switch",
                 "shares",
+                "trash_retention_days",
                 "upload_folder_shares"
             ]
             .into_iter()
@@ -349,6 +419,10 @@ mod tests {
         assert!(!old.folder_grant_writes, "writer folder invites stay off until a server says otherwise");
         assert!(!old.upload_folder_shares, "an older server never claims uploaded folder links");
         assert!(!old.share_preview, "a server without the preview routes is never sent one");
+        assert!(
+            !old.share_open_while_uploading,
+            "a server that 404s a link still uploading never has one opened early"
+        );
         assert!(!old.share_insights, "a server without insights is sent no switches");
         assert!(!old.share_comments, "a server without comments shows none");
         assert!(!old.share_notifications, "a server without email preferences shows none");
@@ -361,10 +435,19 @@ mod tests {
         assert!(!old.share_gates, "a server without email gates offers no Ask for email");
         assert!(!old.share_nda, "a server without NDA texts offers no NDA switch or tab");
         assert!(
+            !old.folder_share_gates,
+            "a server without folder gates offers no Ask for email on a folder link"
+        );
+        assert!(!old.folder_share_nda, "a server without folder NDAs offers no NDA on a folder link");
+        assert!(!old.share_expiry_date, "a server without chosen dates offers only the presets");
+        assert!(!old.share_watermark_switch, "a server without the watermark switch is never sent one");
+        assert!(!old.share_nda_signer_names, "a server without signer names sends none");
+        assert!(
             !old.folder_share_link_envelopes,
             "a server without link envelopes keeps every folder mint on #k= / #p="
         );
         assert!(!old.drive_moves, "a server without drive moves shows no drive picker");
+        assert!(!old.drive_trash, "a server without Trash keeps Delete permanent and hides the Trash page");
         assert!(
             !old.drive_invite_link_envelopes,
             "a server without invite link envelopes keeps every invite mint on #k="

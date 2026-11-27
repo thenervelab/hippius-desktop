@@ -2172,7 +2172,23 @@ pub async fn auto_init_sync(
     // FE entry that flows account_id into the secret-using inner; authorize
     // against the session before it reaches the mnemonic/token paths.
     let account_id = state.require_session_account(&account_id)?;
+    // Register (or keep linked) this computer as one of the account's
+    // devices, and check again every minute while it stays signed in. Before
+    // the drive init, which can fail for reasons a device does not care
+    // about; a second call only wakes the running check.
+    crate::devices::registration::start(&app, &account_id);
     let result = auto_init_sync_inner(app.clone(), &state, account_id.clone(), mnemonic).await?;
+    // Signed in and unlocked: abort the moves between drives a crash left
+    // open, so their room comes back now. Once per account per launch, in
+    // the background; it never touches a move that is running.
+    {
+        let app = app.clone();
+        let account_id = account_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let state = tauri::Manager::state::<crate::app_state::AppState>(&app);
+            crate::sync::drive_move::abort_left_behind_moves(&state, &account_id).await;
+        });
+    }
     // Register the configured drive roots with the macOS Finder extension so a
     // right-click inside a synced folder offers "Share via Hippius". Best-effort.
     #[cfg(target_os = "macos")]

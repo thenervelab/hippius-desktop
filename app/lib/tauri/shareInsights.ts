@@ -34,6 +34,13 @@ export interface LinkSettingsDefault {
    * starts with downloads allowed). Turning it off needs a paid plan.
    */
   download?: boolean | null;
+  /**
+   * The watermark, as the link has it, where it is a setting of its own
+   * (`share_watermark_switch`). Absent or `null` otherwise, where the share
+   * page draws it on a PDF while downloads are off. Turning it on needs a
+   * paid plan.
+   */
+  watermark?: boolean | null;
 }
 
 /**
@@ -220,7 +227,7 @@ export function getLinkSettings(shareToken: string): Promise<LinkSettingsDefault
 }
 
 /** A change to a link's switches: only the ones flipped. */
-export type LinkSettingsChange = Partial<LinkSettings> & { download?: boolean };
+export type LinkSettingsChange = Partial<LinkSettings> & { download?: boolean; watermark?: boolean };
 
 /**
  * Flip some of a link's switches. Only the switches in `change` are sent, so
@@ -302,4 +309,32 @@ export const CAPTURE_OPEN_INSIGHTS_EVENT = "capture_open_insights";
 export interface CaptureOpenInsights {
   shareToken: string;
   fileName: string;
+}
+
+/** One visit of one viewer (hcfs #1415). */
+export interface ViewerVisit {
+  startedAt: string;
+  lastSeenAt: string;
+  kind: "video" | "image" | "document" | "other";
+  /** What Insights counts for the visit; `null` where it counts nothing. */
+  timeSpentMs: number | null;
+  /** Distinct pages a document visit saw; `null` otherwise. */
+  pagesSeen: number | null;
+}
+
+/** A page of one viewer's visits, with their totals over every visit. */
+export interface ViewerVisits {
+  viewerId: string;
+  visitsTotal: number;
+  timeSpentMs: number;
+  /** Milliseconds on each page, page 1 first; `null` without document visits. */
+  pageTimeMs: number[] | null;
+  /** Newest first, up to 100. */
+  visits: ViewerVisit[];
+  nextBefore: string | null;
+}
+
+/** One viewer's visits on a file link; `before` is the last page's `nextBefore`. */
+export function getViewerVisits(shareToken: string, viewerId: string, before?: string | null): Promise<ViewerVisits> {
+  return invoke<ViewerVisits>("share_viewer_visits", { shareToken, viewerId, before: before ?? null });
 }

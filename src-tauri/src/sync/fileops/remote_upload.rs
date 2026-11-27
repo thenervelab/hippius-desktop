@@ -72,6 +72,40 @@ pub struct RemoteUploadProgress {
     /// not have to translate.
     pub status: String,
     pub error: Option<String>,
+    /// What this row is, in Rust's words, when it is not a plain upload: a
+    /// capture's copy saved into the drive after its link made its own copy
+    /// ([`UploadBatch::capture_backup`]) says "Backing up to Drive". The
+    /// widget shows it in the size's place. `None` for every other upload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// [`RemoteUploadProgress::note`] while a capture's drive copy is on its way.
+pub const BACKUP_UPLOADING: &str = "Backing up to Drive";
+/// [`RemoteUploadProgress::note`] once a capture's drive copy has landed.
+pub const BACKUP_DONE: &str = "Backed up to Drive";
+/// [`RemoteUploadProgress::note`], and its error, when it failed.
+pub const BACKUP_FAILED: &str = "Couldn't back up to Drive";
+
+/// The row a batch emits: as built, or for a capture's drive copy
+/// (`capture_backup`) worded as a backup, its failure included. The link is
+/// the capture's own copy and is already out, so this upload is the backup
+/// that puts the capture in Captures, not the capture being sent again.
+fn stamped(capture_backup: bool, row: RemoteUploadProgress) -> RemoteUploadProgress {
+    if !capture_backup {
+        return row;
+    }
+    let note = match row.status.as_str() {
+        "completed" => BACKUP_DONE,
+        "error" | "cancelled" => BACKUP_FAILED,
+        _ => BACKUP_UPLOADING,
+    };
+    let error = row.error.is_some().then(|| BACKUP_FAILED.to_string());
+    RemoteUploadProgress {
+        note: Some(note.to_string()),
+        error,
+        ..row
+    }
 }
 
 /// One user-initiated upload, and the handle its rows are emitted on.
@@ -84,6 +118,9 @@ pub struct RemoteUploadProgress {
 pub(crate) struct UploadBatch {
     app: tauri::AppHandle,
     id: u64,
+    /// A capture's drive copy whose link is already out: its rows say
+    /// "Backing up to Drive" ([`stamped`]).
+    capture_backup: bool,
 }
 
 impl UploadBatch {
@@ -92,11 +129,21 @@ impl UploadBatch {
         Self {
             app,
             id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            capture_backup: false,
+        }
+    }
+
+    /// The batch for a capture's copy saved into the drive after its link
+    /// made the capture's own copy: every row is worded as a backup.
+    pub(crate) fn capture_backup(app: tauri::AppHandle) -> Self {
+        Self {
+            capture_backup: true,
+            ..Self::new(app)
         }
     }
 
     pub(crate) fn emit(&self, row: RemoteUploadProgress) {
-        let _ = self.app.emit(REMOTE_UPLOAD_PROGRESS, row);
+        let _ = self.app.emit(REMOTE_UPLOAD_PROGRESS, stamped(self.capture_backup, row));
     }
 
     /// The id every row of this upload carries.
@@ -176,6 +223,7 @@ fn encrypt_to_temp(source: &Path, dest: &Path, key: &FileKey) -> Result<String> 
 fn transfer_progress(
     app: tauri::AppHandle,
     batch_id: u64,
+    capture_backup: bool,
     relative_path: &str,
     file_name: &str,
     label: &str,
@@ -198,20 +246,24 @@ fn transfer_progress(
         }
         let _ = app.emit(
             REMOTE_UPLOAD_PROGRESS,
-            RemoteUploadProgress {
-                batch_id,
-                path: path.clone(),
-                file_name: file_name.clone(),
-                label: label.clone(),
-                bytes_transferred: sent,
-                // hcfs reports the CIPHERTEXT length; the row is measured
-                // in plaintext bytes so it matches the size shown
-                // everywhere else, and a ciphertext slightly larger than
-                // the plaintext cannot push the bar past 100%.
-                total_bytes: total.max(size_bytes),
-                status: "inProgress".into(),
-                error: None,
-            },
+            stamped(
+                capture_backup,
+                RemoteUploadProgress {
+                    batch_id,
+                    path: path.clone(),
+                    file_name: file_name.clone(),
+                    label: label.clone(),
+                    bytes_transferred: sent,
+                    // hcfs reports the CIPHERTEXT length; the row is measured
+                    // in plaintext bytes so it matches the size shown
+                    // everywhere else, and a ciphertext slightly larger than
+                    // the plaintext cannot push the bar past 100%.
+                    total_bytes: total.max(size_bytes),
+                    status: "inProgress".into(),
+                    error: None,
+                    note: None,
+                },
+            ),
         );
     }
 }
@@ -599,6 +651,7 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
                 total_bytes: size_bytes,
                 status: status.to_string(),
                 error,
+                note: None,
             });
         }
     };
@@ -640,7 +693,17 @@ pub(crate) async fn upload_to_remote_folder_with_progress(
 
     // The transfer callback runs on hcfs's thread, so it gets its own
     // owned copies rather than borrowing the closure above.
-    let progress = batch.map(|batch| transfer_progress(batch.app.clone(), batch.id, &relative_path, &file_name, label, size_bytes));
+    let progress = batch.map(|batch| {
+        transfer_progress(
+            batch.app.clone(),
+            batch.id,
+            batch.capture_backup,
+            &relative_path,
+            &file_name,
+            label,
+            size_bytes,
+        )
+    });
 
     let ciphertext_size = std::fs::metadata(&ciphertext_path).map_or(0, |m| m.len());
     // Not `?`: the ciphertext still has to be cleaned up below, whichever
@@ -696,6 +759,7 @@ pub async fn upload_files_to_remote_folder(
         owner_ss58,
         folder_hash,
         None,
+        false,
     )
     .await
 }
@@ -707,7 +771,9 @@ pub async fn upload_files_to_remote_folder(
 ///
 /// `account_id` MUST already be the validated session account. `capture` is
 /// declared on every file in `file_paths`, so only a capture delivery passes
-/// one, with its one file.
+/// one, with its one file. `capture_backup` is that file's copy saved into
+/// the drive after its link made the capture's own copy, and words its rows
+/// as a backup ([`UploadBatch::capture_backup`]).
 #[allow(clippy::too_many_arguments)] // the IPC payload's shape, passed through
 pub(crate) async fn upload_files_to_remote_folder_inner(
     state: &AppState,
@@ -719,6 +785,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
     owner_ss58: Option<String>,
     folder_hash: Option<String>,
     capture: Option<hcfs_shared::network::Capture>,
+    capture_backup: bool,
 ) -> Result<Vec<RemoteUploadFailure>> {
     let account_id = account_id.to_string();
     let label = label.to_string();
@@ -750,7 +817,11 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
     // next file starts. Sizes come from disk here because nothing has
     // been read yet; a file that cannot be stat'd still gets a row, since
     // a missing row is worse than an unknown size.
-    let batch = UploadBatch::new(app);
+    let batch = if capture_backup {
+        UploadBatch::capture_backup(app)
+    } else {
+        UploadBatch::new(app)
+    };
     // ONCE per upload, not per file: deriving it inside the loop meant a key
     // derivation for every file, and for an unsynced shared drive that is an
     // Argon2id grant open apiece.
@@ -772,6 +843,7 @@ pub(crate) async fn upload_files_to_remote_folder_inner(
             total_bytes: std::fs::metadata(source).map_or(0, |m| m.len()),
             status: "pending".into(),
             error: None,
+            note: None,
         });
     }
 
@@ -960,6 +1032,7 @@ pub async fn upload_folder_to_remote_folder(
             total_bytes: item.size,
             status: "pending".into(),
             error: None,
+            note: None,
         });
     }
 
@@ -1004,6 +1077,48 @@ pub struct RemoteUploadFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(status: &str, error: Option<&str>) -> RemoteUploadProgress {
+        RemoteUploadProgress {
+            batch_id: 7,
+            path: "Recording 2026-11-27 at 06.15.00.mp4".into(),
+            file_name: "Recording 2026-11-27 at 06.15.00.mp4".into(),
+            label: "Hippius Captures".into(),
+            bytes_transferred: 24,
+            total_bytes: 100,
+            status: status.into(),
+            error: error.map(str::to_string),
+            note: None,
+        }
+    }
+
+    /// A capture's drive copy, sent after its link made the capture's own
+    /// copy, reads as a backup in the upload list at every step, its failure
+    /// included; every other upload is left exactly as it was built.
+    #[test]
+    fn a_captures_drive_copy_reads_as_a_backup_and_nothing_else_does() {
+        let note = |status: &str| stamped(true, row(status, None)).note;
+        for status in ["pending", "encrypting", "inProgress"] {
+            assert_eq!(note(status).as_deref(), Some(BACKUP_UPLOADING), "{status}");
+        }
+        assert_eq!(note("completed").as_deref(), Some(BACKUP_DONE));
+        let failed = stamped(true, row("error", Some("Network error: error sending request for url (https://x)")));
+        assert_eq!(failed.note.as_deref(), Some(BACKUP_FAILED));
+        assert_eq!(
+            failed.error.as_deref(),
+            Some(BACKUP_FAILED),
+            "the widget's red line says the backup failed"
+        );
+        let sent = stamped(true, row("inProgress", None));
+        assert_eq!((sent.bytes_transferred, sent.total_bytes, sent.status.as_str()), (24, 100, "inProgress"));
+        assert_eq!(sent.error, None);
+
+        let plain = stamped(false, row("inProgress", None));
+        assert_eq!(plain.note, None);
+        let json = serde_json::to_value(&plain).unwrap();
+        assert!(json.get("note").is_none(), "an ordinary row carries no note");
+        assert_eq!(serde_json::to_value(&sent).unwrap()["note"], BACKUP_UPLOADING, "sent as `note`");
+    }
 
     /// The server's recording refusals come back typed, so the capture card
     /// answers them by kind (`capture::deliver::failure_reason`), and the

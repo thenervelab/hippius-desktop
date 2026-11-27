@@ -277,6 +277,9 @@ pub fn card(id: u64, file: &Path, kept: KeptFailed, remote: bool) -> Option<Prev
             link: super::preview::LinkState::None,
             link_text: None,
             link_note: None,
+            link_info: None,
+            link_progress: None,
+            link_percent: None,
             actions: super::preview::CardActions::default(),
             settled: false,
             notice: None,
@@ -289,6 +292,7 @@ pub fn card(id: u64, file: &Path, kept: KeptFailed, remote: bool) -> Option<Prev
             // computer (its Retry too), as it did before the restart.
             kept_locally: kept.awaiting_setup,
             stopped_at_free_limit: kept.stopped_at_free_limit,
+            drive_copy_pending: false,
         }
         .refreshed(),
     )

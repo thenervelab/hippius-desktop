@@ -59,6 +59,8 @@ export interface ServerCapabilities {
   upload_folder_shares?: boolean;
   /** `PUT`/`DELETE /v1/shares/{token}/preview`. Read by Rust only; listed so the type matches the wire. */
   share_preview?: boolean;
+  /** A link opened while its file still uploads says so instead of "not found". Read by Rust only; listed so the type matches the wire. */
+  share_open_while_uploading?: boolean;
   /** A link's Insights and its Insights switch. Absent on older servers. */
   share_insights?: boolean;
   /** Encrypted comments and reactions on links. Absent on older servers. */
@@ -91,6 +93,14 @@ export interface ServerCapabilities {
    * matches the wire.
    */
   share_gates?: boolean;
+  /** NDA texts on file links. Read by Rust only; listed so the type matches the wire. */
+  share_nda?: boolean;
+  /** A file link can end on a chosen date, not only after a preset. */
+  share_expiry_date?: boolean;
+  /** The watermark is its own link setting. Read by Rust only; listed so the type matches the wire. */
+  share_watermark_switch?: boolean;
+  /** NDA accepts carry the signer's sealed name. Read by Rust only; listed so the type matches the wire. */
+  share_nda_signer_names?: boolean;
   /** Links per person. Read by Rust only; listed so the type matches the wire. */
   share_recipient_links?: boolean;
   /** Insights grouped by person. Read by Rust only; listed so the type matches the wire. */
@@ -107,6 +117,13 @@ export interface ServerCapabilities {
   drive_invite_link_envelopes?: boolean;
   /** Moves between drives (`/v1/drive_moves`): Move to… offers a drive picker. */
   drive_moves?: boolean;
+  /**
+   * Drive Trash (`/v1/trash/...`): Delete moves to Trash and the Trash page
+   * shows. Absent or false, Delete stays a permanent delete.
+   */
+  drive_trash?: boolean;
+  /** Days an item stays in Trash before the server deletes it forever; 30 when absent. */
+  trash_retention_days?: number | null;
   /** Insights for folder links: which files were opened, and by whom. */
   folder_share_insights?: boolean;
 }
@@ -644,6 +661,25 @@ export async function updateShareExpiry(
   ttl: ShareTtl,
 ): Promise<string | null> {
   return invoke<string | null>("hcfs_update_share_expiry", { shareToken, ttl });
+}
+
+/** The days the expiry picker offers ("YYYY-MM-DD"), decided by Rust. */
+export interface ExpiryDayRange {
+  min: string;
+  max: string;
+}
+
+export function getExpiryDayRange(): Promise<ExpiryDayRange> {
+  return invoke<ExpiryDayRange>("share_expiry_day_range");
+}
+
+/**
+ * End a file link on a chosen day ("YYYY-MM-DD"): Rust ends it at that
+ * day's last second on this computer and answers the stored end (RFC 3339).
+ * Only on a server with `share_expiry_date`.
+ */
+export function setShareExpiryDate(shareToken: string, day: string): Promise<string> {
+  return invoke<string>("share_set_expiry_date", { shareToken, day });
 }
 
 /**

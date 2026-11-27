@@ -12,6 +12,7 @@
 
 use std::path::Path;
 
+use hcfs_client::client::share::ShareProgressFn;
 use serde::Serialize;
 
 use super::destination::CaptureDestination;
@@ -88,6 +89,21 @@ pub struct Placed {
     pub file_name: String,
 }
 
+/// The destination drive's folder on this machine, where [`place`] moves a
+/// capture for the sync engine to upload; `None` when the capture is
+/// uploaded to the drive directly (a drive that is not synced here, a
+/// paused one, or another account's).
+///
+/// # Errors
+///
+/// When the database cannot be read.
+pub async fn local_root(state: &AppState, account_id: &str, destination: &CaptureDestination) -> Result<Option<std::path::PathBuf>> {
+    if destination.owner_ss58.is_some() {
+        return Ok(None);
+    }
+    super::destination::own_local_path(state.pool()?, account_id, &destination.label).await
+}
+
 /// Put `file` in the destination's capture folder: moved into the drive's
 /// folder on this machine (the sync engine uploads it), or uploaded
 /// directly to a drive that is only on the server.
@@ -101,16 +117,23 @@ pub struct Placed {
 /// A failed upload is an `Err` and leaves `file` where it is: a long recording
 /// must not be lost because the network dropped at the end.
 ///
+/// `backup`: the capture's link already made its own copy on the server, so
+/// a direct upload here is its backup into the drive, and the upload list
+/// says so ("Backing up to Drive") rather than showing a second upload.
+///
 /// # Errors
 ///
 /// Whatever the upload refused with, including `NotReady(StorageLimitReached)`
 /// from the storage gate, which the UI answers with the plans dialog.
-pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, destination: &CaptureDestination, file: &Path) -> Result<Placed> {
-    let local_root = if destination.owner_ss58.is_none() {
-        super::destination::own_local_path(state.pool()?, account_id, &destination.label).await?
-    } else {
-        None
-    };
+pub async fn place(
+    state: &AppState,
+    app: tauri::AppHandle,
+    account_id: &str,
+    destination: &CaptureDestination,
+    file: &Path,
+    backup: bool,
+) -> Result<Placed> {
+    let local_root = local_root(state, account_id, destination).await?;
 
     // Read before the move, while the file is still the one recorded.
     let capture = tokio::task::spawn_blocking({
@@ -159,6 +182,7 @@ pub async fn place(state: &AppState, app: tauri::AppHandle, account_id: &str, de
             destination.owner_ss58.clone(),
             destination.folder_hash.clone(),
             capture,
+            backup,
         )
         .await?;
         if let Some(failure) = failures.into_iter().next() {
@@ -209,39 +233,52 @@ pub struct Minted {
     pub link_error: Option<String>,
 }
 
-/// Mint the public link to a placed capture. A failed LINK is not an error:
-/// the capture is safely in the drive, and the card says the link could not
-/// be made rather than that the capture failed.
-pub async fn link_for(state: &AppState, account_id: &str, destination: &CaptureDestination, placed: &Placed) -> Minted {
-    let source = if placed.via_sync {
-        LinkSource::Synced {
-            label: destination.label.clone(),
-            rel_path: destination.rel_path(&placed.file_name),
-        }
-    } else {
-        LinkSource::External(placed.placed.clone())
-    };
-    match mint(state, account_id, &source).await {
-        Ok(link) => {
-            remember_origin(
-                state,
-                account_id,
-                &source,
-                &destination.label,
-                &destination.rel_path(&placed.file_name),
-                &link.share_token,
-            )
-            .await;
-            Minted {
-                share_url: Some(link.share_url),
-                share_token: Some(link.share_token),
-                link_error: None,
-            }
-        }
+/// Mint the public link to a capture from its own file, BEFORE it is placed
+/// (`commands::deliver_and_announce`): the link's upload then has the
+/// connection to itself, where it used to share it with the drive's upload
+/// of the same file (a synced drive) or wait for that upload to finish (a
+/// drive only on the server). The file it records as the link's origin is
+/// only known once placed, so [`remember_placed_origin`] does that after.
+///
+/// A failed LINK is not an error: the capture is still put in the drive, and
+/// the card says the link could not be made rather than that the capture
+/// failed. `progress` follows the link's upload for the card.
+///
+/// `on_link`, when given, is offered the link the moment it exists, while
+/// the file is still uploading ([`mint_reporting_link`]); this still
+/// returns only once the upload has finished or failed.
+pub async fn link_from_file(state: &AppState, account_id: &str, file: &Path, progress: Option<ShareProgressFn>, on_link: Option<OnLink>) -> Minted {
+    match mint_reporting_link(state, account_id, &LinkSource::External(file.to_path_buf()), progress, on_link).await {
+        Ok(link) => Minted {
+            share_url: Some(link.share_url),
+            share_token: Some(link.share_token),
+            link_error: None,
+        },
         Err(message) => Minted {
             link_error: Some(message),
             ..Minted::default()
         },
+    }
+}
+
+/// After a link made by [`link_from_file`], once the capture is placed:
+/// record which file in the drive it is the link of (`shares::origin`), and
+/// mark a synced file shared in Finder, as a link minted from the synced
+/// file itself does (`create_share_inner`). That is how Drive, Insights, the
+/// tray's Copy link and deleting the capture find the link by its path.
+pub async fn remember_placed_origin(state: &AppState, account_id: &str, destination: &CaptureDestination, placed: &Placed, share_token: &str) {
+    let rel_path = destination.rel_path(&placed.file_name);
+    remember_origin(
+        state,
+        account_id,
+        &LinkSource::External(placed.placed.clone()),
+        &destination.label,
+        &rel_path,
+        share_token,
+    )
+    .await;
+    if placed.via_sync {
+        crate::finder_bridge::badges::push_from_state(state, &destination.label, &rel_path, crate::finder_bridge::protocol::BadgeState::Shared);
     }
 }
 
@@ -304,23 +341,114 @@ pub enum LinkSource {
 /// # Errors
 ///
 /// The sentence the card shows when no link could be made.
-pub async fn mint(state: &AppState, account_id: &str, source: &LinkSource) -> std::result::Result<crate::shares::commands::ShareLink, String> {
+pub async fn mint(
+    state: &AppState,
+    account_id: &str,
+    source: &LinkSource,
+    progress: Option<ShareProgressFn>,
+) -> std::result::Result<crate::shares::commands::ShareLink, String> {
+    mint_reporting_link(state, account_id, source, progress, None).await
+}
+
+/// A capture's link the moment it exists, before its file has finished
+/// uploading: what [`mint_reporting_link`] hands to its `on_link`.
+pub struct EarlyLink {
+    pub share_url: String,
+    pub share_token: String,
+}
+
+impl std::fmt::Debug for EarlyLink {
+    // The URL carries the link's secret and the token opens the share.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EarlyLink { .. }")
+    }
+}
+
+/// Offered a capture's link as soon as it exists (see [`EarlyLink`]), and
+/// answers whether it handed the link out. Only a link handed out stops a
+/// later failure from being retried: once someone may have it, a new link
+/// would be a different one nobody was given. Called at most once per mint.
+/// Cheap and panic-free, since it runs inside the upload.
+pub type OnLink = std::sync::Arc<dyn Fn(EarlyLink) -> bool + Send + Sync>;
+
+/// Whether the server answers someone who opens a link still uploading with
+/// "still uploading" (`share_open_while_uploading`, `409 share_uploading`)
+/// rather than the "not found" an older server gives. Only then is a
+/// capture's link handed out before its upload ends. No answer reads as no.
+pub async fn server_shows_uploading(state: &AppState, account_id: &str) -> bool {
+    crate::shares::capabilities::fetch_capabilities(state, account_id)
+        .await
+        .is_ok_and(|caps| caps.share_open_while_uploading)
+}
+
+/// The card's (and notification's) sentence for a link that was copied
+/// while its file uploaded, and whose upload then failed: hcfs-client
+/// revoked it, so the copied link never opens.
+pub const LINK_BROKEN: &str = "The link you copied won't open because its upload failed. Retry to make a new link.";
+
+/// [`mint`], also offering the link to `on_link` the moment it exists, while
+/// a large file is still uploading. Only for [`LinkSource::External`], the
+/// capture's own file: a synced file's link is never offered to `on_link`,
+/// and comes back only when the mint returns.
+///
+/// A failure before the link was handed out is tried again as in [`mint`].
+/// One after `on_link` took it is not: that link is already out and is now
+/// revoked, and a new one would be a different link nobody was given. It
+/// comes back as [`LINK_BROKEN`].
+///
+/// # Errors
+///
+/// The sentence the card shows when no link could be made.
+pub async fn mint_reporting_link(
+    state: &AppState,
+    account_id: &str,
+    source: &LinkSource,
+    progress: Option<ShareProgressFn>,
+    on_link: Option<OnLink>,
+) -> std::result::Result<crate::shares::commands::ShareLink, String> {
     use crate::shares::commands::ShareChoice;
     use hcfs_client::client::share::ShareTtl;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let reported = std::sync::Arc::new(AtomicBool::new(false));
     let mut attempt = 0;
     loop {
         let minted = match source {
             LinkSource::Synced { label, rel_path } => {
-                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, None).await
+                crate::shares::commands::share_synced_file(state, account_id, label, rel_path, ShareTtl::Never, ShareChoice::Public, progress.clone())
+                    .await
             }
             LinkSource::External(path) => {
-                crate::shares::commands::share_external_file(state, account_id, path, ShareTtl::Never, ShareChoice::Public, None).await
+                let report = on_link.clone().map(|on_link| {
+                    let reported = reported.clone();
+                    Box::new(move |link: &hcfs_client::client::share::ShareResult| {
+                        let handed_out = on_link(EarlyLink {
+                            share_url: link.share_url.clone(),
+                            share_token: link.share_token.clone(),
+                        });
+                        // Read back on this same task once the mint returns.
+                        reported.store(handed_out, Ordering::Relaxed);
+                    }) as hcfs_client::client::share::ShareLinkFn
+                });
+                crate::shares::commands::share_external_file_reporting_link(
+                    state,
+                    account_id,
+                    path,
+                    ShareTtl::Never,
+                    ShareChoice::Public,
+                    progress.clone(),
+                    report,
+                )
+                .await
             }
         };
         let e = match minted {
             Ok(link) => return Ok(link),
             Err(e) => e,
         };
+        if reported.load(Ordering::Relaxed) {
+            tracing::warn!(error = %e, "capture link was handed out, then its upload failed; the link is revoked");
+            return Err(LINK_BROKEN.to_string());
+        }
         let Some(wait) = mint_retry_after(failure_reason(&e), attempt) else {
             tracing::warn!(error = %e, "capture saved, but its share link could not be minted");
             return Err(link_failure_copy(&e));
@@ -660,6 +788,10 @@ pub fn delivered_notice(delivered: &Delivered) -> (String, String) {
     let saved = format!("{} is in {place}.", delivered.file_name);
     if delivered.share_url.is_some() {
         ("Link copied".into(), saved)
+    } else if delivered.link_error.as_deref() == Some(LINK_BROKEN) {
+        // The link was copied while it uploaded, and is already in someone's
+        // chat: "could not be created" would hide that it won't open.
+        ("Capture saved".into(), format!("{saved} {LINK_BROKEN}"))
     } else {
         ("Capture saved".into(), format!("{saved} The share link could not be created."))
     }
@@ -717,6 +849,27 @@ mod tests {
             ("Hippius Captures", "Captures/Recording.mp4")
         );
         assert!(!rows.contains_key("tok-sync"), "a synced share records its own origin when minted");
+    }
+
+    /// The sentence for a copied link whose upload failed names the link
+    /// the user already has, and the way on; it never reads like the link
+    /// was simply not made.
+    #[test]
+    fn a_broken_link_is_told_apart_from_one_never_made() {
+        assert!(LINK_BROKEN.contains("you copied"));
+        assert!(LINK_BROKEN.contains("Retry"));
+        let never = link_failure_copy(&AppError::Other("x".into()));
+        assert_ne!(never, LINK_BROKEN);
+        assert!(
+            !format!(
+                "{:?}",
+                EarlyLink {
+                    share_url: "https://h/share/t#s=secret".into(),
+                    share_token: "t".into()
+                }
+            )
+            .contains("secret")
+        );
     }
 
     /// A recording kept back at the free limit says so and offers Upgrade
@@ -895,6 +1048,24 @@ mod tests {
         let (title, body) = delivered_notice(&delivered(None));
         assert_eq!(title, "Capture saved");
         assert!(body.contains("is in Work › Captures") && body.contains("could not be created"));
+    }
+
+    /// A capture with no card whose link was copied while it uploaded, and
+    /// whose upload then failed, says the copied link won't open: the link
+    /// is already in someone's chat, so "could not be created" is wrong.
+    #[test]
+    fn a_copied_link_that_broke_says_so_in_the_notice() {
+        let broken = Delivered {
+            link_error: Some(LINK_BROKEN.into()),
+            ..delivered(None)
+        };
+        let (title, body) = delivered_notice(&broken);
+        assert_eq!(title, "Capture saved");
+        assert_eq!(
+            body,
+            format!("Screenshot 2026-09-22 at 14.03.11.png is in Work › Captures. {LINK_BROKEN}")
+        );
+        assert!(!body.contains("could not be created"), "{body}");
     }
 
     /// The kept file is in a hidden folder; naming it helps nobody. The

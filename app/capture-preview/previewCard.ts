@@ -73,11 +73,28 @@ export function cardView(
   const status = card.status;
   switch (status.state) {
     case "uploading": {
+      // The link is made first, from the capture itself, before the file
+      // goes into the drive: while it is, Rust's line says how far it is.
+      // It is out (copied) before its upload ends, and the line says both.
+      if ((card.link.state === "creating" || card.link.state === "uploading") && card.linkText) {
+        return {
+          percent: card.linkPercent ?? null,
+          text: card.linkText,
+          announce: card.link.state === "uploading" ? (card.link.copied ? "Link copied" : "Link ready") : "Making link",
+          done: false,
+          settled: false,
+          failed: false,
+          waiting: false,
+        };
+      }
       const percent = remoteRow && sameFile(card, remoteRow) ? cappedPercent(remoteRow.bytesTransferred, remoteRow.totalBytes) : null;
+      // A link already made goes on saying so while the file goes into the
+      // drive, and so does a copied link that won't open.
+      const linkOut = card.link.state === "public" || card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
-        text: percent === null ? "Preparing upload…" : `Uploading · ${percent}%`,
-        announce: percent === null ? "Preparing upload…" : "Uploading",
+        text: joinLink(percent === null ? "Preparing upload…" : `Uploading · ${percent}%`, linkOut),
+        announce: joinLink(percent === null ? "Preparing upload…" : "Uploading", linkOut),
         done: false,
         settled: false,
         failed: false,
@@ -87,10 +104,13 @@ export function cardView(
     case "syncing": {
       const row = syncFiles.find((f) => sameFile(card, f));
       const percent = row ? cappedPercent(row.bytesTransferred, row.totalBytes) : null;
+      // A copied link that won't open is said while the file syncs too: the
+      // sync line alone would hide that the link in chat is dead.
+      const broken = card.link.state === "broken" ? card.linkText : undefined;
       return {
         percent,
-        text: percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`,
-        announce: percent === null ? "Saved · waiting for sync" : "Uploading",
+        text: joinLink(percent === null ? "Saved · waiting for sync" : `Uploading · ${percent}%`, broken),
+        announce: joinLink(percent === null ? "Saved · waiting for sync" : "Uploading", broken),
         done: false,
         settled: false,
         failed: false,

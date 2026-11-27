@@ -196,6 +196,12 @@ function confirmChooser() {
   fireEvent.click(screen.getByRole("button", { name: /create share link/i }));
 }
 
+/** Opens a rule card on the finished link: its editor is pushed in its place. */
+async function openRule(id: string) {
+  const card = await screen.findByTestId(`rule-${id}`);
+  fireEvent.click(within(card).getByRole("button"));
+}
+
 describe("ShareFileModal", () => {
   /**
    * REGRESSION: the modal is mounted permanently in the pages layout, so its
@@ -1349,6 +1355,8 @@ describe("ShareFileModal link switches", () => {
     await screen.findByDisplayValue(/tok-rec#k=KEY/);
 
     // Read even though no switch was asked for: it is where download comes from.
+    expect(await screen.findByTestId("rule-download")).toHaveTextContent("Viewers can save it");
+    await openRule("download");
     const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
     expect(download).toHaveAttribute("aria-checked", "true");
     expect(screen.getByText(DOWNLOAD_SWITCH.description)).toBeInTheDocument();
@@ -1365,6 +1373,7 @@ describe("ShareFileModal link switches", () => {
     render(withProvider(<ShareFileModal />, RECORDING));
     await screen.findByRole("switch", { name: "Insights" });
     confirmChooser();
+    await openRule("download");
     const download = await screen.findByRole("switch", { name: DOWNLOAD_SWITCH.label });
     fireEvent.click(download);
     expect(await screen.findByText(DOWNLOAD_LOCKED_PROMPT)).toBeInTheDocument();
@@ -1390,6 +1399,7 @@ describe("ShareFileModal link switches", () => {
     render(withProvider(<ShareFileModal />, RECORDING));
     await screen.findByRole("switch", { name: "Insights" });
     confirmChooser();
+    await openRule("gate");
     const gate = await screen.findByRole("switch", { name: GATE_LABEL });
     expect(gate).toHaveAttribute("aria-checked", "false");
     expect(getGateMock).toHaveBeenCalledWith("share_get_gate", { shareToken: "tok-rec" });
@@ -1594,14 +1604,17 @@ describe("ShareFileModal secure link section", () => {
     await screen.findByDisplayValue(/tok-doc#k=KEY/);
 
     const section = screen.getByRole("group", { name: "Secure link" });
-    expect(within(section).getByText(/^Expires /)).toBeInTheDocument();
+    expect(within(section).getByTestId("rule-expiry")).toHaveTextContent("On");
 
     invokeMock.mockResolvedValueOnce(null);
+    await openRule("expiry");
     await chooseExpiry(/until i revoke it/i);
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("hcfs_update_share_expiry", { shareToken: "tok-doc", ttl: "never" }),
     );
-    expect(await within(section).findByText("This link stays active until you revoke it.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await within(section).findByTestId("rule-expiry")).toHaveTextContent("Never");
+    await openRule("expiry");
 
     invokeMock.mockRejectedValueOnce(new Error("This link is no longer active."));
     await chooseExpiry(/7 days/i);
@@ -1617,6 +1630,7 @@ describe("ShareFileModal secure link section", () => {
     await screen.findByDisplayValue(/tok-doc#k=KEY/);
 
     invokeMock.mockResolvedValueOnce("2099-02-01T00:00:00Z");
+    await openRule("expiry");
     await chooseExpiry(/30 days/i);
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("hcfs_update_folder_share_expiry", { shareToken: "tok-folder", ttl: "30d" }),
