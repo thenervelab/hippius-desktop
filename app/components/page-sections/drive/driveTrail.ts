@@ -193,6 +193,30 @@ export function pinnedFolderHref(
 }
 
 /**
+ * An open request's folder (`openSubfolder`) as a path from the drive's
+ * root. On a page rooted at a folder inside a drive, the request names a
+ * folder relative to that root (the Captures page's own subfolders), so the
+ * root goes in front; elsewhere it is already from the drive's root.
+ */
+export function openSubfolderInDrive(pinned: PinnedDrive | null, subfolder: string | null | undefined): string {
+  return [folderPathOf(pinned?.folder), folderPathOf(subfolder)].filter(Boolean).join("/");
+}
+
+/**
+ * Where a page rooted at a folder goes to open `wanted` (a path from the
+ * drive's root): that folder when it is the page's folder or under it, else
+ * `null`, and always `null` on a page pinned to a whole drive (the folder is
+ * stepped into from the drive's root there). The page jumps straight to it
+ * rather than stepping in from the drive's root, which it never shows.
+ */
+export function pinnedOpenFolder(pinned: PinnedDrive | null, wanted: string | null | undefined): string | null {
+  const folder = folderPathOf(pinned?.folder);
+  const path = folderPathOf(wanted);
+  if (!folder || !path) return null;
+  return path === folder || path.startsWith(`${folder}/`) ? path : null;
+}
+
+/**
  * Whether the view on screen is the pinned folder or a folder under it.
  * Always true for a page pinned to a whole drive. The drive's root, or any
  * folder beside the pinned one, is outside it.

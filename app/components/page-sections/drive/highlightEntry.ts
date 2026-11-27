@@ -47,6 +47,7 @@ export interface HighlightRequest {
 /**
  * The request a "Show in folder" URL makes (`openLabel`, `openSubfolder`,
  * `openFile`), or null when it names no file: the folder then simply opens.
+ * `root`: the folder a pinned page is rooted at (`PinnedDrive.folder`).
  * The Drive page and the Captures page build it the same way, so a URL from
  * `driveFolderRoute`, `capturesRoute` or the sync queue points out the same
  * row on either.
@@ -54,9 +55,14 @@ export interface HighlightRequest {
 export function highlightRequestFromUrl(
   url: { label: string; subfolder: string | null | undefined; file: string | null | undefined },
   now: number,
+  root?: string | null,
 ): HighlightRequest | null {
   if (!url.file) return null;
-  return { label: url.label, folder: url.subfolder || "", name: url.file, until: now + HIGHLIGHT_OPEN_LIMIT_MS };
+  // On a page rooted at a folder inside the drive (captures kept in a
+  // folder of another drive), the URL's subfolder is relative to that
+  // folder, while the level on screen is named from the drive's root.
+  const folder = [trimSlashes(root ?? ""), trimSlashes(url.subfolder ?? "")].filter(Boolean).join("/");
+  return { label: url.label, folder, name: url.file, until: now + HIGHLIGHT_OPEN_LIMIT_MS };
 }
 
 /**

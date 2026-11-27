@@ -1038,7 +1038,7 @@ pub enum CaptureDriveStatus {
     Pending { location: Location, message: String },
 }
 
-async fn status_for(pool: &sqlx::SqlitePool, account_id: &str) -> Result<CaptureDriveStatus> {
+pub(crate) async fn status_for(pool: &sqlx::SqlitePool, account_id: &str) -> Result<CaptureDriveStatus> {
     let home = home_dir()?;
     let drives = destination::drives_here(pool, account_id).await?;
     if let Some(d) = destination::load(pool, account_id).await? {

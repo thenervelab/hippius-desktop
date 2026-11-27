@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { deleteLabel, useDeleteMode } from "@/app/lib/trash/deleteMode";
+import { deleteLabel, offersDeleteOnRow, useDeleteMode } from "@/app/lib/trash/deleteMode";
 import { createPortal } from "react-dom";
 import { Copy, Download, Link2, Trash2, FolderOpen, MonitorDown, Pencil, FolderInput, FolderSymlink } from "lucide-react";
 import { Icons } from "@/components/ui";
@@ -43,6 +43,7 @@ import { Folder } from "@/components/ui/icons";
 import cn from "@/app/lib/utils/cn";
 import {
   shareDialogAtom,
+  driveTrashEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -122,6 +123,7 @@ export default function FileContextMenu({
   const { getParam } = useUrlParams();
   const driveRoute = useDriveRoute();
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   // "Share folder" is live: always behind the folder-roles flag, else once
   // the server advertises folder grants.
@@ -492,9 +494,13 @@ export default function FileContextMenu({
             </button>
           )}
 
-          {/* Cloud-only rows hide Delete — the pipeline removes the LOCAL
-              copy and lets sync propagate, which server-only rows lack. */}
-          {!isCloudOnlyRow(file) && (
+          {/* A cloud-only row has Delete only while the server has Trash
+              and where this account can write (`offersDeleteOnRow`). */}
+          {offersDeleteOnRow(
+            file,
+            trashEnabled,
+            offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels),
+          ) && (
             <button
               // Same rationale as the Rename row: `pointer-events-none` made
               // the disabled-state `title` tooltip unreachable.

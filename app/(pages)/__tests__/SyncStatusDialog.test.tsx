@@ -160,6 +160,48 @@ describe("SyncStatusDialog", () => {
     expect(params.get("openFile")).toBe("Recording 2026-11-27 at 16.13.34.mp4");
   });
 
+  // Captures kept in a folder inside another drive: still the Captures page
+  // (rooted at that folder), never Drive > that drive.
+  it("opens a capture kept in a folder of another drive on the Captures page", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "capture_drive_status"
+        ? { state: "ready", label: "Documents", name: "Documents", folder: "hippius-captures", remote: false }
+        : undefined,
+    );
+    const files = [
+      makeFileProgress("Screenshot.png", {
+        label: "Documents",
+        path: "hippius-captures/Screenshot.png",
+        status: "completed",
+        progressPercent: 100,
+      }),
+    ];
+    const opened: string[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<OpenDriveFolderDetail>).detail.url);
+    window.addEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+    try {
+      renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />, [
+        [captureSupportKnownAtom, true],
+        [captureSupportedAtom, true],
+        [driveStatusesAtom, new Map([["Documents", { folderName: "Documents", path: "/Users/u/Documents", status: { kind: "active" } }]])],
+      ]);
+      fireEvent.click(screen.getByTestId("sync-status-toggle"));
+      fireEvent.click(screen.getByRole("button", { name: "Show Screenshot.png in its folder" }));
+      await waitFor(() => expect(opened).toHaveLength(1));
+    } finally {
+      window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+      vi.mocked(invoke).mockReset();
+    }
+    const [path, query] = opened[0].split("?");
+    expect(path).toBe("/captures");
+    const params = new URLSearchParams(query);
+    expect(params.get("openLabel")).toBe("Documents");
+    expect(params.get("openRemote")).toBeNull();
+    // Relative to the Captures page's root, the captures folder.
+    expect(params.get("openSubfolder")).toBeNull();
+    expect(params.get("openFile")).toBe("Screenshot.png");
+  });
+
   it("opens Drive when Rust cannot say where captures go", async () => {
     vi.mocked(invoke).mockRejectedValue(new Error("offline"));
     const files = [makeFileProgress("a.txt", { label: "Work", path: "Docs/a.txt", status: "completed", progressPercent: 100 })];

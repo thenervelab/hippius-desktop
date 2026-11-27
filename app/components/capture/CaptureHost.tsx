@@ -114,8 +114,11 @@ export default function CaptureHost() {
       onTauriEvent<CaptureShowInFolder>("capture_show_in_folder", (e) => {
         const file = e.payload.fileName || undefined;
         router.push(
+          // Rust says where: the Captures page when the capture is where
+          // captures go (its own drive, or a folder inside another drive),
+          // with `subfolder` relative to that page; else Drive.
           e.payload.capturesDrive
-            ? capturesRoute(e.payload.label, e.payload.remote, file)
+            ? capturesRoute(e.payload.label, e.payload.remote, file, e.payload.subfolder || undefined)
             : driveFolderRoute(e.payload.label, e.payload.remote, e.payload.subfolder, file),
         );
       }),
