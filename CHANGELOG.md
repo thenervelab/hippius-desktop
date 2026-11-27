@@ -23,6 +23,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 - **Allow and block lists take emails and whole domains as chips.** Type or paste several at once; a mistyped entry is marked on the spot.
 - **Link settings say when your Drive needs unlocking, with an Unlock button.** Settings that need your Drive unlocked show a small lock, and pressing one unlocks first and then carries on.
 - **Link settings read more clearly.** Rules that are off say what that means ("Not asked", "None") instead of describing what they would do, and the Allow list and Expiry show their value without an On or Off beside it.
+- **Link settings open in the Insights panel itself.** The gear slides Link settings in over the panel, for file and folder links alike, with a back arrow that returns you to the same tab and place. The Allow list and NDA open a step further in, Escape goes back one step, and closing the panel and opening it again for the same link brings you back where you were.
 
 - **Links per person show how to upgrade on the free plan.** Links per person come with paid Drive plans, so on the free plan the box for adding people is replaced by an upgrade card, and any links already made stay listed to copy or turn off.
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.

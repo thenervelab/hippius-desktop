@@ -54,6 +54,8 @@ export const GateChipsInput = forwardRef<GateChipsHandle, GateChipsProps>(functi
   const errorId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [draft, setDraft] = useState("");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   // Entries are committed in the order typed, one read of Rust at a time.
   const chain = useRef<Promise<void>>(Promise.resolve());
   const latest = useRef(entries);
@@ -173,7 +175,11 @@ export const GateChipsInput = forwardRef<GateChipsHandle, GateChipsProps>(functi
           onPaste={onPaste}
           onBlur={() => {
             commit(draft);
-            typed("");
+            setDraft("");
+            // Still "typing" until Rust has made the chips, so a host asking
+            // whether anything is unsaved (Back pressed, taking focus here)
+            // never hears "no" in between.
+            void chain.current.then(() => onTyping?.(draftRef.current.trim() !== ""));
           }}
           disabled={disabled}
           spellCheck={false}
