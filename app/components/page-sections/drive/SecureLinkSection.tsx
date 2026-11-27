@@ -1,15 +1,21 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
+import { Select } from "@/components/ui/select/Select";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
+import { shareLinkNotificationsEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import {
   canReceiveLinkEmails,
+  getLinkVisitEmails,
   getNotificationPreferences,
+  setLinkVisitEmails,
   setNotificationPreferences,
   type NotificationPreferences,
+  type VisitEmails,
 } from "@/app/lib/tauri/shareInsights";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 
@@ -21,6 +27,15 @@ export const SECURE_LINK = "Secure link";
  * Settings, so it says "a link", not "this link".
  */
 export const FIRST_VIEW_EMAIL = "Email me when any link is first opened";
+
+/** The per-link email setting's label, and its accessible name. */
+export const LINK_VISIT_EMAILS = "Emails about this link";
+
+const VISIT_EMAIL_OPTIONS: ReadonlyArray<{ value: VisitEmails; label: string }> = [
+  { value: "every", label: "Every visit" },
+  { value: "first", label: "First visit" },
+  { value: "off", label: "None" },
+];
 
 /**
  * Shown in place of the link email switches for an account with no email
@@ -127,6 +142,66 @@ export function FirstViewEmailSwitch({ viewsCounted }: { viewsCounted: boolean }
         disabled={saving}
         onCheckedChange={(on) => void setFirstViews(on)}
       />
+    </div>
+  );
+}
+
+/**
+ * "Emails about this link": which visit emails the owner gets about this one
+ * file link (every visit, the first only, or none, which also stops its
+ * comment, return visit, NDA and refused viewer emails). Shown only while the
+ * server has the setting (`share_link_notifications`), the link counts views
+ * and the account can get email, and only once Rust has read the link's
+ * value: a link the server has no value for shows nothing. A change shows at
+ * once and is put back if the server refuses it.
+ */
+export function LinkVisitEmailsSelect({ shareToken, viewsCounted }: { shareToken: string; viewsCounted: boolean }) {
+  const offered = useAtomValue(shareLinkNotificationsEnabledAtom);
+  const canReceive = useCanReceiveLinkEmails(offered && viewsCounted);
+  const enabled = offered && viewsCounted && canReceive === true;
+  const [visits, setVisits] = useState<VisitEmails | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    getLinkVisitEmails(shareToken)
+      .then((v) => alive && setVisits(v))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [enabled, shareToken]);
+
+  if (!enabled || !visits) return null;
+
+  const change = async (next: VisitEmails) => {
+    const before = visits;
+    setVisits(next);
+    setSaving(true);
+    try {
+      await setLinkVisitEmails(shareToken, next);
+    } catch (err) {
+      setVisits(before);
+      toast.error(`Couldn't save that. ${errorMessage(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 flex items-center justify-between gap-3">
+      <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">{LINK_VISIT_EMAILS}</span>
+      <div className="w-[132px] flex-shrink-0">
+        <Select
+          ariaLabel={LINK_VISIT_EMAILS}
+          size="compact"
+          value={visits}
+          disabled={saving}
+          onValueChange={(v) => void change(v as VisitEmails)}
+          options={VISIT_EMAIL_OPTIONS.map(({ value, label }) => ({ value, label }))}
+        />
+      </div>
     </div>
   );
 }

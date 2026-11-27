@@ -95,6 +95,16 @@ pub struct ServerCapabilities {
     /// `/v1/notification-preferences`. Absent on older servers, which show
     /// no such preferences.
     pub share_notifications: bool,
+    /// The visit emails: a link's own email setting (`notifications.visits`
+    /// on each owner listing row and `PUT /v1/shares/{token}/notifications`)
+    /// and the `return_visits` preference. Absent on older servers and off
+    /// in production until the emails are ready: no Return visits row, no
+    /// per-link email setting, and nothing is sent.
+    pub share_link_notifications: bool,
+    /// The NDA-accepted and refused-viewer emails, and their `nda_accepts`
+    /// and `gate_refusals` preferences. Absent on older servers and off in
+    /// production until the emails are ready: no rows for them.
+    pub share_event_notifications: bool,
     /// Per-link view and comment counts on the owner's share listing
     /// (hcfs #805). Absent on older servers: the Captures row's Insights
     /// button carries no count and the tables no Views or Comments column.
@@ -323,6 +333,7 @@ mod tests {
             r#""folder_grants":true,"member_folder_shares":true,"folder_grant_writes":true,"upload_folder_shares":true,"#,
             r#""share_preview":true,"folder_share_link_envelopes":true,"drive_invite_link_envelopes":true,"#,
             r#""share_insights":true,"share_comments":true,"share_notifications":true,"#,
+            r#""share_link_notifications":true,"share_event_notifications":true,"#,
             r#""share_listing_counts":true,"share_insights_seen":true,"share_comment_replies":true,"#,
             r#""share_reaction_moments":true,"share_document_views":true,"share_download_switch":true,"share_gates":true,"share_nda":true,"#,
             r#""folder_share_gates":true,"folder_share_nda":true,"#,
@@ -344,6 +355,8 @@ mod tests {
         assert!(caps.share_insights);
         assert!(caps.share_comments);
         assert!(caps.share_notifications);
+        assert!(caps.share_link_notifications);
+        assert!(caps.share_event_notifications);
         assert!(caps.share_listing_counts);
         assert!(caps.share_insights_seen);
         assert!(caps.share_comment_replies);
@@ -388,11 +401,13 @@ mod tests {
                 "share_comments",
                 "share_document_views",
                 "share_download_switch",
+                "share_event_notifications",
                 "share_expiry_date",
                 "share_gates",
                 "share_group_insights",
                 "share_insights",
                 "share_insights_seen",
+                "share_link_notifications",
                 "share_listing_counts",
                 "share_nda",
                 "share_nda_signer_names",
@@ -426,6 +441,11 @@ mod tests {
         assert!(!old.share_insights, "a server without insights is sent no switches");
         assert!(!old.share_comments, "a server without comments shows none");
         assert!(!old.share_notifications, "a server without email preferences shows none");
+        assert!(!old.share_link_notifications, "a server without visit emails shows no row for them");
+        assert!(
+            !old.share_event_notifications,
+            "a server without NDA or refusal emails shows no row for them"
+        );
         assert!(!old.share_listing_counts, "a server without listing counts shows no counts");
         assert!(!old.share_insights_seen, "a server without last-seen shows no new dot");
         assert!(!old.share_comment_replies, "a server without replies lists comments flat");

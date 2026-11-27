@@ -82,7 +82,7 @@ import LinkEngagementSwitches from "./LinkEngagementSwitches";
 import { LinkRules, TTL_OPTIONS } from "@/components/page-sections/shares/rules/LinkRules";
 import RecipientLinks from "@/components/page-sections/shares/insights/RecipientLinks";
 import { isDownloadNotInPlan, isWatermarkNotInPlan } from "@/components/page-sections/shares/insights/insightsView";
-import { FirstViewEmailSwitch, SecureLinkSection } from "./SecureLinkSection";
+import { FirstViewEmailSwitch, LinkVisitEmailsSelect, SecureLinkSection } from "./SecureLinkSection";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { isNotReady } from "@/app/lib/utils/dispatchTauriError";
@@ -1579,6 +1579,10 @@ function DoneBody({
         {/* File links only; Rust offers it only on a server with links per person. */}
         {engagement && <RecipientLinks shareToken={link.shareToken} onUpgrade={onUpgrade} />}
         <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
+        {/* File links only, like links per person. */}
+        {engagement && (
+          <LinkVisitEmailsSelect shareToken={link.shareToken} viewsCounted={Boolean(switches?.insights)} />
+        )}
           </>
         )}
       </SecureLinkSection>
