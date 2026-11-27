@@ -10,6 +10,7 @@ import {
   FolderPlus,
   Clock,
   FolderSearch,
+  Info,
   Link2,
   MonitorDown,
   MoreHorizontal,
@@ -562,6 +563,22 @@ export default function CapturePreviewPage() {
             <span aria-hidden className="truncate">
               {view.text}
             </span>
+            {card.linkInfo && (
+              // Why the card shows only the link's upload: the link has its
+              // own copy, and the backup to Drive is in the upload list.
+              // Named by its label and described by the card's tooltip, on
+              // hover (Rust's pointer) and keyboard focus alike.
+              <button
+                type="button"
+                aria-label="About this upload"
+                data-card-tip="link-info"
+                data-testid="capture-link-info"
+                {...tipProps("link-info", { label: card.linkInfo })}
+                className={`-my-1 grid size-5 shrink-0 place-items-center rounded-full text-white/60 hover:text-white ${GLASS_FOCUS}`}
+              >
+                <Info aria-hidden className="size-3.5" />
+              </button>
+            )}
             <span role="status" aria-live="polite" className="sr-only">
               {view.announce}
             </span>

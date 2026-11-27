@@ -418,6 +418,12 @@ export interface CapturePreviewCard {
   /** Rust's line on who can open the link ("Anyone with the link can view. Never expires."); absent = none. */
   linkNote?: string;
   /**
+   * Rust's words for the info icon beside the status line while a
+   * recording's link is being made (its own encrypted copy, and the backup
+   * to Drive that follows in the upload list); absent = no icon.
+   */
+  linkInfo?: string;
+  /**
    * While the link is being made: how much of its upload is done, 0 to 100,
    * for the card's bar. Absent while it is still being prepared, and once it
    * has settled.

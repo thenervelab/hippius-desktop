@@ -136,6 +136,11 @@ pub const UPLOADING_LINK_NOTE: &str = "Keep Hippius open until the upload finish
 /// [`LinkState::note`] for a link whose upload failed after it was copied.
 pub const BROKEN_LINK_NOTE: &str = "Its upload failed. Retry to make a new link.";
 
+/// What the info icon beside a recording's link line says while the link's
+/// own copy uploads ([`PreviewCard::link_info`]): why the card shows only
+/// that upload, and what the second upload in the upload list is.
+pub const LINK_COPY_INFO: &str = "Your link has its own encrypted copy. A backup also goes to your Drive, so the recording shows in Captures.";
+
 /// Which buttons the card offers now. Rust decides; the card draws them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +207,12 @@ pub struct PreviewCard {
     /// [`LinkState::note`], sent so the card does not word it itself.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_note: Option<String>,
+    /// [`LINK_COPY_INFO`], for the info icon beside the status line, while
+    /// a recording's link is being made: the card shows that upload only,
+    /// and the drive's backup copy goes on in the upload list. Worked out in
+    /// [`PreviewCard::refreshed`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_info: Option<String>,
     pub actions: CardActions,
     /// The capture is in the drive and its link has settled: the card may
     /// slide away on its own. Worked out in [`PreviewCard::refreshed`].
@@ -248,6 +259,13 @@ pub struct PreviewCard {
     /// Worked out in [`PreviewCard::refreshed`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_percent: Option<u8>,
+    /// The card was finished by its link while the capture's drive copy is
+    /// still being uploaded directly ([`finished_by_link_while_direct`]):
+    /// that upload reads the temp file, so the card closing must not remove
+    /// it ([`PreviewCard::temp_copy_done_with`]). Cleared once the upload
+    /// landed or failed. Never sent to the card.
+    #[serde(skip)]
+    pub drive_copy_pending: bool,
 }
 
 /// How far a capture's link has got while it is made. The link is the
@@ -417,21 +435,69 @@ impl SyncFacts {
     }
 }
 
-/// Whether the card's public link finishes it: the card is still syncing,
-/// its link is public and the engine's drive copy has not failed (no row
-/// yet, queued behind other files, or uploading right now). Minting the
-/// link uploads the capture's own encrypted copy, so the capture is on the
-/// server and shareable; the drive copy is a second upload of the same
-/// file, and showing its progress on the card reads as the capture being
-/// sent twice. It goes on in the sync queue like any synced file, and a
-/// failure there is reported the way any sync failure is. A failed row still
-/// fails the card, and a card without a public link follows the drive
-/// upload, since that is its only copy on the server.
+/// The capture's second upload, the copy saved into the drive, as far as
+/// [`link_finishes_card`] goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriveCopy<'a> {
+    /// The capture is in the drive's folder on this machine and the sync
+    /// engine uploads it: its row there (the card is `Syncing`).
+    Synced(&'a SyncRow),
+    /// The drive is not synced here, so the capture is uploaded to it
+    /// directly, and that upload is running now (the card is `Uploading`).
+    Direct,
+}
+
+/// Whether the card's public link finishes it while the drive copy is still
+/// on its way. Minting the link uploads the capture's own encrypted copy, so
+/// once the link is public the capture is on the server and shareable; the
+/// drive copy is a second upload of the same file (a file link cannot reuse
+/// the drive's copy without handing out the drive's key), and showing its
+/// progress on the card reads as the capture being sent twice. So the card
+/// is finished, and the drive copy goes on in the background like any other
+/// upload, in the sync queue or the upload list:
+///
+/// - synced here: the card is still syncing and the engine's drive copy has
+///   not failed (no row yet, queued behind other files, or uploading right
+///   now). A failure there is reported the way any sync failure is, and a
+///   failed row still fails the card;
+/// - uploaded directly: the card is still uploading. Its temp file is kept
+///   until that upload lands ([`PreviewCard::drive_copy_pending`]), and a
+///   failure there fails the card, or with the card gone is kept for Retry
+///   and notified, as any failed capture upload is.
+///
+/// A card without a public link (none wanted, still being made, failed, or
+/// copied and then broken) follows the drive upload, since that is its only
+/// copy on the server.
 #[must_use]
-pub fn link_finishes_card(card: &PreviewCard, row: &SyncRow) -> bool {
-    matches!(card.status, PreviewStatus::Syncing { .. })
-        && matches!(card.link, LinkState::Public { .. })
-        && matches!(row, SyncRow::Absent | SyncRow::Queued | SyncRow::Working)
+pub fn link_finishes_card(card: &PreviewCard, copy: DriveCopy<'_>) -> bool {
+    let copy_on_its_way = match copy {
+        DriveCopy::Synced(row) => {
+            matches!(card.status, PreviewStatus::Syncing { .. }) && matches!(row, SyncRow::Absent | SyncRow::Queued | SyncRow::Working)
+        }
+        DriveCopy::Direct => matches!(card.status, PreviewStatus::Uploading),
+    };
+    copy_on_its_way && matches!(card.link, LinkState::Public { .. })
+}
+
+/// The card once its link finishes it while its capture is uploaded
+/// directly ([`link_finishes_card`] with [`DriveCopy::Direct`]): uploaded,
+/// saying what it says about the link, and marked as still sending the
+/// drive copy, so closing it keeps the file that upload reads. `None` when
+/// the link does not finish it, and the card follows the upload as before.
+#[must_use]
+pub fn finished_by_link_while_direct(card: &PreviewCard) -> Option<PreviewCard> {
+    if !link_finishes_card(card, DriveCopy::Direct) {
+        return None;
+    }
+    let (link_copied, link_error) = card.link_fields();
+    Some(
+        PreviewCard {
+            status: PreviewStatus::Uploaded { link_copied, link_error },
+            drive_copy_pending: true,
+            ..card.clone()
+        }
+        .refreshed(),
+    )
 }
 
 /// What a syncing card becomes given the engine's row, or `None` when it
@@ -485,6 +551,9 @@ impl PreviewCard {
         };
         let link_percent = progress.and_then(LinkProgress::percent);
         let link_note = self.link.note().map(str::to_string);
+        // A screenshot's link is up in a moment; a recording's is most of the
+        // wait, and the backup that follows it shows in the upload list.
+        let link_info = (self.kind == CaptureKind::Recording && self.link.is_being_made()).then(|| LINK_COPY_INFO.to_string());
         let actions = self.decide_actions();
         // A link still being made, or one that failed, holds the card: it
         // must stay up to say the link was copied, or to offer Create link.
@@ -498,6 +567,7 @@ impl PreviewCard {
         Self {
             link_text,
             link_note,
+            link_info,
             actions,
             settled,
             notice,
@@ -568,10 +638,12 @@ impl PreviewCard {
     }
 
     /// Whether the card's own temp copy is no longer needed once the card
-    /// goes: the upload landed, so the drive has the file.
+    /// goes: the upload landed, so the drive has the file. Not while a card
+    /// its link finished still has its drive copy uploading directly: that
+    /// upload reads the file, and keeps it for Retry if it fails.
     #[must_use]
     pub fn temp_copy_done_with(&self) -> bool {
-        matches!(self.status, PreviewStatus::Uploaded { .. } | PreviewStatus::Syncing { .. })
+        matches!(self.status, PreviewStatus::Uploaded { .. } | PreviewStatus::Syncing { .. }) && !self.drive_copy_pending
     }
 }
 
@@ -601,6 +673,7 @@ mod tests {
             link: LinkState::None,
             link_text: None,
             link_note: None,
+            link_info: None,
             link_progress: None,
             link_percent: None,
             actions: CardActions::default(),
@@ -613,6 +686,7 @@ mod tests {
             kept_locally: false,
             stopped_at_free_limit: false,
             notice: None,
+            drive_copy_pending: false,
         }
         .refreshed()
     }
@@ -1097,33 +1171,33 @@ mod tests {
         // Queued behind a long sync, not picked up yet, or uploading right
         // now: the link's own copy is on the server, so the card does not
         // wait for the queue, nor show the drive copy as a second upload.
-        assert!(link_finishes_card(&c, &SyncRow::Absent));
-        assert!(link_finishes_card(&c, &SyncRow::Queued));
-        assert!(link_finishes_card(&c, &SyncRow::Working));
+        assert!(link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Absent)));
+        assert!(link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Queued)));
+        assert!(link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Working)));
         // Done or failed: the engine's row decides.
-        assert!(!link_finishes_card(&c, &SyncRow::Completed));
-        assert!(!link_finishes_card(&c, &SyncRow::Failed(None)));
+        assert!(!link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Completed)));
+        assert!(!link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Failed(None))));
         // No link means no evidence the bytes reached the server: the
         // drive upload is the capture's only copy, so the card follows it.
         let mut no_link = syncing(false);
         no_link.link = LinkState::None;
-        assert!(!link_finishes_card(&no_link, &SyncRow::Queued));
-        assert!(!link_finishes_card(&no_link, &SyncRow::Working));
+        assert!(!link_finishes_card(&no_link, DriveCopy::Synced(&SyncRow::Queued)));
+        assert!(!link_finishes_card(&no_link, DriveCopy::Synced(&SyncRow::Working)));
         let mut creating = syncing(false);
         creating.link = LinkState::Creating;
-        assert!(!link_finishes_card(&creating, &SyncRow::Working));
+        assert!(!link_finishes_card(&creating, DriveCopy::Synced(&SyncRow::Working)));
         let mut failed_link = syncing(false);
         failed_link.link = LinkState::Failed { message: "no".into() };
-        assert!(!link_finishes_card(&failed_link, &SyncRow::Queued));
-        assert!(!link_finishes_card(&failed_link, &SyncRow::Working));
+        assert!(!link_finishes_card(&failed_link, DriveCopy::Synced(&SyncRow::Queued)));
+        assert!(!link_finishes_card(&failed_link, DriveCopy::Synced(&SyncRow::Working)));
         let mut broken = syncing(true);
         broken.link = LinkState::Broken { message: "no".into() };
-        assert!(!link_finishes_card(&broken, &SyncRow::Working));
+        assert!(!link_finishes_card(&broken, DriveCopy::Synced(&SyncRow::Working)));
         // Only a syncing card: one that failed stays failed until its row
         // moves it back to syncing.
         let mut failed = syncing(true);
         failed.status = status_after_sync_row(&failed, &SyncRow::Failed(None)).unwrap();
-        assert!(!link_finishes_card(&failed, &SyncRow::Working));
+        assert!(!link_finishes_card(&failed, DriveCopy::Synced(&SyncRow::Working)));
     }
 
     /// A recording whose link was copied while its upload ran, placed in a
@@ -1135,7 +1209,7 @@ mod tests {
     fn a_card_whose_drive_copy_is_uploading_finishes_with_its_link() {
         let c = syncing(true);
         assert_eq!(status_after_sync_row(&c, &SyncRow::Working), None, "the row alone keeps it syncing");
-        assert!(link_finishes_card(&c, &SyncRow::Working));
+        assert!(link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Working)));
         let next = status_after_sync_row(&c, &SyncRow::Completed).unwrap();
         assert_eq!(
             next,
@@ -1147,6 +1221,121 @@ mod tests {
         let done = c.with_outcome(9, next, Some("https://l".into())).unwrap();
         assert!(done.settled, "it may slide away like any finished card");
         assert_eq!(done.link_text.as_deref(), Some("Public link copied"));
+    }
+
+    /// A card whose capture goes to a drive that is not synced here: the
+    /// link's own copy is uploaded and copied, then the capture is uploaded
+    /// directly into the drive. That second upload used to start the card
+    /// again from 0 ("Uploading · 24% · Public link copied", as if the
+    /// recording were sent twice). The public link finishes the card at
+    /// once, and the drive copy goes on in the upload list.
+    #[test]
+    fn a_direct_upload_card_is_finished_by_its_link_not_restarted_by_the_drive_copy() {
+        // The link's upload, on the card.
+        let mut c = card(11);
+        c.remote = true;
+        c.link = LinkState::Uploading { copied: true };
+        c.share_url = Some("https://console.example/share/t#s=x".into());
+        c.share_token = Some("t".into());
+        c.link_progress = Some(LinkProgress::Uploading {
+            percent: 80,
+            seconds_left: Some(12),
+        });
+        let c = c.refreshed();
+        assert!(!link_finishes_card(&c, DriveCopy::Direct), "not while the link is still uploading");
+        assert_eq!(finished_by_link_while_direct(&c), None);
+
+        // The link's upload is done (`announce_minted`); the drive copy is
+        // about to start, and the card is still `Uploading`.
+        let mut minted = c;
+        minted.link = LinkState::Public { copied: true };
+        minted.status = PreviewStatus::Uploading;
+        let minted = minted.refreshed();
+        assert!(link_finishes_card(&minted, DriveCopy::Direct));
+
+        let done = finished_by_link_while_direct(&minted).expect("the link finishes the card");
+        assert_eq!(
+            done.status,
+            PreviewStatus::Uploaded {
+                link_copied: true,
+                link_error: None
+            }
+        );
+        assert!(done.settled, "it closes on its usual countdown");
+        assert_eq!(done.link_text.as_deref(), Some("Public link copied"));
+        assert!(
+            done.actions.copy_link && done.actions.revoke_link && done.actions.manage_link,
+            "{:?}",
+            done.actions
+        );
+        assert!(done.drive_copy_pending);
+        assert!(!done.temp_copy_done_with(), "closing it must keep the file the drive copy reads");
+        assert!(!done.is_parkable());
+        assert!(
+            serde_json::to_value(&done).unwrap().get("driveCopyPending").is_none(),
+            "never sent to the card"
+        );
+        assert!(!link_finishes_card(&done, DriveCopy::Direct), "finished once");
+
+        // The drive copy landed (`announce_placed`): the temp copy may go.
+        let mut landed = done.clone();
+        landed.drive_copy_pending = false;
+        landed.placed_path = Some(PathBuf::from("/tmp/capture/Recording.mp4"));
+        let landed = landed.refreshed();
+        assert!(landed.settled && landed.temp_copy_done_with());
+
+        // The drive copy failed (`announce_failed`): the card fails as any
+        // failed capture upload does, with Retry on the kept file.
+        let mut failed_copy = done;
+        failed_copy.status = failed(true);
+        failed_copy.drive_copy_pending = false;
+        let failed_copy = failed_copy.refreshed();
+        assert!(!failed_copy.settled);
+        assert!(failed_copy.actions.retry && failed_copy.is_parkable());
+        assert!(failed_copy.actions.copy_link, "the link still opens: it is its own copy");
+    }
+
+    /// Only a public link finishes a card on the direct path. With none
+    /// wanted, one still being made, one that failed or one copied and then
+    /// broken, the drive upload is the capture's only copy, so the card
+    /// follows it as before.
+    #[test]
+    fn a_direct_upload_card_without_a_public_link_follows_the_upload() {
+        for link in [
+            LinkState::None,
+            LinkState::Creating,
+            LinkState::Uploading { copied: true },
+            LinkState::Failed { message: "no".into() },
+            LinkState::Broken { message: "no".into() },
+            LinkState::Revoked,
+        ] {
+            let mut c = card(12);
+            c.link = link.clone();
+            let c = c.refreshed();
+            assert!(!link_finishes_card(&c, DriveCopy::Direct), "{link:?}");
+            assert_eq!(finished_by_link_while_direct(&c), None, "{link:?}");
+        }
+        // Only an uploading card: a synced one is its follower's, and a
+        // failed or finished one stays as it is.
+        let mut c = card(13);
+        c.link = LinkState::Public { copied: true };
+        for status in [
+            PreviewStatus::Syncing {
+                link_copied: true,
+                link_error: None,
+            },
+            PreviewStatus::Uploaded {
+                link_copied: true,
+                link_error: None,
+            },
+            failed(true),
+        ] {
+            c.status = status.clone();
+            assert!(!link_finishes_card(&c, DriveCopy::Direct), "{status:?}");
+        }
+        // And the synced rule never takes an uploading card.
+        c.status = PreviewStatus::Uploading;
+        assert!(!link_finishes_card(&c, DriveCopy::Synced(&SyncRow::Working)));
     }
 
     #[test]
@@ -1216,6 +1405,39 @@ mod tests {
         assert_eq!(done.link_text.as_deref(), Some("Public link copied"));
         assert_eq!(done.link_progress, None, "a finished upload is forgotten");
         assert!(done.actions.revoke_link);
+    }
+
+    /// While a recording's link uploads, the card shows that upload only,
+    /// with an info icon saying the link has its own copy and a backup goes
+    /// to Drive; once the link is ready the icon goes. A screenshot's link is
+    /// up in a moment and gets none.
+    #[test]
+    fn a_recordings_link_being_made_explains_its_own_copy_and_the_backup() {
+        for link in [LinkState::Creating, LinkState::Uploading { copied: true }] {
+            let mut c = card(14);
+            c.link = link.clone();
+            c.link_progress = Some(LinkProgress::Uploading {
+                percent: 42,
+                seconds_left: None,
+            });
+            let c = c.refreshed();
+            assert_eq!(c.link_info.as_deref(), Some(LINK_COPY_INFO), "{link:?}");
+            assert_eq!(c.link_percent, Some(42), "the card's bar is the link's upload");
+            assert_eq!(serde_json::to_value(&c).unwrap()["linkInfo"], LINK_COPY_INFO);
+        }
+        let mut c = card(14);
+        c.link = LinkState::Uploading { copied: true };
+        assert_eq!(c.clone().refreshed().link_text.as_deref(), Some("Link copied, uploading…"));
+        c.link = LinkState::Public { copied: true };
+        let ready = c.refreshed();
+        assert_eq!(ready.link_info, None, "no icon once the link is ready");
+        assert!(serde_json::to_value(&ready).unwrap().get("linkInfo").is_none());
+
+        let mut shot = card(15);
+        shot.kind = CaptureKind::Screenshot;
+        shot.link = LinkState::Creating;
+        assert_eq!(shot.refreshed().link_info, None);
+        assert!(LINK_COPY_INFO.chars().count() <= 120, "a short tooltip");
     }
 
     #[test]

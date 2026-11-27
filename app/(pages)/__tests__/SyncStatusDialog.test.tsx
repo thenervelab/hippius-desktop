@@ -185,6 +185,32 @@ describe("SyncStatusDialog", () => {
     expect(item).not.toHaveTextContent("2.05 KB");
   });
 
+  it("says a capture's drive copy is backing up, backed up, or couldn't back up", () => {
+    const files = [
+      makeFileProgress("Recording 1.mp4", { status: "inProgress", progressPercent: 24, totalBytes: 2048, note: "Backing up to Drive" }),
+      makeFileProgress("Recording 2.mp4", { status: "completed", progressPercent: 100, totalBytes: 2048, note: "Backed up to Drive" }),
+      makeFileProgress("Recording 3.mp4", {
+        status: "error",
+        totalBytes: 2048,
+        error: "Couldn't back up to Drive",
+        note: "Couldn't back up to Drive",
+      }),
+      makeFileProgress("photo.jpg", { status: "inProgress", progressPercent: 50, totalBytes: 2048 }),
+    ];
+    renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />);
+    fireEvent.click(screen.getByTestId("sync-status-toggle"));
+
+    const row = (name: string) => screen.getAllByTestId("file-item").find((el) => el.textContent?.includes(name))!;
+    expect(row("Recording 1.mp4")).toHaveTextContent("Backing up to Drive");
+    expect(row("Recording 1.mp4")).toHaveTextContent("24%");
+    expect(row("Recording 1.mp4")).not.toHaveTextContent("2.05 KB");
+    expect(row("Recording 2.mp4")).toHaveTextContent("Backed up to Drive");
+    expect(row("Recording 3.mp4")).toHaveTextContent("Couldn't back up to Drive");
+    // Any other upload keeps its size: nothing is relabelled that is not a backup.
+    expect(row("photo.jpg")).toHaveTextContent("2.05 KB");
+    expect(row("photo.jpg")).not.toHaveTextContent("Backing up");
+  });
+
   it("labels a self-resolving failure 'Retrying', not 'Error'", () => {
     // A file rewritten by a build tool mid-upload fails, then succeeds on the
     // next cycle unattended. Rendering it identically to a hard failure is what
