@@ -124,6 +124,10 @@ function answer(insights: FolderInsights, extra: Record<string, (args: Record<st
     if (extra[cmd]) return extra[cmd](args);
     if (cmd === "folder_share_get_insights") return insights;
     if (cmd === "folder_share_insights_csv_name") return "Board room activity 2026-11-18.csv";
+    // A server without folder gates or NDAs, unless a test says otherwise.
+    if (cmd === "share_get_gate") return { offered: false, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: null };
+    if (cmd === "share_get_nda") return { offered: false, on: false, text: null, editable: false, inPlan: null };
+    if (cmd === "share_nda_accepts") return { offered: false, hasText: false, text: null, accepts: [], nextAfter: null };
     return undefined;
   });
 }
@@ -263,6 +267,76 @@ describe("FolderInsightsPanel", () => {
     await screen.findAllByTestId("folder-insights-file");
     act(() => store.set(insightsSheetAtom, { shareToken: "t", fileName: "x.png" }));
     expect(store.get(folderInsightsAtom)).toBeNull();
+  });
+
+  it("asks for an email on the folder link by its hash, where Rust offers it", async () => {
+    const off = { offered: true, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: true };
+    answer(PAID, {
+      share_get_gate: () => off,
+      share_set_gate: () => ({ ...off, on: true, lists: { allow: [], block: [] } }),
+    });
+    renderPanel();
+    const card = await screen.findByTestId("rule-gate");
+    expect(invokeMock).toHaveBeenCalledWith("share_get_gate", { shareToken: HASH, kind: "folder" });
+    expect(invokeMock).toHaveBeenCalledWith("share_get_nda", { shareToken: HASH, kind: "folder" });
+    expect(screen.getByTestId("rule-allowList")).toBeInTheDocument();
+    expect(screen.queryByTestId("rule-nda")).toBeNull();
+
+    // The card's editor takes the place of the numbers.
+    fireEvent.click(within(card).getByRole("button"));
+    expect(screen.queryByTestId("folder-insights-summary")).toBeNull();
+    fireEvent.click(screen.getByRole("switch", { name: "Ask for email" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_set_gate", { shareToken: HASH, allow: "", block: "", kind: "folder" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByTestId("folder-insights-summary")).toBeInTheDocument();
+    expect(within(screen.getByTestId("rule-gate")).getByText("On")).toBeInTheDocument();
+  });
+
+  it("has no rules for a revoked link", async () => {
+    answer(PAID, { share_get_gate: () => ({ offered: true, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: true }) });
+    renderPanel({ ...TARGET, revoked: true });
+    await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByTestId("folder-link-rules")).toBeNull();
+    expect(invokeMock).not.toHaveBeenCalledWith("share_get_gate", expect.anything());
+  });
+
+  it("lists who accepted the folder link's NDA, by typed name, else the People tab's label", async () => {
+    answer(PAID, {
+      share_get_nda: () => ({ offered: true, on: true, text: "Keep it quiet.", editable: true, inPlan: true }),
+      share_nda_accepts: () => ({
+        offered: true,
+        hasText: true,
+        text: "Keep it quiet.",
+        accepts: [
+          { id: 1, viewerId: "q1w2e3", email: null, signerName: null, acceptedAt: "2026-11-05T10:00:00Z", earlier: false },
+          { id: 2, viewerId: "zz", email: null, signerName: "Dana Reyes", acceptedAt: "2026-11-06T10:00:00Z", earlier: false },
+        ],
+        nextAfter: null,
+      }),
+      share_nda_accepts_csv_name: () => "Board room NDA accepts 2026-11-18.csv",
+    });
+    renderPanel();
+    expect(within(await screen.findByTestId("rule-nda")).getByText("On")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("tab", { name: /NDA/ }));
+    expect(invokeMock).toHaveBeenCalledWith("share_nda_accepts", { shareToken: HASH, after: 0, kind: "folder" });
+    const rows = await screen.findAllByTestId("nda-accept");
+    expect(rows[0]).toHaveTextContent("Dana Reyes");
+    expect(rows[1]).toHaveTextContent("Viewer q1w2");
+    expect(screen.getByTestId("nda-current-text")).toHaveTextContent("Keep it quiet.");
+
+    saveMock.mockResolvedValueOnce("/Users/me/Desktop/accepts.csv");
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith("share_export_nda_accepts_csv", {
+        shareToken: HASH,
+        fileName: "Board room",
+        destination: "/Users/me/Desktop/accepts.csv",
+        viewerNames: { q1w2e3: "Viewer q1w2" },
+        kind: "folder",
+      }),
+    );
   });
 
   it("words the header's line from the link", () => {

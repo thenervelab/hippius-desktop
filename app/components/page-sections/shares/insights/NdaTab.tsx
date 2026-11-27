@@ -7,6 +7,7 @@ import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { getNdaAccepts, type NdaAccept, type NdaAccepts } from "@/app/lib/tauri/shareNda";
+import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { PersonName } from "./CommentThreads";
 import { EmptyLine } from "./EmptyLine";
 import { InsightsAvatar } from "./InsightsAvatar";
@@ -42,10 +43,10 @@ export function acceptsNewestFirst(pages: readonly NdaAccepts[]): NdaAccept[] {
  * every 30 s while the panel is open. `shown` is whether the panel has an NDA
  * tab: the server has NDA texts and the link has a text or any accepts.
  */
-export function useNdaAccepts(shareToken: string) {
+export function useNdaAccepts(shareToken: string, kind: LinkKind = "file") {
   const query = useInfiniteQuery({
-    queryKey: ndaAcceptsQueryKey(shareToken),
-    queryFn: ({ pageParam }) => getNdaAccepts(shareToken, pageParam),
+    queryKey: ndaAcceptsQueryKey(shareToken, kind),
+    queryFn: ({ pageParam }) => getNdaAccepts(shareToken, pageParam, kind),
     initialPageParam: 0,
     getNextPageParam: (last: NdaAccepts) => last.nextAfter ?? undefined,
     refetchInterval: 30_000,
@@ -78,12 +79,15 @@ export function NdaTab({
   viewerNames,
   shareToken,
   fileName,
+  kind = "file",
 }: {
   state: NdaAcceptsState;
   /** The Viewers tab's names, by viewer id. */
   viewerNames: Readonly<Record<string, string | null>>;
+  /** A file link's token, or a folder link's token hash. */
   shareToken: string;
   fileName: string;
+  kind?: LinkKind;
 }) {
   const { query, pages } = state;
   const first = pages[0] ?? null;
@@ -134,7 +138,7 @@ export function NdaTab({
               className={TEXT_LINK}
               disabled={saving !== null}
               onClick={() =>
-                run("export", "export the accepts", "Accepts saved as CSV", () => saveNdaAcceptsCsv(shareToken, fileName, viewerNames))
+                run("export", "export the accepts", "Accepts saved as CSV", () => saveNdaAcceptsCsv(shareToken, fileName, viewerNames, kind))
               }
             >
               <Download aria-hidden className="size-[13px]" />
@@ -192,7 +196,7 @@ export function NdaTab({
                           aria-label={`${RECORD} for ${name ?? "this accept"}`}
                           disabled={saving !== null}
                           onClick={() =>
-                            run(a.id, "save the record", "Record saved", () => saveNdaRecord(shareToken, fileName, a.id))
+                            run(a.id, "save the record", "Record saved", () => saveNdaRecord(shareToken, fileName, a.id, kind))
                           }
                         >
                           {RECORD}

@@ -67,7 +67,7 @@ use super::capabilities::ServerCapabilities;
 use super::comment_crypto::{self, CommentKey};
 use super::insights::{
     Api, KeyUnavailable, LINK_GONE, OfferedSwitches, PLAN_UNREADABLE, REQUEST_TIMEOUT, SettingsPatch, UNREACHABLE, WireEmail, capabilities_checked,
-    get_meta_body, patch_settings, read_ok, share_key_for, transport,
+    get_meta_body, patch_settings, read_ok, read_switches_in_plan, share_key_for, transport,
 };
 use super::nda::{read_link_text, set_link_text};
 use super::owner_wrap::{WrapKey, derive_wrap_key, open_file_link_secret, push_file_link_secrets};
@@ -460,6 +460,11 @@ pub struct RecipientLinks {
     pub can_add: bool,
     /// Oldest first.
     pub people: Vec<RecipientPerson>,
+    /// Whether the plan includes links per person (paid Drive plans only):
+    /// `Some(false)` on the free plan, where the app shows the upgrade prompt
+    /// in place of adding people; `None` when the plan could not be read
+    /// (nothing is locked, and the server still checks).
+    pub in_plan: Option<bool>,
 }
 
 /// What adding people did.
@@ -982,7 +987,7 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
     if source.link_label.is_some() {
         return Ok(RecipientLinks::default());
     }
-    let (label_key, wrap_key) = account_keys(&state, &account_id).await;
+    let ((label_key, wrap_key), in_plan) = tokio::join!(account_keys(&state, &account_id), read_switches_in_plan(&state, &account_id));
     let can_add = label_key.is_some() && share_key_for(&state, &account_id, &share_token).await.is_ok();
     let origin = super::commands::console_base_url();
     let recipients = recipient_rows(&rows, &source, Utc::now());
@@ -1002,6 +1007,7 @@ pub async fn share_recipient_links(state: tauri::State<'_, AppState>, share_toke
         offered: can_add || !people.is_empty(),
         can_add,
         people,
+        in_plan,
     })
 }
 
@@ -1013,6 +1019,11 @@ pub async fn share_add_recipient_links(state: tauri::State<'_, AppState>, share_
     let caps = capabilities_checked(&state, &account_id, UNREACHABLE).await?;
     if !caps.share_recipient_links {
         return Err(AppError::Validation(UNAVAILABLE.into()));
+    }
+    // Paid Drive plans only: a known free plan is refused before anything is
+    // minted, in the upgrade prompt's words. The server checks too.
+    if read_switches_in_plan(&state, &account_id).await == Some(false) {
+        return Err(AppError::Validation(RECIPIENTS_NOT_IN_PLAN.into()));
     }
     let api = Api::for_account(&state, &account_id).await?;
     let rows = get_listing(&state.api_client, &api).await?;

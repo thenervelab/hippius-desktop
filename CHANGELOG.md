@@ -17,11 +17,13 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- **Links per person show how to upgrade on the free plan.** Links per person come with paid Drive plans, so on the free plan the box for adding people is replaced by an upgrade card, and any links already made stay listed to copy or turn off.
 - The sign-in screen now shows what Hippius Drive does, in livelier slides: a network that keeps your files when part of it goes offline, files locked on your computer before they leave it, and screen recordings you can send as a link.
 - **A recording's link is copied the moment you stop recording.** You can paste it in chat straight away while the recording finishes uploading, and the chat shows its preview picture right away; the card shows how far the upload has got, and if the upload fails the card and the notification tell you the copied link won't open, and the card offers Retry. Long recordings also upload faster.
 
 ### Added
 
+- **Ask for an email and an NDA on folder links.** A folder link's Insights now show its rules as cards, like a file link: ask viewers to confirm their email with a code, let in only certain addresses or company domains, and ask them to accept your NDA before any file in the folder opens. A folder link with an NDA gets an NDA tab of who accepted and when, with Export and a Record for each accept. On paid Drive plans.
 - **A notification when an update is ready, even when Hippius sits in the tray.** The update used to be offered only inside the main window, which is easy to miss when the app is minimized, behind other windows or in the tray. Now you also get a system notification, and the tray popover shows "Hippius x.y.z is ready to install" until you update.
 - **Star files, folders and drives.** Choose Star from any file, folder or drive menu, the preview or the selection bar, and find everything you starred on the new Starred page in the sidebar. It looks and works like your Drive, in list or card view: starred folders and drives expand with their arrow or open right there on the Starred page, and each item says where it is. Starred items show a small star beside their name, and your stars are the same in the phone app and on the web.
 - **See the phones and computers linked to your account.** Settings has a new Devices section that lists each one with when it was last active, and you can unlink any of them except the computer you're using. This computer now appears there, and on your other devices, under its device name.
