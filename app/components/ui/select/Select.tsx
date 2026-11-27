@@ -13,6 +13,8 @@ export type SelectOption = {
   label: string;
   description?: string;
   disabled?: boolean;
+  /** Shown on hover, for example why a disabled option cannot be picked. */
+  title?: string;
 };
 
 export interface SelectProps {
@@ -221,6 +223,7 @@ const Select = React.forwardRef<
                       key={option.value}
                       value={option.value}
                       disabled={option.disabled}
+                      title={option.title}
                       className={cn(
                         "flex w-full min-w-0 cursor-pointer select-none items-center rounded-[6px]",
                         compact ? "px-2.5 py-1.5" : "px-3 py-3",

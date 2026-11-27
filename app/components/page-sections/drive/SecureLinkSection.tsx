@@ -31,6 +31,12 @@ export const FIRST_VIEW_EMAIL = "Email me when any link is first opened";
 /** The per-link email setting's label, and its accessible name. */
 export const LINK_VISIT_EMAILS = "Emails about this link";
 
+/**
+ * Why Every visit and First visit cannot be picked while the account's First
+ * views email is off: the server sends both through that one switch.
+ */
+export const VISIT_EMAILS_NEED_FIRST_VIEWS = "Turn on First views in Settings to get these";
+
 const VISIT_EMAIL_OPTIONS: ReadonlyArray<{ value: VisitEmails; label: string }> = [
   { value: "every", label: "Every visit" },
   { value: "first", label: "First visit" },
@@ -127,22 +133,34 @@ function useNotificationPreferences(enabled: boolean) {
  * these emails. An account with no email address gets one line saying how to
  * get them instead, never a switch that cannot do anything.
  */
-export function FirstViewEmailSwitch({ viewsCounted }: { viewsCounted: boolean }) {
+export function FirstViewEmailSwitch({ viewsCounted, shareToken }: { viewsCounted: boolean; shareToken?: string }) {
   const canReceive = useCanReceiveLinkEmails(viewsCounted);
   const { prefs, saving, setFirstViews } = useNotificationPreferences(viewsCounted && canReceive === true);
   if (!viewsCounted || canReceive === null) return null;
   if (!canReceive) return <LinkEmailsNeedSignIn className="mt-3" />;
-  if (!prefs) return null;
   return (
-    <div className="mt-3 flex items-center justify-between gap-3">
-      <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">{FIRST_VIEW_EMAIL}</span>
-      <SettingsToggle
-        ariaLabel={FIRST_VIEW_EMAIL}
-        checked={prefs.firstViews}
-        disabled={saving}
-        onCheckedChange={(on) => void setFirstViews(on)}
-      />
-    </div>
+    <>
+      {prefs && (
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <span className="text-xs font-medium text-grey-30 dark:text-grey-dark-700">{FIRST_VIEW_EMAIL}</span>
+          <SettingsToggle
+            ariaLabel={FIRST_VIEW_EMAIL}
+            checked={prefs.firstViews}
+            disabled={saving}
+            onCheckedChange={(on) => void setFirstViews(on)}
+          />
+        </div>
+      )}
+      {/* Beside the account switch, so turning First views on or off here
+          updates which of the link's choices can be picked at once. */}
+      {shareToken && (
+        <LinkVisitEmailsSelect
+          shareToken={shareToken}
+          viewsCounted={viewsCounted}
+          firstViews={prefs ? prefs.firstViews : null}
+        />
+      )}
+    </>
   );
 }
 
@@ -154,8 +172,21 @@ export function FirstViewEmailSwitch({ viewsCounted }: { viewsCounted: boolean }
  * and the account can get email, and only once Rust has read the link's
  * value: a link the server has no value for shows nothing. A change shows at
  * once and is put back if the server refuses it.
+ *
+ * `firstViews` is the account's First views email. While it is off, the
+ * server sends neither the first-view nor the every-visit email, so those
+ * two choices are disabled with the reason on hover; None stays, since it
+ * also stops the link's other emails. `null` (not read) disables nothing.
  */
-export function LinkVisitEmailsSelect({ shareToken, viewsCounted }: { shareToken: string; viewsCounted: boolean }) {
+export function LinkVisitEmailsSelect({
+  shareToken,
+  viewsCounted,
+  firstViews = null,
+}: {
+  shareToken: string;
+  viewsCounted: boolean;
+  firstViews?: boolean | null;
+}) {
   const offered = useAtomValue(shareLinkNotificationsEnabledAtom);
   const canReceive = useCanReceiveLinkEmails(offered && viewsCounted);
   const enabled = offered && viewsCounted && canReceive === true;
@@ -199,7 +230,15 @@ export function LinkVisitEmailsSelect({ shareToken, viewsCounted }: { shareToken
           value={visits}
           disabled={saving}
           onValueChange={(v) => void change(v as VisitEmails)}
-          options={VISIT_EMAIL_OPTIONS.map(({ value, label }) => ({ value, label }))}
+          options={VISIT_EMAIL_OPTIONS.map(({ value, label }) => {
+            const needsFirstViews = firstViews === false && value !== "off";
+            return {
+              value,
+              label,
+              disabled: needsFirstViews,
+              title: needsFirstViews ? VISIT_EMAILS_NEED_FIRST_VIEWS : undefined,
+            };
+          })}
         />
       </div>
     </div>
