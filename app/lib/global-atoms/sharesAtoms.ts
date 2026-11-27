@@ -108,6 +108,22 @@ export const shareNotificationsEnabledAtom = atom(
 );
 
 /**
+ * Whether the server sends the visit emails (`share_link_notifications`):
+ * the Return visits switch in Settings and a file link's own email setting.
+ */
+export const shareLinkNotificationsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_link_notifications === true,
+);
+
+/**
+ * Whether the server sends the NDA accepted and refused viewer emails
+ * (`share_event_notifications`), and so shows their switches in Settings.
+ */
+export const shareEventNotificationsEnabledAtom = atom(
+  (get) => get(serverCapabilitiesAtom)?.share_event_notifications === true,
+);
+
+/**
  * Parts of Insights waiting on the server. Each is `false` until the server
  * advertises it, and its part of the UI renders nothing until then:
  * per-link counts on the Captures row and the tables (`share_listing_counts`),
