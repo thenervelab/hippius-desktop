@@ -60,6 +60,11 @@ export interface SyncedFileDetail {
   fileName: string;
   totalBytes: number;
   action: string;
+  /**
+   * A remote delete that went to Trash. Rust sets it only when every remote
+   * delete of the cycle went there; absent otherwise and on older rows.
+   */
+  trashed?: boolean;
 }
 
 interface SyncOutcome {
@@ -68,6 +73,8 @@ interface SyncOutcome {
   files_downloaded: number;
   files_deleted_locally: number;
   files_deleted_remotely: number;
+  /** How many of `files_deleted_remotely` went to Trash. */
+  files_trashed_remotely?: number;
   /**
    * Per-file details for this cycle, populated by Rust from the
    * `sync.progress.current_session.files` HashMap in
@@ -92,6 +99,12 @@ interface FolderRecovered {
   label?: string;
 }
 
+/** The counts summed over the aggregation window, as Rust's
+ *  `SyncCycleCounts` reads them. */
+function emptyCounts() {
+  return { uploaded: 0, downloaded: 0, deletedLocally: 0, deletedRemotely: 0, trashedRemotely: 0 };
+}
+
 export function useFilesNotification() {
   const refreshUnread = useSetAtom(refreshUnreadCountAtom);
   const refreshEnabledTypes = useSetAtom(refreshEnabledTypesAtom);
@@ -101,7 +114,7 @@ export function useFilesNotification() {
   const areFilesNotificationsEnabled = enabledTypes.includes("Files");
 
   // Accumulate counts across multi-drive completion events
-  const pendingCountsRef = useRef({ uploaded: 0, downloaded: 0, deletedLocally: 0, deletedRemotely: 0 });
+  const pendingCountsRef = useRef(emptyCounts());
   const pendingFilesRef = useRef<SyncedFileDetail[]>([]);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -145,38 +158,29 @@ export function useFilesNotification() {
       if (cancelled || !userAddress) return;
       const counts = { ...pendingCountsRef.current };
       const capturedFiles = [...pendingFilesRef.current];
-      pendingCountsRef.current = { uploaded: 0, downloaded: 0, deletedLocally: 0, deletedRemotely: 0 };
+      pendingCountsRef.current = emptyCounts();
       pendingFilesRef.current = [];
 
       const total = counts.uploaded + counts.downloaded + counts.deletedLocally + counts.deletedRemotely;
       if (total === 0) return;
 
-      // Frontend formats the description from raw counts
-      const parts: string[] = [];
-      if (counts.uploaded > 0) parts.push(`${counts.uploaded} file${counts.uploaded !== 1 ? "s" : ""} uploaded`);
-      if (counts.downloaded > 0) parts.push(`${counts.downloaded} file${counts.downloaded !== 1 ? "s" : ""} downloaded`);
-      if (counts.deletedLocally > 0) parts.push(`${counts.deletedLocally} file${counts.deletedLocally !== 1 ? "s" : ""} deleted locally`);
-      if (counts.deletedRemotely > 0) parts.push(`${counts.deletedRemotely} file${counts.deletedRemotely !== 1 ? "s" : ""} deleted remotely`);
-      const description = parts.join(", ") + ".";
-
       const fileDetailsJson = capturedFiles.length > 0
         ? JSON.stringify(capturedFiles)
         : "";
 
-      // Single Rust call creates the notification. Outcome drives the
-      // title and notification_subtype prefix — the Rust side never
-      // infers it from the description.
+      // Single Rust call creates the notification. Rust writes the title
+      // AND the description from `counts` ("Moved 12 files to Trash"), so
+      // a delete that went to Trash never reads as deleted.
       //
-      // `fileCount` is the aggregate above, NOT `capturedFiles.length`:
+      // The counts are the aggregate above, NOT `capturedFiles.length`:
       // the detail list is capped at MAX_PENDING_NOTIFICATION_FILES here
       // and again at MAX_NOTIFICATION_FILES in Rust, so counting the list
       // would title a 5,000-file sync "Synced 200 files".
       await invoke("create_sync_notification", {
         userAddress,
-        description,
         fileDetailsJson,
         outcome: "success",
-        fileCount: total,
+        counts,
       });
       await refreshUnread();
     };
@@ -194,6 +198,7 @@ export function useFilesNotification() {
             pendingCountsRef.current.downloaded += o.files_downloaded;
             pendingCountsRef.current.deletedLocally += o.files_deleted_locally;
             pendingCountsRef.current.deletedRemotely += o.files_deleted_remotely;
+            pendingCountsRef.current.trashedRemotely += o.files_trashed_remotely ?? 0;
 
             // File details are carried on the event payload itself,
             // populated by Rust from the session state. This is the

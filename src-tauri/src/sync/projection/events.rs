@@ -1004,6 +1004,7 @@ mod tests {
                 file_name: "f.txt".to_string(),
                 total_bytes: 1,
                 action,
+                trashed: false,
             };
             let json = serde_json::to_value(&detail).expect("serialize SyncedFileDetail");
             assert_eq!(json["action"], wire, "FileAction wire string drifted (expected {wire})");
@@ -1012,6 +1013,49 @@ mod tests {
             let mut keys: Vec<&str> = json.as_object().expect("object").keys().map(String::as_str).collect();
             keys.sort_unstable();
             assert_eq!(keys, ["action", "fileName", "totalBytes"], "SyncedFileDetail key set drifted");
+        }
+    }
+
+    /// A remote delete that went to Trash carries `trashed: true`, which the
+    /// notification's file list reads; one that did not carries no key.
+    #[test]
+    fn trashed_deletes_are_marked_only_when_the_whole_cycle_went_to_trash() {
+        use hcfs_client::engine::progress::state::FileAction;
+        let rows = || {
+            vec![
+                SyncedFileDetail {
+                    file_name: "a.txt".into(),
+                    total_bytes: 1,
+                    action: FileAction::RemoteDelete,
+                    trashed: false,
+                },
+                SyncedFileDetail {
+                    file_name: "b.txt".into(),
+                    total_bytes: 1,
+                    action: FileAction::LocalDelete,
+                    trashed: false,
+                },
+                SyncedFileDetail {
+                    file_name: "c.txt".into(),
+                    total_bytes: 1,
+                    action: FileAction::Upload,
+                    trashed: false,
+                },
+            ]
+        };
+        let trashed = |files: &[SyncedFileDetail]| files.iter().map(|f| f.trashed).collect::<Vec<_>>();
+
+        let mut all = rows();
+        mark_trashed_deletes(&mut all, 1, 1);
+        assert_eq!(trashed(&all), [true, false, false], "only the remote delete went to Trash");
+        let json = serde_json::to_value(&all).expect("serialize");
+        assert_eq!(json[0]["trashed"], true);
+        assert!(json[1].get("trashed").is_none(), "an unmarked row carries no key");
+
+        for (deleted, moved) in [(1, 0), (3, 2)] {
+            let mut files = rows();
+            mark_trashed_deletes(&mut files, deleted, moved);
+            assert_eq!(trashed(&files), [false, false, false], "{moved} of {deleted} is not every delete");
         }
     }
 
@@ -1161,6 +1205,7 @@ mod tests {
                 files_downloaded: 0,
                 files_deleted_locally: 0,
                 files_deleted_remotely: 0,
+                files_trashed_remotely: 0,
                 conflicts_resolved: 0,
                 conflicts_skipped: 0,
                 files: Vec::new(),
@@ -1171,6 +1216,7 @@ mod tests {
                 "files_downloaded",
                 "files_deleted_locally",
                 "files_deleted_remotely",
+                "files_trashed_remotely",
                 "conflicts_resolved",
                 "conflicts_skipped",
                 "files",
@@ -1448,6 +1494,26 @@ pub struct SyncedFileDetail {
     pub file_name: String,
     pub total_bytes: u64,
     pub action: hcfs_client::engine::progress::state::FileAction,
+    /// A remote delete that went to the server's Trash. The engine counts
+    /// Trash per cycle, not per file, so this is set only when every remote
+    /// delete of the cycle went there ([`mark_trashed_deletes`]); absent
+    /// (never `false` on the wire) otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub trashed: bool,
+}
+
+/// Mark the cycle's remote deletes as moved to Trash when the counts say
+/// all of them were. A cycle that sent some to Trash and deleted others
+/// for good cannot say which file went where, so its rows stay unmarked
+/// and the notification's title and description carry the split.
+pub fn mark_trashed_deletes(files: &mut [SyncedFileDetail], deleted_remotely: usize, trashed_remotely: usize) {
+    use hcfs_client::engine::progress::state::FileAction;
+    if trashed_remotely == 0 || trashed_remotely < deleted_remotely {
+        return;
+    }
+    for file in files.iter_mut().filter(|f| f.action == FileAction::RemoteDelete) {
+        file.trashed = true;
+    }
 }
 
 /// Emitted when a sync cycle finishes successfully.
@@ -1465,6 +1531,9 @@ pub struct SyncCompletedPayload {
     pub files_downloaded: usize,
     pub files_deleted_locally: usize,
     pub files_deleted_remotely: usize,
+    /// How many of `files_deleted_remotely` went to the server's Trash
+    /// rather than being deleted for good.
+    pub files_trashed_remotely: usize,
     pub conflicts_resolved: usize,
     pub conflicts_skipped: usize,
     /// Files completed in this cycle. Populated by
@@ -1481,6 +1550,7 @@ impl SyncCompletedPayload {
             files_downloaded: o.files_downloaded,
             files_deleted_locally: o.files_deleted_locally,
             files_deleted_remotely: o.files_deleted_remotely,
+            files_trashed_remotely: o.files_trashed_remotely,
             conflicts_resolved: o.conflicts_resolved,
             conflicts_skipped: o.conflicts_skipped,
             files: Vec::new(),

@@ -30,6 +30,7 @@ import TabList from "@/components/ui/tabs/TabList";
 import TabPanel from "@/components/ui/tabs/TabPanel";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import { cn } from "@/lib/utils";
+import { PAUSED_BADGE, pausedTooltip } from "@/app/lib/utils/folderLinkPause";
 import { BILLING_ROUTE } from "@/app/lib/routes";
 import { useIsOnline } from "@/app/lib/hooks/useIsOnline";
 import { getFolderInsights, setFolderInsights, type FolderInsights } from "@/app/lib/tauri/folderInsights";
@@ -162,6 +163,16 @@ function PanelFor({ target, onClose }: { target: FolderInsightsTarget; onClose: 
             <p className={cn("mt-1 text-[13px] leading-[18px]", MUTED)} data-testid="folder-insights-subtitle">
               {folderSubtitle(target, insightsOn)}
             </p>
+            {target.paused === true && !target.revoked && (
+              <span
+                className="mt-1.5 inline-flex items-center rounded-[4px] bg-grey-90 px-2 py-0.5 text-xs font-medium text-grey-30 dark:bg-black-400 dark:text-grey-dark-500"
+                title={pausedTooltip(target)}
+                data-testid="folder-link-paused"
+              >
+                {PAUSED_BADGE}
+                <span className="sr-only">: {pausedTooltip(target)}</span>
+              </span>
+            )}
           </div>
           {canExport && (
             <button

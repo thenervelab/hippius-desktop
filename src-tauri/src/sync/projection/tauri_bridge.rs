@@ -276,6 +276,7 @@ pub(crate) fn handle_sync_completed(app: &AppHandle, mut payload: events::SyncCo
     let reported_count = payload.files_uploaded + payload.files_downloaded + payload.files_deleted_locally + payload.files_deleted_remotely;
     let max_files = reported_count.min(crate::sync::progress::MAX_NOTIFICATION_FILES);
     payload.files = crate::sync::progress::collect_cycle_files_for_label(&app_state.sync, &payload.label, max_files);
+    events::mark_trashed_deletes(&mut payload.files, payload.files_deleted_remotely, payload.files_trashed_remotely);
 
     // Side-channel: keep the server's folder entities and the on-disk directory
     // tree in step. ONE combined fire-and-forget task reconciles local→server
@@ -928,11 +929,11 @@ fn handle_engine_sync_completed(app: &AppHandle, event: SyncEvent) {
         files_downloaded,
         files_deleted_locally,
         files_deleted_remotely,
+        files_trashed_remotely,
         conflicts_resolved,
         conflicts_skipped,
         files_failed,
-        // `files_trashed_remotely` (how many of the remote deletes went to
-        // Trash) and any later count: the variant is non-exhaustive.
+        // Any later count: the variant is non-exhaustive.
         ..
     } = event
     else {
@@ -946,6 +947,7 @@ fn handle_engine_sync_completed(app: &AppHandle, event: SyncEvent) {
         files_downloaded,
         files_deleted_locally,
         files_deleted_remotely,
+        files_trashed_remotely,
         conflicts_resolved,
         conflicts_skipped,
         files: Vec::new(),

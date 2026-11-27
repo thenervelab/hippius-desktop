@@ -64,6 +64,7 @@ interface CompletedOverrides {
   files_downloaded?: number;
   files_deleted_locally?: number;
   files_deleted_remotely?: number;
+  files_trashed_remotely?: number;
   fileCount?: number; // how many SyncedFileDetail entries to attach
   label?: string;
 }
@@ -77,6 +78,7 @@ function completed(o: CompletedOverrides) {
     files_downloaded: o.files_downloaded ?? 0,
     files_deleted_locally: o.files_deleted_locally ?? 0,
     files_deleted_remotely: o.files_deleted_remotely ?? 0,
+    files_trashed_remotely: o.files_trashed_remotely ?? 0,
     files: Array.from({ length: detailCount }, (_, i) => ({
       fileName: `f${i}.bin`,
       totalBytes: 1,
@@ -167,11 +169,46 @@ describe("useFilesNotification — completion aggregation", () => {
     const calls = syncNotificationCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.[1]).toMatchObject({
-      description: "86 files uploaded.",
       outcome: "success",
       userAddress: "5poll",
-      // The title Rust writes counts THIS, not the (capped) detail list.
-      fileCount: 86,
+      // Rust writes the title and the description from THESE, not from the
+      // (capped) detail list.
+      counts: { uploaded: 86, downloaded: 0, deletedLocally: 0, deletedRemotely: 0, trashedRemotely: 0 },
+    });
+    // The words are Rust's: the hook sends none.
+    expect((calls[0]?.[1] as { description?: string }).description).toBeUndefined();
+  });
+
+  it("sends how many deletes went to Trash, summed over the window", async () => {
+    mount(true);
+    await flushRegistration();
+    await act(async () => {
+      await tauri.emitEvent(
+        "hcfs_sync_completed",
+        completed({ files_deleted_remotely: 8, files_trashed_remotely: 8 }),
+      );
+      await tauri.emitEvent(
+        "hcfs_sync_completed",
+        completed({ files_deleted_remotely: 4, files_trashed_remotely: 3, files_deleted_locally: 1 }),
+      );
+    });
+    await advance(AGGREGATION_MS);
+    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
+      counts: { uploaded: 0, downloaded: 0, deletedLocally: 1, deletedRemotely: 12, trashedRemotely: 11 },
+    });
+  });
+
+  it("reads a completion without a Trash count as none went there", async () => {
+    mount(true);
+    await flushRegistration();
+    const older = { ...completed({ files_deleted_remotely: 2 }) } as Record<string, unknown>;
+    delete older.files_trashed_remotely;
+    await act(async () => {
+      await tauri.emitEvent("hcfs_sync_completed", older);
+    });
+    await advance(AGGREGATION_MS);
+    expect(syncNotificationCalls()[0]?.[1]).toMatchObject({
+      counts: { deletedRemotely: 2, trashedRemotely: 0 },
     });
   });
 
@@ -194,16 +231,14 @@ describe("useFilesNotification — completion aggregation", () => {
     await advance(AGGREGATION_MS);
 
     const args = syncNotificationCalls()[0]?.[1] as {
-      description: string;
       fileDetailsJson: string;
-      fileCount: number;
+      counts: { uploaded: number };
     };
-    expect(args.description).toBe("250 files uploaded."); // count is NOT truncated
     expect(JSON.parse(args.fileDetailsJson)).toHaveLength(200); // detail list IS capped
-    // The `fileCount` key (camelCase — Tauri renames the Rust `file_count`
-    // param) is the ONLY uncapped number Rust can title with. Sending the
-    // list length instead would render "Synced 200 files" for 250 files.
-    expect(args.fileCount).toBe(250);
+    // The counts are the ONLY uncapped numbers Rust can title and describe
+    // with. Sending the list length instead would render "Synced 200 files"
+    // for 250 files.
+    expect(args.counts.uploaded).toBe(250);
   });
 
   it("prefers the OAuth substrate address over the polkadot address", async () => {
@@ -243,9 +278,9 @@ describe("useFilesNotification — failure path", () => {
       outcome: "error",
       description: 'Sync failed for folder "photos": boom',
     });
-    // A failure carries no file count: Rust's title must come from the
-    // outcome alone, never from a number a success path happened to leave.
-    expect((calls[0]?.[1] as { fileCount?: number }).fileCount).toBeUndefined();
+    // A failure carries no counts: Rust's title must come from the outcome
+    // alone, never from a number a success path happened to leave.
+    expect((calls[0]?.[1] as { counts?: unknown }).counts).toBeUndefined();
   });
 
   // An unplugged disk is not a failed sync. Rust saves its own "Drive
