@@ -13,6 +13,7 @@ import {
   removeLinkGate,
   setLinkGate,
   type LinkGate,
+  type LinkKind,
 } from "@/app/lib/tauri/shareGate";
 import { actionErrorLine } from "./insightsView";
 
@@ -40,31 +41,31 @@ export function gateCountsLine(gate: Pick<LinkGate, "allowCount" | "blockCount">
 
 /**
  * A link's email gate as read from Rust, and the setter its editors share.
- * `null` reads nothing (a folder link, which has no gate). Nothing while it
- * is read or if the read fails, so a link without the feature looks as it
- * always did.
+ * `null` reads nothing. A folder link (`kind` "folder") is named by its
+ * token hash. Nothing while it is read or if the read fails, so a link
+ * without the feature looks as it always did.
  */
-export function useLinkGate(shareToken: string | null) {
+export function useLinkGate(shareToken: string | null, kind: LinkKind = "file") {
   const [gate, setGate] = useState<LinkGate | null>(null);
   useEffect(() => {
     let alive = true;
     setGate(null);
     if (shareToken === null) return;
     Promise.resolve()
-      .then(() => getLinkGate(shareToken))
+      .then(() => getLinkGate(shareToken, kind))
       .then((g) => alive && setGate(g))
       .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [shareToken]);
+  }, [shareToken, kind]);
   return { gate, setGate };
 }
 
 export type LinkGateStore = ReturnType<typeof useLinkGate>;
 
 /**
- * "Ask for email" on a file link: viewers confirm an email with a mailed
+ * "Ask for email" on a file or folder link: viewers confirm an email with a mailed
  * code before the link opens, and the owner can let in only some addresses
  * and domains, or keep some out. Drawn only when Rust says the server has
  * email gates (`offered`).
@@ -78,19 +79,22 @@ export type LinkGateStore = ReturnType<typeof useLinkGate>;
  */
 export default function EmailGateSettings({
   shareToken,
+  kind = "file",
   onUpgrade,
   layout = "stack",
   store,
   part,
 }: {
+  /** A file link's token, or a folder link's token hash. */
   shareToken: string;
+  kind?: LinkKind;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
   layout?: "stack" | "list";
   store?: LinkGateStore;
   part?: "switch" | "lists";
 }) {
-  const own = useLinkGate(store ? null : shareToken);
+  const own = useLinkGate(store ? null : shareToken, kind);
   const { gate, setGate } = store ?? own;
   const [busy, setBusy] = useState(false);
   const [asking, setAsking] = useState(false);
@@ -129,9 +133,9 @@ export default function EmailGateSettings({
     setBusy(true);
     try {
       if (on) {
-        show(await setLinkGate(shareToken, "", ""));
+        show(await setLinkGate(shareToken, "", "", kind));
       } else {
-        await removeLinkGate(shareToken);
+        await removeLinkGate(shareToken, kind);
         show({ ...gate, on: false, allowCount: 0, blockCount: 0, lists: null });
       }
     } catch (err) {
@@ -155,7 +159,7 @@ export default function EmailGateSettings({
     setListError(null);
     setBusy(true);
     try {
-      show(await setLinkGate(shareToken, allowText, blockText));
+      show(await setLinkGate(shareToken, allowText, blockText, kind));
       toast.success("Saved");
     } catch (err) {
       const message = (err as { kind?: unknown; message?: unknown } | null)?.message;

@@ -1577,7 +1577,7 @@ function DoneBody({
           </div>
         )}
         {/* File links only; Rust offers it only on a server with links per person. */}
-        {engagement && <RecipientLinks shareToken={link.shareToken} />}
+        {engagement && <RecipientLinks shareToken={link.shareToken} onUpgrade={onUpgrade} />}
         <FirstViewEmailSwitch viewsCounted={Boolean(switches?.insights)} />
           </>
         )}
