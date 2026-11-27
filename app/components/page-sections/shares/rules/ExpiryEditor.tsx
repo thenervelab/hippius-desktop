@@ -46,7 +46,20 @@ export function dayOf(expiresAt: string | null): string {
  * be picked comes from Rust (`share_expiry_day_range`, 2 hours to a year
  * ahead); the link ends at the end of the day picked.
  */
-export function ExpiryEditor({ expiry, expiresAt }: { expiry: ExpiryEdit; expiresAt: string | null }) {
+export function ExpiryEditor({
+  expiry,
+  expiresAt,
+  label,
+}: {
+  expiry: ExpiryEdit;
+  expiresAt: string | null;
+  /**
+   * Drawn as a row: this label, the list beside it, and the date field (when
+   * picked) under both. For a row in Link settings; without one it is the
+   * card's editor, the list on its own.
+   */
+  label?: string;
+}) {
   const caps = useAtomValue(serverCapabilitiesAtom);
   const datesOffered = Boolean(expiry.onDate) && caps?.share_expiry_date === true;
   // Asked of Rust once the date is offered: a local answer, no request.
@@ -78,23 +91,35 @@ export function ExpiryEditor({ expiry, expiresAt }: { expiry: ExpiryEdit; expire
   const options: { label: string; value: string }[] = TTL_OPTIONS.map(({ label, value: v }) => ({ label, value: v }));
   if (onDate) options.push({ label: ON_A_DATE_LABEL, value: ON_A_DATE });
 
+  const select = (
+    <Select
+      ariaLabel="Link expires"
+      value={value}
+      placeholder={label ? "Choose" : "Choose how long it lasts"}
+      disabled={expiry.saving}
+      onValueChange={(v) => {
+        if (v === ON_A_DATE) {
+          setPicking(true);
+          return;
+        }
+        setPicking(false);
+        expiry.onChange(v as ShareTtl);
+      }}
+      options={options}
+      size={label ? "compact" : undefined}
+    />
+  );
+
   return (
-    <div className="flex flex-col gap-2.5">
-      <Select
-        ariaLabel="Link expires"
-        value={value}
-        placeholder="Choose how long it lasts"
-        disabled={expiry.saving}
-        onValueChange={(v) => {
-          if (v === ON_A_DATE) {
-            setPicking(true);
-            return;
-          }
-          setPicking(false);
-          expiry.onChange(v as ShareTtl);
-        }}
-        options={options}
-      />
+    <div className={cn("flex flex-col gap-2.5", label && "px-3 py-2.5")}>
+      {label ? (
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[13px] font-medium text-grey-10 dark:text-white">{label}</span>
+          <div className="w-[160px] shrink-0">{select}</div>
+        </div>
+      ) : (
+        select
+      )}
       {showDate && onDate && range.data && (
         <form
           className="flex items-center gap-2"

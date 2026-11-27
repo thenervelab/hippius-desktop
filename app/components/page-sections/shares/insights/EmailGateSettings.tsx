@@ -18,7 +18,7 @@ import {
   type LinkKind,
 } from "@/app/lib/tauri/shareGate";
 import { GateChipsInput, type GateChipsHandle } from "./GateChipsInput";
-import { DriveLockedLine, UNLOCK_TO_SEE_LISTS, useDriveLocked, useDriveUnlock } from "./DriveUnlock";
+import { DriveLockedLine, LockMark, UNLOCK_TO_SEE_LISTS, useDriveLocked, useDriveUnlock } from "./DriveUnlock";
 import { actionErrorLine } from "./insightsView";
 import { useUnlockCount } from "./useUnlockCount";
 
@@ -94,7 +94,9 @@ export type LinkGateStore = ReturnType<typeof useLinkGate>;
  * the gate a host already read (the rule cards' summary); without one it
  * reads its own. `part` draws only the switch (the "Ask for email" card) or
  * only the lists (the "Allow list" card, where saving lists turns the gate
- * on); both by default.
+ * on); both by default. `row` is `list` without its border, for a row in
+ * the side panel's Link settings list. `onDirtyChange` says whether the
+ * lists hold changes that are not saved, so a host can ask before leaving.
  */
 export default function EmailGateSettings({
   shareToken,
@@ -103,15 +105,17 @@ export default function EmailGateSettings({
   layout = "stack",
   store,
   part,
+  onDirtyChange,
 }: {
   /** A file link's token, or a folder link's token hash. */
   shareToken: string;
   kind?: LinkKind;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
-  layout?: "stack" | "list";
+  layout?: "stack" | "list" | "row";
   store?: LinkGateStore;
   part?: "switch" | "lists";
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const own = useLinkGate(store ? null : shareToken, kind);
   const { gate, setGate } = store ?? own;
@@ -131,11 +135,31 @@ export default function EmailGateSettings({
     setBlock(asEntries(gate?.lists?.block));
   }, [gate]);
 
+  // Typed or changed in the boxes and not saved yet (the Save button shows).
+  const saved = gate?.on ? gate.lists : null;
+  const anyTyped = typing.allow || typing.block;
+  const dirty =
+    gate?.offered === true &&
+    part !== "switch" &&
+    !driveLocked &&
+    (anyTyped ||
+      (saved !== null
+        ? !sameList(allow, saved.allow) || !sameList(block, saved.block)
+        : part === "lists" && !gate.on && (allow.length > 0 || block.length > 0)));
+  const onDirtyRef = useRef(onDirtyChange);
+  onDirtyRef.current = onDirtyChange;
+  useEffect(() => {
+    onDirtyRef.current?.(dirty);
+  }, [dirty]);
+  // Unmounted, nothing of it is left unsaved.
+  useEffect(() => () => onDirtyRef.current?.(false), []);
+
   const show = (next: LinkGate) => setGate(next);
 
   if (!gate?.offered) return null;
   const locked = gate.inPlan === false;
-  const list = layout === "list";
+  const list = layout !== "stack";
+  const row = layout === "row";
 
   const refused = (err: unknown, doing: string) => {
     if (isGateNotInPlan(err)) {
@@ -168,18 +192,11 @@ export default function EmailGateSettings({
     }
   };
 
-  const saved = gate.on ? gate.lists : null;
   const showSwitch = part !== "lists";
   // The lists alone may be written while the gate is off: saving them turns it on.
   // While the Drive is locked they can be neither read nor sealed here.
   const listsShown =
     !driveLocked && (part === "lists" ? !(gate.on && gate.lists === null) : gate.on && gate.lists !== null);
-  const anyTyped = typing.allow || typing.block;
-  const dirty =
-    anyTyped ||
-    (saved !== null
-      ? !sameList(allow, saved.allow) || !sameList(block, saved.block)
-      : part === "lists" && !gate.on && (allow.length > 0 || block.length > 0));
   const invalid = [...allow, ...block].some((e) => e.error !== null);
 
   // Saving only ever sets the gate (on, with these lists). It never removes
@@ -217,7 +234,12 @@ export default function EmailGateSettings({
 
   return (
     <div className={cn("flex flex-col", !list && "mt-3")} data-testid="email-gate-settings">
-      <div className={cn("flex flex-col gap-2.5", list && "rounded-[12px] border border-grey-80 px-3 py-2.5 dark:border-[#494949]")}>
+      <div
+        className={cn(
+          "flex flex-col gap-2.5",
+          row ? "px-3 py-2.5" : list && "rounded-[12px] border border-grey-80 px-3 py-2.5 dark:border-[#494949]",
+        )}
+      >
         {showSwitch && (
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -227,7 +249,11 @@ export default function EmailGateSettings({
                 list ? "text-[13px] text-grey-10 dark:text-white" : "text-xs text-grey-30 dark:text-grey-dark-700",
               )}
             >
-              {GATE_LABEL}
+              <span className="inline-flex items-center gap-1.5">
+                {GATE_LABEL}
+                {/* Turning it on needs the Drive unlocked (see LockedGateToggle). */}
+                {driveLocked && !gate.on && !locked && <LockMark />}
+              </span>
             </p>
             <p className="text-xs text-grey-50 dark:text-grey-dark-600">
               {locked ? GATE_LOCKED_DESCRIPTION : GATE_DESCRIPTION}
@@ -305,11 +331,11 @@ export default function EmailGateSettings({
           </div>
         )}
       </div>
-      <div aria-live="polite">
+      <div aria-live="polite" className={row ? "px-3" : undefined}>
         {asking && (
           <SwitchesUpgradeNotice
             onUpgrade={onUpgrade}
-            className={list ? "mt-3" : "mt-2"}
+            className={row ? "mb-3" : list ? "mt-3" : "mt-2"}
             label={GATE_UPGRADE_LABEL}
             prompt={GATE_LOCKED_PROMPT}
             body={GATE_UPGRADE_BODY}

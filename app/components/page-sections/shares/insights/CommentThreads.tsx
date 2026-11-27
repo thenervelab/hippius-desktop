@@ -50,7 +50,7 @@ import {
 } from "./insightsView";
 import { EmptyLine } from "./EmptyLine";
 import { LoadError } from "./LoadError";
-import { SwitchOffNotice } from "./LinkSettingsPopover";
+import { SwitchOffNotice } from "./LinkSettings";
 import { DIVIDE, FLOATING, FOCUS, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
 
 /** Which question a comment row is asking, if any. */

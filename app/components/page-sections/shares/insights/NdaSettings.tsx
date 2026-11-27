@@ -78,7 +78,8 @@ export type LinkNdaStore = ReturnType<typeof useLinkNda>;
  * `layout` matches the switches it sits with: `stack` in the share dialog,
  * `list` (a bordered row) in the Insights sheet's Link settings. `store` is
  * the setting a host already read (the rule cards' summary); without one it
- * reads its own.
+ * reads its own. `onDirtyChange` says whether the text box holds changes
+ * that are not saved, so a host can ask before leaving.
  */
 export default function NdaSettings({
   shareToken,
@@ -86,6 +87,7 @@ export default function NdaSettings({
   onUpgrade,
   layout = "stack",
   store,
+  onDirtyChange,
 }: {
   /** A file link's token, or a folder link's token hash. */
   shareToken: string;
@@ -94,6 +96,7 @@ export default function NdaSettings({
   onUpgrade: () => void;
   layout?: "stack" | "list";
   store?: LinkNdaStore;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   // Optional: the share dialog has no query cache; the Insights panel does,
   // and its NDA tab is told to read again after a change.
@@ -116,6 +119,16 @@ export default function NdaSettings({
   useEffect(() => setWriting(false), [shareToken]);
 
   const saved = nda?.text ?? null;
+  // Written in the box and not saved yet (the Save button shows).
+  const dirty = draft.trim() !== "" && draft.trim() !== (saved ?? "");
+  const unsaved = nda?.offered === true && dirty;
+  const onDirtyRef = useRef(onDirtyChange);
+  onDirtyRef.current = onDirtyChange;
+  useEffect(() => {
+    onDirtyRef.current?.(unsaved);
+  }, [unsaved]);
+  // Unmounted, nothing of it is left unsaved.
+  useEffect(() => () => onDirtyRef.current?.(false), []);
 
   if (!nda?.offered) return null;
   const locked = nda.inPlan === false;
@@ -177,7 +190,6 @@ export default function NdaSettings({
   };
 
   const editable = on && nda.editable && (writing || saved !== null);
-  const dirty = draft.trim() !== "" && draft.trim() !== (saved ?? "");
 
   return (
     <div className={cn("flex flex-col", !list && "mt-3")} data-testid="nda-settings">

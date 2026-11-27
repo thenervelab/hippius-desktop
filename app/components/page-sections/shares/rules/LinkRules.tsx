@@ -9,6 +9,7 @@ import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { MUTED } from "@/components/page-sections/shares/insights/panelStyles";
 import { DriveLockedLine, useDriveLocked } from "@/components/page-sections/shares/insights/DriveUnlock";
 import { RuleCards, type LinkRule } from "./RuleCards";
+import { useRuleStack } from "./ruleStack";
 import { ExpiryEditor, TTL_OPTIONS, type ExpiryEdit } from "./ExpiryEditor";
 import {
   allowListSummary,
@@ -38,6 +39,11 @@ const NO_SWITCHES = { insights: false, comments: false, reactions: false } as co
  * (`share_watermark_switch`, Rust then sends `watermark`); elsewhere it only
  * reads the older rule, a PDF while downloads are off. Expiry offers a
  * chosen date beside the presets where the server takes one.
+ *
+ * Inside the side panel's Link settings (a `RuleStackContext`), the short
+ * rules (Ask for email, Watermark, Download, Expiry) are drawn as rows with
+ * their control in place, and only the long ones (Allow list, NDA) open as
+ * a level of their own.
  */
 export function LinkRules({
   shareToken,
@@ -85,8 +91,12 @@ export function LinkRules({
   const gateStore = useLinkGate(shareToken);
   const ndaStore = useLinkNda(shareToken);
   const driveLocked = useDriveLocked();
+  const stack = useRuleStack();
+  const inline = stack !== null;
   const rules: LinkRule[] =
-    shareToken !== null ? accessRules({ shareToken, kind: "file", gateStore, ndaStore, onUpgrade, driveLocked }) : [];
+    shareToken !== null
+      ? accessRules({ shareToken, kind: "file", gateStore, ndaStore, onUpgrade, driveLocked, inline, onDirty: stack?.dirty })
+      : [];
 
   if (shareToken !== null) {
     const summary = watermarkSummary(fileName, mimeType, download, watermark, gateStore.gate?.on === true);
@@ -96,9 +106,10 @@ export function LinkRules({
       id: "watermark",
       label: RULE_LABELS.watermark,
       ...summary,
+      inline,
       editor: editable ? (
         <LinkEngagementSwitches
-          layout="list"
+          layout={inline ? "row" : "list"}
           offered={NO_SWITCHES}
           value={NO_SWITCHES}
           disabled={savingSwitches}
@@ -118,9 +129,10 @@ export function LinkRules({
       id: "download",
       label: RULE_LABELS.download,
       ...downloadSummary(download),
+      inline,
       editor: (
         <LinkEngagementSwitches
-            layout="list"
+            layout={inline ? "row" : "list"}
             offered={NO_SWITCHES}
             value={NO_SWITCHES}
             disabled={savingSwitches}
@@ -141,7 +153,10 @@ export function LinkRules({
       id: "expiry",
       label: RULE_LABELS.expiry,
       ...expirySummary(expiresAt),
-      editor: expiry ? <ExpiryEditor expiry={expiry} expiresAt={expiresAt} /> : undefined,
+      inline,
+      editor: expiry ? (
+        <ExpiryEditor expiry={expiry} expiresAt={expiresAt} label={inline ? RULE_LABELS.expiry : undefined} />
+      ) : undefined,
     });
   }
 
@@ -195,6 +210,8 @@ export function accessRules({
   ndaStore,
   onUpgrade,
   driveLocked = false,
+  inline = false,
+  onDirty,
 }: {
   /** A file link's token, or a folder link's token hash. */
   shareToken: string;
@@ -208,6 +225,10 @@ export function accessRules({
    * elsewhere) shows a lock and unlocks first.
    */
   driveLocked?: boolean;
+  /** Ask for email drawn in its row, as the side panel's Link settings does. */
+  inline?: boolean;
+  /** Told whether the Allow list's or the NDA's editor holds unsaved changes. */
+  onDirty?: (id: string, dirty: boolean) => void;
 }): LinkRule[] {
   const rules: LinkRule[] = [];
   const gate = gateStore.gate;
@@ -218,14 +239,34 @@ export function accessRules({
       ...gateSummary(gate.on),
       // Turning it off needs no key; turning it on seals the (empty) lists.
       locked: driveLocked && !gate.on,
-      editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="switch" />,
+      inline,
+      editor: (
+        <EmailGateSettings
+          shareToken={shareToken}
+          kind={kind}
+          onUpgrade={onUpgrade}
+          layout={inline ? "row" : "list"}
+          store={gateStore}
+          part="switch"
+        />
+      ),
     });
     rules.push({
       id: "allowList",
       label: RULE_LABELS.allowList,
       ...allowListSummary(gate),
       locked: driveLocked,
-      editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="lists" />,
+      editor: (
+        <EmailGateSettings
+          shareToken={shareToken}
+          kind={kind}
+          onUpgrade={onUpgrade}
+          layout="list"
+          store={gateStore}
+          part="lists"
+          onDirtyChange={onDirty && ((d) => onDirty("allowList", d))}
+        />
+      ),
     });
   }
 
@@ -249,7 +290,16 @@ export function accessRules({
       ...ndaSummary(nda),
       // A text can't be written, or one made elsewhere read, until the Drive is unlocked.
       locked: driveLocked && (!nda.editable || (nda.on && nda.text === null)),
-      editor: <NdaSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={ndaStore} />,
+      editor: (
+        <NdaSettings
+          shareToken={shareToken}
+          kind={kind}
+          onUpgrade={onUpgrade}
+          layout="list"
+          store={ndaStore}
+          onDirtyChange={onDirty && ((d) => onDirty("nda", d))}
+        />
+      ),
     });
   }
   return rules;
@@ -275,6 +325,16 @@ export function FolderLinkRules({
   const gateStore = useLinkGate(tokenHash, "folder");
   const ndaStore = useLinkNda(tokenHash, "folder");
   const driveLocked = useDriveLocked();
-  const rules = accessRules({ shareToken: tokenHash, kind: "folder", gateStore, ndaStore, onUpgrade, driveLocked });
+  const stack = useRuleStack();
+  const rules = accessRules({
+    shareToken: tokenHash,
+    kind: "folder",
+    gateStore,
+    ndaStore,
+    onUpgrade,
+    driveLocked,
+    inline: stack !== null,
+    onDirty: stack?.dirty,
+  });
   return <LockableRuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
 }
