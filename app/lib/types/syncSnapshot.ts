@@ -17,6 +17,13 @@ export interface FileProgress {
    *  null/absent while pending/in-flight. The widget cap uses it server-side
    *  to keep the newest completions; the FE does not render it. */
   completedAt?: number | null;
+  /**
+   * Rust's word for what this row is when it is not a plain upload, shown in
+   * the size's place: a capture's copy saved into the drive after its link
+   * made its own copy reads "Backing up to Drive". Only remote upload rows
+   * carry one (`RemoteUploadProgress.note`); the engine's never do.
+   */
+  note?: string;
 }
 
 export interface SyncSnapshot {

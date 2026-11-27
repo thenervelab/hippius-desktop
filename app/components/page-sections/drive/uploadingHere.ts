@@ -31,6 +31,8 @@ export interface UploadingRow {
   status: string;
   bytesTransferred: number;
   totalBytes: number;
+  /** Rust's word for the row ("Backing up to Drive" for a capture's drive copy), when it has one. */
+  note?: string | null;
 }
 
 /**
@@ -58,4 +60,13 @@ export function uploadsInFolder(
 export function rowPercent(row: Pick<UploadingRow, "status" | "bytesTransferred" | "totalBytes">): number | null {
   if (row.status === "encrypting" || row.status === "pending") return null;
   return cappedPercent(row.bytesTransferred, row.totalBytes);
+}
+
+/**
+ * A row's words: Rust's note for a capture's drive copy ("Backing up to
+ * Drive · Recording.mp4"), else whether it is uploading or failed.
+ */
+export function rowText(row: Pick<UploadingRow, "fileName" | "note">, failed: boolean): string {
+  if (row.note) return `${row.note} · ${row.fileName}`;
+  return failed ? `Couldn't upload ${row.fileName}` : `Uploading ${row.fileName}`;
 }

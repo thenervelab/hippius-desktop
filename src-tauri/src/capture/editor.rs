@@ -1173,6 +1173,7 @@ async fn upload_remote_copy(
             destination.folder_hash.clone(),
             // A screenshot: the server counts none, so none is declared.
             None,
+            false,
         )
         .await
         {
@@ -1385,6 +1386,7 @@ async fn write_edited(state: &AppState, app: &AppHandle, account_id: &str, sessi
                 destination.folder_hash.clone(),
                 // A screenshot: the server counts none, so none is declared.
                 None,
+                false,
             )
             .await;
             let failure = match uploaded {

@@ -893,7 +893,43 @@ it right now (`Working`), because minting the link uploads the capture's own
 encrypted copy, and the drive copy's progress on the card reads as a second
 upload of the same file. That copy goes on in the sync queue, where a failure
 is reported like any sync failure; only a `Failed` row still fails the card,
-and a card without a public link follows the drive upload, its only copy. `PreviewCard.settled` (uploaded and the
+and a card without a public link follows the drive upload, its only copy.
+**The same rule holds for a direct upload** (a drive not synced here):
+`link_finishes_card(card, DriveCopy::Direct)` is an `uploading` card with a
+public link, and `deliver_and_announce` asks it after `link_first` and before
+`deliver::place` (`finish_card_by_link_while_direct`, where `deliver::local_root`
+is `None`), so the card is `uploaded` and settled while the drive copy uploads
+in the upload list; otherwise the card drew the direct upload's percent from
+0 again beside "Public link copied". The drive copy cannot reuse the link's
+ciphertext (a file link would hand out the drive key; per-file keys are the
+real fix), so the second upload stays. Such a card carries
+`drive_copy_pending` until `announce_placed` or `announce_failed`, and
+`temp_copy_done_with` is false meanwhile, so a card closed by its countdown,
+Show in folder (the remote folder, where the file shows as uploading) or a
+new capture keeps the temp file; a failed drive copy fails the card with
+Retry, or with the card gone writes its marker and notifies, as any failed
+capture upload; a success after the card closed posts no "Link copied"
+notification (the card said it). **The card shows only the link's upload**:
+while a recording's link is made it carries `linkInfo` (`LINK_COPY_INFO`,
+"Your link has its own encrypted copy. A backup also goes to your Drive,
+so the recording shows in Captures."), drawn as an info button after the
+status line (`aria-label` "About this upload", the card's own tooltip via
+`data-card-tip`, never a native `title`); none for a screenshot, whose link
+is up at once. **The drive copy reads as a backup where the app words the
+row**: `deliver::place(.., backup)` (a link is out) makes the direct
+upload's batch `UploadBatch::capture_backup`, whose rows carry
+`RemoteUploadProgress.note` (`BACKUP_UPLOADING` / `BACKUP_DONE` /
+`BACKUP_FAILED`, the failure also as the row's `error`; `stamped`), which
+the sync widget shows in the size's place and the folder's "Uploading
+here" strip before the name (`rowText`); every other upload has no note.
+The synced path's rows are the hcfs-client engine's snapshot, which has no
+per-row label the app sets, so they still read as an ordinary sync upload.
+Pinned by
+`preview::tests::a_direct_upload_card_is_finished_by_its_link_not_restarted_by_the_drive_copy`,
+`preview::tests::a_recordings_link_being_made_explains_its_own_copy_and_the_backup`,
+`commands::tests::closing_a_card_its_link_finished_keeps_the_file_its_drive_copy_reads`,
+`remote_upload::tests::a_captures_drive_copy_reads_as_a_backup_and_nothing_else_does`,
+`previewPage.test.tsx` and `SyncStatusDialog.test.tsx`. `PreviewCard.settled` (uploaded and the
 link neither `Creating` nor `Failed`) is what the card's auto-hide waits for, so
 it never slides away before it can say the link was copied, and a card whose
 link failed stays up with Create link. `deliver::mint` tries a link three

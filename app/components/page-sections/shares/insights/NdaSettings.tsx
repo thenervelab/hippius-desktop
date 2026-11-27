@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { SettingsToggle } from "@/app/components/page-sections/settings/SettingsToggle";
 import { SwitchesUpgradeNotice } from "@/components/page-sections/drive/LinkEngagementSwitches";
 import { getLinkNda, isNdaNotInPlan, removeLinkNda, setLinkNda, type LinkNda } from "@/app/lib/tauri/shareNda";
+import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { actionErrorLine } from "./insightsView";
 import { ndaAcceptsQueryKey } from "./queryKeys";
 
@@ -30,30 +31,32 @@ const TEXTAREA = cn(
 
 /**
  * A link's NDA setting as read from Rust, and the setter its editors share.
- * `null` reads nothing (a folder link, which has no NDA).
+ * `null` reads nothing. A folder link (`kind` "folder") is named by its
+ * token hash.
  */
-export function useLinkNda(shareToken: string | null) {
+export function useLinkNda(shareToken: string | null, kind: LinkKind = "file") {
   const [nda, setNda] = useState<LinkNda | null>(null);
   useEffect(() => {
     let alive = true;
     setNda(null);
     if (shareToken === null) return;
     Promise.resolve()
-      .then(() => getLinkNda(shareToken))
+      .then(() => getLinkNda(shareToken, kind))
       .then((n) => alive && setNda(n))
       .catch(() => undefined);
     return () => {
       alive = false;
     };
-  }, [shareToken]);
+  }, [shareToken, kind]);
   return { nda, setNda };
 }
 
 export type LinkNdaStore = ReturnType<typeof useLinkNda>;
 
 /**
- * "Ask to accept an NDA" on a file link: viewers read the owner's text and
- * accept it on the share page before the file opens. Turning it on opens a
+ * "Ask to accept an NDA" on a file or folder link: viewers read the owner's
+ * text and accept it on the share page before the file (or any file of the
+ * folder) opens. Turning it on opens a
  * text box and Save stores the text; turning it off removes it, on every
  * plan, so an owner who left the paid plan can still open a link back up.
  *
@@ -69,11 +72,14 @@ export type LinkNdaStore = ReturnType<typeof useLinkNda>;
  */
 export default function NdaSettings({
   shareToken,
+  kind = "file",
   onUpgrade,
   layout = "stack",
   store,
 }: {
+  /** A file link's token, or a folder link's token hash. */
   shareToken: string;
+  kind?: LinkKind;
   /** Opens the plans page (and closes whatever this sits in). */
   onUpgrade: () => void;
   layout?: "stack" | "list";
@@ -82,7 +88,7 @@ export default function NdaSettings({
   // Optional: the share dialog has no query cache; the Insights panel does,
   // and its NDA tab is told to read again after a change.
   const queryClient = useContext(QueryClientContext);
-  const own = useLinkNda(store ? null : shareToken);
+  const own = useLinkNda(store ? null : shareToken, kind);
   const { nda, setNda } = store ?? own;
 
   const [busy, setBusy] = useState(false);
@@ -107,7 +113,7 @@ export default function NdaSettings({
 
   const show = (next: LinkNda) => {
     setNda(next);
-    void queryClient?.invalidateQueries({ queryKey: ndaAcceptsQueryKey(shareToken) });
+    void queryClient?.invalidateQueries({ queryKey: ndaAcceptsQueryKey(shareToken, kind) });
   };
 
   const flip = async (next: boolean) => {
@@ -131,7 +137,7 @@ export default function NdaSettings({
     }
     setBusy(true);
     try {
-      await removeLinkNda(shareToken);
+      await removeLinkNda(shareToken, kind);
       setWriting(false);
       show({ ...nda, on: false, text: null });
     } catch (err) {
@@ -146,7 +152,7 @@ export default function NdaSettings({
     setTextError(null);
     setBusy(true);
     try {
-      show(await setLinkNda(shareToken, draft));
+      show(await setLinkNda(shareToken, draft, kind));
       setWriting(false);
       toast.success("Saved");
     } catch (err) {
