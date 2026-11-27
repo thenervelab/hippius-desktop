@@ -269,6 +269,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Viewer names and emails show in Insights on links made on another computer.** On a link that asks for an email, its viewers' names and confirmed emails, its comments and its NDA accepts now open on any of your computers, not only the one that made the link. While your Drive is locked, Insights says so and offers Unlock.
 - **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.
 - **A recording's card shows one upload, its link's.** Once the link is ready the card says it was copied and closes as usual, also when your captures go to a drive that isn't synced on this computer, where it used to start uploading again from 0. An info icon on the card explains that the link has its own encrypted copy and a backup goes to your Drive, and the upload list shows that backup as "Backing up to Drive", then "Backed up to Drive". If the backup fails, it says "Couldn't back up to Drive", the card or a notification tells you, and Retry sends it again.

@@ -36,6 +36,7 @@ import {
   shareDriveModalAtom,
 } from "@/app/lib/global-atoms/sharesAtoms";
 import { fileDetailsPanelAtom } from "@/app/lib/global-atoms/fileDetailsAtoms";
+import { syncRequiresReauthAtom } from "@/app/lib/global-atoms/unpinAtoms";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import type { ServerCapabilities } from "@/app/lib/tauri/shares";
 import type { ShareComments, ShareInsights } from "@/app/lib/tauri/shareInsights";
@@ -1784,6 +1785,37 @@ describe("the Insights Pages tab", () => {
     expect(rows[2]).not.toHaveTextContent("@");
     // Every email shown is a proven one, so no row carries a "verified" mark.
     for (const row of rows) expect(within(row).queryByText(/verified/i)).toBeNull();
+  });
+
+  it("says why viewers' names and emails are missing, with Unlock while the Drive is locked", async () => {
+    const LOCKED_LINE = "Unlock your Drive to see viewers' names and emails.";
+    answer({ share_get_insights: { ...PAID_DOC, identitiesUnreadable: LOCKED_LINE }, share_list_comments: NO_COMMENTS });
+    const store = createStore();
+    store.set(syncRequiresReauthAtom, true);
+    store.set(serverCapabilitiesAtom, DOC_CAPS);
+    store.set(insightsSheetAtom, { shareToken: "tok", fileName: DOC });
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <Provider store={store}>
+          <ShareInsightsSheet />
+        </Provider>
+      </QueryClientProvider>,
+    );
+    const panel = await showTab("Viewers");
+    // Never rows that read as viewers who gave no email: the line says why,
+    // and offers the unlock that brings the key.
+    const line = within(panel).getByTestId("drive-locked-line");
+    expect(line).toHaveTextContent(LOCKED_LINE);
+    expect(within(line).getByRole("button", { name: "Unlock" })).toBeInTheDocument();
+  });
+
+  it("says why viewers' names and emails are missing when the key is not here", async () => {
+    const LINE = "Viewers' names and emails can't be read on this computer because the link's key isn't here.";
+    answer({ share_get_insights: { ...PAID_DOC, identitiesUnreadable: LINE }, share_list_comments: NO_COMMENTS });
+    renderSheet(DOC_CAPS, undefined, DOC);
+    const panel = await showTab("Viewers");
+    expect(within(panel).getByText(LINE)).toBeInTheDocument();
+    expect(within(panel).queryByTestId("drive-locked-line")).toBeNull();
   });
 
   it("says no page views yet on a document link nobody has read", async () => {

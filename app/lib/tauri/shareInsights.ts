@@ -101,6 +101,12 @@ export interface ShareInsights {
    * `null` inside for a block with no readable page count.
    */
   pages?: Gated<InsightsPages | null> | null;
+  /**
+   * Rust's sentence for viewers' names and emails that could not be opened
+   * on this computer (the Drive is locked, or the link's key is not here).
+   * Absent when they opened or none needed to.
+   */
+  identitiesUnreadable?: string | null;
 }
 
 export interface ShareComment {
