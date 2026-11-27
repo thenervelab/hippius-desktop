@@ -5,7 +5,7 @@ import { Provider, createStore } from "jotai";
 import React from "react";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
 import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { skipTrashAtom } from "@/app/lib/trash/deleteMode";
+import { deleteRulesAtom } from "@/app/lib/trash/deleteMode";
 
 const h = vi.hoisted(() => ({ selected: [] as FormattedUserFile[], clear: vi.fn() }));
 vi.mock("@/app/contexts/FileSelectionContext", () => ({
@@ -23,10 +23,15 @@ import SelectionActionBar from "../SelectionActionBar";
 
 const FILE = { name: "a.txt", actualFileName: "a.txt" } as FormattedUserFile;
 
-function renderBar(trash: boolean, skip = false) {
+function renderBar(trash: boolean, skip = false, canDeleteForever = true) {
   const store = createStore();
   store.set(serverCapabilitiesAtom, { drive_trash: trash } as never);
-  store.set(skipTrashAtom, { address: "5Me", value: skip });
+  store.set(deleteRulesAtom, {
+    address: "5Me",
+    skipTrash: skip,
+    drives: [{ label: "default", canDeleteForever, skipsTrash: skip && canDeleteForever }],
+    at: Date.now(),
+  });
   const onDelete = vi.fn();
   render(
     <Provider store={store}>
@@ -82,5 +87,22 @@ describe("SelectionActionBar with Trash", () => {
     fireEvent.keyDown(window, { key: "Backspace", metaKey: true, altKey: true });
     expect(onDelete).not.toHaveBeenCalled();
     expect(screen.getByText("Delete forever?")).toBeInTheDocument();
+  });
+
+  it("in a drive the account may not delete forever, Option and the setting still move to Trash", () => {
+    const onDelete = renderBar(true, true, false);
+    act(() => {
+      fireEvent.keyDown(window, { key: "Alt", altKey: true });
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Move to Trash" }));
+    expect(onDelete).toHaveBeenCalledWith([FILE], undefined, "trash");
+    expect(screen.queryByText("Delete forever?")).toBeNull();
+  });
+
+  it("refuses the delete-forever shortcut where the account may not, asking nothing", () => {
+    const onDelete = renderBar(true, false, false);
+    fireEvent.keyDown(window, { key: "Backspace", metaKey: true, altKey: true });
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.queryByText("Delete forever?")).toBeNull();
   });
 });

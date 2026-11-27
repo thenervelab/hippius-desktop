@@ -50,12 +50,16 @@ const row = (overrides: Partial<TrashRow> = {}): TrashRow => ({
   name: "report.pdf",
   parentPath: "Legal",
   path: "Legal/report.pdf",
+  storedPath: "Legal/report.pdf",
   fileCount: 1,
   totalBytes: 2048,
   trashedAt: Math.floor(Date.now() / 1000),
   purgeAt: Math.floor(Date.now() / 1000) + 12 * 86_400 + 60,
   trashedBy: null,
   nameTaken: false,
+  state: "ready",
+  restoreMode: null,
+  restoreNewPath: null,
   ...overrides,
 });
 
@@ -105,12 +109,29 @@ describe("TrashView", () => {
     expect(screen.getByText("2.05 KB")).toBeTruthy();
   });
 
-  it("uses the server's retention, and counts from the trash time when no purge time came", async () => {
+  it("uses the server's retention and each item's own purge time", async () => {
     listing.retentionDays = 7;
-    listing.items = [row({ purgeAt: null, trashedAt: Math.floor(Date.now() / 1000) - 2 * 86_400 })];
+    listing.items = [row({ purgeAt: Math.floor(Date.now() / 1000) + 5 * 86_400 + 60 })];
     renderView();
     expect(await screen.findByText("Items in Trash are deleted forever after 7 days.")).toBeTruthy();
     expect(screen.getByText("In 5 days")).toBeTruthy();
+  });
+
+  it("finishes a restore that stopped part way, the way it started", async () => {
+    listing.items = [row({ isFolder: true, name: "Trip", path: "Trip", storedPath: "Trip", parentPath: "", state: "restoring", restoreMode: "rename", restoreNewPath: "Trip (1)" })];
+    restoreAnswers = [[{ label: "hippius", itemId: "i1", status: "restored", error: null, path: "Trip (1)" }]];
+    renderView();
+    expect(await screen.findByText("Restore not finished")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Finish restoring Trip" }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const sent = calls.find(([cmd]) => cmd === "restore_trash_items")![1];
+    expect(sent.items).toEqual([expect.objectContaining({ itemId: "i1", restoreMode: "rename", restoreNewPath: "Trip (1)", storedPath: "Trip" })]);
+  });
+
+  it("says a folder whose move to Trash stopped part way is still moving", async () => {
+    listing.items = [row({ isFolder: true, name: "Big", path: "Big", parentPath: "", state: "trashing" })];
+    renderView();
+    expect(await screen.findByText("Still moving to Trash")).toBeTruthy();
   });
 
   it("restores in place and offers Show", async () => {
@@ -120,7 +141,17 @@ describe("TrashView", () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     const sent = calls.find(([cmd]) => cmd === "restore_trash_items")![1];
     expect(sent.items).toEqual([
-      { label: "hippius", itemId: "i1", path: "Legal/report.pdf", isFolder: false, fileCount: 1, onClash: "ask" },
+      {
+        label: "hippius",
+        itemId: "i1",
+        path: "Legal/report.pdf",
+        storedPath: "Legal/report.pdf",
+        isFolder: false,
+        fileCount: 1,
+        onClash: "ask",
+        restoreMode: null,
+        restoreNewPath: null,
+      },
     ]);
     const [title, options] = vi.mocked(toast.success).mock.calls[0] as [string, { action: { label: string; onClick: () => void } }];
     expect(title).toBe("Restored “report.pdf”");

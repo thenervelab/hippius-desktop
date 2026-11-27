@@ -4,13 +4,16 @@ import { useAtomValue } from "jotai";
 import { toast } from "sonner";
 import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
 import { useSkipTrash } from "@/app/lib/trash/deleteMode";
+import { errorMessage } from "@/app/lib/utils/errorUtils";
 import { SettingsCard } from "./SettingsCard";
 import { SettingsToggle } from "./SettingsToggle";
 
 /**
- * "Skip Trash when deleting", per account, off by default. On, Delete
- * removes items for good and always asks first. Shown only while the
- * server keeps a Trash (`drive_trash`).
+ * "Skip Trash when deleting", per account, off by default. On, Delete in
+ * the account's own drives removes items for good and always asks first,
+ * and Rust has the sync engine delete for good what is deleted in those
+ * drives' folders too (`set_skip_trash`). Drives shared with the account
+ * keep Trash. Shown only while the server keeps a Trash (`drive_trash`).
  */
 export default function SkipTrashSetting() {
   const trashEnabled = useAtomValue(driveTrashEnabledAtom);
@@ -24,7 +27,7 @@ export default function SkipTrashSetting() {
             Skip Trash when deleting
           </p>
           <p className="mt-1 text-sm text-grey-60 dark:text-grey-70">
-            Deleted items are removed for good, after you confirm.
+            Items you delete from your own drives are removed for good instead of going to Trash.
           </p>
         </div>
         <div className="flex-shrink-0 pt-0.5">
@@ -33,7 +36,7 @@ export default function SkipTrashSetting() {
             checked={skipTrash}
             disabled={!loaded}
             onCheckedChange={(value) =>
-              void setSkipTrash(value).catch(() => toast.error("Couldn't save that."))
+              void setSkipTrash(value).catch((err) => toast.error(errorMessage(err) || "Couldn't save that."))
             }
           />
         </div>

@@ -1230,6 +1230,12 @@ pub(crate) async fn initialize_sync_inner(
         .mass_delete_holds
         .arm(&label, &account_id, is_member, std::path::Path::new(&cfg.sync_path), &seed);
 
+    // Where this drive's local deletes go once the server has Trash: the
+    // engine reads its `delete_permanently` marker at every cycle start, so
+    // it is brought in line with "Skip Trash when deleting" before the
+    // first one. See `sync::trash::setting`.
+    crate::sync::trash::setting::apply_to_drive(pool, &account_id, is_member, PathBuf::from(&cfg.sync_path), folder_dir.clone()).await;
+
     // Recordings kept in the chosen captures folder while its drive could
     // not be added are declared before this drive can sync them, when the
     // folder is in it. Not on a member drive: the folder is never there, and
