@@ -512,6 +512,79 @@ impl SyncNotificationOutcome {
 pub struct SyncFileSummary<'a> {
     pub details_json: &'a str,
     pub file_count: Option<u32>,
+    /// The cycle's counts by kind, when the caller has them (the success
+    /// path does). They decide a delete-only title exactly, and which of
+    /// its deletes went to Trash; `file_count` is ignored when present.
+    pub counts: Option<SyncCycleCounts>,
+}
+
+/// What finished sync cycles did, summed over the notification hook's
+/// aggregation window: the `hcfs_sync_completed` counts, camelCased.
+///
+/// `trashed_remotely` is how many of `deleted_remotely` went to the
+/// server's Trash rather than being deleted for good. Absent from an older
+/// caller, which reads as none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncCycleCounts {
+    pub uploaded: u32,
+    pub downloaded: u32,
+    pub deleted_locally: u32,
+    pub deleted_remotely: u32,
+    #[serde(default)]
+    pub trashed_remotely: u32,
+}
+
+impl SyncCycleCounts {
+    /// Remote deletes that went to Trash. Never more than the remote
+    /// deletes, whatever the caller sent.
+    fn trashed(self) -> u32 {
+        self.trashed_remotely.min(self.deleted_remotely)
+    }
+
+    /// Remote deletes that are gone for good.
+    fn deleted_remotely_for_good(self) -> u32 {
+        self.deleted_remotely - self.trashed()
+    }
+
+    fn transferred(self) -> u32 {
+        self.uploaded.saturating_add(self.downloaded)
+    }
+
+    fn deletes(self) -> u32 {
+        self.deleted_locally.saturating_add(self.deleted_remotely)
+    }
+
+    /// Every file the cycles touched. A trashed file is one of the remote
+    /// deletes, so it is not counted twice.
+    pub fn total(self) -> u32 {
+        self.transferred().saturating_add(self.deletes())
+    }
+
+    /// The notification's description: "3 files uploaded, 12 files moved
+    /// to Trash." `None` when the cycles touched nothing, which saves no row.
+    pub fn description(self) -> Option<String> {
+        let parts: Vec<String> = [
+            (self.uploaded, "uploaded"),
+            (self.downloaded, "downloaded"),
+            (self.deleted_locally, "deleted locally"),
+            (self.trashed(), "moved to Trash"),
+            (self.deleted_remotely_for_good(), "deleted remotely"),
+        ]
+        .into_iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, what)| format!("{} {what}", files_word(n)))
+        .collect();
+        if parts.is_empty() {
+            return None;
+        }
+        Some(format!("{}.", parts.join(", ")))
+    }
+}
+
+/// "1 file", "12 files".
+fn files_word(n: u32) -> String {
+    if n == 1 { "1 file".to_string() } else { format!("{n} files") }
 }
 
 /// One entry of the `release_notes` file list, reduced to what the title needs.
@@ -542,6 +615,11 @@ fn success_list_title(files: &SyncFileSummary<'_>) -> String {
 
     let details = parse_file_details(files.details_json);
     let transferred: Vec<&str> = details.iter().filter(|d| d.transferred).filter_map(|d| d.name.as_deref()).collect();
+
+    if let Some(counts) = files.counts {
+        return counted_title(counts, &details, &transferred).unwrap_or(generic);
+    }
+
     let total = files.file_count.map_or(details.len(), |n| n as usize);
 
     // Delete-only is inferred from the visible list. That list is capped at
@@ -567,6 +645,43 @@ fn success_list_title(files: &SyncFileSummary<'_>) -> String {
         (n, _) if n > 1 => format!("Synced {n} files"),
         _ => generic,
     }
+}
+
+/// Title from the cycle's counts. They are exact, so a delete-only cycle is
+/// known as one whatever the (capped) list shows, and a delete that went to
+/// Trash is never called deleted: "Moved 12 files to Trash", "Deleted 3
+/// files", or both named when the cycle did both. `None` keeps the generic
+/// "Sync Complete" (nothing counted).
+///
+/// A single file is named only when the list agrees there was one, as for
+/// the list-only title.
+fn counted_title(counts: SyncCycleCounts, details: &[FileDetail], transferred: &[&str]) -> Option<String> {
+    let total = counts.total();
+    if total == 0 {
+        return None;
+    }
+    if counts.transferred() > 0 {
+        return Some(match (total, transferred) {
+            (1, [name]) => format!("Synced {name}"),
+            (1, _) => "Synced 1 file".to_string(),
+            (n, _) => format!("Synced {n} files"),
+        });
+    }
+    let trashed = counts.trashed();
+    let for_good = total - trashed;
+    let named: Vec<&str> = details.iter().filter(|d| d.deleted).filter_map(|d| d.name.as_deref()).collect();
+    let only_name = match (total, named.as_slice()) {
+        (1, [name]) => Some(*name),
+        _ => None,
+    };
+    Some(match (trashed, for_good) {
+        (0, _) => only_name.map_or_else(|| format!("Deleted {}", files_word(for_good)), |name| format!("Deleted {name}")),
+        (_, 0) => only_name.map_or_else(
+            || format!("Moved {} to Trash", files_word(trashed)),
+            |name| format!("Moved {name} to Trash"),
+        ),
+        (_, _) => format!("Moved {} to Trash and deleted {for_good}", files_word(trashed)),
+    })
 }
 
 /// Title for a cycle that transferred nothing. `None` keeps the generic
@@ -750,6 +865,7 @@ pub async fn create_files_notification(
     let files = SyncFileSummary {
         details_json: "",
         file_count: None,
+        counts: None,
     };
     create_sync_notification_inner(pool, owner, description, files, outcome).await.map(Some)
 }
@@ -892,37 +1008,59 @@ fn held_banner_link(label: &str, side: hcfs_client::sync::MassDeleteSide) -> Str
     files_page_link("heldDelete", label, Some(side.as_str()))
 }
 
-/// Create a sync notification row.
+/// Create a sync notification row. Returns its id, or `None` when nothing
+/// was saved (counts that add up to no file).
 ///
 /// `outcome` drives the title ("Sync Failed" vs. the success titles above) and
 /// the `notification_subtype` prefix — so the notifications page can filter
 /// success from failure without parsing the description string.
 ///
-/// `file_count` is the cycle's uncapped file count, which only the success path
-/// sends; omitting it falls back to the length of the (capped) file list. See
-/// [`SyncFileSummary`] for why the two differ.
+/// The success path sends `counts`, the cycles' totals by kind, and no
+/// description: Rust writes both the title and the description from them
+/// ([`SyncCycleCounts::description`]), so a delete that went to Trash reads
+/// "moved to Trash" everywhere. The error and folder-restored paths send a
+/// `description` and no counts.
+///
+/// `file_count` is the older callers' uncapped total; `counts` supersedes it.
+/// See [`SyncFileSummary`] for why it differs from the list length.
 ///
 /// Called by the frontend after its aggregation window closes for the success
 /// branch (see `useFilesNotification.ts`), and per-event for the error branch.
-/// Rust owns notification persistence; the FE only formats the description.
 #[tauri::command]
 pub async fn create_sync_notification(
     state: tauri::State<'_, AppState>,
     user_address: String,
-    description: String,
+    description: Option<String>,
     file_details_json: String,
     outcome: SyncNotificationOutcome,
     file_count: Option<u32>,
-) -> Result<i64, AppError> {
+    counts: Option<SyncCycleCounts>,
+) -> Result<Option<i64>, AppError> {
     // Scope the write to the signed-in account; never trust the caller-supplied
     // address.
     let user_address = crate::notifications::session_scoped_notification_account(state.inner(), &user_address)?;
+    let Some(description) = sync_notification_description(description, counts) else {
+        return Ok(None);
+    };
     let pool = state.pool()?;
     let files = SyncFileSummary {
         details_json: &file_details_json,
         file_count,
+        counts,
     };
-    create_sync_notification_inner(pool, &user_address, &description, files, outcome).await
+    create_sync_notification_inner(pool, &user_address, &description, files, outcome)
+        .await
+        .map(Some)
+}
+
+/// The description a sync notification is saved with: Rust's own sentence
+/// when the caller sent counts (`None` when they add up to nothing), else
+/// the caller's.
+pub fn sync_notification_description(description: Option<String>, counts: Option<SyncCycleCounts>) -> Option<String> {
+    match counts {
+        Some(counts) => counts.description(),
+        None => Some(description.unwrap_or_default()),
+    }
 }
 
 /// Persist multiple credit event notifications in a single call.
@@ -1062,7 +1200,11 @@ mod tests {
     // shows) is the FE's; the title is Rust's.
 
     fn title_for(details_json: &str, file_count: Option<u32>) -> String {
-        SyncNotificationOutcome::Success.list_title(&SyncFileSummary { details_json, file_count })
+        SyncNotificationOutcome::Success.list_title(&SyncFileSummary {
+            details_json,
+            file_count,
+            counts: None,
+        })
     }
 
     fn upload(name: &str) -> serde_json::Value {
@@ -1188,9 +1330,123 @@ mod tests {
         let files = SyncFileSummary {
             details_json: &details(&[upload("stuck.bin")]),
             file_count: Some(1),
+            counts: None,
         };
         assert_eq!(SyncNotificationOutcome::Error.list_title(&files), "Sync Failed");
         assert_eq!(SyncNotificationOutcome::FolderRestored.list_title(&files), "Folder Restored");
+    }
+
+    // ── Counts from the cycles: Trash versus deleted for good ───────
+    //
+    // When the server has Trash, the engine sends a delete made in Finder
+    // there, and `files_trashed_remotely` says how many of the remote deletes
+    // it moved. The copy must say "moved to Trash" for those and keep
+    // "deleted" for deletes that are gone for good, or a user reads a
+    // recoverable file as lost.
+
+    fn counts(uploaded: u32, deleted_locally: u32, deleted_remotely: u32, trashed_remotely: u32) -> SyncCycleCounts {
+        SyncCycleCounts {
+            uploaded,
+            downloaded: 0,
+            deleted_locally,
+            deleted_remotely,
+            trashed_remotely,
+        }
+    }
+
+    fn counted(details_json: &str, c: SyncCycleCounts) -> (String, Option<String>) {
+        let title = SyncNotificationOutcome::Success.list_title(&SyncFileSummary {
+            details_json,
+            file_count: None,
+            counts: Some(c),
+        });
+        (title, sync_notification_description(None, Some(c)))
+    }
+
+    #[test]
+    fn deletes_that_went_to_trash_say_so() {
+        let (title, description) = counted("", counts(0, 0, 12, 12));
+        assert_eq!(title, "Moved 12 files to Trash");
+        assert_eq!(description.as_deref(), Some("12 files moved to Trash."));
+
+        // One file, named when the list agrees there was one.
+        let one = details(&[deleted("Reports/q3.pdf", "remote_delete")]);
+        let (title, description) = counted(&one, counts(0, 0, 1, 1));
+        assert_eq!(title, "Moved q3.pdf to Trash");
+        assert_eq!(description.as_deref(), Some("1 file moved to Trash."));
+        assert_eq!(counted("", counts(0, 0, 1, 1)).0, "Moved 1 file to Trash");
+    }
+
+    #[test]
+    fn permanent_deletes_keep_the_deleted_wording() {
+        let (title, description) = counted("", counts(0, 0, 3, 0));
+        assert_eq!(title, "Deleted 3 files");
+        assert_eq!(description.as_deref(), Some("3 files deleted remotely."));
+
+        let one = details(&[deleted("gone.txt", "local_delete")]);
+        let (title, description) = counted(&one, counts(0, 1, 0, 0));
+        assert_eq!(title, "Deleted gone.txt");
+        assert_eq!(description.as_deref(), Some("1 file deleted locally."));
+    }
+
+    #[test]
+    fn a_cycle_that_did_both_names_both() {
+        let (title, description) = counted("", counts(0, 0, 5, 3));
+        assert_eq!(title, "Moved 3 files to Trash and deleted 2");
+        assert_eq!(description.as_deref(), Some("3 files moved to Trash, 2 files deleted remotely."));
+
+        // A local delete is never one that went to Trash.
+        let (title, description) = counted("", counts(0, 2, 1, 1));
+        assert_eq!(title, "Moved 1 file to Trash and deleted 2");
+        assert_eq!(description.as_deref(), Some("2 files deleted locally, 1 file moved to Trash."));
+
+        // Transfers keep the transfer title; the description names the Trash.
+        let (title, description) = counted("", counts(4, 0, 2, 2));
+        assert_eq!(title, "Synced 6 files");
+        assert_eq!(description.as_deref(), Some("4 files uploaded, 2 files moved to Trash."));
+    }
+
+    #[test]
+    fn counts_of_nothing_save_no_row() {
+        let (title, description) = counted("", SyncCycleCounts::default());
+        assert_eq!(title, "Sync Complete");
+        assert_eq!(description, None);
+    }
+
+    #[test]
+    fn a_trashed_count_above_the_remote_deletes_is_capped() {
+        // Never "moved 9 to Trash" for 2 remote deletes, whatever was sent.
+        let (title, description) = counted("", counts(0, 0, 2, 9));
+        assert_eq!(title, "Moved 2 files to Trash");
+        assert_eq!(description.as_deref(), Some("2 files moved to Trash."));
+    }
+
+    #[test]
+    fn counts_are_the_camel_cased_keys_the_hook_sends() {
+        let c: SyncCycleCounts =
+            serde_json::from_str(r#"{"uploaded":1,"downloaded":2,"deletedLocally":3,"deletedRemotely":4,"trashedRemotely":4}"#).expect("parse");
+        assert_eq!(
+            c,
+            SyncCycleCounts {
+                uploaded: 1,
+                downloaded: 2,
+                deleted_locally: 3,
+                deleted_remotely: 4,
+                trashed_remotely: 4,
+            }
+        );
+        // An older caller without the Trash count reads as none.
+        let old: SyncCycleCounts = serde_json::from_str(r#"{"uploaded":0,"downloaded":0,"deletedLocally":0,"deletedRemotely":2}"#).expect("parse");
+        assert_eq!(old.trashed_remotely, 0);
+    }
+
+    #[test]
+    fn a_description_without_counts_is_the_callers() {
+        assert_eq!(
+            sync_notification_description(Some("Sync failed".into()), None).as_deref(),
+            Some("Sync failed")
+        );
+        assert_eq!(sync_notification_description(None, None).as_deref(), Some(""));
     }
 
     async fn insert_low_credit(pool: &sqlx::SqlitePool, user: &str, is_deleted: i64, deleted_at: Option<i64>) {

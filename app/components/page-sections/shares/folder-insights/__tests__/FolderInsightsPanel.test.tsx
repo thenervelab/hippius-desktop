@@ -132,6 +132,12 @@ function answer(insights: FolderInsights, extra: Record<string, (args: Record<st
   });
 }
 
+/** Opens Link settings from the header's gear and returns the view. */
+async function openSettings() {
+  fireEvent.click(await screen.findByRole("button", { name: "Link settings" }));
+  return screen.findByRole("region", { name: "Link settings" });
+}
+
 function renderPanel(target: FolderInsightsTarget = TARGET) {
   const store = createStore();
   store.set(folderInsightsAtom, target);
@@ -220,7 +226,10 @@ describe("FolderInsightsPanel", () => {
     });
     renderPanel();
     await screen.findAllByTestId("folder-insights-file");
-    const toggle = within(screen.getByTestId("folder-insights-switch")).getByRole("switch", { name: "Insights" });
+    // The switch is in Link settings, not under the header.
+    expect(screen.queryByTestId("folder-insights-switch")).toBeNull();
+    const settings = await openSettings();
+    const toggle = within(within(settings).getByTestId("folder-insights-switch")).getByRole("switch", { name: "Insights" });
     expect(toggle).toHaveAttribute("aria-checked", "true");
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
@@ -276,30 +285,67 @@ describe("FolderInsightsPanel", () => {
       share_set_gate: () => ({ ...off, on: true, lists: { allow: [], block: [] } }),
     });
     renderPanel();
-    const card = await screen.findByTestId("rule-gate");
+    await screen.findAllByTestId("folder-insights-file");
+    const settings = await openSettings();
+    const row = await within(settings).findByTestId("rule-gate");
     expect(invokeMock).toHaveBeenCalledWith("share_get_gate", { shareToken: HASH, kind: "folder" });
     expect(invokeMock).toHaveBeenCalledWith("share_get_nda", { shareToken: HASH, kind: "folder" });
-    expect(screen.getByTestId("rule-allowList")).toBeInTheDocument();
-    expect(screen.queryByTestId("rule-nda")).toBeNull();
+    expect(within(settings).getByTestId("rule-allowList")).toBeInTheDocument();
+    expect(within(settings).queryByTestId("rule-nda")).toBeNull();
 
-    // The card's editor takes the place of the numbers.
-    fireEvent.click(within(card).getByRole("button"));
-    expect(screen.queryByTestId("folder-insights-summary")).toBeNull();
-    fireEvent.click(screen.getByRole("switch", { name: "Ask for email" }));
+    // A short rule: its switch is in its row.
+    const ask = within(row).getByRole("switch", { name: "Ask for email" });
+    fireEvent.click(ask);
     await waitFor(() =>
       expect(invokeMock).toHaveBeenCalledWith("share_set_gate", { shareToken: HASH, allow: "", block: "", kind: "folder" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByTestId("folder-insights-summary")).toBeInTheDocument();
-    expect(within(screen.getByTestId("rule-gate")).getByText("On")).toBeInTheDocument();
+    await waitFor(() => expect(ask).toHaveAttribute("aria-checked", "true"));
+
+    // The Allow list opens a level further in, in place of the switch.
+    fireEvent.click(within(within(settings).getByTestId("rule-allowList")).getByRole("button"));
+    expect(await within(settings).findByRole("heading", { name: "Allow list" })).toBeInTheDocument();
+    expect(within(settings).queryByTestId("folder-insights-switch")).toBeNull();
+    fireEvent.click(within(settings).getByRole("button", { name: "Back to Link settings" }));
+    expect(await within(settings).findByTestId("folder-insights-switch")).toBeInTheDocument();
+
+    // Back to the numbers, which were there all along.
+    fireEvent.click(within(settings).getByRole("button", { name: "Back to Insights" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Link settings" })).toBeNull());
+    expect(screen.getByTestId("folder-insights-summary")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Link settings" })).toHaveFocus());
   });
 
   it("has no rules for a revoked link", async () => {
     answer(PAID, { share_get_gate: () => ({ offered: true, on: false, allowCount: 0, blockCount: 0, lists: null, inPlan: true }) });
     renderPanel({ ...TARGET, revoked: true });
     await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByRole("button", { name: "Link settings" })).toBeNull();
     expect(screen.queryByTestId("folder-link-rules")).toBeNull();
     expect(invokeMock).not.toHaveBeenCalledWith("share_get_gate", expect.anything());
+  });
+
+  // While its folder is in Drive Trash the server keeps the link off; the
+  // panel says so as Shared Links does, and only when the listing said so.
+  it("marks a link paused by Trash, and says why", async () => {
+    answer(PAID);
+    renderPanel({ ...TARGET, paused: true, held: true });
+    const badge = await screen.findByTestId("folder-link-paused");
+    expect(badge).toHaveTextContent("Paused");
+    expect(badge).toHaveAttribute("title", "Off until you revoke it: its folder left Trash another way");
+  });
+
+  it("shows no Paused badge on a link the server did not pause", async () => {
+    answer(PAID);
+    renderPanel();
+    await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByTestId("folder-link-paused")).toBeNull();
+  });
+
+  it("shows no Paused badge on a revoked link", async () => {
+    answer(PAID);
+    renderPanel({ ...TARGET, revoked: true, paused: true });
+    await screen.findAllByTestId("folder-insights-file");
+    expect(screen.queryByTestId("folder-link-paused")).toBeNull();
   });
 
   it("lists who accepted the folder link's NDA, by typed name, else the People tab's label", async () => {
@@ -318,7 +364,9 @@ describe("FolderInsightsPanel", () => {
       share_nda_accepts_csv_name: () => "Board room NDA accepts 2026-11-18.csv",
     });
     renderPanel();
-    expect(within(await screen.findByTestId("rule-nda")).getByText("On")).toBeInTheDocument();
+    const settings = await openSettings();
+    expect(within(await within(settings).findByTestId("rule-nda")).getByText("On")).toBeInTheDocument();
+    fireEvent.click(within(settings).getByRole("button", { name: "Back to Insights" }));
     fireEvent.click(await screen.findByRole("tab", { name: /NDA/ }));
     expect(invokeMock).toHaveBeenCalledWith("share_nda_accepts", { shareToken: HASH, after: 0, kind: "folder" });
     const rows = await screen.findAllByTestId("nda-accept");

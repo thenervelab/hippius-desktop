@@ -41,6 +41,7 @@ import { useAtomValue, useSetAtom } from "jotai";
 import {
   shareDialogAtom,
   shareDriveModalAtom,
+  driveTrashEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -112,7 +113,7 @@ import { canStar } from "@/app/lib/starred/starState";
 import { starMenuItem, withStarItem } from "@/app/lib/starred/starMenu";
 import { useFolderAggregateSelection } from "@/app/lib/hooks/use-folder-aggregate-selection";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { TrashRequestRunner, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
+import { TrashRequestRunner, offersDeleteOnRow, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
@@ -713,6 +714,7 @@ const FilesTable: FC<FilesTableProps> = memo(
     // hcfs-server advertises `shares: true`. The atom is populated once
     // per session by `useServerCapabilities` (mounted in SyncEventLogger).
     const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+    const trashEnabled = useAtomValue(driveTrashEnabledAtom);
     const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
     // "Share folder" is live: always behind the folder-roles flag, else once
     // the server advertises folder grants.
@@ -1490,11 +1492,15 @@ const FilesTable: FC<FilesTableProps> = memo(
               ]
             : []),
           // Delete is gated by both sync state (unassigned files are
-          // mid-upload) and live deletion state (already in flight).
-          // Cloud-only rows hide it entirely — the delete pipeline removes
-          // the LOCAL copy and lets sync propagate, which a server-only row
-          // has no path through.
-          ...(isCloudOnlyRow(file)
+          // mid-upload) and live deletion state (already in flight). A
+          // cloud-only row has it only while the server has Trash (Rust
+          // trashes it on Hippius) and where this account can write;
+          // `offersDeleteOnRow` decides.
+          ...(!offersDeleteOnRow(
+            file,
+            trashEnabled,
+            offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels),
+          )
             ? []
             : [
                 {
@@ -1528,6 +1534,7 @@ const FilesTable: FC<FilesTableProps> = memo(
         localHandleShowFileDetails,
         handleDeleteFile,
         deleteMenuLabelFor,
+        trashEnabled,
         getParam,
         drivePagePath,
         driveRoute,

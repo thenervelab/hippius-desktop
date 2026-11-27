@@ -47,12 +47,19 @@ const ready = (over: Partial<Extract<CaptureDriveStatus, { state: "ready" }>> = 
 
 describe("capturesDriveFromStatus", () => {
   it("is the captures drive when it is a drive of its own", () => {
-    expect(capturesDriveFromStatus(ready({ remote: true }))).toEqual({ label: "hippius-captures", remote: true });
-    expect(capturesDriveFromStatus(ready({ folder: undefined }))).toEqual({ label: "hippius-captures", remote: false });
+    expect(capturesDriveFromStatus(ready({ remote: true }))).toEqual({ label: "hippius-captures", remote: true, folder: "" });
+    expect(capturesDriveFromStatus(ready({ folder: undefined }))).toEqual({ label: "hippius-captures", remote: false, folder: "" });
   });
 
-  it("is none for captures kept in a folder of another drive, or before there is a drive", () => {
-    expect(capturesDriveFromStatus(ready({ label: "Documents", folder: "hippius-recordingss" }))).toBeNull();
+  it("is the drive and its folder for captures kept in a folder of another drive", () => {
+    expect(capturesDriveFromStatus(ready({ label: "Documents", folder: "/hippius-recordingss/" }))).toEqual({
+      label: "Documents",
+      remote: false,
+      folder: "hippius-recordingss",
+    });
+  });
+
+  it("is none before there is a drive, or when it could not be added", () => {
     expect(
       capturesDriveFromStatus({ state: "needsSetup", suggested: { path: "/x", place: "x" }, waiting: 0 } as CaptureDriveStatus),
     ).toBeNull();
@@ -75,7 +82,7 @@ describe("browsedFromServer", () => {
 });
 
 describe("syncQueueFolderRoute", () => {
-  const captures: CapturesDrive = { label: "hippius-recordingss", remote: true };
+  const captures: CapturesDrive = { label: "hippius-recordingss", remote: true, folder: "" };
 
   it("opens a capture on the Captures page, not as a path in My Drive", () => {
     // The reported case: a recording backed up to the captures drive, whose
@@ -98,7 +105,7 @@ describe("syncQueueFolderRoute", () => {
     const at = parse(
       syncQueueFolderRoute(
         { label: "hippius-captures", path: "Shot.png" },
-        { drives: drives({}), captures: { label: "hippius-captures", remote: false } },
+        { drives: drives({}), captures: { label: "hippius-captures", remote: false, folder: "" } },
       ),
     );
     expect(at.path).toBe(CAPTURES_ROUTE);
@@ -129,7 +136,9 @@ describe("syncQueueFolderRoute", () => {
     expect(capture.path).toBe(CAPTURES_ROUTE);
   });
 
-  it("opens captures kept in a folder of another drive on Drive, in that folder, as the capture card does", () => {
+  it("opens captures kept in a folder of another drive on the Captures page, rooted at that folder", () => {
+    // The reported case: captures in a folder inside Documents opened
+    // Drive > Documents instead of the Captures page.
     const status = ready({ label: "Documents", folder: "Screens", remote: true });
     const at = parse(
       syncQueueFolderRoute(
@@ -137,11 +146,41 @@ describe("syncQueueFolderRoute", () => {
         { drives: drives({ Documents: paused }), captures: capturesDriveFromStatus(status) },
       ),
     );
-    expect(at.path).toBe("/files");
+    expect(at.path).toBe(CAPTURES_ROUTE);
     expect(at.label).toBe("Documents");
     expect(at.remote).toBe(true);
-    expect(at.subfolder).toBe("Screens");
+    // Relative to the page's root, which is the captures folder.
+    expect(at.subfolder).toBeNull();
     expect(at.file).toBe("Shot.png");
+
+    const nested = parse(
+      syncQueueFolderRoute(
+        { label: "Documents", path: "Screens/Demos/clip.mp4" },
+        { drives: drives({ Documents: paused }), captures: capturesDriveFromStatus(status) },
+      ),
+    );
+    expect(nested.path).toBe(CAPTURES_ROUTE);
+    expect(nested.subfolder).toBe("Demos");
+  });
+
+  it("opens the rest of that drive on Drive, a lookalike folder included", () => {
+    const captures = capturesDriveFromStatus(ready({ label: "Documents", folder: "Screens" }));
+    const here = drives({ Documents: active });
+    for (const path of ["notes.txt", "Screens Old/a.png", "Work/Screens/a.png"]) {
+      const at = parse(syncQueueFolderRoute({ label: "Documents", path }, { drives: here, captures }));
+      expect(at.path).toBe("/files");
+    }
+  });
+
+  it("opens Drive when there are no captures to show (the captures drive was deleted)", () => {
+    const at = parse(
+      syncQueueFolderRoute(
+        { label: "hippius-captures", path: "Recording.mp4" },
+        { drives: drives({}), captures: capturesDriveFromStatus(null) },
+      ),
+    );
+    expect(at.path).toBe("/files");
+    expect(at.file).toBe("Recording.mp4");
   });
 
   it("opens a file in a drive's nested folder there, locally when the drive syncs here", () => {
@@ -201,9 +240,9 @@ describe("the row is pointed out where the route lands", () => {
   const file = (name: string, isFolder = false) =>
     ({ name, actualFileName: name, isFolder }) as unknown as FormattedUserFile;
 
-  function requestFor(url: string | null, now = 1_000) {
+  function requestFor(url: string | null, now = 1_000, root?: string) {
     const at = parse(url);
-    return highlightRequestFromUrl({ label: at.label as string, subfolder: at.subfolder, file: at.file }, now);
+    return highlightRequestFromUrl({ label: at.label as string, subfolder: at.subfolder, file: at.file }, now, root);
   }
 
   const view = (ordered: FormattedUserFile[], now = 1_000) => ({
@@ -219,7 +258,7 @@ describe("the row is pointed out where the route lands", () => {
     const request = requestFor(
       syncQueueFolderRoute(
         { label: "hippius-captures", path: "Recording.mp4" },
-        { drives: drives({}), captures: { label: "hippius-captures", remote: true } },
+        { drives: drives({}), captures: { label: "hippius-captures", remote: true, folder: "" } },
       ),
     );
     expect(request).not.toBeNull();
@@ -227,6 +266,21 @@ describe("the row is pointed out where the route lands", () => {
     expect(isRequestedLevel(request!, { label: "hippius-captures", folder: "" })).toBe(true);
     const step = nextHighlightStep(request!, view([file("Older.mp4"), file("Recording.mp4")]));
     expect(step).toEqual({ kind: "show", file: expect.objectContaining({ name: "Recording.mp4" }) });
+  });
+
+  it("on the Captures page rooted at a folder of another drive, at that folder", () => {
+    const captures = capturesDriveFromStatus(ready({ label: "Documents", folder: "Screens" }));
+    const url = syncQueueFolderRoute({ label: "Documents", path: "Screens/Demos/clip.mp4" }, { drives: drives({}), captures });
+    // The page names its levels from the drive's root (`PinnedDrive.folder`).
+    const request = requestFor(url, 1_000, "Screens");
+    expect(isRequestedLevel(request!, { label: "Documents", folder: "Screens" })).toBe(false);
+    expect(isRequestedLevel(request!, { label: "Documents", folder: "Screens/Demos" })).toBe(true);
+    const atRoot = requestFor(
+      syncQueueFolderRoute({ label: "Documents", path: "Screens/Shot.png" }, { drives: drives({}), captures }),
+      1_000,
+      "Screens",
+    );
+    expect(isRequestedLevel(atRoot!, { label: "Documents", folder: "Screens" })).toBe(true);
   });
 
   it("in a nested folder, and not at the drive's root on the way there", () => {

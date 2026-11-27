@@ -7,7 +7,9 @@ import {
   isDriveOpenInUrl,
   isInsidePinnedFolder,
   isPinnedRoot,
+  openSubfolderInDrive,
   pinnedFolderHref,
+  pinnedOpenFolder,
   trailFromPinnedFolder,
   urlAfterOpen,
 } from "../driveTrail";
@@ -217,6 +219,26 @@ describe("a Captures page rooted at a folder inside a drive", () => {
     expect(isInsidePinnedFolder(SYNCED, true, "hippius-recordingss/Week 1/Demos")).toBe(true);
     // A page pinned to a whole drive is never sent anywhere.
     expect(isInsidePinnedFolder({ label: "Hippius Captures", remote: false }, false, null)).toBe(true);
+  });
+
+  it("names a Show in folder request from the drive's root on a page rooted at a folder", () => {
+    // The Captures page's own subfolders are relative to its folder.
+    expect(openSubfolderInDrive(SYNCED, null)).toBe("hippius-recordingss");
+    expect(openSubfolderInDrive(SYNCED, "Week 1/")).toBe("hippius-recordingss/Week 1");
+    // A page pinned to a whole drive takes it as it is.
+    expect(openSubfolderInDrive({ label: "Hippius Captures", remote: false }, "Week 1")).toBe("Week 1");
+    expect(openSubfolderInDrive(null, null)).toBe("");
+  });
+
+  it("jumps straight to a requested folder inside the page's folder, built like its root's URL", () => {
+    expect(pinnedOpenFolder(SYNCED, "hippius-recordingss")).toBe("hippius-recordingss");
+    expect(pinnedOpenFolder(SYNCED, "hippius-recordingss/Week 1")).toBe("hippius-recordingss/Week 1");
+    expect(pinnedOpenFolder(SYNCED, "hippius-recordingss-old")).toBeNull();
+    expect(pinnedOpenFolder(SYNCED, null)).toBeNull();
+    expect(pinnedOpenFolder({ label: "Hippius Captures", remote: false }, "Week 1")).toBeNull();
+    const get = paramsOf(pinnedFolderHref("/captures", { ...SYNCED, folder: "hippius-recordingss/Week 1" }, DOCUMENTS)!);
+    expect(get("subFolderPath")).toBe("hippius-recordingss/Week 1");
+    expect(isInsidePinnedFolder(SYNCED, true, get("subFolderPath"))).toBe(true);
   });
 
   it("opens a subfolder from its row and keeps it inside the page", () => {

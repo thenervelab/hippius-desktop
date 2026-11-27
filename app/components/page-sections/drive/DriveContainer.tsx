@@ -127,7 +127,9 @@ import {
   driveTrail,
   initialDriveView,
   isInsidePinnedFolder,
+  openSubfolderInDrive,
   pinnedFolderHref,
+  pinnedOpenFolder,
   trailFromPinnedFolder,
   urlAfterOpen,
   type TrailTarget,
@@ -1703,12 +1705,15 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     });
     openedFromUrlRef.current = decision.key;
     if (!decision.open || !urlOpenLabel) return;
-    pendingSubfolderRef.current = urlOpenSubfolder ? { path: urlOpenSubfolder, missedOn: null } : null;
+    // From the drive's root: a page rooted at a folder (Captures in a folder
+    // of another drive) names its subfolders from that folder.
+    const openPath = openSubfolderInDrive(pinned, urlOpenSubfolder);
+    pendingSubfolderRef.current = openPath ? { path: openPath, missedOn: null } : null;
     // Pointed out once its folder is listed (`useDriveHighlight`). A folder
     // that never opens drops it after HIGHLIGHT_OPEN_LIMIT_MS, so it cannot
     // fire later when the user browses there on their own.
     setHighlightRequest(
-      highlightRequestFromUrl({ label: urlOpenLabel, subfolder: urlOpenSubfolder, file: urlOpenFile }, Date.now()),
+      highlightRequestFromUrl({ label: urlOpenLabel, subfolder: urlOpenSubfolder, file: urlOpenFile }, Date.now(), pinned?.folder),
     );
     if (urlOpenRemote) {
       // A shared drive's browse label is not a name: show the one it came with.
@@ -1748,6 +1753,7 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   }, [
     driveRoute,
     parent,
+    pinned,
     urlOpenLabel,
     urlOpenRemote,
     urlOpenName,
@@ -1767,10 +1773,12 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
   useEffect(() => {
     const wanted = pendingSubfolderRef.current;
     if (!wanted || isNested || isOnLocalView || isLoading) return;
+    // A page rooted at a folder jumps straight there (below).
+    if (pinnedOpenFolder(pinned, wanted.path)) return;
     const next = resolvePendingFolder(wanted, allData, getParam, basePath);
     pendingSubfolderRef.current = next.pending;
     if (next.url) router.push(next.url);
-  }, [allData, isNested, isOnLocalView, isLoading, router, getParam, basePath]);
+  }, [allData, isNested, isOnLocalView, isLoading, router, getParam, basePath, pinned]);
 
   // A page rooted at a folder inside a drive (captures kept in a folder of
   // another drive) lists that folder and what is under it, never the rest of
@@ -1782,10 +1790,25 @@ const DriveContainer: FC<{ isRecentFiles?: boolean }> = ({
     [basePath, pinned, drivePathsByLabel],
   );
   useEffect(() => {
-    if (!pinnedFolderUrl || isRecentFiles) return;
+    if (!pinnedFolderUrl || isRecentFiles || !pinned) return;
+    // "Show in folder" into the pinned folder or a folder under it: go
+    // there, built the way the root's own URL is, and point the file out
+    // once it is listed. The page never shows the drive's root to step in
+    // from, so the open is not left to the stepping above.
+    const wanted = pinnedOpenFolder(pinned, pendingSubfolderRef.current?.path);
+    if (wanted) {
+      pendingSubfolderRef.current = null;
+      const url = pinnedFolderHref(basePath, { ...pinned, folder: wanted }, drivePathsByLabel[pinned.label]);
+      if (url) {
+        router.replace(url);
+        return;
+      }
+    }
     if (isInsidePinnedFolder(pinned, isNested, urlSubFolderPath)) return;
     router.replace(pinnedFolderUrl);
-  }, [pinnedFolderUrl, isRecentFiles, pinned, isNested, urlSubFolderPath, router]);
+    // `highlightRequest`: a new "Show in folder" while the page is already
+    // inside its folder changes nothing else this effect reads.
+  }, [pinnedFolderUrl, isRecentFiles, pinned, isNested, urlSubFolderPath, router, basePath, drivePathsByLabel, highlightRequest]);
 
   // Build the breadcrumb path that lives in the drive header. Empty when
   // the user is on the Local cards view (DriveOnboarding); otherwise the

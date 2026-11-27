@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -21,14 +21,11 @@ import { LinkRules } from "@/components/page-sections/shares/rules/LinkRules";
 import type { ShareSummary, ShareTtl } from "@/app/lib/tauri/shares";
 import { setShareExpiryDate, updateShareExpiry } from "@/app/lib/tauri/shares";
 import { SHARES_QUERY_KEY } from "@/app/lib/hooks/useSharedFiles";
-import { useEscapeFirst } from "@/components/page-sections/drive/share-dialog/RowConfirm";
+import { LinkVisitEmailsSelect } from "@/components/page-sections/drive/SecureLinkSection";
 import { linkSettingsQueryKey, PANEL_MUTATION, PANEL_QUERY } from "./queryKeys";
 import { actionErrorLine, DEFINITIONS, isDownloadNotInPlan, isWatermarkNotInPlan, loadErrorLine } from "./insightsView";
 import { LoadError } from "./LoadError";
-import { FLOATING, HAIRLINE, MUTED, SKELETON, STRONG, TEXT_LINK } from "./panelStyles";
-
-/** Marks what opens Link settings, so a press on it is not "outside". */
-export const SETTINGS_TRIGGER_ATTR = "data-link-settings-trigger";
+import { HAIRLINE, MUTED, SKELETON, TEXT_LINK } from "./panelStyles";
 
 /**
  * A link's Insights, Comments and Reactions switches (and Allow download,
@@ -88,43 +85,30 @@ export function useLinkSwitches(shareToken: string) {
 export type LinkSwitches = ReturnType<typeof useLinkSwitches>;
 
 /**
- * Link settings: the link's switches and "How we count views", in a popover
- * anchored under the panel header's gear. It is drawn inside the panel (not
- * portalled), so it sits within the narrow-window sheet's focus trap.
- * Escape, a press outside or the gear again closes it, and focus goes back
- * to whatever opened it. A list or menu it opens that is drawn elsewhere on
- * the page counts as inside it.
+ * A file link's Link settings, drawn in the side panel's Link settings view
+ * (`LinkSettingsView`): the Unlock line once at the top while the Drive is
+ * locked, the link's rules (short ones as rows with their control, Allow
+ * list and NDA a level further in), the Insights, Comments and Reactions
+ * switches, "Emails about this link", Links per person and "How we count
+ * views". While a rule's own level is open only its editor shows.
  */
-export function LinkSettingsPopover({
-  id,
+export function FileLinkSettings({
   shareToken,
   fileName,
   share,
   switches,
-  top,
-  opener,
-  onClose,
   onLeave,
 }: {
-  id: string;
   /** The link these settings are for. */
   shareToken: string;
   fileName: string;
   /** The link's row in the share listing, for its expiry and password. */
   share: ShareSummary | null;
   switches: LinkSwitches;
-  /** Pixels from the panel's top: just under its header. */
-  top: number;
-  /** What opened it (the gear or a Turn on), to give focus back to. */
-  opener: React.MutableRefObject<HTMLElement | null>;
-  onClose: () => void;
   /** Closes the whole panel (the upgrade prompt leaves for the plans page). */
   onLeave: () => void;
 }) {
   const router = useRouter();
-  const titleId = useId();
-  const ref = useRef<HTMLDivElement>(null);
-  const titleRef = useRef<HTMLHeadingElement>(null);
   const { current, save, downloadRefused, watermarkRefused } = switches;
   const online = useIsOnline();
   const queryClient = useQueryClient();
@@ -161,96 +145,14 @@ export function LinkSettingsPopover({
     onLeave();
     router.push(BILLING_ROUTE);
   };
-
-  // The panel hands a new `onClose` every render; the listeners read the latest.
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  const close = useCallback(() => {
-    const panel = ref.current;
-    const focused = document.activeElement;
-    const lost = !focused || focused === document.body || (panel?.contains(focused) ?? false);
-    onCloseRef.current();
-    if (lost && opener.current?.isConnected) opener.current.focus({ preventScroll: true });
-  }, [opener]);
-
-  useEscapeFirst(ref, close);
-
-  // Focus moves in once, when it opens: never again on a re-render (a switch
-  // saving re-renders it, and focus must stay on that switch).
-  useEffect(() => {
-    titleRef.current?.focus({ preventScroll: true });
-  }, []);
-
-  // What it draws elsewhere on the page (the Expiry list, any menu or list a
-  // rule's editor opens) is portalled outside it in the DOM but still inside
-  // it in React, and React's events reach it from there. So "outside" is
-  // never read off the DOM alone: a press or a focus the DOM calls outside
-  // waits one task, and React's own event from the same press or focus, if
-  // one arrives, says it was inside.
-  const pressedInside = useRef<Event | null>(null);
-  const focusInside = useRef(false);
-  const pendingClose = useRef<number[]>([]);
-  const closeUnlessInside = useCallback((stillInside: () => boolean) => {
-    const timer = window.setTimeout(() => {
-      pendingClose.current = pendingClose.current.filter((t) => t !== timer);
-      if (!stillInside()) onCloseRef.current();
-    }, 0);
-    pendingClose.current.push(timer);
-  }, []);
-  useEffect(() => () => pendingClose.current.forEach((t) => window.clearTimeout(t)), []);
-
-  useEffect(() => {
-    const onPointerDown = (e: PointerEvent) => {
-      const target = e.target;
-      if (!(target instanceof Element)) return;
-      if (ref.current?.contains(target) || target.closest(`[${SETTINGS_TRIGGER_ATTR}]`)) return;
-      // This runs first (document, capture); React's capture handler on the
-      // popover runs after it for a press in anything it drew elsewhere.
-      closeUnlessInside(() => pressedInside.current === e);
-    };
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => document.removeEventListener("pointerdown", onPointerDown, true);
-  }, [closeUnlessInside]);
+  // Views are counted unless the link has Insights turned off; a server
+  // without the switch counts as it always did.
+  const viewsCounted = !(current.data?.offered.insights === true && !current.data.on.insights);
 
   return (
-    <div
-      ref={ref}
-      id={id}
-      role="dialog"
-      aria-labelledby={titleId}
-      data-testid="link-settings"
-      style={{ top, maxHeight: `calc(100% - ${top + 12}px)` }}
-      // Focusable itself, so a click inside lands focus here. WebKit (the
-      // macOS webview) never focuses a clicked button: it focuses the nearest
-      // focusable ancestor instead, which without this was the panel around
-      // the popover, so pressing a switch read as focus leaving and closed it.
-      tabIndex={-1}
-      onPointerDownCapture={(e) => {
-        pressedInside.current = e.nativeEvent;
-      }}
-      onFocus={() => {
-        focusInside.current = true;
-      }}
-      onBlur={(e) => {
-        focusInside.current = false;
-        // Focus going to something it drew elsewhere (the Expiry list as it
-        // opens) brings its focus event right after this one.
-        if (leftPopover(e.currentTarget, e.relatedTarget)) closeUnlessInside(() => focusInside.current);
-      }}
-      className={cn(
-        "absolute right-3 z-30 flex w-[calc(100%-24px)] max-w-[320px] flex-col overflow-y-auto overscroll-contain p-3 outline-none",
-        FLOATING,
-      )}
-    >
-      <h3 id={titleId} ref={titleRef} tabIndex={-1} className={cn("text-[13.5px] font-semibold outline-none", STRONG)}>
-        Link settings
-      </h3>
-      {!pushed && <p className={cn("mb-2.5 mt-0.5 text-xs", MUTED)}>What people who open this link can do.</p>}
-      {pushed && <div className="mb-2" />}
-      {/* The link's rules as cards; a card's editor opens in their place. */}
+    <div className="flex flex-col gap-3">
+      {/* The link's rules; a long rule's editor opens in their place. */}
       <LinkRules
-        className="mb-2.5"
         shareToken={shareToken}
         fileName={fileName}
         mimeType={share?.mimeType ?? null}
@@ -271,47 +173,39 @@ export function LinkSettingsPopover({
       />
       {!pushed && (
         <>
-      {current.isPending ? (
-        <div className={cn(SKELETON, "h-[150px] rounded-[12px]")} />
-      ) : current.isError ? (
-        <LoadError line={loadErrorLine("this link's settings", current.error, online)} onRetry={() => void current.refetch()} />
-      ) : current.data.offered.insights ? (
-        <LinkEngagementSwitches
-          layout="list"
-          offered={current.data.offered}
-          value={current.data.on}
-          disabled={save.isPending}
-          switchesInPlan={current.data.switchesInPlan ?? null}
-          onChange={(next) => save.mutate(switchChange(current.data.on, next))}
-          onUpgrade={upgrade}
-        />
-      ) : (
-        <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
-      )}
-      {/* Drawn only where Rust offers it: a server with links per person. */}
-      <div className="mt-2.5 empty:hidden">
-        <RecipientLinks layout="list" shareToken={shareToken} onUpgrade={upgrade} />
-      </div>
-      <div className={cn("mt-3 border-t pt-2.5", HAIRLINE)}>
-        <HowWeCountViews />
-      </div>
+          {current.isPending ? (
+            <div className={cn(SKELETON, "h-[150px] rounded-[12px]")} />
+          ) : current.isError ? (
+            <LoadError line={loadErrorLine("this link's settings", current.error, online)} onRetry={() => void current.refetch()} />
+          ) : current.data.offered.insights ? (
+            <LinkEngagementSwitches
+              layout="list"
+              offered={current.data.offered}
+              value={current.data.on}
+              disabled={save.isPending}
+              switchesInPlan={current.data.switchesInPlan ?? null}
+              onChange={(next) => save.mutate(switchChange(current.data.on, next))}
+              onUpgrade={upgrade}
+            />
+          ) : (
+            <p className={cn("text-sm", MUTED)}>This server doesn&apos;t offer settings for links yet.</p>
+          )}
+          {/* Every file link, counting views or not: None also stops its
+              NDA and refused viewer emails. Drawn only where Rust has it. */}
+          <div className="empty:hidden">
+            <LinkVisitEmailsSelect shareToken={shareToken} viewsCounted={viewsCounted} layout="list" />
+          </div>
+          {/* Drawn only where Rust offers it: a server with links per person. */}
+          <div className="empty:hidden">
+            <RecipientLinks layout="list" shareToken={shareToken} onUpgrade={upgrade} />
+          </div>
+          <div className={cn("border-t pt-2.5", HAIRLINE)}>
+            <HowWeCountViews />
+          </div>
         </>
       )}
     </div>
   );
-}
-
-/**
- * Whether focus moving to `next` means it left the popover: tabbing out
- * does, like any popover. Focus going nowhere (a switch that turns disabled
- * while it saves), to the gear, or to something that holds the popover (the
- * panel or the sheet, where WebKit puts focus on a click it gives no
- * element) does not: a press outside closes it through its own listener.
- */
-export function leftPopover(popover: Element, next: EventTarget | null): boolean {
-  if (!(next instanceof Node)) return false;
-  if (popover.contains(next) || next.contains(popover)) return false;
-  return !(next instanceof Element && next.closest(`[${SETTINGS_TRIGGER_ATTR}]`));
 }
 
 /** What each number means, opened in place: there is no help page for it yet. */
@@ -343,8 +237,6 @@ export function SwitchOffNotice({ line, onTurnOn }: { line: string; onTurnOn: (f
       <p className={cn("min-w-0 text-xs leading-[1.45]", MUTED)}>{line}</p>
       <button
         type="button"
-        {...{ [SETTINGS_TRIGGER_ATTR]: "" }}
-        aria-haspopup="dialog"
         onClick={(e) => onTurnOn(e.currentTarget)}
         className={cn(TEXT_LINK, "shrink-0 whitespace-nowrap")}
       >

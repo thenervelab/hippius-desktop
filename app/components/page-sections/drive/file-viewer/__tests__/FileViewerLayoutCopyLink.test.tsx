@@ -10,7 +10,10 @@ import { serverCapabilitiesAtom } from "@/app/lib/global-atoms/sharesAtoms";
 
 vi.mock("@/app/lib/capture/useCaptureAvailability", () => ({ useCaptureAvailability: () => "unavailable" }));
 vi.mock("@/app/lib/tauri/captureEditor", () => ({ openFileInEditor: vi.fn() }));
-vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({ useMemberDriveLabels: () => new Set<string>() }));
+vi.mock("@/app/lib/hooks/useSharedDriveRoles", () => ({
+  useMemberDriveLabels: () => new Set<string>(),
+  useWritableMemberDriveLabels: () => new Set<string>(),
+}));
 vi.mock("@/app/lib/wallet-auth-context", () => ({ useWalletAuth: () => ({ polkadotAddress: "5Acct" }) }));
 vi.mock("@/app/contexts/FileSelectionContext", () => ({ useFileSelection: () => ({ enterSelectionModeAndSelectFile: vi.fn() }) }));
 vi.mock("../FileViewerThumbnailStrip", () => ({ default: () => null }));

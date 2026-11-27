@@ -102,8 +102,8 @@ pub async fn set_skip_trash(state: tauri::State<'_, AppState>, account_id: Strin
     Ok(())
 }
 
-/// One synced drive's delete rules, for the webview to pick the words and
-/// the confirm before it asks Rust (which checks again).
+/// One drive's delete rules, for the webview to pick the words and the
+/// confirm before it asks Rust (which checks again).
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DriveDeleteRule {
@@ -129,19 +129,36 @@ pub fn rule_for(label: &str, own: bool, manager: bool, skip_trash: bool) -> Driv
     }
 }
 
-pub(crate) async fn delete_rules(state: &AppState, account_id: &str) -> Result<TrashDeleteRules> {
-    let skip_trash = read_skip_trash(state.pool()?, account_id).await;
-    let drives = crate::sync::drive_move::list_move_destinations_inner(state, account_id)
-        .await?
-        .into_iter()
-        .filter(|d| d.sync_path.is_some())
-        .map(|d| rule_for(&d.label, !d.shared, d.manager, skip_trash))
-        .collect();
-    Ok(TrashDeleteRules { skip_trash, drives })
+/// Pure: the rules of every drive this account can delete in, synced here
+/// or browsed from the server. An own drive browsed from the server is
+/// still the account's: Delete forever and Skip Trash work there as on a
+/// synced one. A drive shared with the account never skips Trash, and only
+/// a Manager may delete forever there.
+pub fn rules_for_drives(drives: &[crate::sync::drive_move::MoveDestination], skip_trash: bool) -> Vec<DriveDeleteRule> {
+    drives.iter().map(|d| rule_for(&d.label, !d.shared, d.manager, skip_trash)).collect()
 }
 
-/// The delete rules of every drive synced here. A drive shared with this
-/// account as a Viewer is not listed (nothing can be deleted there).
+/// Pure: whether Delete forever may run in `label`. A drive the rules do
+/// not list (a folder shared on its own, a Viewer's drive, one added since)
+/// may not: there only Move to Trash, which can be undone.
+pub fn may_delete_forever(rules: &[DriveDeleteRule], label: &str) -> bool {
+    rules.iter().any(|r| r.label == label && r.can_delete_forever)
+}
+
+pub(crate) async fn delete_rules(state: &AppState, account_id: &str) -> Result<TrashDeleteRules> {
+    let skip_trash = read_skip_trash(state.pool()?, account_id).await;
+    let drives = crate::sync::drive_move::list_move_destinations_inner(state, account_id).await?;
+    Ok(TrashDeleteRules {
+        skip_trash,
+        drives: rules_for_drives(&drives, skip_trash),
+    })
+}
+
+/// The delete rules of every drive this account can delete in: its own
+/// drives (synced here or browsed from the server) and the drives shared
+/// with it as an Editor or Manager. A drive shared as a Viewer, or a folder
+/// shared on its own, is not listed: the webview offers only Move to Trash
+/// there, and the server decides.
 #[tauri::command]
 pub async fn get_trash_delete_rules(state: tauri::State<'_, AppState>, account_id: String) -> Result<TrashDeleteRules> {
     let account_id = state.require_session_account(&account_id)?;
@@ -173,6 +190,51 @@ mod tests {
         assert!(managed.can_delete_forever && !managed.skips_trash);
         let editor = rule_for("team", false, false, true);
         assert!(!editor.can_delete_forever && !editor.skips_trash);
+    }
+
+    fn drive(label: &str, remote: bool, shared: bool, manager: bool) -> crate::sync::drive_move::MoveDestination {
+        crate::sync::drive_move::MoveDestination {
+            label: label.into(),
+            name: label.into(),
+            remote,
+            sync_path: (!remote).then(|| format!("/drives/{label}")),
+            shared,
+            manager,
+        }
+    }
+
+    #[test]
+    fn a_drive_browsed_from_the_server_keeps_the_rules_of_its_kind() {
+        let drives = [
+            drive("docs", false, false, true),
+            drive("archive", true, false, true),
+            drive("shared:5Owner~0123456789abcdef", true, true, false),
+            drive("shared:5Boss~fedcba9876543210", true, true, true),
+        ];
+        let rules = rules_for_drives(&drives, true);
+        let of = |label: &str| rules.iter().find(|r| r.label == label).cloned().unwrap();
+        assert_eq!(
+            of("archive"),
+            of("docs").clone_with_label("archive"),
+            "an own drive not synced here deletes the same way"
+        );
+        assert!(of("archive").can_delete_forever && of("archive").skips_trash);
+        let editor = of("shared:5Owner~0123456789abcdef");
+        assert!(!editor.can_delete_forever && !editor.skips_trash, "an Editor only moves to Trash");
+        let manager = of("shared:5Boss~fedcba9876543210");
+        assert!(
+            manager.can_delete_forever && !manager.skips_trash,
+            "Skip Trash never reaches a shared drive"
+        );
+    }
+
+    impl DriveDeleteRule {
+        fn clone_with_label(&self, label: &str) -> Self {
+            Self {
+                label: label.into(),
+                ..self.clone()
+            }
+        }
     }
 
     #[test]

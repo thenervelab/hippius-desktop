@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { MoreVertical, Download, FolderOpen, FolderSymlink, Link2, MonitorDown, Pencil } from "lucide-react";
 import { useAtomValue } from "jotai";
 import {
+  driveTrashEnabledAtom,
   folderShareFeatureEnabledAtom,
   memberFolderSharesEnabledAtom,
   shareFeatureEnabledAtom,
@@ -53,7 +54,7 @@ import { generateFolderUrl } from "@/app/utils/folderUrlUtils";
 import { pageFolderHref, useDriveRoute } from "@/app/components/page-sections/drive/driveRoute";
 import { useFileSelection } from "@/app/contexts/FileSelectionContext";
 import useDeleteFile from "@/app/lib/hooks/use-delete-file";
-import { TrashRequestRunner, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
+import { TrashRequestRunner, offersDeleteOnRow, useDeleteMenuAction, type DeleteMode } from "@/app/lib/trash/deleteMode";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { revealFile } from "@/lib/utils/revealFile";
 import { saveFileToDesktop } from "@/lib/utils/saveFileToDesktop";
@@ -107,6 +108,7 @@ const CardView: FC<CardViewProps> = ({
   // advertises `shares: true`. Atom populated once per session by
   // `useServerCapabilities` (mounted in SyncEventLogger).
   const shareEnabled = useAtomValue(shareFeatureEnabledAtom);
+  const trashEnabled = useAtomValue(driveTrashEnabledAtom);
   const folderSharesEnabled = useAtomValue(folderShareFeatureEnabledAtom);
   // Which of this listing's rows sit in a drive shared WITH this account.
   const memberDriveLabels = useMemberDriveLabels();
@@ -531,11 +533,15 @@ const CardView: FC<CardViewProps> = ({
                             },
                           }]
                             : []),
-                          // Delete: disabled for unpinned files, hidden for
-                          // cloud-only rows — the delete pipeline removes the
-                          // LOCAL copy and lets sync propagate, which a
-                          // server-only row has no path through.
-                          ...(isCloudOnlyRow(file)
+                          // Delete: disabled for unpinned files. A
+                          // cloud-only row has it only while the server has
+                          // Trash and where this account can write
+                          // (`offersDeleteOnRow`).
+                          ...(!offersDeleteOnRow(
+                            file,
+                            trashEnabled,
+                            offersWriteAction(file, memberDriveLabels, writableMemberDriveLabels),
+                          )
                             ? []
                             : [
                                 {
