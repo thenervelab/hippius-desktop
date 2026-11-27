@@ -14,7 +14,9 @@ import {
   TRAY_FILE_ACTION_EVENT,
   type TrayFileActionRequest,
 } from "@/app/lib/tray/trayRowActions";
-import { capturesRoute, driveFolderRoute } from "@/app/lib/routes";
+import { driveFolderRoute } from "@/app/lib/routes";
+import { capturesDriveFromStatus, capturesPageRoute, type CapturesDrive } from "@/app/lib/drive/syncQueueLocation";
+import { getCaptureDriveStatus } from "@/app/lib/tauri/capture";
 import { downloadFile } from "@/app/lib/utils/downloadFile";
 import {
   offersShareAction,
@@ -85,34 +87,48 @@ export default function TrayFileActionHost() {
     null,
   );
 
+  // Where a row opens: the Captures page when the file is where captures go
+  // (their own drive, or a folder inside another), as the sync queue and the
+  // capture card open it; else the Drive page in its folder. The captures
+  // location is asked of Rust at the click; no answer opens Drive.
+  const openRowFolder = useCallback(
+    (at: NonNullable<ReturnType<typeof trayDriveLocation>>) => {
+      const path = at.subfolder ? `${at.subfolder}/${at.fileName}` : at.fileName;
+      const captures: Promise<CapturesDrive | null> = Promise.resolve()
+        .then(getCaptureDriveStatus)
+        .then(capturesDriveFromStatus)
+        .catch(() => null);
+      void captures.then((drive) => {
+        router.push(
+          capturesPageRoute({ label: at.label, path }, drive) ??
+            driveFolderRoute(at.label, at.remote, at.subfolder, at.fileName),
+        );
+      });
+    },
+    [router],
+  );
+
   const handle = useCallback(
     ({ action, file, siblings }: TrayFileActionRequest) => {
       switch (action) {
         case "show-in-drive": {
           const at = trayDriveLocation(file);
           if (!at) return;
-          router.push(
-            driveFolderRoute(at.label, at.remote, at.subfolder, at.fileName),
-          );
+          openRowFolder(at);
           return;
         }
         case "insights": {
           // The Captures page with the capture pointed out, its Insights
           // panel open beside it. The panel finds the capture's newest link
           // in the listing, or offers to make one, so nothing is asked of
-          // the server here. A capture in a folder inside another drive is
-          // on the Drive page instead, as "Show in Hippius" opens it.
+          // the server here. It opens where "Show in Hippius" opens it.
           if (!insightsEnabled) {
             toast.error(TRAY_INSIGHTS_UNAVAILABLE);
             return;
           }
           const at = trayDriveLocation(file);
           if (!at) return;
-          router.push(
-            at.subfolder
-              ? driveFolderRoute(at.label, at.remote, at.subfolder, at.fileName)
-              : capturesRoute(at.label, at.remote, at.fileName),
-          );
+          openRowFolder(at);
           setInsights({
             shareToken: null,
             fileName: at.fileName,
@@ -153,7 +169,7 @@ export default function TrayFileActionHost() {
       }
     },
     [
-      router,
+      openRowFolder,
       polkadotAddress,
       shareEnabled,
       insightsEnabled,

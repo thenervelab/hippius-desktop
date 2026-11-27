@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { deleteShareLinksNote } from "@/app/components/page-sections/drive/deleteShareLinksNote";
 import { useAtomValue } from "jotai";
 import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
+import { deleteDriveCopy } from "./deleteDriveCopy";
 
 interface DeleteServerDialogProps {
   open: boolean;
@@ -36,25 +37,24 @@ export function DeleteServerDialog({
 
   const mismatch = confirmInput.length > 0 && confirmInput !== folderName;
   const trashEnabled = useAtomValue(driveTrashEnabledAtom);
+  const copy = deleteDriveCopy(trashEnabled);
 
   return (
     <FramedDialog
       open={open}
       onClose={handleClose}
-      title="Delete Folder from Server"
+      title={copy.title}
       icon={<Trash2 className="size-5 text-white" />}
       maxWidth="max-w-[680px]"
       iconBgClassName="bg-[#fc7d73]"
       borderClassName="bg-[#fc7d73]"
     >
       <p className="mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-        This will permanently delete all files for{" "}
+        {copy.lead}
         <span className="font-semibold text-grey-10 dark:text-white">
           &quot;{folderName}&quot;
-        </span>{" "}
-        from the server. This action cannot be undone.
-        {/* With Trash on, say that a whole drive skips it. */}
-        {trashEnabled && " It does not go to Trash."}
+        </span>
+        {copy.tail}
       </p>
       <p className="-mt-3 mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
         {deleteShareLinksNote([{ isFolder: true }])}
@@ -104,7 +104,7 @@ export function DeleteServerDialog({
               "hover:bg-[#fb695e] hover:border-[#fb695e]"
             )}
           >
-            {isDeletingServer ? "Deleting..." : "Delete Permanently"}
+            {isDeletingServer ? "Deleting..." : copy.button}
           </Button>
         </div>
       </div>

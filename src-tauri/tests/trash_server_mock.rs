@@ -15,7 +15,12 @@
 //! - delete forever goes a hundred items a call, Empty asks again while
 //!   `more`, the listing pages on the server's cursor;
 //! - a server with Trash switched off answers a bare 404 that is never read
-//!   as success.
+//!   as success;
+//! - a drive browsed from the server (no folder on this computer) finds its
+//!   rows by path through `/browse` and sends them through the same loops:
+//!   a file as its own item, a folder as one item under a journaled id,
+//!   Undo restores those items in place, and Delete forever is refused in a
+//!   drive shared with the account as an Editor.
 
 use axum::Router;
 use axum::extract::{Path as AxPath, Query, State};
@@ -26,9 +31,12 @@ use hcfs_shared::network::{RestoreConflict, RestoreTrashRename};
 use hcfs_shared::revision_id::RevisionId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use tauri_project_lib::sync::drive_move::MoveDestination;
 use tauri_project_lib::sync::trash::run::{
     FileToTrash, KeepBoth, delete_forever, empty, list_all, restore_as, restore_in_place, trash_files, trash_folder,
 };
+use tauri_project_lib::sync::trash::server::{Listings, OnServer, ServerDrive, ToSend, find, send};
+use tauri_project_lib::sync::trash::setting::{may_delete_forever, rules_for_drives};
 
 const OWNER: &str = "5Owner";
 const HASH: &str = "0123456789abcdef";
@@ -235,6 +243,34 @@ async fn empty_route(State(m): State<Mock>) -> Answer {
     ok(serde_json::json!({ "items_marked": 100, "more": more }))
 }
 
+/// One listed file of the browsed drive, in the server's row shape.
+fn listed_file(path: &str, hash: u8) -> serde_json::Value {
+    serde_json::json!({ "path_hash": ([hash; 32]), "salted_hash": ([0u8; 32]), "size_bytes": 3, "revision_seq": 1,
+        "revision_id": ([9u8; 32]), "encrypted_path": [], "relative_path": path })
+}
+
+/// A drive with `Work/report.pdf` and the folder `Work/Trip` (two files and
+/// an empty subfolder), as `/browse` lists it level by level.
+async fn browse_route(AxPath((ss58, hash)): AxPath<(String, String)>, Query(q): Query<HashMap<String, String>>) -> Answer {
+    assert_eq!((ss58.as_str(), hash.as_str()), (OWNER, HASH), "browsed in the owner's namespace");
+    let path = q.get("path").cloned().unwrap_or_default();
+    let folder = |name: &str| serde_json::json!({ "name": name, "file_count": 1, "total_bytes": 3 });
+    let (folders, files) = match path.as_str() {
+        "" => (vec![folder("Work")], vec![]),
+        "Work" => (vec![folder("Trip")], vec![listed_file("Work/report.pdf", 0xa1)]),
+        "Work/Trip" => (
+            vec![folder("Empty")],
+            vec![listed_file("Work/Trip/1.jpg", 0xb1), listed_file("Work/Trip/2.jpg", 0xb2)],
+        ),
+        _ => (vec![], vec![]),
+    };
+    let count = folders.len() + files.len();
+    ok(serde_json::json!({
+        "ss58_address": ss58, "folder_hash": hash, "path": path, "folders": folders, "files": files,
+        "total_count": count, "has_more": false, "offset": 0, "limit": 200,
+    }))
+}
+
 async fn start(mock: Mock) -> HcfsClient {
     let app = Router::new()
         .route("/v1/trash/{ss58}/{hash}", get(list_route))
@@ -243,6 +279,7 @@ async fn start(mock: Mock) -> HcfsClient {
         .route("/v1/trash/{ss58}/{hash}/items/{item}/files", get(item_files_route))
         .route("/v1/trash/{ss58}/{hash}/delete", post(delete_route))
         .route("/v1/trash/{ss58}/{hash}/empty", post(empty_route))
+        .route("/browse/{ss58}/{hash}", get(browse_route))
         .with_state(mock);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -506,4 +543,154 @@ async fn a_server_with_trash_off_is_never_read_as_success() {
             .is_unavailable()
     );
     assert!(empty(&client, OWNER, HASH).await.unwrap_err().is_unavailable());
+}
+
+/// The browsed drive, as `trash::server` reaches it.
+fn browsed<'a>(client: &'a HcfsClient, key: &'a hcfs_crypto::FileKey) -> ServerDrive<'a> {
+    ServerDrive {
+        client,
+        ss58: OWNER,
+        folder_hash: HASH,
+        wire_root: "",
+        key,
+    }
+}
+
+#[tokio::test]
+async fn a_drive_browsed_from_the_server_trashes_by_path_and_undo_restores_it() {
+    let mock = Mock::default();
+    let client = start(mock.clone()).await;
+    let key = hcfs_crypto::FileKey::from_bytes([5; 32]);
+    let drive = browsed(&client, &key);
+    let journal = tempfile::tempdir().unwrap();
+
+    // Nothing on this computer: the parent's listing says what each row is.
+    let mut listings = Listings::default();
+    let file = find(&drive, &mut listings, "Work/report.pdf", false).await.unwrap();
+    let folder = find(&drive, &mut listings, "Work/Trip", false).await.unwrap();
+    let gone = find(&drive, &mut listings, "Work/missing.txt", false).await.unwrap();
+    assert!(matches!(file, OnServer::File(_)), "{file:?}");
+    assert!(matches!(folder, OnServer::Folder(_)), "{folder:?}");
+    assert!(matches!(gone, OnServer::Missing), "a row that is not there is never guessed at");
+    let (folder_files, folder_bytes) = folder.files();
+    assert_eq!(
+        (folder_files.len(), folder_bytes),
+        (2, 6),
+        "every file under the folder, nested levels walked"
+    );
+
+    let rows = vec![
+        ToSend {
+            rel: "Work/report.pdf".into(),
+            is_dir: false,
+            files: file.files().0,
+        },
+        ToSend {
+            rel: "Work/Trip".into(),
+            is_dir: true,
+            files: folder_files,
+        },
+    ];
+    let answers = send(&drive, journal.path(), &rows, |_| {}).await;
+    let items: Vec<Vec<String>> = answers.into_iter().map(|a| a.expect("trashed")).collect();
+    assert_eq!(
+        items[0],
+        vec![format!("item-{}", &hex::encode([0xa1u8; 32])[..4])],
+        "the file is its own item"
+    );
+    assert_eq!(items[1].len(), 1, "the folder is one item");
+    let folder_item = items[1][0].clone();
+    assert_eq!(folder_item.len(), 32, "an id this computer picked");
+
+    let bodies = mock.trash_bodies.lock().unwrap().clone();
+    let grouped: Vec<&serde_json::Value> = bodies.iter().filter(|b| b.get("folder_path").is_some()).collect();
+    assert!(
+        grouped
+            .iter()
+            .all(|b| b["folder_path"] == "Work/Trip" && b["item_id"] == folder_item.as_str())
+    );
+    assert!(
+        !journal.path().join(".hippius-trash-hold/jobs.json").exists(),
+        "a finished folder leaves nothing to resume"
+    );
+
+    // Undo: the same items restored in place, nothing to put back on disk.
+    let ids: Vec<String> = items.into_iter().flatten().collect();
+    let back = restore_in_place(&client, OWNER, HASH, &ids, RestoreConflict::Fail, |_| {}).await.unwrap();
+    assert_eq!(back.restored.len(), 2);
+    assert_eq!(mock.restore_bodies.lock().unwrap()[0]["item_ids"], serde_json::json!(ids));
+}
+
+#[tokio::test]
+async fn a_browsed_folder_stopped_part_way_resumes_into_its_item() {
+    let mock = Mock::default();
+    let client = start(mock.clone()).await;
+    let key = hcfs_crypto::FileKey::from_bytes([5; 32]);
+    let drive = browsed(&client, &key);
+    let journal = tempfile::tempdir().unwrap();
+    // An earlier run recorded its item before the app stopped.
+    tauri_project_lib::sync::trash::hold::remember_item(journal.path(), "Work/Trip", ITEM).unwrap();
+
+    let rows = vec![ToSend {
+        rel: "Work/Trip".into(),
+        is_dir: true,
+        files: files(3, 0xb0),
+    }];
+    let answers = send(&drive, journal.path(), &rows, |_| {}).await;
+    assert_eq!(answers[0].as_ref().unwrap(), &vec![ITEM.to_string()], "the same item, not a second one");
+    let bodies = mock.trash_bodies.lock().unwrap().clone();
+    assert!(bodies.iter().all(|b| b["item_id"] == ITEM));
+}
+
+#[tokio::test]
+async fn a_failed_trash_on_a_browsed_drive_deletes_nothing_forever() {
+    let mock = Mock::default();
+    *mock.off.lock().unwrap() = true;
+    let client = start(mock.clone()).await;
+    let key = hcfs_crypto::FileKey::from_bytes([5; 32]);
+    let drive = browsed(&client, &key);
+    let journal = tempfile::tempdir().unwrap();
+    let rows = vec![ToSend {
+        rel: "Work/report.pdf".into(),
+        is_dir: false,
+        files: files(1, 0xa1),
+    }];
+    let answers = send(&drive, journal.path(), &rows, |_| {}).await;
+    assert!(answers[0].is_err(), "Trash switched off is a refusal, never success");
+    assert!(mock.delete_bodies.lock().unwrap().is_empty(), "never a permanent delete in its place");
+}
+
+#[test]
+fn delete_forever_is_refused_in_a_browsed_drive_shared_as_an_editor() {
+    let destination = |label: &str, shared: bool, manager: bool| MoveDestination {
+        label: label.into(),
+        name: label.into(),
+        remote: true,
+        sync_path: None,
+        shared,
+        manager,
+    };
+    let rules = rules_for_drives(
+        &[
+            destination("archive", false, true),
+            destination("shared:5Owner~0123456789abcdef", true, false),
+        ],
+        false,
+    );
+    assert!(
+        may_delete_forever(&rules, "archive"),
+        "an own drive browsed from the server deletes forever"
+    );
+    assert!(
+        !may_delete_forever(&rules, "shared:5Owner~0123456789abcdef"),
+        "an Editor only moves to Trash"
+    );
+    assert!(
+        !may_delete_forever(&rules, "grant:5Owner~0123456789abcdef~Work"),
+        "a drive the rules do not list may not"
+    );
+    assert_eq!(
+        tauri_project_lib::sync::trash::NOT_YOURS_TO_DELETE,
+        "Only the drive's owner or a manager can delete items forever."
+    );
 }

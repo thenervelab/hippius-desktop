@@ -13,6 +13,7 @@ import {
 } from "@/app/lib/tauri/trash";
 import { useWalletAuth } from "@/app/lib/wallet-auth-context";
 import type { FormattedUserFile } from "@/app/lib/hooks/use-user-files";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
 
 /**
  * - `legacy`: the server has no Trash. Today's delete and its words, exactly.
@@ -37,6 +38,26 @@ export function resolveDeleteMode(
   if (!trashEnabled) return "legacy";
   if (!canDeleteForever) return "trash";
   return skipsTrash || optionHeld ? "forever" : "trash";
+}
+
+/**
+ * Pure: whether a row's menus offer its Delete item at all.
+ *
+ * A row with a copy on this computer always does (today's Delete, or Move
+ * to Trash). A row with none (browsed from the server, or not downloaded
+ * here) does only while the server has Trash, since Rust then trashes it
+ * on Hippius, and only where this account can write (`canWrite`, from
+ * `offersWriteAction`). With Trash off such a row has no delete: today's
+ * delete removes the local copy, which it does not have. A whole drive is
+ * never a row here: drives do not go to Trash.
+ */
+export function offersDeleteOnRow(
+  file: FormattedUserFile,
+  trashEnabled: boolean,
+  canWrite: boolean,
+): boolean {
+  if (!isCloudOnlyRow(file)) return true;
+  return trashEnabled && canWrite && !file.isDriveRoot;
 }
 
 /** The menu and button label for a mode. */

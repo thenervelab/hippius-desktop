@@ -13,6 +13,9 @@ import { deleteFilesForever, moveToTrash, newTrashJobId, onTrashProgress, type M
 import { movingToTrashMessage, progressMessage } from "@/app/lib/trash/copy";
 import { showMovedToTrashToast } from "@/app/lib/trash/trashToast";
 import type { DeleteMode } from "@/app/lib/trash/deleteMode";
+import { isCloudOnlyRow } from "@/app/lib/utils/cloudOnly";
+import { driveRelativePathFor } from "@/app/lib/utils/driveRelativePath";
+import { REMOTE_SOURCE_PREFIX } from "@/app/lib/hooks/use-nested-folder-listing";
 
 export type FileToDelete = FormattedUserFile;
 
@@ -52,6 +55,19 @@ export function linksOutcomeNote(turnedOff: number, failed: number): string | nu
   }
   if (turnedOff > 0) return turnedOff === 1 ? "Its link is turned off." : `${turnedOff} links are turned off.`;
   return null;
+}
+
+/**
+ * How Rust names a row to delete. A row with a copy here is named as
+ * always (its local path, or its name). A row with none (browsed from the
+ * server, or not downloaded here) is named by its path in the drive, since
+ * Rust finds it on Hippius by that path; a folder row carries only its
+ * name, so the path is rebuilt from where it was listed.
+ */
+export function deleteRequestPath(f: FileToDelete): { name: string; source: string | null } {
+    if (!isCloudOnlyRow(f)) return { name: f.actualFileName || f.name, source: f.source ?? null };
+    const source = f.source && !f.source.startsWith(REMOTE_SOURCE_PREFIX) ? f.source : null;
+    return { name: driveRelativePathFor(f), source };
 }
 
 function names(files: FileToDelete[]): string[] {
@@ -173,8 +189,7 @@ export const useDeleteFile = ({
                 let trash: MoveToTrashResult;
                 try {
                     trash = await moveToTrash(polkadotAddress, jobId, files.map((f) => ({
-                        name: f.actualFileName || f.name,
-                        source: f.source ?? null,
+                        ...deleteRequestPath(f),
                         label: f.label ?? null,
                     })));
                 } finally {
@@ -192,8 +207,7 @@ export const useDeleteFile = ({
             // Single Rust call handles path resolution, deletion, and sync trigger
             const turnOffLinks = options ? options.turnOffLinks : undefined;
             const requests = files.map((f) => ({
-                name: f.actualFileName || f.name,
-                source: f.source ?? null,
+                ...deleteRequestPath(f),
                 label: f.label ?? null,
                 size: f.size ?? 0,
                 turnOffLinks: turnOffLinks?.get(f) ?? [],

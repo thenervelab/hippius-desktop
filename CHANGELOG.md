@@ -270,6 +270,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Move to Trash works on files and folders you browse from Hippius.** In a drive or folder that isn't synced on this computer, the row menu, the right-click menu, the viewer and the selection bar now offer Move to Trash (and Delete forever where you own or manage the drive), with Undo like everywhere else.
+- **Deleting a whole drive now says plainly that it doesn't go to Trash.** The confirmation reads "Drives don't go to Trash. This deletes every file in it for good." before you type the drive's name.
+- **Show in folder on a recording or screenshot opens Captures.** From the sync queue, the capture's card or the menu bar, a capture now opens on the Captures page with it highlighted, also when your captures are kept in a folder inside another drive.
 - **Viewer names and emails show in Insights on links made on another computer.** On a link that asks for an email, its viewers' names and confirmed emails, its comments and its NDA accepts now open on any of your computers, not only the one that made the link. While your Drive is locked, Insights says so and offers Unlock.
 - **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.

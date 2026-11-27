@@ -1,5 +1,5 @@
-//! Drive Trash: Move to Trash with Undo, Delete forever on a synced item,
-//! and the Trash page's list, restore, delete forever and empty.
+//! Drive Trash: Move to Trash with Undo, Delete forever from a drive, and
+//! the Trash page's list, restore, delete forever and empty.
 //!
 //! Everything here is behind the server's `drive_trash` capability; each
 //! command refuses without it, and the webview hides every Trash surface
@@ -14,7 +14,10 @@
 //! trashes the item on the server, then moves the local copy into the
 //! hold (`hold`), so the next cycle sees "both deleted" and sends nothing.
 //! Delete forever does the same, then deletes the items forever and drops
-//! the held copies. See "Drive Trash" in `.claude/rules/sync-engine.md`.
+//! the held copies. A drive browsed from the server (not synced here, or a
+//! row whose copy is not on this computer) has no local half: the same
+//! server calls (`server`), and Undo restores the items on Hippius only.
+//! See "Drive Trash" in `.claude/rules/sync-engine.md`.
 //!
 //! No size limit anywhere: `run` carries any number of files through the
 //! server's batches, reports progress on [`PROGRESS_EVENT`], and every step
@@ -22,21 +25,23 @@
 
 pub mod hold;
 pub mod run;
+pub mod server;
 pub mod setting;
 pub mod wire;
 
 use crate::app_state::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::drive_move::{DriveLock, entry_path, list_move_destinations_inner, lock_drive, resolve_side, unsettled_folder};
-use crate::sync::files::move_entries::{basename_of, join_path, keep_both_name, parent_of};
+use crate::sync::files::move_entries::{basename_of, join_path, keep_both_name, normalize_drive_path, parent_of};
 use crate::sync::files::{DeleteFilesResult, FileDeleteError, FileDeleteRequest};
 use crate::sync::identity::{DriveIdentity, resolve_drive_identity_or_own};
 use hcfs_client::client::HcfsClient;
 use hcfs_client::engine::types::{SyncActivityAction, SyncActivityItem};
 use run::{FileToTrash, KeepBoth};
 use serde::{Deserialize, Serialize};
+use server::{OnServer, ServerDrive, ToSend};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tauri::Emitter;
 use tracing::{info, warn};
 use wire::{RestoreConflict, TrashItemKind, TrashItemState, TrashRefusal, TrashRestoreMode};
@@ -84,16 +89,38 @@ impl Progress {
     }
 }
 
-/// One item moved into a hold, for Undo.
+/// One trashed item Undo can bring back.
 #[derive(Clone, Debug)]
 struct HeldItem {
     label: String,
-    root: PathBuf,
     rel: String,
-    held: PathBuf,
     /// The Trash items it became; empty when the server named none, which
     /// leaves the item in Trash on Undo.
     item_ids: Vec<String>,
+    /// Its local copy, moved into the hold. `None` for an item with no copy
+    /// on this computer (a drive browsed from the server, or a row not
+    /// downloaded here): Undo restores it on Hippius only.
+    local: Option<LocalHold>,
+}
+
+#[derive(Clone, Debug)]
+struct LocalHold {
+    root: PathBuf,
+    held: PathBuf,
+}
+
+/// The drive folders holding these items' local copies.
+fn hold_roots<'a>(items: impl IntoIterator<Item = &'a HeldItem>) -> HashSet<PathBuf> {
+    items.into_iter().filter_map(|i| i.local.as_ref().map(|l| l.root.clone())).collect()
+}
+
+/// Where a drive browsed from the server keeps its folder trash journal
+/// (`hold`'s resume record): this computer's account folder, by the drive's
+/// wire identity, since such a drive has no folder here.
+fn browsed_journal_dir(account_id: &str, ss58: &str, folder_hash: &str) -> Result<PathBuf> {
+    Ok(crate::sync::mnemonic::account_dir(account_id)?
+        .join("trash-journal")
+        .join(format!("{ss58}-{folder_hash}")))
 }
 
 /// The holds whose Undo toast is still up, by token.
@@ -179,9 +206,9 @@ enum Kind {
 // Move to Trash
 // ---------------------------------------------------------------------------
 
-/// Move synced files and folders to Trash. No confirm: Undo
-/// (`undo_move_to_trash`) brings them back while its toast is up, and the
-/// Trash page after that.
+/// Move files and folders to Trash, in a drive synced here or browsed from
+/// the server. No confirm: Undo (`undo_move_to_trash`) brings them back
+/// while its toast is up, and the Trash page after that.
 #[tauri::command]
 pub async fn move_to_trash(
     state: tauri::State<'_, AppState>,
@@ -227,6 +254,66 @@ struct Target {
     files: Vec<FileToTrash>,
     /// Delete forever of a file not on Hippius yet: only the local copy.
     local_only: bool,
+    /// Its local copy goes into the hold once the server has trashed it.
+    /// False when there is no copy on this computer.
+    held: bool,
+}
+
+/// What a row is, from its local copy and what Hippius holds at its path.
+#[derive(Debug, PartialEq, Eq)]
+enum Step {
+    /// Trash it on Hippius; `held`: then hold its local copy.
+    Trash { is_dir: bool, held: bool },
+    /// Delete forever of a file not on Hippius yet: only its local copy.
+    LocalOnly,
+}
+
+/// Why a row is not trashed.
+#[derive(Debug, PartialEq, Eq)]
+enum Problem {
+    /// A synced folder with changes still on their way: Undo needs the local
+    /// copy to match Hippius.
+    Unsettled,
+    /// A local file Hippius does not have yet.
+    NotUploaded,
+    /// Neither here nor on Hippius.
+    Gone,
+}
+
+impl Problem {
+    fn sentence(&self, name: &str) -> String {
+        match self {
+            Problem::Unsettled => format!("\"{name}\" has changes that are still syncing. Try again when sync finishes."),
+            Problem::NotUploaded => format!("\"{name}\" hasn't finished uploading yet."),
+            Problem::Gone => format!("\"{name}\" is no longer in this folder."),
+        }
+    }
+}
+
+/// What Hippius holds at a row's path, without the rows themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Remote {
+    Folder,
+    File,
+    Missing,
+}
+
+/// Pure: what to do with one row. `local`: its copy on this computer is a
+/// folder (`Some(true)`) or a file, or there is none (a drive browsed from
+/// the server, or a row not downloaded here). `unsettled`: a local folder
+/// holds something Hippius does not.
+fn plan_row(kind: Kind, local: Option<bool>, remote: Remote, unsettled: bool) -> std::result::Result<Step, Problem> {
+    match (local, remote) {
+        // Delete forever removes both whatever they hold.
+        (Some(true), _) if kind == Kind::Trash && unsettled => Err(Problem::Unsettled),
+        (Some(true), _) => Ok(Step::Trash { is_dir: true, held: true }),
+        (Some(false), Remote::File) => Ok(Step::Trash { is_dir: false, held: true }),
+        (Some(false), _) if kind == Kind::Forever => Ok(Step::LocalOnly),
+        (Some(false), _) => Err(Problem::NotUploaded),
+        (None, Remote::Folder) => Ok(Step::Trash { is_dir: true, held: false }),
+        (None, Remote::File) => Ok(Step::Trash { is_dir: false, held: false }),
+        (None, Remote::Missing) => Err(Problem::Gone),
+    }
 }
 
 async fn move_to_trash_inner(
@@ -250,28 +337,22 @@ async fn move_to_trash_inner(
             error,
         });
     };
-    // Group by drive; an explicitly named drive must exist (never the
-    // default drive in its place, as `delete_files`).
+    // Group by drive. A drive with no folder here is browsed from the
+    // server; an explicitly named drive is never the default drive in its
+    // place (as `delete_files`).
     let mut by_label: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (index, file) in files.iter().enumerate() {
         let label = file.label.clone().unwrap_or_else(|| "default".to_string());
-        if label_to_path.contains_key(&label) {
-            by_label.entry(label).or_default().push(index);
-        } else {
-            fail(&mut result, index, "This item's drive isn't synced on this computer.".into());
-        }
+        by_label.entry(label).or_default().push(index);
     }
 
     let token = hold::new_token(now_millis());
     let mut held_all = Vec::new();
     let mut folder_labels = Vec::new();
     for (label, indexes) in by_label {
-        let root_str = label_to_path[&label].clone();
-        let root = PathBuf::from(&root_str);
         let drive = DriveRequest {
             label: &label,
-            root: &root,
-            root_str: &root_str,
+            root: label_to_path.get(&label).map(String::as_str),
             token: &token,
             kind,
         };
@@ -284,7 +365,7 @@ async fn move_to_trash_inner(
                 for (index, error) in outcome.failed {
                     fail(&mut result, index, error);
                 }
-                if outcome.held.iter().any(|h| h.held.is_dir()) {
+                if outcome.held.iter().any(|h| h.local.as_ref().is_some_and(|l| l.held.is_dir())) {
                     folder_labels.push(label.clone());
                 }
                 held_all.extend(outcome.held);
@@ -323,14 +404,16 @@ struct DriveOutcome {
 
 struct DriveRequest<'a> {
     label: &'a str,
-    root: &'a Path,
-    root_str: &'a str,
+    /// The drive's folder on this computer; `None` for a drive browsed from
+    /// the server.
+    root: Option<&'a str>,
     token: &'a str,
     kind: Kind,
 }
 
-/// Move one drive's rows to Trash: read them, trash them on the server with
-/// the drive's sync lock held, then hold the local copies.
+/// Move one drive's rows to Trash: read them from disk and the server,
+/// trash them on the server with the drive's sync lock held, then hold the
+/// local copies. A row with no copy here is trashed on the server only.
 #[allow(clippy::too_many_lines)]
 async fn trash_in_drive(
     state: &AppState,
@@ -340,99 +423,78 @@ async fn trash_in_drive(
     indexes: &[usize],
     progress_base: &Progress,
 ) -> Result<DriveOutcome> {
-    let DriveRequest {
-        label,
-        root,
-        root_str,
-        token,
-        kind,
-    } = *drive;
+    let DriveRequest { label, root, token, kind } = *drive;
+    let root_str = root.unwrap_or("");
+    let root: Option<PathBuf> = root.map(PathBuf::from);
     let mnemonic = crate::sync::remote::session_mnemonic(state)?;
     let (side, _) = resolve_side(state, account_id, label, &mnemonic).await?;
     drop(mnemonic);
     let (ss58, fh) = (side.identity.wire_ss58.clone(), side.identity.wire_folder_hash.clone());
-    let swept = hold::sweep_stale(root, now_millis());
-    if swept > 0 {
-        info!(swept, "Move to Trash: stale holds removed");
+    let server = ServerDrive {
+        client: &side.client,
+        ss58: &ss58,
+        folder_hash: &fh,
+        wire_root: &side.wire_root,
+        key: &side.key,
+    };
+    let journal = match &root {
+        Some(root) => root.clone(),
+        None => browsed_journal_dir(account_id, &ss58, &fh)?,
+    };
+    if let Some(root) = &root {
+        let swept = hold::sweep_stale(root, now_millis());
+        if swept > 0 {
+            info!(swept, "Move to Trash: stale holds removed");
+        }
     }
 
     let mut out = DriveOutcome::default();
     let mut targets = Vec::new();
-    let mut parents: HashMap<String, Vec<hcfs_shared::network::RemoteFileEntry>> = HashMap::new();
+    let mut listings = server::Listings::default();
     for &index in indexes {
         let file = &files[index];
-        let rel = crate::sync::files::pathops::derive_relative_name(root_str, file.source.as_deref(), &file.name)
-            .replace('\\', "/")
-            .trim_matches('/')
-            .to_string();
-        let name = basename_of(&rel).to_string();
-        if rel.is_empty() || crate::sync::files::pathops::ensure_within(root, &root.join(&rel)).is_err() {
+        let derived = crate::sync::files::pathops::derive_relative_name(root_str, file.source.as_deref(), &file.name).replace('\\', "/");
+        let rel = normalize_drive_path(derived.trim_matches('/')).unwrap_or_default();
+        let inside = root
+            .as_ref()
+            .is_none_or(|root| crate::sync::files::pathops::ensure_within(root, &root.join(&rel)).is_ok());
+        if rel.is_empty() || !inside {
             out.failed.push((index, "This item isn't inside its drive's folder.".into()));
             continue;
         }
-        let abs = root.join(&rel);
-        let Ok(meta) = abs.symlink_metadata() else {
-            out.failed.push((index, format!("\"{name}\" is no longer in this folder.")));
-            continue;
+        let name = basename_of(&rel).to_string();
+        let local = root.as_ref().and_then(|root| root.join(&rel).symlink_metadata().ok());
+        let on_server = server::find(&server, &mut listings, &rel, local.as_ref().is_some_and(std::fs::Metadata::is_dir)).await?;
+        let remote = match &on_server {
+            OnServer::Folder(_) => Remote::Folder,
+            OnServer::File(_) => Remote::File,
+            OnServer::Missing => Remote::Missing,
         };
-        let wire = join_path(side.wire_root.trim_matches('/'), &rel);
-        if meta.is_dir() {
-            let tree = crate::sync::remote_rename::collect_folder_tree(&side.client, &ss58, &fh, &wire, &side.key).await?;
-            // Undo needs the local copy to match Hippius. Delete forever
-            // removes both whatever they hold.
-            if kind == Kind::Trash && unsettled_folder(root, &rel, &tree) {
-                out.failed.push((
-                    index,
-                    format!("\"{name}\" has changes that are still syncing. Try again when sync finishes."),
-                ));
-                continue;
-            }
-            targets.push(Target {
+        let unsettled = match (&root, &local, &on_server) {
+            (Some(root), Some(meta), OnServer::Folder(tree)) if meta.is_dir() && kind == Kind::Trash => unsettled_folder(root, &rel, tree),
+            _ => false,
+        };
+        let (server_files, server_size) = on_server.files();
+        match plan_row(kind, local.as_ref().map(std::fs::Metadata::is_dir), remote, unsettled) {
+            Ok(Step::Trash { is_dir, held }) => targets.push(Target {
                 index,
                 rel,
-                is_dir: true,
-                size: tree.files.iter().map(|f| f.size_bytes).sum(),
-                files: tree
-                    .files
-                    .iter()
-                    .map(|f| FileToTrash {
-                        path_hash: f.path_hash,
-                        revision_id: f.revision_id,
-                    })
-                    .collect(),
+                is_dir,
+                size: server_size,
+                files: server_files,
                 local_only: false,
-            });
-            continue;
-        }
-        let parent = parent_of(&wire).to_string();
-        if !parents.contains_key(&parent) {
-            let (_, listed) = crate::sync::remote_rename::browse_directory(&side.client, &ss58, &fh, &parent).await?;
-            parents.insert(parent.clone(), listed);
-        }
-        let found = parents[&parent]
-            .iter()
-            .find(|entry| entry_path(entry, &side.key).as_deref() == Some(wire.as_str()));
-        match (found, kind) {
-            (Some(entry), _) => targets.push(Target {
-                index,
-                rel,
-                is_dir: false,
-                size: entry.size_bytes,
-                files: vec![FileToTrash {
-                    path_hash: entry.path_hash,
-                    revision_id: entry.revision_id,
-                }],
-                local_only: false,
+                held,
             }),
-            (None, Kind::Forever) => targets.push(Target {
+            Ok(Step::LocalOnly) => targets.push(Target {
                 index,
                 rel,
                 is_dir: false,
-                size: meta.len(),
+                size: local.as_ref().map_or(0, std::fs::Metadata::len),
                 files: Vec::new(),
                 local_only: true,
+                held: true,
             }),
-            (None, Kind::Trash) => out.failed.push((index, format!("\"{name}\" hasn't finished uploading yet."))),
+            Err(problem) => out.failed.push((index, problem.sentence(&name))),
         }
     }
     if targets.is_empty() {
@@ -447,80 +509,34 @@ async fn trash_in_drive(
         total,
     };
     progress.report(0);
-    let mut done_before = 0u64;
 
     // No cycle runs between the server's answer and the hold, so the engine
-    // never sees the item gone on one side only.
-    let lock = lock_drive(state, label).await;
+    // never sees the item gone on one side only. A drive browsed from the
+    // server has no cycle to wait for.
+    let lock = if root.is_some() {
+        lock_drive(state, label).await
+    } else {
+        DriveLock::Idle
+    };
     let mut trashed: Vec<(&Target, Vec<String>)> = Vec::new();
+    let local_only: Vec<&Target> = targets.iter().filter(|t| t.local_only).collect();
+    let done_before = local_only.len() as u64;
+    trashed.extend(local_only.into_iter().map(|t| (t, Vec::new())));
 
-    for target in targets.iter().filter(|t| t.local_only) {
-        trashed.push((target, Vec::new()));
-        done_before += 1;
-    }
-
-    let loose: Vec<&Target> = targets.iter().filter(|t| !t.is_dir && !t.local_only).collect();
-    if !loose.is_empty() {
-        let batch: Vec<FileToTrash> = loose.iter().flat_map(|t| t.files.clone()).collect();
-        let base = done_before;
-        let sent = run::trash_files(&side.client, &ss58, &fh, &batch, |n| progress.report(base + n)).await;
-        done_before += batch.len() as u64;
-        match sent {
-            Ok(outcome) => {
-                let kept: HashMap<&str, &str> = outcome.kept.iter().map(|(id, code)| (id.as_str(), code.as_str())).collect();
-                for target in loose {
-                    let id = wire::file_id(&target.files[0].path_hash);
-                    match kept.get(id.as_str()) {
-                        Some(code) => out.failed.push((target.index, kept_sentence(&target.rel, code))),
-                        None => trashed.push((target, outcome.item_of_file.get(&id).cloned().into_iter().collect())),
-                    }
-                }
-            }
-            Err(r) => {
-                for target in loose {
-                    out.failed.push((target.index, r.sentence()));
-                }
-            }
-        }
-    }
-
-    for target in targets.iter().filter(|t| t.is_dir) {
-        let wire_rel = join_path(side.wire_root.trim_matches('/'), &target.rel);
-        // The item's id is picked here and recorded before the first call,
-        // so trashing the folder again after a stop continues the same item.
-        let item_id = hold::resumed_item(root, &target.rel).unwrap_or_else(run::new_item_id);
-        let remember = |item: &str| {
-            if let Err(e) = hold::remember_item(root, &target.rel, item) {
-                warn!(error = %e, "Move to Trash: the resume journal could not be written");
-            }
-        };
-        remember(&item_id);
-        let base = done_before;
-        let sent = run::trash_folder(&side.client, &ss58, &fh, &wire_rel, &target.files, &item_id, remember, |n| {
-            progress.report(base + n);
+    let on_hippius: Vec<&Target> = targets.iter().filter(|t| !t.local_only).collect();
+    let rows: Vec<ToSend> = on_hippius
+        .iter()
+        .map(|t| ToSend {
+            rel: t.rel.clone(),
+            is_dir: t.is_dir,
+            files: t.files.clone(),
         })
-        .await;
-        done_before += target.files.len().max(1) as u64;
-        match sent {
-            Ok(outcome) => {
-                hold::forget_item(root, &target.rel);
-                if let Some((_, code)) = outcome.kept.first() {
-                    // Part of the folder stayed live: leave the folder to the
-                    // engine, which removes what was trashed and keeps the rest.
-                    out.failed.push((target.index, kept_sentence(&target.rel, code)));
-                } else {
-                    trashed.push((target, outcome.folder_item.into_iter().collect()));
-                }
-            }
-            Err(r) => {
-                // The item is gone (restored or deleted forever elsewhere):
-                // nothing to continue. Otherwise the journal keeps it, and
-                // trashing the folder again resumes it.
-                if r.is("item_not_found") {
-                    hold::forget_item(root, &target.rel);
-                }
-                out.failed.push((target.index, r.sentence()));
-            }
+        .collect();
+    let sent = server::send(&server, &journal, &rows, |n| progress.report(done_before + n)).await;
+    for (target, answer) in on_hippius.into_iter().zip(sent) {
+        match answer {
+            Ok(item_ids) => trashed.push((target, item_ids)),
+            Err(sentence) => out.failed.push((target.index, sentence)),
         }
     }
     progress.report(total);
@@ -529,6 +545,16 @@ async fn trash_in_drive(
     for (target, item_ids) in trashed {
         out.trashed += 1;
         out.trashed_items.push((target.index, item_ids.clone()));
+        let Some(root) = root.as_ref().filter(|_| target.held) else {
+            // Nothing here to hold: Undo restores it on Hippius only.
+            out.held.push(HeldItem {
+                label: label.to_string(),
+                rel: target.rel.clone(),
+                item_ids,
+                local: None,
+            });
+            continue;
+        };
         crate::sync::files::invalidate_dir_stats_for_change(root, &root.join(&target.rel));
         state.sync.update_state(label, |st| {
             st.add_activity(SyncActivityItem {
@@ -547,25 +573,20 @@ async fn trash_in_drive(
         match hold::hold(root, &target.rel, token) {
             Ok(held) => out.held.push(HeldItem {
                 label: label.to_string(),
-                root: root.to_path_buf(),
                 rel: target.rel.clone(),
-                held,
                 item_ids,
+                local: Some(LocalHold { root: root.clone(), held }),
             }),
             Err(e) => warn!(error = %e, "Move to Trash: the local copy could not be held; sync removes it"),
         }
     }
     drop(lock);
-    Ok(out)
-}
-
-/// Why the server kept a file, in words.
-fn kept_sentence(rel: &str, code: &str) -> String {
-    let name = basename_of(rel);
-    match code {
-        "conflict" => format!("\"{name}\" changed on another device, so it was kept."),
-        _ => format!("Hippius couldn't move \"{name}\" to Trash."),
+    if out.trashed > 0 {
+        // Downloads read a cached listing of the drive: the trashed rows
+        // are no longer on it.
+        state.remote_listing_cache.invalidate(label);
     }
+    Ok(out)
 }
 
 /// What Undo brought back.
@@ -578,7 +599,8 @@ pub struct UndoTrashResult {
 }
 
 /// Undo a Move to Trash: restore the items on the server and put the held
-/// copies back, so sync downloads nothing.
+/// copies back, so sync downloads nothing. An item with no copy here (a
+/// drive browsed from the server) is restored on the server only.
 #[tauri::command]
 pub async fn undo_move_to_trash(state: tauri::State<'_, AppState>, account_id: String, hold: String) -> Result<UndoTrashResult> {
     let account_id = state.require_session_account(&account_id)?;
@@ -586,8 +608,7 @@ pub async fn undo_move_to_trash(state: tauri::State<'_, AppState>, account_id: S
         return Ok(UndoTrashResult::default());
     };
     let outcome = undo_inner(&state, &account_id, &items).await;
-    let roots: HashSet<PathBuf> = items.iter().map(|i| i.root.clone()).collect();
-    for root in roots {
+    for root in hold_roots(&items) {
         hold::release(&root, &hold);
     }
     let _ = hcfs_client::engine::runner::trigger_sync(&state.sync).await;
@@ -625,11 +646,13 @@ async fn undo_inner(state: &AppState, account_id: &str, items: &[HeldItem]) -> R
                 continue;
             }
             result.restored += 1;
+            // An item with no copy here is back once Hippius has it.
+            let Some(local) = &item.local else { continue };
             if matches!(lock, DriveLock::Busy) {
                 continue;
             }
-            match hold::put_back(&item.root, &item.rel, &item.held) {
-                Ok(true) => crate::sync::files::invalidate_dir_stats_for_change(&item.root, &item.root.join(&item.rel)),
+            match hold::put_back(&local.root, &item.rel, &local.held) {
+                Ok(true) => crate::sync::files::invalidate_dir_stats_for_change(&local.root, &local.root.join(&item.rel)),
                 // Taken meanwhile, or the rename failed: sync downloads the
                 // restored item instead.
                 Ok(false) => {}
@@ -637,6 +660,7 @@ async fn undo_inner(state: &AppState, account_id: &str, items: &[HeldItem]) -> R
             }
         }
         drop(lock);
+        state.remote_listing_cache.invalidate(label);
     }
     Ok(result)
 }
@@ -652,7 +676,7 @@ pub async fn release_trash_hold(state: tauri::State<'_, AppState>, hold: String)
 }
 
 async fn release_held(items: Vec<HeldItem>, token: String) -> Result<()> {
-    let roots: HashSet<PathBuf> = items.into_iter().map(|i| i.root).collect();
+    let roots = hold_roots(&items);
     tokio::task::spawn_blocking(move || {
         for root in roots {
             hold::release(&root, &token);
@@ -666,14 +690,17 @@ async fn release_held(items: Vec<HeldItem>, token: String) -> Result<()> {
 // Delete forever, from a drive
 // ---------------------------------------------------------------------------
 
-/// Delete synced files and folders forever while the server has Trash.
+/// Delete files and folders forever while the server has Trash, in a drive
+/// synced here or browsed from the server.
 ///
 /// Not `delete_files`: the engine would send that local delete to Trash.
-/// Each item is trashed on the server and its local copy held, as Move to
-/// Trash does, then the items are deleted forever and the held copies
-/// dropped. A file not on Hippius yet only loses its local copy. Refused,
-/// touching nothing, in a drive where this account may not delete forever
-/// (an Editor of somebody else's drive).
+/// Each item is trashed on the server and its local copy (if any) held, as
+/// Move to Trash does, then the items are deleted forever and the held
+/// copies dropped. A file not on Hippius yet only loses its local copy.
+/// Refused, touching nothing, in a drive where this account may not delete
+/// forever (an Editor of somebody else's drive, or a drive the rules do not
+/// list). A failed trash call never becomes a permanent delete: the item
+/// stays where it was.
 #[tauri::command]
 pub async fn delete_files_forever(
     state: tauri::State<'_, AppState>,
@@ -685,7 +712,6 @@ pub async fn delete_files_forever(
     let account_id = state.require_session_account(&account_id)?;
     require_trash(&state, &account_id).await?;
     let rules = setting::delete_rules(&state, &account_id).await?;
-    let allowed: HashSet<String> = rules.drives.iter().filter(|d| d.can_delete_forever).map(|d| d.label.clone()).collect();
 
     let mut failed = Vec::new();
     let mut deleted_flags = vec![false; files.len()];
@@ -693,7 +719,7 @@ pub async fn delete_files_forever(
     let mut request_index = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let label = file.label.clone().unwrap_or_else(|| "default".to_string());
-        if allowed.contains(&label) {
+        if setting::may_delete_forever(&rules.drives, &label) {
             request_index.push(index);
             requests.push(TrashFileRequest {
                 name: file.name.clone(),
@@ -1358,6 +1384,79 @@ mod tests {
             RestorePlan::InPlace,
             "the server refuses any other way (restore_mode_mismatch)"
         );
+    }
+
+    #[test]
+    fn a_row_with_no_copy_here_is_trashed_on_hippius_only() {
+        for kind in [Kind::Trash, Kind::Forever] {
+            assert_eq!(
+                plan_row(kind, None, Remote::File, false),
+                Ok(Step::Trash { is_dir: false, held: false }),
+                "a file browsed from the server"
+            );
+            assert_eq!(
+                plan_row(kind, None, Remote::Folder, false),
+                Ok(Step::Trash { is_dir: true, held: false }),
+                "a folder browsed from the server is one item"
+            );
+            assert_eq!(
+                plan_row(kind, None, Remote::Missing, false),
+                Err(Problem::Gone),
+                "never a guess at what to delete"
+            );
+        }
+    }
+
+    #[test]
+    fn a_synced_row_keeps_its_local_rules() {
+        assert_eq!(
+            plan_row(Kind::Trash, Some(false), Remote::File, false),
+            Ok(Step::Trash { is_dir: false, held: true })
+        );
+        assert_eq!(plan_row(Kind::Trash, Some(false), Remote::Missing, false), Err(Problem::NotUploaded));
+        assert_eq!(
+            plan_row(Kind::Forever, Some(false), Remote::Missing, false),
+            Ok(Step::LocalOnly),
+            "delete forever of a file not uploaded yet only loses the local copy"
+        );
+        assert_eq!(plan_row(Kind::Trash, Some(true), Remote::Folder, true), Err(Problem::Unsettled));
+        assert_eq!(
+            plan_row(Kind::Forever, Some(true), Remote::Folder, true),
+            Ok(Step::Trash { is_dir: true, held: true }),
+            "delete forever removes both whatever they hold"
+        );
+    }
+
+    #[test]
+    fn undo_puts_back_only_copies_that_were_held() {
+        let browsed = HeldItem {
+            label: "archive".into(),
+            rel: "Work/a.txt".into(),
+            item_ids: vec!["ab".repeat(16)],
+            local: None,
+        };
+        let synced = HeldItem {
+            label: "docs".into(),
+            rel: "b.txt".into(),
+            item_ids: vec!["cd".repeat(16)],
+            local: Some(LocalHold {
+                root: PathBuf::from("/drives/docs"),
+                held: PathBuf::from("/drives/docs/.hippius-trash-hold/t/b.txt"),
+            }),
+        };
+        let roots = hold_roots([&browsed, &synced]);
+        assert_eq!(
+            roots,
+            HashSet::from([PathBuf::from("/drives/docs")]),
+            "a drive browsed from the server has no hold folder"
+        );
+    }
+
+    #[test]
+    fn a_browsed_drive_journals_under_the_account_by_wire_identity() {
+        let dir = browsed_journal_dir("5Account", "5Owner", "0123456789abcdef").unwrap();
+        assert!(dir.ends_with("trash-journal/5Owner-0123456789abcdef"), "{}", dir.display());
+        assert!(dir.starts_with(crate::sync::mnemonic::account_dir("5Account").unwrap()));
     }
 
     #[test]
