@@ -14,8 +14,7 @@ import {
   retentionNotice,
   undoneMessage,
 } from "../copy";
-import { deleteLabel, resolveDeleteMode, skipTrashKey } from "../deleteMode";
-import { ENGINE_SENDS_DELETES_TO_TRASH } from "../engine";
+import { deleteLabel, deleteScope, engineSendsDeletesToTrash, resolveDeleteMode, rowDriveLabel } from "../deleteMode";
 import { failedNote } from "../trashToast";
 import { clashDestinationName, rowKey, sizeLabel } from "@/app/components/page-sections/trash/trashRows";
 
@@ -34,12 +33,36 @@ describe("which delete runs", () => {
     expect(deleteLabel("forever")).toBe("Delete forever");
   });
 
-  it("keeps the setting per account", () => {
-    expect(skipTrashKey("5Alice")).not.toBe(skipTrashKey("5Bob"));
+  it("never deletes forever where the account may not, Option or the setting alike", () => {
+    expect(resolveDeleteMode(true, true, true, false)).toBe("trash");
+    expect(resolveDeleteMode(true, false, true, false)).toBe("trash");
+    expect(resolveDeleteMode(false, true, true, false)).toBe("legacy");
   });
 
-  it("does not tell anyone an engine delete goes to Trash until the engine trashes", () => {
-    expect(ENGINE_SENDS_DELETES_TO_TRASH).toBe(false);
+  it("reads Rust's rules per drive, and an unknown drive allows only Move to Trash", () => {
+    const drives = [
+      { label: "mine", canDeleteForever: true, skipsTrash: true },
+      { label: "team", canDeleteForever: true, skipsTrash: false },
+      { label: "theirs", canDeleteForever: false, skipsTrash: false },
+    ];
+    expect(deleteScope(drives, ["mine"])).toEqual({ skipsTrash: true, canDeleteForever: true });
+    expect(deleteScope(drives, ["mine", "team"])).toEqual({ skipsTrash: false, canDeleteForever: true });
+    expect(deleteScope(drives, ["mine", "theirs"])).toEqual({ skipsTrash: false, canDeleteForever: false });
+    expect(deleteScope(drives, ["new"])).toEqual({ skipsTrash: false, canDeleteForever: false });
+    expect(deleteScope(null, ["mine"])).toEqual({ skipsTrash: false, canDeleteForever: false });
+    expect(rowDriveLabel({ label: undefined } as never)).toBe("default");
+  });
+
+  it("says an engine delete goes to Trash only where the drive does not skip it", () => {
+    const drives = [
+      { label: "mine", canDeleteForever: true, skipsTrash: true },
+      { label: "team", canDeleteForever: false, skipsTrash: false },
+    ];
+    expect(engineSendsDeletesToTrash(true, drives, "team")).toBe(true);
+    expect(engineSendsDeletesToTrash(true, drives, "mine")).toBe(false);
+    expect(engineSendsDeletesToTrash(false, drives, "team")).toBe(false);
+    expect(engineSendsDeletesToTrash(true, drives, "unknown")).toBe(false);
+    expect(engineSendsDeletesToTrash(true, null, "team")).toBe(false);
   });
 });
 

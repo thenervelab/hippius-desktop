@@ -117,7 +117,7 @@ export default function FileContextMenu({
   const [mounted, setMounted] = useState(false);
   // "Delete", or with Trash on "Move to Trash" ("Delete forever" while
   // Option is held or Trash is skipped).
-  const deleteMode = useDeleteMode();
+  const deleteMode = useDeleteMode(file ? [file] : []);
   const { polkadotAddress } = useWalletAuth();
   const { getParam } = useUrlParams();
   const driveRoute = useDriveRoute();

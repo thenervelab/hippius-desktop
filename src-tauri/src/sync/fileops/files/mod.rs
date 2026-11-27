@@ -39,6 +39,7 @@ mod user_files;
 pub use add::{AddFilesResult, AddFolderResult, add_file, add_files, add_folder};
 pub use asset_scope::{allow_asset_directory, allow_asset_scope};
 pub use delete::{DeleteFilesResult, FileDeleteError, FileDeleteRequest, delete_files};
+pub(crate) use delete::{links_to_turn_off, turn_off_links};
 pub use export_zip::export_folder_zip;
 pub use listing::{FileEntry, GroupedListing, list_sync_folder, list_sync_folder_grouped, list_sync_folder_grouped_inner};
 pub use move_entries::{MoveEntriesRequest, MoveEntriesResult, move_entries};

@@ -145,4 +145,21 @@ describe("useDeleteFile in trash mode", () => {
     expect(invokeCalls.map(([cmd]) => cmd)).not.toContain("move_to_trash");
     expect(vi.mocked(toast.success).mock.calls[0][0]).toBe('Successfully deleted "Docs/report.pdf"');
   });
+
+  it("deletes forever through Rust's Trash-aware command, never the engine's local delete", async () => {
+    const result = renderDeleteHook();
+    await act(async () => {
+      result.current.mutate({ mode: "forever" });
+    });
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    const commands = invokeCalls.map(([cmd]) => cmd);
+    expect(commands).toContain("delete_files_forever");
+    expect(commands).not.toContain("delete_files");
+    const call = invokeCalls.find(([cmd]) => cmd === "delete_files_forever")!;
+    expect(call[1]).toMatchObject({
+      accountId: "5TestAddress",
+      files: [{ name: "Docs/report.pdf", label: "hippius", turnOffLinks: [] }],
+    });
+    expect(typeof call[1].jobId).toBe("string");
+  });
 });

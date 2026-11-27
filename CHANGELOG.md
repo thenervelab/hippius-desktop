@@ -30,6 +30,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Added
 
+- **Deleted files go to Trash.** Deleting a file or folder, in the app or in your drive's folder on your computer, moves it to Trash, with Undo right after. Restore it from the Trash page (next to what is there now, if its name is taken), delete it forever, or empty Trash; items left there are deleted for good after the number of days the Trash page shows. Turn on "Skip Trash when deleting" in Settings to delete your own drives' files for good instead.
 - **More choices for emails about your links.** Settings can turn on or off emails for return visits, accepted NDAs and people your allow list turned away, and each file link can send an email after every visit, only the first, or none. They appear once Hippius starts sending these emails.
 - **Ask for an email and an NDA on folder links.** A folder link's Insights now show its rules as cards, like a file link: ask viewers to confirm their email with a code, let in only certain addresses or company domains, and ask them to accept your NDA before any file in the folder opens. A folder link with an NDA gets an NDA tab of who accepted and when, with Export and a Record for each accept. On paid Drive plans.
 - **A notification when an update is ready, even when Hippius sits in the tray.** The update used to be offered only inside the main window, which is easy to miss when the app is minimized, behind other windows or in the tray. Now you also get a system notification, and the tray popover shows "Hippius x.y.z is ready to install" until you update.
@@ -273,6 +274,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **Viewer names and emails show in Insights on links made on another computer.** On a link that asks for an email, its viewers' names and confirmed emails, its comments and its NDA accepts now open on any of your computers, not only the one that made the link. While your Drive is locked, Insights says so and offers Unlock.
 - **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.
 - **A recording's card shows one upload, its link's.** Once the link is ready the card says it was copied and closes as usual, also when your captures go to a drive that isn't synced on this computer, where it used to start uploading again from 0. An info icon on the card explains that the link has its own encrypted copy and a backup goes to your Drive, and the upload list shows that backup as "Backing up to Drive", then "Backed up to Drive". If the backup fails, it says "Couldn't back up to Drive", the card or a notification tells you, and Retry sends it again.
