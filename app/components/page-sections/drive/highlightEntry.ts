@@ -45,6 +45,21 @@ export interface HighlightRequest {
 }
 
 /**
+ * The request a "Show in folder" URL makes (`openLabel`, `openSubfolder`,
+ * `openFile`), or null when it names no file: the folder then simply opens.
+ * The Drive page and the Captures page build it the same way, so a URL from
+ * `driveFolderRoute`, `capturesRoute` or the sync queue points out the same
+ * row on either.
+ */
+export function highlightRequestFromUrl(
+  url: { label: string; subfolder: string | null | undefined; file: string | null | undefined },
+  now: number,
+): HighlightRequest | null {
+  if (!url.file) return null;
+  return { label: url.label, folder: url.subfolder || "", name: url.file, until: now + HIGHLIGHT_OPEN_LIMIT_MS };
+}
+
+/**
  * Whether `file` is the file called `name`. Exact, never trimmed, in one
  * Unicode form (macOS hands out decomposed names), the same comparison
  * `folderUrlForPath` makes for folders. A folder is never the file.

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import "@testing-library/jest-dom";
 import { Provider, createStore } from "jotai";
 import SyncStatusDialog from "../SyncStatusDialog";
@@ -10,6 +11,8 @@ import {
 import { EMPTY_SNAPSHOT } from "@/lib/types/syncSnapshot";
 import { syncEngineHealthAtom } from "@/lib/store/syncAtoms";
 import { OPEN_DRIVE_FOLDER_EVENT, type OpenDriveFolderDetail } from "@/app/lib/drive/openDriveFolder";
+import { driveStatusesAtom } from "@/app/lib/global-atoms/unpinAtoms";
+import { captureSupportedAtom, captureSupportKnownAtom } from "@/app/lib/capture/captureFlow";
 
 // Mock Tauri APIs (not available in test environment)
 vi.mock("@tauri-apps/api/core", () => ({
@@ -83,7 +86,7 @@ function renderWithJotai(
 }
 
 describe("SyncStatusDialog", () => {
-  it("opens the folder a queued file lives in, from its row", () => {
+  it("opens the folder a queued file lives in, from its row", async () => {
     const files = [
       makeFileProgress("Recording.mp4", {
         label: "Work",
@@ -100,10 +103,10 @@ describe("SyncStatusDialog", () => {
       renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />);
       fireEvent.click(screen.getByTestId("sync-status-toggle"));
       fireEvent.click(screen.getByRole("button", { name: "Show Recording.mp4 in its folder" }));
+      await waitFor(() => expect(opened).toHaveLength(1));
     } finally {
       window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
     }
-    expect(opened).toHaveLength(1);
     const params = new URLSearchParams(opened[0].split("?")[1]);
     expect(params.get("openLabel")).toBe("Work");
     // The whole path to the file's folder, not just the first level.
@@ -112,6 +115,70 @@ describe("SyncStatusDialog", () => {
     expect(params.get("openFile")).toBe("Recording.mp4");
     // No drive status here means the drive is not synced on this machine.
     expect(params.get("openRemote")).toBe("1");
+  });
+
+  // A capture backed up to the captures drive is a drive of its own, not a
+  // folder of My Drive: its row opens the Captures page with it pointed out.
+  it("opens a capture on the Captures page, asking Rust which drive that is", async () => {
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "capture_drive_status"
+        ? { state: "ready", label: "hippius-recordingss", name: "hippius-recordingss", folder: "", remote: true }
+        : undefined,
+    );
+    const files = [
+      makeFileProgress("Recording 2026-11-27 at 16.13.34.mp4", {
+        label: "hippius-recordingss",
+        path: "Recording 2026-11-27 at 16.13.34.mp4",
+        status: "completed",
+        progressPercent: 100,
+        note: "Backed up to Drive",
+      }),
+    ];
+    const opened: string[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<OpenDriveFolderDetail>).detail.url);
+    window.addEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+    try {
+      renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />, [
+        [captureSupportKnownAtom, true],
+        [captureSupportedAtom, true],
+        // Paused here: the Drive page would list its empty folder on disk.
+        [driveStatusesAtom, new Map([["hippius-recordingss", { folderName: "hippius-recordingss", path: "/Users/u/Documents/hippius-recordingss", status: { kind: "paused" } }]])],
+      ]);
+      fireEvent.click(screen.getByTestId("sync-status-toggle"));
+      fireEvent.click(screen.getByRole("button", { name: "Show Recording 2026-11-27 at 16.13.34.mp4 in its folder" }));
+      await waitFor(() => expect(opened).toHaveLength(1));
+    } finally {
+      window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+      vi.mocked(invoke).mockReset();
+    }
+    const [path, query] = opened[0].split("?");
+    expect(path).toBe("/captures");
+    const params = new URLSearchParams(query);
+    expect(params.get("openLabel")).toBe("hippius-recordingss");
+    expect(params.get("openRemote")).toBe("1");
+    expect(params.get("openSubfolder")).toBeNull();
+    expect(params.get("openFile")).toBe("Recording 2026-11-27 at 16.13.34.mp4");
+  });
+
+  it("opens Drive when Rust cannot say where captures go", async () => {
+    vi.mocked(invoke).mockRejectedValue(new Error("offline"));
+    const files = [makeFileProgress("a.txt", { label: "Work", path: "Docs/a.txt", status: "completed", progressPercent: 100 })];
+    const opened: string[] = [];
+    const onOpen = (e: Event) => opened.push((e as CustomEvent<OpenDriveFolderDetail>).detail.url);
+    window.addEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+    try {
+      renderWithJotai(<SyncStatusDialog snapshot={makeSnapshot(files)} open={true} />, [
+        [captureSupportKnownAtom, true],
+        [captureSupportedAtom, true],
+      ]);
+      fireEvent.click(screen.getByTestId("sync-status-toggle"));
+      fireEvent.click(screen.getByRole("button", { name: "Show a.txt in its folder" }));
+      await waitFor(() => expect(opened).toHaveLength(1));
+    } finally {
+      window.removeEventListener(OPEN_DRIVE_FOLDER_EVENT, onOpen);
+      vi.mocked(invoke).mockReset();
+    }
+    expect(opened[0].startsWith("/files?")).toBe(true);
   });
 
   it("offers no Show in folder on a deleted file's row", () => {

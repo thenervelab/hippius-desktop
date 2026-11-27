@@ -268,6 +268,7 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Fixed
 
+- **"Show in folder" in the sync queue opens the right place.** A screenshot or recording opens on the Captures page with it pointed out, instead of an empty folder in My Drive; a file in a paused drive or a shared folder opens where it really is.
 - **A recording's card finishes as soon as its link is ready.** When your captures folder is inside a synced drive, the card no longer shows the copy saved to your drive as a second upload; that copy carries on in the sync queue.
 - **A recording's card shows one upload, its link's.** Once the link is ready the card says it was copied and closes as usual, also when your captures go to a drive that isn't synced on this computer, where it used to start uploading again from 0. An info icon on the card explains that the link has its own encrypted copy and a backup goes to your Drive, and the upload list shows that backup as "Backing up to Drive", then "Backed up to Drive". If the backup fails, it says "Couldn't back up to Drive", the card or a notification tells you, and Retry sends it again.
 - **Expiry in Link settings opens its list.** Choosing how long a link lasts no longer closes Link settings; the list opens and the choice is saved, in a narrow window too.
