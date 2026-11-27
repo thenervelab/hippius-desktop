@@ -783,7 +783,9 @@ describe("ShareInsightsSheet", () => {
     renderSheet();
     const settings = await openSettings();
     expect(await within(settings).findByTestId("rule-gate")).toHaveTextContent("On");
-    expect(within(settings).getByTestId("rule-allowList")).toHaveTextContent("Off");
+    // The Allow list is not a switch: it reads "Anyone", with no On or Off.
+    expect(within(settings).getByTestId("rule-allowList")).toHaveTextContent("Anyone");
+    expect(within(settings).getByTestId("rule-allowList")).not.toHaveTextContent(/\b(On|Off)\b/);
     await openRule(settings, "gate");
     const ask = await within(settings).findByRole("switch", { name: GATE_LABEL });
     expect(ask).toHaveAttribute("aria-checked", "true");
@@ -1350,47 +1352,27 @@ describe("ShareInsightsSheet", () => {
       }
     });
 
-    it("cuts a long name in the middle, keeping its start and end, with the full name in its title", async () => {
-      // jsdom has no layout or canvas: every character 8px, every name 120px wide.
-      vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (this: HTMLElement) {
-        return this.hasAttribute("data-middle-truncate") ? 120 : 0;
+    it("never cuts a long name to a stub: the whole name is there, cut only by the width, and whole on hover", async () => {
+      answer({
+        share_get_insights: {
+          ...PAID,
+          viewers: { state: "shown", value: [{ ...PAID.viewers.state === "shown" ? PAID.viewers.value[0] : ({} as never), name: LONG_NAME }] },
+        },
+        share_list_comments: many(1),
+        share_get_reactions: NO_REACTIONS,
       });
-      vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockImplementation(function (this: HTMLElement) {
-        return [...(this.getAttribute("data-text") ?? this.textContent ?? "")].length * 8;
+      renderSheet();
+      await screen.findByRole("tab", { name: "Comments 1" });
+      const names = await waitFor(() => {
+        const found = Array.from(document.querySelectorAll<HTMLElement>("bdi")).filter((el) => el.getAttribute("title") === LONG_NAME);
+        expect(found.length).toBeGreaterThanOrEqual(2); // the comment row and the viewer row
+        return found;
       });
-      vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
-        () => ({ font: "", measureText: (t: string) => ({ width: [...t].length * 8 }) }) as unknown as CanvasRenderingContext2D,
-      );
-      try {
-        answer({
-          share_get_insights: {
-            ...PAID,
-            viewers: { state: "shown", value: [{ ...PAID.viewers.state === "shown" ? PAID.viewers.value[0] : ({} as never), name: LONG_NAME }] },
-          },
-          share_list_comments: many(1),
-          share_get_reactions: NO_REACTIONS,
-        });
-        renderSheet();
-        await screen.findByRole("tab", { name: "Comments 1" });
-        const boxes = await waitFor(() => {
-          const found = Array.from(document.querySelectorAll<HTMLElement>("[data-middle-truncate]")).filter(
-            (el) => el.getAttribute("title") === LONG_NAME,
-          );
-          expect(found.length).toBeGreaterThanOrEqual(2); // the comment row and the viewer row
-          return found;
-        });
-        for (const box of boxes) {
-          const line = box.firstElementChild!.textContent!;
-          expect(line).toContain("…");
-          expect(line.length).toBeLessThanOrEqual(15);
-          expect(line.startsWith("Maxi")).toBe(true);
-          expect(line.endsWith(LONG_NAME.slice(-3))).toBe(true);
-          expect(box).toHaveAttribute("data-shortened");
-          // A screen reader hears the whole name.
-          expect(within(box).getByText(LONG_NAME, { selector: ".sr-only" })).toBeInTheDocument();
-        }
-      } finally {
-        vi.restoreAllMocks();
+      for (const name of names) {
+        expect(name).toHaveTextContent(LONG_NAME);
+        expect(name.textContent).not.toContain("…");
+        // An ellipsis only where the line runs out of room.
+        expect(name.className).toContain("truncate");
       }
     });
   });

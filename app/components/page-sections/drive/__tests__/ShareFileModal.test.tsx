@@ -1604,7 +1604,9 @@ describe("ShareFileModal secure link section", () => {
     await screen.findByDisplayValue(/tok-doc#k=KEY/);
 
     const section = screen.getByRole("group", { name: "Secure link" });
-    expect(within(section).getByTestId("rule-expiry")).toHaveTextContent("On");
+    // Expiry is a date, not a switch: no On or Off beside it.
+    expect(within(section).getByTestId("rule-expiry")).toHaveTextContent(/2099/);
+    expect(within(section).getByTestId("rule-expiry")).not.toHaveTextContent(/\b(On|Off)\b/);
 
     invokeMock.mockResolvedValueOnce(null);
     await openRule("expiry");

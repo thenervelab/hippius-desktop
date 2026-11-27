@@ -1,17 +1,20 @@
 "use client";
 
+import { useState } from "react";
+
 import LinkEngagementSwitches from "@/components/page-sections/drive/LinkEngagementSwitches";
 import EmailGateSettings, { useLinkGate, type LinkGateStore } from "@/components/page-sections/shares/insights/EmailGateSettings";
 import NdaSettings, { useLinkNda, type LinkNdaStore } from "@/components/page-sections/shares/insights/NdaSettings";
 import type { LinkKind } from "@/app/lib/tauri/shareGate";
 import { MUTED } from "@/components/page-sections/shares/insights/panelStyles";
+import { DriveLockedLine, useDriveLocked } from "@/components/page-sections/shares/insights/DriveUnlock";
 import { RuleCards, type LinkRule } from "./RuleCards";
 import { ExpiryEditor, TTL_OPTIONS, type ExpiryEdit } from "./ExpiryEditor";
 import {
   allowListSummary,
   downloadSummary,
   expirySummary,
-  GATE_VALUE,
+  gateSummary,
   isWatermarkable,
   NDA_PASSWORD_REASON,
   NDA_PASSWORD_VALUE,
@@ -81,11 +84,12 @@ export function LinkRules({
 }) {
   const gateStore = useLinkGate(shareToken);
   const ndaStore = useLinkNda(shareToken);
+  const driveLocked = useDriveLocked();
   const rules: LinkRule[] =
-    shareToken !== null ? accessRules({ shareToken, kind: "file", gateStore, ndaStore, onUpgrade }) : [];
+    shareToken !== null ? accessRules({ shareToken, kind: "file", gateStore, ndaStore, onUpgrade, driveLocked }) : [];
 
   if (shareToken !== null) {
-    const summary = watermarkSummary(fileName, mimeType, download, watermark);
+    const summary = watermarkSummary(fileName, mimeType, download, watermark, gateStore.gate?.on === true);
     // A switch only for a PDF, the one file the share page draws it on.
     const editable = watermark !== null && onWatermarkChange !== undefined && isWatermarkable(fileName, mimeType);
     rules.push({
@@ -145,7 +149,37 @@ export function LinkRules({
     rules.push({ id: "password", label: RULE_LABELS.password, ...passwordSummary(passwordOn) });
   }
 
-  return <RuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
+  return <LockableRuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
+}
+
+/**
+ * The rule cards, under one line with Unlock while any of them needs the
+ * Drive unlocked (hidden while a card's editor is open).
+ */
+function LockableRuleCards({
+  rules,
+  onPushedChange,
+  className,
+}: {
+  rules: LinkRule[];
+  onPushedChange?: (pushed: boolean) => void;
+  className?: string;
+}) {
+  const [pushed, setPushed] = useState(false);
+  const anyLocked = rules.some((r) => r.locked);
+  if (rules.length === 0) return null;
+  return (
+    <div className={className}>
+      {anyLocked && !pushed && <DriveLockedLine className="mb-2" />}
+      <RuleCards
+        rules={rules}
+        onPushedChange={(p) => {
+          setPushed(p);
+          onPushedChange?.(p);
+        }}
+      />
+    </div>
+  );
 }
 
 /**
@@ -160,6 +194,7 @@ export function accessRules({
   gateStore,
   ndaStore,
   onUpgrade,
+  driveLocked = false,
 }: {
   /** A file link's token, or a folder link's token hash. */
   shareToken: string;
@@ -167,6 +202,12 @@ export function accessRules({
   gateStore: LinkGateStore;
   ndaStore: LinkNdaStore;
   onUpgrade: () => void;
+  /**
+   * The Drive is locked on this computer: what needs the account's key to
+   * open or seal (turning the gate on, the lists, an NDA text made
+   * elsewhere) shows a lock and unlocks first.
+   */
+  driveLocked?: boolean;
 }): LinkRule[] {
   const rules: LinkRule[] = [];
   const gate = gateStore.gate;
@@ -174,14 +215,16 @@ export function accessRules({
     rules.push({
       id: "gate",
       label: RULE_LABELS.gate,
-      on: gate.on,
-      value: GATE_VALUE,
+      ...gateSummary(gate.on),
+      // Turning it off needs no key; turning it on seals the (empty) lists.
+      locked: driveLocked && !gate.on,
       editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="switch" />,
     });
     rules.push({
       id: "allowList",
       label: RULE_LABELS.allowList,
       ...allowListSummary(gate),
+      locked: driveLocked,
       editor: <EmailGateSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={gateStore} part="lists" />,
     });
   }
@@ -204,6 +247,8 @@ export function accessRules({
       id: "nda",
       label: RULE_LABELS.nda,
       ...ndaSummary(nda),
+      // A text can't be written, or one made elsewhere read, until the Drive is unlocked.
+      locked: driveLocked && (!nda.editable || (nda.on && nda.text === null)),
       editor: <NdaSettings shareToken={shareToken} kind={kind} onUpgrade={onUpgrade} layout="list" store={ndaStore} />,
     });
   }
@@ -229,6 +274,7 @@ export function FolderLinkRules({
 }) {
   const gateStore = useLinkGate(tokenHash, "folder");
   const ndaStore = useLinkNda(tokenHash, "folder");
-  const rules = accessRules({ shareToken: tokenHash, kind: "folder", gateStore, ndaStore, onUpgrade });
-  return <RuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
+  const driveLocked = useDriveLocked();
+  const rules = accessRules({ shareToken: tokenHash, kind: "folder", gateStore, ndaStore, onUpgrade, driveLocked });
+  return <LockableRuleCards rules={rules} onPushedChange={onPushedChange} className={className} />;
 }

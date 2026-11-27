@@ -67,6 +67,10 @@ export interface ServerCapabilities {
   share_comments?: boolean;
   /** Emails about views and comments on links. Absent on older servers. */
   share_notifications?: boolean;
+  /** The visit emails: a link's own email setting and the Return visits email. Absent on older servers. */
+  share_link_notifications?: boolean;
+  /** The NDA accepted and refused viewer emails. Absent on older servers. */
+  share_event_notifications?: boolean;
   /** Per-link view and comment counts on the share listing (hcfs #805). Absent on older servers. */
   share_listing_counts?: boolean;
   /** When the owner last looked at a link's Insights (hcfs #805). Absent on older servers. */

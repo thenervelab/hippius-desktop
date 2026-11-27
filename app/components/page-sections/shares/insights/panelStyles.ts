@@ -30,3 +30,30 @@ export const ICON_BUTTON = cn(
 );
 /** What floats over the panel: the comment menu and Link settings. */
 export const FLOATING = cn("rounded-[12px] border bg-white shadow-lg dark:bg-[#1f1f1f]", HAIRLINE);
+
+// Charts: one look for every chart in the panels (where people stopped, time
+// per page, a viewer's pages, a folder's pages). One baseline, a faint top
+// line, soft fills, one value label, and the exact numbers on hover or focus.
+/** Axis and value labels: the panel's small text, not a mono face. */
+export const CHART_LABEL = cn("text-[11px] leading-4 tabular-nums", MUTED);
+/** The chart's one solid line, at zero. */
+export const CHART_BASELINE = "border-grey-80 dark:border-white/15";
+/** The faint line at the top of the scale. */
+export const CHART_TOPLINE = "border-grey-80/50 dark:border-white/[0.06]";
+/** The series colour, as `currentColor`. */
+export const CHART_INK = "text-primary-50 dark:text-primary-brand-dark";
+/** A bar at rest, and the one under the pointer or keys. */
+export const CHART_BAR = "bg-primary-50/30 dark:bg-primary-brand-dark/45";
+export const CHART_BAR_ACTIVE = "bg-primary-50 dark:bg-primary-brand-dark";
+/** A bar with nothing in it: a sliver on the baseline. */
+export const CHART_BAR_EMPTY = "bg-grey-80 dark:bg-white/10";
+/** The hover and focus readout. */
+export const CHART_TOOLTIP = cn(
+  "pointer-events-none absolute z-10 whitespace-nowrap rounded-[7px] px-2 py-1 text-[11.5px] font-medium tabular-nums shadow-sm",
+  "bg-grey-10 text-white dark:bg-white dark:text-grey-10",
+);
+/** Keyboard focus on a chart: a ring clear of its marks. */
+export const CHART_FOCUS = cn(
+  "rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-primary-50/40 focus-visible:ring-offset-4",
+  "focus-visible:ring-offset-white dark:focus-visible:ring-offset-[#1f1f1f]",
+);

@@ -1193,8 +1193,9 @@ pages keep the "an event beats a late first read" rule; the pill compares
 `seq`.
 
 **Sync queue Show in folder:** each row's folder button fires
-`requestOpenDriveFolder(driveFolderRoute(label, remote, parentOf(path),
-baseNameOf(path)))` (a window event, so the widget needs no router);
+`requestOpenDriveFolder(syncQueueFolderRoute(...))` (a window event, so the
+widget needs no router): the captures drive opens the Captures page, never a
+My Drive path built from its folder (see `.claude/rules/sync-widget.md`);
 `TrayNavigationListener` navigates and `folderUrlForPath` opens a multi-level
 path.
 
