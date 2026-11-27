@@ -1,15 +1,15 @@
 "use client";
 
 import React from "react";
-import { Trash2 } from "lucide-react";
+import { Link2, Trash2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { FramedDialog } from "@/components/ui/FramedDialog";
 import { Button, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
-import { deleteShareLinksNote } from "@/app/components/page-sections/drive/deleteShareLinksNote";
 import { useAtomValue } from "jotai";
 import { driveTrashEnabledAtom } from "@/app/lib/global-atoms/sharesAtoms";
-import { deleteDriveCopy } from "./deleteDriveCopy";
+import { DELETE_DRIVE_LINKS_ACTION, DELETE_DRIVE_LINKS_NOTE, deleteDriveCopy } from "./deleteDriveCopy";
 
 interface DeleteServerDialogProps {
   open: boolean;
@@ -38,6 +38,12 @@ export function DeleteServerDialog({
   const mismatch = confirmInput.length > 0 && confirmInput !== folderName;
   const trashEnabled = useAtomValue(driveTrashEnabledAtom);
   const copy = deleteDriveCopy(trashEnabled);
+  const router = useRouter();
+  const openSharedLinks = () => {
+    if (isDeletingServer) return;
+    onClose();
+    router.push("/shares");
+  };
 
   return (
     <FramedDialog
@@ -56,9 +62,25 @@ export function DeleteServerDialog({
         </span>
         {copy.tail}
       </p>
-      <p className="-mt-3 mb-5 text-center text-sm text-[#7D7D7D] dark:text-grey-dark-600">
-        {deleteShareLinksNote([{ isFolder: true }])}
-      </p>
+      {/* The share links point in its own quiet card, so it reads apart from
+          what the delete does instead of trailing it as a loose paragraph. */}
+      <div
+        className="mb-5 flex items-start gap-2.5 rounded-lg border border-grey-80 bg-grey-light-200 px-3 py-2.5 text-left text-sm text-[#7D7D7D] dark:border-black-300 dark:bg-black-primary-bg dark:text-grey-dark-600"
+        data-testid="delete-drive-links-note"
+      >
+        <Link2 className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <p className="min-w-0">
+          {DELETE_DRIVE_LINKS_NOTE}{" "}
+          <button
+            type="button"
+            onClick={openSharedLinks}
+            disabled={isDeletingServer}
+            className="whitespace-nowrap font-medium text-primary-50 hover:underline focus-visible:underline focus-visible:outline-none disabled:opacity-50 dark:text-primary-brand-dark"
+          >
+            {DELETE_DRIVE_LINKS_ACTION}
+          </button>
+        </p>
+      </div>
 
       <div className="flex flex-col gap-4">
         <label className="flex flex-col gap-1">

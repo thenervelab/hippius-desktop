@@ -17,6 +17,9 @@ not "parallel chunk uploads with per-chunk retry". One line each. On release, re
 
 ### Changed
 
+- Deleting a whole drive now shows the share links reminder in its own card, with a link straight to Shared Links.
+- Side panels such as Insights now line up exactly with the edge of the file list, including the resize line.
+
 - **Sync notifications say when files went to Trash.** Files you delete in your Drive folder that go to Trash now read "Moved 12 files to Trash" instead of "Deleted", and a folder link that is off while its folder is in Trash shows a Paused badge in Shared Links.
 - **The Insights panel can be made wider.** Drag its left edge (or use the arrow keys on it) to widen it; it remembers the width, and a double click puts it back.
 - **Insights charts are calmer and easier to read.** Softer bars and curves with one baseline, one label where it matters, and the exact number when you point at any part of a chart.
