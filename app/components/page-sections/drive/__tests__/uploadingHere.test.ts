@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseNameOf, parentOf, rowPercent, uploadsInFolder } from "../uploadingHere";
+import { baseNameOf, parentOf, rowPercent, rowText, uploadsInFolder } from "../uploadingHere";
 import type { RemoteUploadProgress } from "@/app/lib/remote-upload/remoteUploadFeed";
 import type { FileProgress } from "@/app/lib/types/syncSnapshot";
 
@@ -84,5 +84,15 @@ describe("helpers", () => {
   it("has no percentage until bytes move", () => {
     expect(rowPercent(row("a", { status: "encrypting" }))).toBeNull();
     expect(rowPercent(row("a"))).toBe(30);
+  });
+});
+
+describe("rowText", () => {
+  it("words a capture's drive copy as a backup, and any other upload as before", () => {
+    const rec = { fileName: "Recording.mp4" };
+    expect(rowText({ ...rec, note: "Backing up to Drive" }, false)).toBe("Backing up to Drive · Recording.mp4");
+    expect(rowText({ ...rec, note: "Couldn't back up to Drive" }, true)).toBe("Couldn't back up to Drive · Recording.mp4");
+    expect(rowText(rec, false)).toBe("Uploading Recording.mp4");
+    expect(rowText({ ...rec, note: null }, true)).toBe("Couldn't upload Recording.mp4");
   });
 });

@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use tracing::info;
 
 use super::insights_csv::{Cell, save_stem, to_csv, write_csv, write_file};
+use super::link_ref::{LinkKind, LinkRef};
 use super::nda::{NdaAccept, NdaAccepts, link_log};
 use crate::app_state::AppState;
 use crate::chat::attachments::validate_destination;
@@ -272,9 +273,11 @@ pub async fn share_export_nda_accepts_csv(
     file_name: String,
     destination: String,
     viewer_names: Option<BTreeMap<String, Option<String>>>,
+    kind: Option<LinkKind>,
 ) -> Result<()> {
+    let link = LinkRef::new(kind, &share_token)?;
     let destination = validate_destination(&destination)?;
-    let log = link_log(&state, &share_token).await?;
+    let log = link_log(&state, link).await?;
     let csv = accepts_csv(&file_name, &log, &viewer_names.unwrap_or_default())?;
     write_in_background(destination.clone(), csv.into_bytes(), true).await?;
     info!(path = %destination.display(), "nda accepts csv saved");
@@ -289,9 +292,11 @@ pub async fn share_save_nda_record(
     file_name: String,
     accept_id: u64,
     destination: String,
+    kind: Option<LinkKind>,
 ) -> Result<()> {
+    let link = LinkRef::new(kind, &share_token)?;
     let destination = validate_destination(&destination)?;
-    let log = link_log(&state, &share_token).await?;
+    let log = link_log(&state, link).await?;
     let text = record(&file_name, &log, accept_id).ok_or_else(|| AppError::Validation(NO_RECORD.into()))?;
     write_in_background(destination.clone(), text.into_bytes(), false).await?;
     info!(path = %destination.display(), "nda record saved");

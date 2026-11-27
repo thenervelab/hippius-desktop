@@ -103,6 +103,15 @@ describe("mergeRemoteUploads", () => {
     expect(merged.files[0].error).toBe("Upload failed: 402");
   });
 
+  it("carries Rust's note for a capture's drive copy, and none for a plain upload", () => {
+    const merged = mergeRemoteUploads(EMPTY, {
+      "Rec.mp4": row({ path: "Rec.mp4", fileName: "Rec.mp4", note: "Backing up to Drive" }),
+      "Photos/a.jpg": row(),
+    });
+    expect(merged.files.find((f) => f.path === "Rec.mp4")?.note).toBe("Backing up to Drive");
+    expect(merged.files.find((f) => f.path === "Photos/a.jpg")).not.toHaveProperty("note");
+  });
+
   it("does not divide by zero on an empty file", () => {
     const merged = mergeRemoteUploads(EMPTY, {
       "Photos/a.jpg": row({ bytesTransferred: 0, totalBytes: 0 }),

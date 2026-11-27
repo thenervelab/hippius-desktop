@@ -504,6 +504,39 @@ describe("the preview card", () => {
     expect(screen.getByRole("tooltip")).toHaveTextContent("Work › Captures");
   });
 
+  // A recording's link uploads its own copy; the card shows that upload
+  // only, with an info icon saying why, and the backup to Drive that follows
+  // is in the upload list, never a second run on the card.
+  it("explains the link's own upload with an info icon, and drops it once the link is ready", async () => {
+    const info = "Your link has its own encrypted copy. A backup also goes to your Drive, so the recording shows in Captures.";
+    await setup(
+      card({ state: "uploading" }, 1, { copyLink: true }, {
+        kind: "recording",
+        link: { state: "uploading", copied: true },
+        linkText: "Link copied, uploading 42%",
+        linkPercent: 42,
+        linkInfo: info,
+      }),
+    );
+    expect(screen.getByText("Link copied, uploading 42%")).toBeInTheDocument();
+    const icon = screen.getByRole("button", { name: "About this upload" });
+    expect(icon).not.toHaveAttribute("title");
+    await pointAt(icon);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(info);
+    await pointAt(null);
+    // Keyboard focus shows the same words.
+    icon.focus();
+    fireEvent.focus(icon);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(info);
+
+    // The link is ready: Rust finishes the card (direct or synced), which
+    // says the link was copied and shows no second upload.
+    await act(() => tauri.emitEvent("capture_preview_changed", linked({ state: "uploaded", linkCopied: true }, 1)));
+    expect(screen.getAllByText("Uploaded · Public link copied")[0]).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "About this upload" })).toBeNull();
+    expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+
   it("keeps a long failure to one line, with the whole of it in the tooltip", async () => {
     const message = "The upload could not reach the server after several tries. It is kept, and Retry sends it again.";
     await setup(card(failed(message), 1, { retry: true, discard: true }));

@@ -1249,6 +1249,17 @@ impl Api {
     pub(super) fn share_url(&self, token: &str, rest: &str) -> Result<String> {
         Ok(format!("{}/v1/shares/{}{rest}", self.base, path_segment(token)?))
     }
+
+    /// A route of one file or folder link (`link_ref::LinkRef::path`). Its id
+    /// is checked again here, so a `LinkRef` built by hand can only ever
+    /// reach its own link's routes.
+    pub(super) fn link_url(&self, link: super::link_ref::LinkRef<'_>, rest: &str) -> Result<String> {
+        let checked = match link {
+            super::link_ref::LinkRef::File(token) => super::link_ref::LinkRef::File(path_segment(token)?),
+            super::link_ref::LinkRef::Folder(hash) => super::link_ref::LinkRef::Folder(super::link_ref::checked_hash(hash)?),
+        };
+        Ok(format!("{}{}", self.base, checked.path(rest)))
+    }
 }
 
 /// `s` percent-encoded for a query value (RFC 3986 unreserved characters
